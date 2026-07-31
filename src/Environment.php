@@ -112,6 +112,19 @@ final class Environment
         'OPENAI_INDEX_POLL_INTERVAL_SECONDS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 60],
         'OPENAI_INDEX_POLL_MAX_SECONDS' => ['type' => 'int', 'default' => 60, 'min' => 1, 'max' => 600],
 
+        // Order58 Integration API. One shared Bearer token, one configurable base URL — change the token
+        // here and every call updates. The base URL and token have no default (the client refuses to run
+        // until both are set), so an unconfigured install simply skips sync rather than calling nowhere.
+        'ORDER58_API_BASE_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        'ORDER58_API_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 10, 'min' => 1, 'max' => 120],
+        'ORDER58_API_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 30, 'min' => 1, 'max' => 300],
+        'ORDER58_API_MAX_RETRIES' => ['type' => 'int', 'default' => 2, 'min' => 0, 'max' => 10],
+        'ORDER58_API_RETRY_MAX_BACKOFF_SECONDS' => ['type' => 'int', 'default' => 30, 'min' => 0, 'max' => 600],
+        'ORDER58_API_PAGE_SIZE' => ['type' => 'int', 'default' => 100, 'min' => 1, 'max' => 500],
+        'ORDER58_SYNC_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
+        'ORDER58_SYNC_PAGES_PER_RUN' => ['type' => 'int', 'default' => 1000, 'min' => 1, 'max' => 100000],
+
         // Storage and upload limits.
         'KNOWLEDGE_STORAGE_PATH' => ['type' => 'string', 'default' => '@runtime/storage'],
         'MAX_UPLOAD_SIZE_MB' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 512],

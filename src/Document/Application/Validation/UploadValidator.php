@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Document\Application\Validation;
 
 use App\Document\Application\DocumentProcessingParams;
+use App\Document\Application\Text\PlainTextNormalizer;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\Exception\FileTooLarge;
 use App\Document\Domain\Exception\InvalidImage;
+use App\Document\Domain\Exception\InvalidText;
 use App\Document\Domain\Exception\UnsupportedDocumentType;
 
+use function file_get_contents;
 use function filesize;
 
 /**
@@ -58,7 +61,20 @@ final readonly class UploadValidator
             $this->validateImage($absolutePath, $size);
         }
 
+        // 4. Text must be valid UTF-8 — this is what rejects a binary file that merely sniffs as text.
+        if ($kind === DocumentKind::Text) {
+            $this->validateText($absolutePath);
+        }
+
         return new ValidatedUpload($mime, $extension, $kind, $size);
+    }
+
+    private function validateText(string $absolutePath): void
+    {
+        $content = @file_get_contents($absolutePath);
+        if ($content === false || !PlainTextNormalizer::isValidUtf8($content)) {
+            throw InvalidText::notUtf8();
+        }
     }
 
     private function validateImage(string $absolutePath, int $size): void

@@ -68,8 +68,9 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
 
     public function countReadyForKnowledgeBase(int $knowledgeBaseId): int
     {
+        // A disabled document is removed from the vector store, so it does not count toward chat readiness.
         return (int) $this->query()
-            ->where(['knowledge_base_id' => $knowledgeBaseId, 'status' => DocumentStatus::Ready->value])
+            ->where(['knowledge_base_id' => $knowledgeBaseId, 'status' => DocumentStatus::Ready->value, 'is_enabled' => 1])
             ->count();
     }
 
@@ -98,6 +99,9 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
             'size_bytes' => $document->sizeBytes,
             'checksum_sha256' => $document->checksumSha256,
             'kind' => $document->kind->value,
+            'source_type' => $document->sourceType->value,
+            'title' => $document->title ?? $document->originalFilename,
+            'source_text' => $document->sourceText,
             'status' => DocumentStatus::Queued->value,
             'created_at' => $now,
             'updated_at' => $now,

@@ -112,6 +112,22 @@ final class UploadDocumentServiceTest extends Unit
     }
 
     /**
+     * A .txt/.md upload takes the text branch: it is classified as a text document and the stored artifact
+     * is the normalized text, ready for the no-AI text processor.
+     */
+    public function testPlainTextFileBecomesATextDocument(): void
+    {
+        $id = $this->service()->upload(self::KB, 'notes.txt', $this->capture($this->fixtures->text()));
+
+        $document = $this->documents->findByIdForKnowledgeBase($id, self::KB);
+        assertSame(DocumentKind::Text, $document?->kind());
+        assertSame(['queued'], $this->events->statuses());
+
+        $stored = (string) file_get_contents($this->storageRoot . '/' . $document?->storedPath());
+        assertSame("just some plain text, not a document\n", $stored);
+    }
+
+    /**
      * A rejected upload must leave nothing: no row, no event, and no temporary or stored file.
      */
     public function testRejectedUploadLeavesNothingBehind(): void

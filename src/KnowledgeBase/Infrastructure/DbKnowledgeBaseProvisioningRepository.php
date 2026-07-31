@@ -35,6 +35,10 @@ final readonly class DbKnowledgeBaseProvisioningRepository implements KnowledgeB
             ->select(['id', 'name', 'slug', 'provision_attempts'])
             ->from(self::TABLE)
             ->where(['vector_store_status' => VectorStoreStatus::Pending->value, 'status' => 'active'])
+            // Order58-backed knowledge bases are provisioned only once the source store is active and the
+            // knowledge base is enabled — an inactive store keeps its mapping but defers its vector store.
+            // Manually-created knowledge bases (no source store) are unaffected.
+            ->andWhere(['or', ['source_store_id' => null], ['source_active' => 1, 'agent_enabled' => 1]])
             ->andWhere(['or', ['provision_next_attempt_at' => null], ['<=', 'provision_next_attempt_at', DbDateTime::format($now)]])
             ->orderBy(['provision_next_attempt_at' => SORT_ASC, 'id' => SORT_ASC])
             ->limit($limit)

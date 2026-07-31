@@ -2,7 +2,8 @@
 
 declare(strict_types=1);
 
-use App\Document\Domain\Document;
+use App\Document\Domain\DocumentDisplayStatus;
+use App\Document\Domain\DocumentListItem;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\KnowledgeBase\Domain\Rule;
 use Yiisoft\Html\Html;
@@ -15,8 +16,9 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var Csrf $csrf
  * @var KnowledgeBase $knowledgeBase
  * @var list<Rule> $rules
- * @var list<Document> $documents
+ * @var list<DocumentListItem> $documents
  * @var string $uploadAccept
+ * @var int|null $order58StoreId
  */
 
 // The first statement references $this so Psalm keeps the file-level @var docblock in scope.
@@ -35,6 +37,7 @@ $restoreUrl = $urlGenerator->generate('kb.restore', ['slug' => $slug]);
 $addRuleUrl = $urlGenerator->generate('kb.rules.store', ['slug' => $slug]);
 $reorderUrl = $urlGenerator->generate('kb.rules.reorder', ['slug' => $slug]);
 $uploadUrl = $urlGenerator->generate('kb.documents.upload', ['slug' => $slug]);
+$manualTextUrl = $urlGenerator->generate('kb.manual-text.create', ['slug' => $slug]);
 $canManage = !$knowledgeBase->isArchived();
 
 // The id order as displayed, so each row can build a reorder payload that swaps it with a neighbour.
@@ -64,6 +67,12 @@ $orderInputs = static function (array $order): string {
         <?php if ($knowledgeBase->isReadyForChat()): ?>
             <a class="btn btn--primary" href="<?= Html::encode($urlGenerator->generate('chat.index', ['slug' => $slug])) ?>">Open chat</a>
         <?php endif; ?>
+        <?php if ($order58StoreId !== null && $canManage): ?>
+            <form method="post" action="<?= Html::encode($urlGenerator->generate('kb.sync-order58-knowledge', ['slug' => $slug])) ?>">
+                <?= $csrfField ?>
+                <button type="submit" class="btn btn--secondary">Sync Order58 knowledge</button>
+            </form>
+        <?php endif; ?>
         <a class="btn btn--secondary" href="<?= Html::encode($editUrl) ?>">Edit</a>
         <?php if ($knowledgeBase->isArchived()): ?>
             <form method="post" action="<?= Html::encode($restoreUrl) ?>">
@@ -80,30 +89,39 @@ $orderInputs = static function (array $order): string {
     </div>
 </div>
 
-<div class="card">
-    <div class="util-row" style="justify-content: space-between;">
-        <span class="badge badge--<?= Html::encode($vs->badge()) ?>"><span class="badge__dot"></span><?= Html::encode($vs->label()) ?></span>
+<?php
+// Only surface a knowledge-base-level message when there is something the admin needs to know: it is still
+// being prepared, or preparation failed. When it is ready, no technical status is shown at all.
+$preparationFailed = $vs->value === 'failed';
+$preparing = !$vs->isReady() && !$preparationFailed;
+?>
+<?php if ($knowledgeBase->isArchived() || $preparing || $preparationFailed): ?>
+    <div class="card">
         <?php if ($knowledgeBase->isArchived()): ?>
-            <span class="badge badge--muted">Archived</span>
+            <div class="util-row" style="justify-content: flex-end;">
+                <span class="badge badge--muted">Archived</span>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($knowledgeBase->description() !== null): ?>
+            <p style="margin-top: 1rem;"><?= Html::encode($knowledgeBase->description()) ?></p>
+        <?php endif; ?>
+
+        <?php if ($preparationFailed): ?>
+            <div class="alert alert--error" style="margin-top: 1rem;">
+                <span class="alert__icon">✕</span>
+                <span>This knowledge base could not be prepared. Try again shortly, or contact support if it keeps happening.</span>
+            </div>
+        <?php elseif ($preparing): ?>
+            <div class="alert alert--info" style="margin-top: 1rem;">
+                <span class="alert__icon">i</span>
+                <span>Preparing the knowledge base. Documents will be processed automatically.</span>
+            </div>
         <?php endif; ?>
     </div>
-
-    <?php if ($knowledgeBase->description() !== null): ?>
-        <p style="margin-top: 1rem;"><?= Html::encode($knowledgeBase->description()) ?></p>
-    <?php endif; ?>
-
-    <?php if ($vs->value === 'failed' && $knowledgeBase->vectorStoreError() !== null): ?>
-        <div class="alert alert--error" style="margin-top: 1rem;">
-            <span class="alert__icon">✕</span>
-            <span><?= Html::encode($knowledgeBase->vectorStoreError()) ?></span>
-        </div>
-    <?php elseif (!$vs->isReady()): ?>
-        <div class="alert alert--info" style="margin-top: 1rem;">
-            <span class="alert__icon">i</span>
-            <span>Document uploads and chat become available once provisioning completes. Provisioning runs in the background and usually finishes within a minute.</span>
-        </div>
-    <?php endif; ?>
-</div>
+<?php elseif ($knowledgeBase->description() !== null): ?>
+    <div class="card"><p><?= Html::encode($knowledgeBase->description()) ?></p></div>
+<?php endif; ?>
 
 <?php if ($knowledgeBase->systemInstructions() !== null): ?>
     <div class="card">
@@ -113,66 +131,68 @@ $orderInputs = static function (array $order): string {
 <?php endif; ?>
 
 <div class="card">
-    <h2 class="card__title">Documents</h2>
-    <p class="field__hint" style="margin-top: -0.5rem;">
-        PDF and image files. Uploaded documents are queued and indexed in the background.
+    <div class="util-row" style="justify-content: space-between; align-items: baseline;">
+        <h2 class="card__title" style="margin: 0;">Documents</h2>
+        <?php if ($canManage): ?>
+            <a class="btn btn--primary btn--sm" href="<?= Html::encode($manualTextUrl) ?>">+ Add manual text</a>
+        <?php endif; ?>
+    </div>
+    <p class="field__hint" style="margin-top: .5rem;">
+        Upload PDF, image or text files, or type knowledge directly. Everything is queued and indexed in the
+        background. A document can be disabled to hide it from chat without deleting it.
     </p>
 
     <?php if ($documents === []): ?>
         <div class="empty" style="padding: 1.5rem;">
             <div class="empty__title">No documents yet</div>
-            <p>Upload a PDF or image to build this knowledge base.</p>
+            <p>Upload a file or add manual text to build this knowledge base.</p>
         </div>
     <?php else: ?>
         <div class="table-wrap" style="margin-bottom: 1.5rem;">
             <table class="table">
                 <thead>
-                    <tr><th>File</th><th style="width: 90px;">Type</th><th style="width: 90px;">Size</th><th style="width: 130px;">Status</th><th style="width: 230px;"></th></tr>
+                    <tr><th>Document</th><th style="width: 170px;">Source</th><th style="width: 90px;">Size</th><th style="width: 130px;">Status</th><th style="width: 320px;"></th></tr>
                 </thead>
                 <tbody>
                     <?php foreach ($documents as $document): ?>
-                        <?php $status = $document->status(); ?>
+                        <?php $displayStatus = $document->displayStatus(); ?>
                         <tr>
                             <td>
-                                <strong><?= Html::encode($document->originalFilename()) ?></strong>
-                                <?php if ($document->errorMessage() !== null): ?>
-                                    <div class="field__error"><?= Html::encode($document->errorMessage()) ?></div>
+                                <strong><?= Html::encode($document->title) ?></strong>
+                                <?php if ($document->errorMessage !== null): ?>
+                                    <div class="field__error"><?= Html::encode($document->errorMessage) ?></div>
                                 <?php endif; ?>
                             </td>
-                            <td><span class="badge badge--muted"><?= Html::encode($document->kind()->label()) ?></span></td>
+                            <td><span class="badge badge--muted"><?= Html::encode($document->sourceType->label()) ?></span></td>
                             <td class="util-muted"><?= Html::encode($document->humanSize()) ?></td>
                             <td>
-                                <span class="badge badge--<?= Html::encode($status->badge()) ?>">
-                                    <?php if ($status->isInProgress()): ?><span class="badge__dot"></span><?php endif; ?>
-                                    <?= Html::encode($status->label()) ?>
+                                <span class="badge badge--<?= Html::encode($displayStatus->badge()) ?>">
+                                    <?php if ($displayStatus === DocumentDisplayStatus::Processing): ?><span class="badge__dot"></span><?php endif; ?>
+                                    <?= Html::encode($displayStatus->label()) ?>
                                 </span>
                             </td>
                             <td>
                                 <?php if ($canManage): ?>
                                     <?php
-                                    $docId = $document->id();
+                                    $docId = $document->id;
                                     $retryUrl = $urlGenerator->generate('kb.documents.retry', ['slug' => $slug, 'documentId' => $docId]);
-                                    $reindexUrl = $urlGenerator->generate('kb.documents.reindex', ['slug' => $slug, 'documentId' => $docId]);
-                                    $processNowUrl = $urlGenerator->generate('kb.documents.process-now', ['slug' => $slug, 'documentId' => $docId]);
+                                    $toggleUrl = $urlGenerator->generate('kb.documents.toggle', ['slug' => $slug, 'documentId' => $docId]);
+                                    $editUrl = $urlGenerator->generate('kb.documents.edit.show', ['slug' => $slug, 'documentId' => $docId]);
                                     $deleteUrl = $urlGenerator->generate('kb.documents.delete', ['slug' => $slug, 'documentId' => $docId]);
                                     ?>
                                     <div class="table__actions">
-                                        <?php if ($status->isRetryable()): ?>
+                                        <?php if ($document->isManualText()): ?>
+                                            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($editUrl) ?>">Edit</a>
+                                        <?php endif; ?>
+                                        <form method="post" action="<?= Html::encode($toggleUrl) ?>">
+                                            <?= $csrfField ?>
+                                            <input type="hidden" name="enabled" value="<?= $document->isEnabled ? '0' : '1' ?>">
+                                            <button class="btn btn--secondary btn--sm" type="submit"><?= $document->isEnabled ? 'Disable' : 'Enable' ?></button>
+                                        </form>
+                                        <?php if ($displayStatus === DocumentDisplayStatus::Failed): ?>
                                             <form method="post" action="<?= Html::encode($retryUrl) ?>">
                                                 <?= $csrfField ?>
                                                 <button class="btn btn--secondary btn--sm" type="submit">Retry</button>
-                                            </form>
-                                        <?php endif; ?>
-                                        <?php if ($status === App\Document\Domain\DocumentStatus::Ready): ?>
-                                            <form method="post" action="<?= Html::encode($reindexUrl) ?>" data-confirm="Re-index this document? Its current index is rebuilt from scratch.">
-                                                <?= $csrfField ?>
-                                                <button class="btn btn--secondary btn--sm" type="submit">Re-index</button>
-                                            </form>
-                                        <?php endif; ?>
-                                        <?php if ($status->isInProgress()): ?>
-                                            <form method="post" action="<?= Html::encode($processNowUrl) ?>">
-                                                <?= $csrfField ?>
-                                                <button class="btn btn--secondary btn--sm" type="submit">Process now</button>
                                             </form>
                                         <?php endif; ?>
                                         <form method="post" action="<?= Html::encode($deleteUrl) ?>" data-confirm="Remove this document?">
@@ -190,15 +210,17 @@ $orderInputs = static function (array $order): string {
     <?php endif; ?>
 
     <?php if ($canManage): ?>
-        <h3 style="margin-bottom: .75rem;">Upload a document</h3>
-        <form method="post" action="<?= Html::encode($uploadUrl) ?>" enctype="multipart/form-data" style="max-width: 720px;">
-            <?= $csrfField ?>
-            <div class="field">
-                <input class="field__control" type="file" name="document" accept="<?= Html::encode($uploadAccept) ?>" required>
-                <div class="field__hint">PDF, PNG, JPG or WEBP.</div>
-            </div>
-            <button class="btn btn--primary" type="submit">Upload</button>
-        </form>
+        <div class="kb-subsection">
+            <h3 class="kb-subsection__title">Upload a document</h3>
+            <form method="post" action="<?= Html::encode($uploadUrl) ?>" enctype="multipart/form-data" style="max-width: 720px;">
+                <?= $csrfField ?>
+                <div class="field">
+                    <input class="field__control" type="file" name="document" accept="<?= Html::encode($uploadAccept) ?>" required>
+                    <div class="field__hint">PDF, PNG, JPG, WEBP, or a text file (.txt, .md).</div>
+                </div>
+                <button class="btn btn--primary" type="submit">Upload</button>
+            </form>
+        </div>
     <?php endif; ?>
 </div>
 
@@ -290,20 +312,22 @@ $orderInputs = static function (array $order): string {
         </div>
     <?php endif; ?>
 
-    <h3 style="margin-bottom: .75rem;">Add a rule</h3>
-    <form method="post" action="<?= Html::encode($addRuleUrl) ?>" style="max-width: 720px;">
-        <?= $csrfField ?>
-        <div class="field">
-            <label class="field__label" for="rule-name">Name</label>
-            <input class="field__control" type="text" id="rule-name" name="name" maxlength="160" placeholder="e.g. Answer only from the documents" required>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rule-instruction">Instruction</label>
-            <textarea class="field__control" id="rule-instruction" name="instruction" rows="3" maxlength="5000" required></textarea>
-        </div>
-        <div class="field">
-            <label><input type="checkbox" name="is_enabled" value="1" checked> Enabled</label>
-        </div>
-        <button class="btn btn--primary" type="submit">Add rule</button>
-    </form>
+    <div class="kb-subsection">
+        <h3 class="kb-subsection__title">Add a rule</h3>
+        <form method="post" action="<?= Html::encode($addRuleUrl) ?>" style="max-width: 720px;">
+            <?= $csrfField ?>
+            <div class="field">
+                <label class="field__label" for="rule-name">Name</label>
+                <input class="field__control" type="text" id="rule-name" name="name" maxlength="160" placeholder="e.g. Answer only from the documents" required>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rule-instruction">Instruction</label>
+                <textarea class="field__control" id="rule-instruction" name="instruction" rows="3" maxlength="5000" required></textarea>
+            </div>
+            <div class="field">
+                <label><input type="checkbox" name="is_enabled" value="1" checked> Enabled</label>
+            </div>
+            <button class="btn btn--primary" type="submit">Add rule</button>
+        </form>
+    </div>
 </div>

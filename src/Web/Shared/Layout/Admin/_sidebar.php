@@ -23,7 +23,10 @@ $appName = $applicationParams->name;
 // sidebar never links to a 404 and grows as the application does.
 $items = [
     ['label' => 'Dashboard', 'icon' => '◧', 'route' => 'dashboard', 'match' => ['dashboard']],
-    ['label' => 'Knowledge bases', 'icon' => '❏', 'route' => 'kb.index', 'match' => ['kb.']],
+    // ['label' => 'Knowledge bases', 'icon' => '❏', 'route' => 'kb.index', 'match' => ['kb.']],
+    // ['label' => 'Order58 sync', 'icon' => '⇄', 'route' => 'order58.index', 'match' => ['order58.index', 'order58.sync', 'order58.check', 'order58.agents']],
+    ['label' => 'Order58 stores', 'icon' => '🏬', 'route' => 'order58.stores', 'match' => ['order58.stores', 'order58.store.']],
+    ['label' => 'Store chat', 'icon' => '💬', 'route' => 'order58.store-chat', 'match' => ['order58.store-chat']],
 ];
 
 $navItems = [];
@@ -60,8 +63,7 @@ $csrfInput = $admin !== null ? (string) $csrf->hiddenInput() : '';
         <?php foreach ($navItems as $navItem): ?>
             <a
                 class="sidebar__link<?= $navItem['active'] ? ' sidebar__link--active' : '' ?>"
-                href="<?= Html::encode($navItem['href']) ?>"
-            >
+                href="<?= Html::encode($navItem['href']) ?>">
                 <span class="sidebar__link-icon" aria-hidden="true"><?= Html::encode($navItem['icon']) ?></span>
                 <span><?= Html::encode($navItem['label']) ?></span>
             </a>

@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\KnowledgeBase\Web\Show;
 
 use App\Document\Application\Validation\SupportedFileTypes;
-use App\Document\Domain\DocumentRepositoryInterface;
+use App\Document\Domain\TextDocumentRepositoryInterface;
+use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\KnowledgeBase\Domain\RuleRepositoryInterface;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use Psr\Http\Message\ResponseInterface;
@@ -22,7 +23,8 @@ final readonly class Action
         private WebViewRenderer $viewRenderer,
         private KnowledgeBaseFinder $finder,
         private RuleRepositoryInterface $rules,
-        private DocumentRepositoryInterface $documents,
+        private TextDocumentRepositoryInterface $documents,
+        private KnowledgeBaseSourceRepositoryInterface $source,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug): ResponseInterface
@@ -34,8 +36,9 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'knowledgeBase' => $knowledgeBase,
                 'rules' => $this->rules->findAllForKnowledgeBase($knowledgeBase->id()),
-                'documents' => $this->documents->findAllForKnowledgeBase($knowledgeBase->id()),
+                'documents' => $this->documents->findListForKnowledgeBase($knowledgeBase->id()),
                 'uploadAccept' => SupportedFileTypes::acceptAttribute(),
+                'order58StoreId' => $this->source->findOrder58StoreId($knowledgeBase->id()),
             ]);
     }
 }

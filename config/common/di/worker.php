@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Document\Application\Processing\DocumentProcessingDrainer;
 use App\Document\Application\RemoteCleanupDrainer;
 use App\KnowledgeBase\Application\KnowledgeBaseProvisioningDrainer;
+use App\Order58\Application\Sync\IntegrationSyncDrainer;
 use App\Worker\Application\WorkerLockInterface;
 use App\Worker\Application\WorkerParams;
 use App\Worker\Application\WorkerRunner;
@@ -29,11 +30,13 @@ return [
         ],
     ],
 
-    // Order matters: provision a knowledge base's store, then process its documents, then sweep the
-    // remote files left by deletes and re-indexes. A store made ready this run is usable the same run.
+    // Order matters: sync Order58 first (a new/changed store creates or updates its knowledge base and
+    // queues its generated documents), then provision that knowledge base's vector store, then process its
+    // documents, then sweep the remote files left by deletes and re-indexes — all reachable in one pass.
     WorkerRunner::class => [
         '__construct()' => [
             'drainers' => [
+                Reference::to(IntegrationSyncDrainer::class),
                 Reference::to(KnowledgeBaseProvisioningDrainer::class),
                 Reference::to(DocumentProcessingDrainer::class),
                 Reference::to(RemoteCleanupDrainer::class),

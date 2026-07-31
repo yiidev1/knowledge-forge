@@ -47,7 +47,8 @@ final class KnowledgeBaseCest
         $I->submitForm('.card form', ['name' => self::KB_NAME, 'description' => 'A description', 'system_instructions' => 'Be brief']);
         $I->seeCurrentUrlEquals('/knowledge-bases/' . self::KB_SLUG);
         $I->see(self::KB_NAME);
-        $I->see('Provisioning pending');
+        // The admin-facing preparation message replaces the old technical "Provisioning pending" wording.
+        $I->see('Preparing the knowledge base');
 
         // It shows in the list.
         $I->amOnPage('/knowledge-bases');

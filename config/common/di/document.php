@@ -8,14 +8,19 @@ use App\Document\Application\Pdf\PdfTextProbeInterface;
 use App\Document\Application\Processing\DocumentProcessorRegistry;
 use App\Document\Application\Processing\ImageDocumentProcessor;
 use App\Document\Application\Processing\PdfDocumentProcessor;
+use App\Document\Application\Processing\TextDocumentProcessor;
 use App\Document\Application\Storage\DocumentStorageInterface;
 use App\Document\Domain\DocumentProcessingRepositoryInterface;
 use App\Document\Domain\DocumentRepositoryInterface;
+use App\Document\Domain\GeneratedDocumentRepositoryInterface;
 use App\Document\Domain\IndexedFileRepositoryInterface;
 use App\Document\Domain\ProcessingEventRepositoryInterface;
+use App\Document\Domain\TextDocumentRepositoryInterface;
 use App\Document\Infrastructure\DbDocumentProcessingRepository;
 use App\Document\Infrastructure\DbDocumentRepository;
+use App\Document\Infrastructure\DbGeneratedDocumentRepository;
 use App\Document\Infrastructure\DbIndexedFileRepository;
+use App\Document\Infrastructure\DbTextDocumentRepository;
 use App\Document\Infrastructure\DbProcessingEventRepository;
 use App\Document\Infrastructure\LocalDocumentStorage;
 use App\Document\Infrastructure\Pdf\SmalotPdfTextProbe;
@@ -31,6 +36,8 @@ return [
     DocumentStorageInterface::class => LocalDocumentStorage::class,
     IndexedFileRepositoryInterface::class => DbIndexedFileRepository::class,
     DocumentProcessingRepositoryInterface::class => DbDocumentProcessingRepository::class,
+    GeneratedDocumentRepositoryInterface::class => DbGeneratedDocumentRepository::class,
+    TextDocumentRepositoryInterface::class => DbTextDocumentRepository::class,
 
     DocumentProcessingParams::class => [
         '__construct()' => [
@@ -64,6 +71,7 @@ return [
             'processors' => [
                 Reference::to(PdfDocumentProcessor::class),
                 Reference::to(ImageDocumentProcessor::class),
+                Reference::to(TextDocumentProcessor::class),
             ],
         ],
     ],

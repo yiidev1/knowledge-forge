@@ -22,5 +22,13 @@ final readonly class NewDocument
         public int $sizeBytes,
         public string $checksumSha256,
         public DocumentKind $kind,
+        // Provenance for the unified document model. Defaulted so existing binary-upload construction and
+        // tests keep working; the upload service now supplies the accurate value (uploaded_pdf/image/text).
+        public DocumentSourceType $sourceType = DocumentSourceType::UploadedPdf,
+        // Human-readable title; falls back to the original filename when null.
+        public ?string $title = null,
+        // The original submitted text of a manual-text document, kept so it can be edited. NULL for
+        // uploads and Order58-generated documents.
+        public ?string $sourceText = null,
     ) {}
 }

@@ -76,11 +76,11 @@ final class UploadValidatorTest extends Unit
         $this->validator()->validate($this->fixtures->phpDisguisedAsPdf());
     }
 
-    public function testRejectsAnUnsupportedTextFile(): void
+    public function testAcceptsAPlainTextFile(): void
     {
-        $this->expectException(UnsupportedDocumentType::class);
+        $result = $this->validator()->validate($this->fixtures->text());
 
-        $this->validator()->validate($this->fixtures->text());
+        assertSame(DocumentKind::Text, $result->kind);
     }
 
     public function testRejectsAFileOverTheUploadLimit(): void

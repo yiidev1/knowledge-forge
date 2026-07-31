@@ -46,9 +46,9 @@ final class UploadPrimitivesTest extends Unit
 
     public function testUnsupportedTypeReturnsNulls(): void
     {
-        assertFalse(SupportedFileTypes::isSupported('text/plain'));
-        assertNull(SupportedFileTypes::extensionFor('text/plain'));
-        assertNull(SupportedFileTypes::kindFor('text/plain'));
+        assertFalse(SupportedFileTypes::isSupported('application/zip'));
+        assertNull(SupportedFileTypes::extensionFor('application/zip'));
+        assertNull(SupportedFileTypes::kindFor('application/zip'));
     }
 
     // ---- SafeFilenameGenerator --------------------------------------------

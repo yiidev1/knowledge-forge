@@ -16,6 +16,7 @@ $this->setTitle('Dashboard');
 $this->setParameter('breadcrumbs', [['label' => 'Dashboard']]);
 
 $kbUrl = $urlGenerator->generate('kb.index');
+$storesUrl = $urlGenerator->generate('order58.stores');
 $createUrl = $urlGenerator->generate('kb.create');
 ?>
 <div class="page-header">
@@ -27,11 +28,11 @@ $createUrl = $urlGenerator->generate('kb.create');
 </div>
 
 <div class="grid grid--stats">
-    <a class="stat stat--link" href="<?= Html::encode($kbUrl) ?>">
+    <a class="stat stat--link" href="<?= Html::encode($storesUrl) ?>">
         <div class="stat__icon" aria-hidden="true">❏</div>
         <div class="stat__label">Active knowledge bases</div>
         <div class="stat__value"><?= $knowledgeBaseCount ?></div>
-        <div class="stat__hint">Manage knowledge bases →</div>
+        <div class="stat__hint">Browse Order58 stores →</div>
     </a>
 </div>
 

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Agent\Application\CurrentAgent;
 use App\Auth\Application\CurrentAdmin;
 use App\Environment;
 use App\Shared\ApplicationParams;
@@ -120,6 +121,18 @@ return [
         'operationMaxAttempts' => Environment::int('AI_OPERATION_MAX_ATTEMPTS'),
     ],
 
+    'app/order58' => [
+        'baseUrl' => Environment::string('ORDER58_API_BASE_URL'),
+        'token' => Environment::string('ORDER58_API_TOKEN'),
+        'connectTimeoutSeconds' => Environment::int('ORDER58_API_CONNECT_TIMEOUT_SECONDS'),
+        'timeoutSeconds' => Environment::int('ORDER58_API_TIMEOUT_SECONDS'),
+        'maxRetries' => Environment::int('ORDER58_API_MAX_RETRIES'),
+        'maxBackoffSeconds' => Environment::int('ORDER58_API_RETRY_MAX_BACKOFF_SECONDS'),
+        'pageSize' => Environment::int('ORDER58_API_PAGE_SIZE'),
+        'syncMaxAttempts' => Environment::int('ORDER58_SYNC_MAX_ATTEMPTS'),
+        'pagesPerRun' => Environment::int('ORDER58_SYNC_PAGES_PER_RUN'),
+    ],
+
     'app/usage' => [
         // Wall clock a single sync may spend calling the provider. Checked before every call, so the
         // worst case is this budget plus one in-flight call (25s) — well inside the web-server timeout.
@@ -146,6 +159,7 @@ return [
             // Request-scoped services the shared layouts read: who is signed in, and one-shot
             // notifications. Resolved per request, so on a public page currentAdmin is simply empty.
             'currentAdmin' => Reference::to(CurrentAdmin::class),
+            'currentAgent' => Reference::to(CurrentAgent::class),
             'flash' => Reference::to(FlashMessages::class),
         ],
     ],

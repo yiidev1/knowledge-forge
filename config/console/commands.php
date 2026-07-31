@@ -12,4 +12,5 @@ return [
     'kf:worker:run' => App\Worker\Console\RunWorkerCommand::class,
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
+    'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,
 ];

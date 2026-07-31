@@ -5,6 +5,9 @@ declare(strict_types=1);
 use App\Ai\OpenAi\OpenAiAdminCredentials;
 use App\Ai\OpenAi\OpenAiCredentials;
 use App\Ai\OpenAi\OpenAiHttpProfile;
+use App\Order58\Application\Order58SyncParams;
+use App\Order58\Client\Order58Credentials;
+use App\Order58\Client\Order58HttpProfile;
 use App\Shared\Application\Correlation\CorrelationId;
 use App\Shared\Application\Health\HealthChecker;
 use App\Shared\Domain\Clock\ClockInterface;
@@ -101,6 +104,33 @@ return [
         ],
     ],
 
+    Order58Credentials::class => [
+        '__construct()' => [
+            'token' => $params['app/order58']['token'],
+            'baseUrl' => $params['app/order58']['baseUrl'],
+        ],
+    ],
+
+    // A single HTTP profile: all Order58 traffic runs in the cron worker, so it can be patient.
+    'order58.profile' => [
+        'class' => Order58HttpProfile::class,
+        '__construct()' => [
+            'name' => 'order58',
+            'connectTimeoutSeconds' => $params['app/order58']['connectTimeoutSeconds'],
+            'timeoutSeconds' => $params['app/order58']['timeoutSeconds'],
+            'maxRetries' => $params['app/order58']['maxRetries'],
+            'maxBackoffSeconds' => $params['app/order58']['maxBackoffSeconds'],
+        ],
+    ],
+
+    Order58SyncParams::class => [
+        '__construct()' => [
+            'pageSize' => $params['app/order58']['pageSize'],
+            'maxAttempts' => $params['app/order58']['syncMaxAttempts'],
+            'pagesPerRun' => $params['app/order58']['pagesPerRun'],
+        ],
+    ],
+
     // Seeded with the live credentials so that even a provider error body echoing the request back
     // cannot carry them into a log file.
     SecretRedactor::class => [
@@ -112,6 +142,9 @@ return [
                 // in an organization-endpoint error body is the one that is not scrubbed.
                 $params['app/openai']['adminApiKey'],
                 $params['app/db']['password'],
+                // The Order58 Integration API Bearer token, so an echoed request or a transport error
+                // that quotes the Authorization header can never carry it into a log.
+                $params['app/order58']['token'],
             ],
         ],
     ],

@@ -27,6 +27,10 @@ final class SupportedFileTypes
         'image/png' => ['extension' => 'png', 'kind' => DocumentKind::Image],
         'image/jpeg' => ['extension' => 'jpg', 'kind' => DocumentKind::Image],
         'image/webp' => ['extension' => 'webp', 'kind' => DocumentKind::Image],
+        // Plain text and Markdown are indexed directly as text (Markdown is treated as knowledge text, not
+        // rendered as HTML). finfo usually sniffs both as text/plain; text/markdown is accepted when present.
+        'text/plain' => ['extension' => 'txt', 'kind' => DocumentKind::Text],
+        'text/markdown' => ['extension' => 'md', 'kind' => DocumentKind::Text],
     ];
 
     public static function isSupported(string $detectedMime): bool
@@ -58,6 +62,6 @@ final class SupportedFileTypes
      */
     public static function acceptAttribute(): string
     {
-        return '.pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp';
+        return '.pdf,.png,.jpg,.jpeg,.webp,.txt,.md,application/pdf,image/png,image/jpeg,image/webp,text/plain,text/markdown';
     }
 }

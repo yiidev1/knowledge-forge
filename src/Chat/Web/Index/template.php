@@ -21,8 +21,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 
 $this->setTitle('Chat · ' . $knowledgeBase->name());
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Knowledge bases', 'route' => 'kb.index'],
-    ['label' => $knowledgeBase->name(), 'route' => 'kb.show', 'arguments' => ['slug' => $knowledgeBase->slug()]],
+    ['label' => 'Store chat', 'route' => 'order58.store-chat'],
+    ['label' => $knowledgeBase->name()],
     ['label' => 'Chat'],
 ]);
 
@@ -35,7 +35,7 @@ $csrfField = (string) $csrf->hiddenInput();
         <h1 class="page-header__title">Chat</h1>
         <p class="page-header__subtitle util-mono">/<?= Html::encode($slug) ?></p>
     </div>
-    <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('kb.show', ['slug' => $slug])) ?>">Back to knowledge base</a>
+    <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.store-chat')) ?>">← Store chat</a>
 </div>
 
 <div class="card">

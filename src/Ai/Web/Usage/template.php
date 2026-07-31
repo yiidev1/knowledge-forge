@@ -352,7 +352,7 @@ $problemMappings = array_values(array_filter($mappings, static fn(UsageMapping $
                                     <?= $mapping->localReadyDocumentCount ?> ready / <?= $mapping->localDocumentCount ?> total
                                 <?php endif; ?>
                             </td>
-                            <td><?= $mapping->remoteFileCount === null ? '—' : $mapping->remoteFileCount ?></td>
+                            <td><?= $mapping->remoteFileCount ?? '—' ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
