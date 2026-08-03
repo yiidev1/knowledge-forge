@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Document\Domain\DocumentDisplayStatus;
 use App\Document\Domain\DocumentListItem;
+use App\Document\Domain\DocumentStatus;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\KnowledgeBase\Domain\Rule;
 use Yiisoft\Html\Html;
@@ -179,6 +180,8 @@ $preparing = !$vs->isReady() && !$preparationFailed;
                                     $toggleUrl = $urlGenerator->generate('kb.documents.toggle', ['slug' => $slug, 'documentId' => $docId]);
                                     $editUrl = $urlGenerator->generate('kb.documents.edit.show', ['slug' => $slug, 'documentId' => $docId]);
                                     $deleteUrl = $urlGenerator->generate('kb.documents.delete', ['slug' => $slug, 'documentId' => $docId]);
+                                    $processNowUrl = $urlGenerator->generate('kb.documents.process-now', ['slug' => $slug, 'documentId' => $docId]);
+                                    $reindexUrl = $urlGenerator->generate('kb.documents.reindex', ['slug' => $slug, 'documentId' => $docId]);
                                     ?>
                                     <div class="table__actions">
                                         <?php if ($document->isManualText()): ?>
@@ -189,6 +192,19 @@ $preparing = !$vs->isReady() && !$preparationFailed;
                                             <input type="hidden" name="enabled" value="<?= $document->isEnabled ? '0' : '1' ?>">
                                             <button class="btn btn--secondary btn--sm" type="submit"><?= $document->isEnabled ? 'Disable' : 'Enable' ?></button>
                                         </form>
+                                        <?php if ($document->status->isInProgress()): ?>
+                                            <form method="post" action="<?= Html::encode($processNowUrl) ?>">
+                                                <?= $csrfField ?>
+                                                <button class="btn btn--secondary btn--sm" type="submit" title="Move this document to the front of the processing queue.">Process next</button>
+                                            </form>
+                                        <?php endif; ?>
+                                        <?php if ($document->status === DocumentStatus::Ready): ?>
+                                            <form method="post" action="<?= Html::encode($reindexUrl) ?>"
+                                                  data-confirm="Re-index this document? It will be uploaded and attached to OpenAI again.">
+                                                <?= $csrfField ?>
+                                                <button class="btn btn--secondary btn--sm" type="submit">Re-index</button>
+                                            </form>
+                                        <?php endif; ?>
                                         <?php if ($displayStatus === DocumentDisplayStatus::Failed): ?>
                                             <form method="post" action="<?= Html::encode($retryUrl) ?>">
                                                 <?= $csrfField ?>
