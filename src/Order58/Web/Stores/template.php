@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
+use App\Order58\Domain\StoreKnowledgeStatus;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -123,9 +124,14 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $lett
             $status = $store->knowledgeStatus;
             $location = $store->locationLine();
             $kbShowUrl = $urlGenerator->generate('kb.show', ['slug' => $store->slug]);
+            $chatUrl = $urlGenerator->generate('chat.index', ['slug' => $store->slug]);
             $agentAccessUrl = $urlGenerator->generate('order58.store.agent-access', ['storeId' => $store->sourceId]);
+            $chatReady = $status === StoreKnowledgeStatus::Ready;
             ?>
-            <article class="store-card">
+            <article class="store-card<?= $chatReady ? ' store-card--has-chat' : '' ?>">
+                <?php if ($chatReady): ?>
+                    <a class="store-card__chat" href="<?= Html::encode($chatUrl) ?>" title="Open chat" aria-label="Open chat for <?= Html::encode($store->name) ?>">💬</a>
+                <?php endif; ?>
                 <div class="store-card__body">
                     <h2 class="store-card__name"><a href="<?= Html::encode($kbShowUrl) ?>"><?= Html::encode($store->name) ?></a></h2>
                     <?php if ($store->company !== null): ?>

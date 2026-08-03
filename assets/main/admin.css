@@ -638,12 +638,27 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     margin-bottom: 1.5rem;
 }
 .store-card {
+    position: relative;
     display: flex; flex-direction: column; min-width: 0;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); box-shadow: var(--shadow);
     transition: border-color .12s, box-shadow .12s;
 }
 .store-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+.store-card__chat {
+    position: absolute; top: .55rem; right: .55rem; z-index: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2rem; height: 2rem; border-radius: var(--radius-sm, .4rem);
+    font-size: 1.05rem; line-height: 1; text-decoration: none;
+    color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border);
+    transition: border-color .12s, background .12s, color .12s;
+}
+.store-card__chat:hover {
+    color: var(--primary); border-color: var(--primary);
+    background: var(--surface); text-decoration: none;
+}
+.store-card--has-chat .store-card__body { padding-right: 2.75rem; }
 .store-card__body { padding: 1.1rem 1.15rem .75rem; flex: 1 1 auto; min-width: 0; }
 .store-card__name { font-size: 1.02rem; font-weight: 700; line-height: 1.3; margin: 0 0 .35rem; overflow-wrap: anywhere; }
 .store-card__name a { color: var(--text); }
