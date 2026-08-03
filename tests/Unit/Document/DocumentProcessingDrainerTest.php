@@ -12,7 +12,10 @@ use App\Document\Domain\Document;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\DocumentStatus;
 use App\Ai\OpenAi\OpenAiCredentials;
+use App\Shared\Application\Correlation\CorrelationId;
+use App\Shared\Infrastructure\Log\SafeLogContext;
 use App\Shared\Infrastructure\Log\SecretRedactor;
+use App\Tests\Support\Fake\Ai\CapturingLogger;
 use App\Tests\Support\Fake\Ai\FakeKnowledgeIndex;
 use App\Tests\Support\Fake\Document\InMemoryDocumentProcessingRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
@@ -25,8 +28,11 @@ use Codeception\Test\Unit;
 use DateTimeImmutable;
 use DateTimeZone;
 
+use function count;
 use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertSame;
+use function PHPUnit\Framework\assertStringContainsString;
+use function PHPUnit\Framework\assertStringNotContainsString;
 
 /**
  * The document-processing drainer end to end: a queued document in a ready knowledge base is driven to
@@ -45,6 +51,7 @@ final class DocumentProcessingDrainerTest extends Unit
     private InMemoryKnowledgeBaseRepository $knowledgeBases;
     private FakeKnowledgeIndex $index;
     private MutableClock $clock;
+    private CapturingLogger $logger;
 
     protected function _before(): void
     {
@@ -53,6 +60,7 @@ final class DocumentProcessingDrainerTest extends Unit
         $this->knowledgeBases = new InMemoryKnowledgeBaseRepository();
         $this->index = new FakeKnowledgeIndex();
         $this->clock = new MutableClock();
+        $this->logger = new CapturingLogger();
 
         $this->documents->seed($this->queuedDocument());
     }
@@ -118,6 +126,115 @@ final class DocumentProcessingDrainerTest extends Unit
             new RecoverStuckDocumentsService($this->documents, $this->clock, $params),
             new OpenAiCredentials('sk-test', 'https://api.openai.com/v1', 'gpt-x', 'gpt-vision'),
             $this->clock,
+            $this->logger,
+            new SafeLogContext(new SecretRedactor(), new CorrelationId('corr-test')),
+        );
+    }
+
+    /**
+     * The readiness checks are a safety net behind the SQL filter. When one fires it must say so, using
+     * only ids and a fixed reason — never a filename, a stored path, document content or a credential.
+     */
+    public function testSkippedDocumentIsLoggedWithSafeFieldsOnly(): void
+    {
+        // Knowledge base left unprovisioned, so the safety net fires.
+        $this->drainer()->drain(5);
+
+        $logged = $this->logger->everything();
+
+        assertStringContainsString('document processing skipped', $logged);
+        assertStringContainsString('knowledge_base_not_ready', $logged);
+        assertStringContainsString('"document_id":' . self::DOC, $logged);
+
+        // Nothing identifying or sensitive may appear.
+        assertStringNotContainsString('sk-test', $logged);
+        assertStringNotContainsString('stored_path', $logged);
+        assertStringNotContainsString('.txt', $logged);
+    }
+
+    /**
+     * The ordering rule this pins: a document already uploaded and waiting to be polled is picked before
+     * fresh queued work, even though there is only one slot per run.
+     *
+     * Without it, never-scheduled documents (next_attempt_at NULL, which MySQL sorts FIRST in ASC)
+     * monopolise every run, indexing documents are never polled, and nothing reaches `ready`.
+     */
+    public function testDueIndexingDocumentIsPolledBeforeFreshQueuedWork(): void
+    {
+        $repository = new InMemoryDocumentProcessingRepository();
+        // Fresh queued work with the LOWER id, so id-ordering alone would pick it first.
+        $repository->seed($this->documentWith(1, DocumentStatus::Queued));
+        // An indexing document with a HIGHER id whose poll is already due.
+        $repository->seed(
+            $this->documentWith(2, DocumentStatus::Indexing),
+            $this->clock->now()->modify('-10 seconds'),
+        );
+
+        $picked = $repository->findProcessable(1, $this->clock->now());
+
+        assertSame(1, count($picked));
+        assertSame(2, $picked[0]->id(), 'the due indexing document must win the single slot');
+    }
+
+    /**
+     * The complement, and what stops this trading one starvation for its mirror image: when no poll is
+     * due, fresh queued work proceeds as normal.
+     */
+    public function testFreshQueuedWorkResumesWhenNoPollIsDue(): void
+    {
+        $repository = new InMemoryDocumentProcessingRepository();
+        $repository->seed($this->documentWith(1, DocumentStatus::Queued));
+        $repository->seed(
+            $this->documentWith(2, DocumentStatus::Indexing),
+            $this->clock->now()->modify('+5 minutes'),
+        );
+
+        $picked = $repository->findProcessable(1, $this->clock->now());
+
+        assertSame(1, count($picked));
+        assertSame(1, $picked[0]->id(), 'with no due poll, queued work proceeds');
+    }
+
+    /**
+     * A retry scheduled after a transient failure is also work already begun, so it outranks fresh
+     * queued work once its backoff has elapsed.
+     */
+    public function testDueRetryOutranksFreshQueuedWork(): void
+    {
+        $repository = new InMemoryDocumentProcessingRepository();
+        $repository->seed($this->documentWith(1, DocumentStatus::Queued));
+        $repository->seed(
+            $this->documentWith(2, DocumentStatus::Queued),
+            $this->clock->now()->modify('-1 second'),
+        );
+
+        $picked = $repository->findProcessable(1, $this->clock->now());
+
+        assertSame(2, $picked[0]->id(), 'the due retry must be picked before never-scheduled work');
+    }
+
+    private function documentWith(int $id, DocumentStatus $status): Document
+    {
+        $now = new DateTimeImmutable('2026-01-01 00:00:00', new DateTimeZone('UTC'));
+
+        return new Document(
+            id: $id,
+            knowledgeBaseId: self::KB,
+            originalFilename: 'doc.txt',
+            storedPath: 'kb/doc.txt',
+            storageToken: 'tok' . $id,
+            mimeType: 'text/plain',
+            extension: 'txt',
+            sizeBytes: 64,
+            checksumSha256: str_repeat((string) $id, 64),
+            kind: DocumentKind::Text,
+            status: $status,
+            processingAttempts: 0,
+            errorCode: null,
+            errorMessage: null,
+            processedAt: null,
+            createdAt: $now,
+            updatedAt: $now,
         );
     }
 

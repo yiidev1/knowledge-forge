@@ -8,6 +8,7 @@ use App\Document\Domain\Document;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\DocumentProcessingRepositoryInterface;
 use App\Document\Domain\DocumentStatus;
+use App\KnowledgeBase\Domain\VectorStoreStatus;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
@@ -24,6 +25,7 @@ use function is_array;
 final readonly class DbDocumentProcessingRepository implements DocumentProcessingRepositoryInterface
 {
     private const TABLE = '{{%documents}}';
+    private const KNOWLEDGE_BASES_TABLE = '{{%knowledge_bases}}';
 
     public function __construct(
         private ConnectionInterface $connection,
@@ -32,10 +34,35 @@ final readonly class DbDocumentProcessingRepository implements DocumentProcessin
 
     public function findProcessable(int $limit, DateTimeImmutable $now): array
     {
-        $rows = $this->query()
-            ->where(['status' => [DocumentStatus::Queued->value, DocumentStatus::Indexing->value]])
-            ->andWhere(['or', ['next_attempt_at' => null], ['<=', 'next_attempt_at', DbDateTime::format($now)]])
-            ->orderBy(['priority' => SORT_DESC, 'next_attempt_at' => SORT_ASC, 'id' => SORT_ASC])
+        // The knowledge base must already be provisioned, and that has to be expressed HERE rather than
+        // checked after the query returns. The database applies the LIMIT, so a document whose vector
+        // store is not ready would otherwise occupy a slot in the batch only to be discarded in PHP.
+        // With a small batch size that starves every document behind it, and because such a document is
+        // deliberately skipped WITHOUT being claimed, its next_attempt_at stays null and it holds the
+        // head of the ordering on every subsequent run — the queue stops moving permanently.
+        $rows = $this->connection->createQuery()
+            ->select('d.*')
+            ->from(['d' => self::TABLE])
+            ->innerJoin(['kb' => self::KNOWLEDGE_BASES_TABLE], 'kb.id = d.knowledge_base_id')
+            ->where(['d.status' => [DocumentStatus::Queued->value, DocumentStatus::Indexing->value]])
+            ->andWhere(['kb.vector_store_status' => VectorStoreStatus::Ready->value])
+            ->andWhere(['not', ['kb.openai_vector_store_id' => null]])
+            ->andWhere(['or', ['d.next_attempt_at' => null], ['<=', 'd.next_attempt_at', DbDateTime::format($now)]])
+            // Work already begun outranks work not yet started.
+            //
+            // The WHERE above admits a row only when next_attempt_at is null or already past, so a row
+            // that HAS a timestamp here is by definition due: an indexing document waiting to be polled,
+            // or one requeued after a transient failure. Both are finishing something already started —
+            // and, for an indexing document, an OpenAI upload already paid for — so they go first.
+            //
+            // `next_attempt_at IS NULL ASC` is what expresses that. MySQL sorts NULL FIRST in a plain
+            // ASC, so without this clause never-scheduled documents outrank every due poll and retry:
+            // that is exactly how documents reached `indexing` and then sat there while a backlog of
+            // fresh uploads was processed ahead of them.
+            ->orderBy(new Expression(
+                '{{d}}.[[priority]] DESC, {{d}}.[[next_attempt_at]] IS NULL ASC, '
+                . '{{d}}.[[next_attempt_at]] ASC, {{d}}.[[id]] ASC',
+            ))
             ->limit($limit)
             ->all();
 

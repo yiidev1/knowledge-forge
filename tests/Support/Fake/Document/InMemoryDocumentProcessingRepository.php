@@ -10,7 +10,9 @@ use App\Document\Domain\DocumentStatus;
 use DateTimeImmutable;
 
 use function count;
+use function array_keys;
 use function in_array;
+use function uksort;
 
 /**
  * In-memory processing repository. Models the worker-facing lifecycle fields the {@see Document} entity
@@ -54,7 +56,7 @@ final class InMemoryDocumentProcessingRepository implements DocumentProcessingRe
 
     public function findProcessable(int $limit, DateTimeImmutable $now): array
     {
-        $result = [];
+        $due = [];
         foreach ($this->templates as $id => $_) {
             if (!in_array($this->status[$id], [DocumentStatus::Queued, DocumentStatus::Indexing], true)) {
                 continue;
@@ -65,6 +67,30 @@ final class InMemoryDocumentProcessingRepository implements DocumentProcessingRe
                 continue;
             }
 
+            $due[$id] = $next;
+        }
+
+        // Mirrors the SQL ordering: a document with a due next_attempt_at — an indexing poll, or a
+        // retry after a transient failure — is finishing work already started, so it comes before one
+        // that has never been scheduled. Keeping the fake honest about this matters, or the drainer
+        // tests would pass against an ordering the database does not actually produce.
+        uksort($due, static function (int $a, int $b) use ($due): int {
+            $aScheduled = $due[$a] !== null;
+            $bScheduled = $due[$b] !== null;
+
+            if ($aScheduled !== $bScheduled) {
+                return $aScheduled ? -1 : 1;
+            }
+
+            if ($aScheduled && $due[$a] != $due[$b]) {
+                return $due[$a] <=> $due[$b];
+            }
+
+            return $a <=> $b;
+        });
+
+        $result = [];
+        foreach (array_keys($due) as $id) {
             $result[] = $this->rebuild($id);
             if (count($result) >= $limit) {
                 break;
