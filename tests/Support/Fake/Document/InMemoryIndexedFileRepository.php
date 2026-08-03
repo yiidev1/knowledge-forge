@@ -109,6 +109,29 @@ final class InMemoryIndexedFileRepository implements IndexedFileRepositoryInterf
         }
     }
 
+    /**
+     * @return list<int> Document ids that have at least one file flagged for removal.
+     */
+    public function pendingRemovalDocumentIds(): array
+    {
+        $ids = [];
+        foreach ($this->items as $file) {
+            if ($this->pendingRemoval[$file->id] ?? false) {
+                $ids[$file->documentId] = true;
+            }
+        }
+
+        return array_keys($ids);
+    }
+
+    public function seed(int $documentId, IndexedFileRole $role, string $openaiFileId): int
+    {
+        $id = $this->createPending($documentId, $role, null);
+        $this->setUploaded($id, $openaiFileId, IndexStatus::Completed);
+
+        return $id;
+    }
+
     public function findPendingRemoval(int $limit): array
     {
         $result = [];

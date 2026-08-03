@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Ai\OpenAi\OpenAiAdminCredentials;
 use App\Ai\OpenAi\OpenAiCredentials;
 use App\Ai\OpenAi\OpenAiHttpProfile;
+use App\Order58\Application\Order58DisplayParams;
 use App\Order58\Application\Order58SyncParams;
 use App\Order58\Client\Order58Credentials;
 use App\Order58\Client\Order58HttpProfile;
@@ -128,6 +129,12 @@ return [
             'pageSize' => $params['app/order58']['pageSize'],
             'maxAttempts' => $params['app/order58']['syncMaxAttempts'],
             'pagesPerRun' => $params['app/order58']['pagesPerRun'],
+        ],
+    ],
+
+    Order58DisplayParams::class => [
+        '__construct()' => [
+            'showStoreProfileDocuments' => $params['app/order58']['showStoreProfileDocuments'],
         ],
     ],
 

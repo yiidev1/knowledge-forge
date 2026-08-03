@@ -152,7 +152,7 @@ $preparing = !$vs->isReady() && !$preparationFailed;
         <div class="table-wrap" style="margin-bottom: 1.5rem;">
             <table class="table">
                 <thead>
-                    <tr><th>Document</th><th style="width: 170px;">Source</th><th style="width: 90px;">Size</th><th style="width: 130px;">Status</th><th style="width: 320px;"></th></tr>
+                    <tr><th>Document</th><th style="width: 170px;">Source</th><th style="width: 90px;">Size</th><th style="width: 130px;">Status</th><th style="width: 420px;"></th></tr>
                 </thead>
                 <tbody>
                     <?php foreach ($documents as $document): ?>
@@ -160,6 +160,9 @@ $preparing = !$vs->isReady() && !$preparationFailed;
                         <tr>
                             <td>
                                 <strong><?= Html::encode($document->title) ?></strong>
+                                <?php if ($document->isSourceOverridden): ?>
+                                    <span class="badge badge--warning">Local override</span>
+                                <?php endif; ?>
                                 <?php if ($document->errorMessage !== null): ?>
                                     <div class="field__error"><?= Html::encode($document->errorMessage) ?></div>
                                 <?php endif; ?>
@@ -176,16 +179,26 @@ $preparing = !$vs->isReady() && !$preparationFailed;
                                 <?php if ($canManage): ?>
                                     <?php
                                     $docId = $document->id;
+                                    $viewUrl = $urlGenerator->generate('kb.documents.view', ['slug' => $slug, 'documentId' => $docId]);
+                                    $downloadUrl = $urlGenerator->generate('kb.documents.download', ['slug' => $slug, 'documentId' => $docId]);
                                     $retryUrl = $urlGenerator->generate('kb.documents.retry', ['slug' => $slug, 'documentId' => $docId]);
                                     $toggleUrl = $urlGenerator->generate('kb.documents.toggle', ['slug' => $slug, 'documentId' => $docId]);
                                     $editUrl = $urlGenerator->generate('kb.documents.edit.show', ['slug' => $slug, 'documentId' => $docId]);
                                     $deleteUrl = $urlGenerator->generate('kb.documents.delete', ['slug' => $slug, 'documentId' => $docId]);
                                     $processNowUrl = $urlGenerator->generate('kb.documents.process-now', ['slug' => $slug, 'documentId' => $docId]);
                                     $reindexUrl = $urlGenerator->generate('kb.documents.reindex', ['slug' => $slug, 'documentId' => $docId]);
+                                    $resetUrl = $urlGenerator->generate('kb.documents.reset-order58', ['slug' => $slug, 'documentId' => $docId]);
                                     ?>
                                     <div class="table__actions">
-                                        <?php if ($document->isManualText()): ?>
-                                            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($editUrl) ?>">Edit</a>
+                                        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($viewUrl) ?>">View</a>
+                                        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($downloadUrl) ?>">Download</a>
+                                        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($editUrl) ?>">Edit</a>
+                                        <?php if ($document->isOrder58() && $document->isSourceOverridden): ?>
+                                            <form method="post" action="<?= Html::encode($resetUrl) ?>"
+                                                  data-confirm="Reset this document to the latest Order58 version? Your local edits will be discarded.">
+                                                <?= $csrfField ?>
+                                                <button class="btn btn--secondary btn--sm" type="submit">Reset to Order58 version</button>
+                                            </form>
                                         <?php endif; ?>
                                         <form method="post" action="<?= Html::encode($toggleUrl) ?>">
                                             <?= $csrfField ?>

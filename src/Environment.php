@@ -124,6 +124,9 @@ final class Environment
         'ORDER58_API_PAGE_SIZE' => ['type' => 'int', 'default' => 100, 'min' => 1, 'max' => 500],
         'ORDER58_SYNC_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
         'ORDER58_SYNC_PAGES_PER_RUN' => ['type' => 'int', 'default' => 1000, 'min' => 1, 'max' => 100000],
+        // When false, Order58 store-profile documents stay in the DB/index but are hidden on the KB
+        // documents list. Set true to show them again without code changes.
+        'ORDER58_SHOW_STORE_PROFILE_DOCUMENTS' => ['type' => 'bool', 'default' => false],
 
         // Storage and upload limits.
         'KNOWLEDGE_STORAGE_PATH' => ['type' => 'string', 'default' => '@runtime/storage'],

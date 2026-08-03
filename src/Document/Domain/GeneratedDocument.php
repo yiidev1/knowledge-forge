@@ -17,6 +17,7 @@ final readonly class GeneratedDocument
         public string $status,
         public string $storedPath,
         public string $storageToken,
+        public bool $isSourceOverridden = false,
     ) {}
 
     public function isDeleted(): bool

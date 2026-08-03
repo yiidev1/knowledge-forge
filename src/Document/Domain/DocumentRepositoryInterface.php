@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Document\Domain;
 
+use DateTimeImmutable;
+
 /**
  * Persistence boundary for documents. Returns typed entities; every read and write is scoped by
  * knowledge base where a caller could otherwise reach across bases.
@@ -11,6 +13,11 @@ namespace App\Document\Domain;
 interface DocumentRepositoryInterface
 {
     public function findByIdForKnowledgeBase(int $documentId, int $knowledgeBaseId): ?Document;
+
+    /**
+     * Canonical source row for View / Download / Edit (includes source_type and override flag).
+     */
+    public function findCanonicalForKnowledgeBase(int $documentId, int $knowledgeBaseId): ?CanonicalDocument;
 
     /**
      * @return list<Document> Non-deleted documents for the knowledge base, newest first.
@@ -31,8 +38,10 @@ interface DocumentRepositoryInterface
     /**
      * Whether a live document with this checksum already exists in the knowledge base. A fast
      * pre-check; the database's unique index is the actual guarantee against a race.
+     *
+     * @param int|null $exceptDocumentId When replacing a file, exclude the document being updated.
      */
-    public function liveChecksumExists(string $checksum, int $knowledgeBaseId): bool;
+    public function liveChecksumExists(string $checksum, int $knowledgeBaseId, ?int $exceptDocumentId = null): bool;
 
     /**
      * Inserts a queued document.
@@ -59,4 +68,47 @@ interface DocumentRepositoryInterface
      * the queue. "Process now" — enqueue-only, no remote work in the request.
      */
     public function bumpPriority(int $documentId): void;
+
+    /**
+     * Title-only update (no requeue). Used when the indexed bytes are unchanged.
+     */
+    public function updateTitle(int $documentId, string $title, DateTimeImmutable $now): void;
+
+    /**
+     * Replaces binary source metadata after a successful file swap and requeues fresh.
+     */
+    public function replaceBinarySource(
+        int $documentId,
+        string $title,
+        string $originalFilename,
+        string $mimeType,
+        string $extension,
+        int $sizeBytes,
+        string $checksum,
+        DateTimeImmutable $now,
+    ): void;
+
+    /**
+     * Applies Order58 local override content and requeues. Sets is_source_overridden = 1.
+     */
+    public function applySourceOverride(
+        int $documentId,
+        string $title,
+        string $checksum,
+        int $sizeBytes,
+        DateTimeImmutable $now,
+        bool $requeue = true,
+    ): void;
+
+    /**
+     * Restores Order58 upstream content, clears override, and requeues.
+     */
+    public function clearSourceOverride(
+        int $documentId,
+        string $title,
+        string $syncHash,
+        string $checksum,
+        int $sizeBytes,
+        DateTimeImmutable $now,
+    ): void;
 }

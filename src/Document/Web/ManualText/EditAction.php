@@ -4,45 +4,56 @@ declare(strict_types=1);
 
 namespace App\Document\Web\ManualText;
 
+use App\Document\Application\ServeCanonicalDocumentService;
+use App\Document\Domain\DocumentKind;
 use App\Document\Domain\Exception\DocumentNotFound;
-use App\Document\Domain\TextDocumentRepositoryInterface;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
- * The "Edit manual text" form (GET /knowledge-bases/{slug}/documents/{documentId}/edit).
- *
- * Only manual-text documents are editable: an uploaded file resolves through the same not-found path as a
- * missing id, so the form never opens on content the admin cannot safely rewrite. The stored original text
- * is shown verbatim for editing — the normalized, indexed copy is derived from it on save.
+ * GET …/documents/{id}/edit — type-aware edit form (manual, uploaded text, Order58, PDF/image).
  */
 final readonly class EditAction
 {
     public function __construct(
         private WebViewRenderer $viewRenderer,
         private KnowledgeBaseFinder $finder,
-        private TextDocumentRepositoryInterface $texts,
+        private ServeCanonicalDocumentService $serve,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug, #[RouteArgument] int $documentId): ResponseInterface
     {
         $knowledgeBase = $this->finder->bySlug($slug);
+        $document = $this->serve->find($documentId, $knowledgeBase->id());
 
-        $document = $this->texts->findEditable($documentId, $knowledgeBase->id());
-        if ($document === null || !$document->isManual()) {
-            throw DocumentNotFound::inKnowledgeBase($documentId, $knowledgeBase->id());
+        if ($document->isManualText() || $document->isUploadedText() || $document->isOrder58()) {
+            $content = $this->serve->textBody($document);
+
+            return $this->viewRenderer
+                ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+                ->render(__DIR__ . '/form', [
+                    'knowledgeBase' => $knowledgeBase,
+                    'mode' => 'edit',
+                    'documentId' => $document->id,
+                    'title' => $document->displayTitle(),
+                    'content' => $content,
+                    'sourceType' => $document->sourceType,
+                    'isSourceOverridden' => $document->isSourceOverridden,
+                    'readOnly' => false,
+                ]);
         }
 
-        return $this->viewRenderer
-            ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
-            ->render(__DIR__ . '/form', [
-                'knowledgeBase' => $knowledgeBase,
-                'mode' => 'edit',
-                'documentId' => $document->id,
-                'title' => $document->title,
-                'content' => $document->sourceText,
-            ]);
+        if ($document->kind === DocumentKind::Pdf || $document->kind === DocumentKind::Image) {
+            return $this->viewRenderer
+                ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+                ->render(__DIR__ . '/binary-form', [
+                    'knowledgeBase' => $knowledgeBase,
+                    'document' => $document,
+                ]);
+        }
+
+        throw DocumentNotFound::inKnowledgeBase($documentId, $knowledgeBase->id());
     }
 }

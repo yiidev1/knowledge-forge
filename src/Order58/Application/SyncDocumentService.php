@@ -24,6 +24,10 @@ use function strlen;
  * re-index). A changed record's text is rewritten, its old index files are flagged for removal (so the old
  * vector-store copy survives until the replacement indexes), and the document is requeued fresh. A
  * disappeared record's document is disabled and scheduled for removal, preserving audit history.
+ *
+ * When {@see GeneratedDocument::$isSourceOverridden} is true, upstream changes still update mirror tables
+ * (handled by sync handlers) but this service leaves the local document title and file alone until an
+ * administrator resets the override.
  */
 final readonly class SyncDocumentService
 {
@@ -49,6 +53,11 @@ final readonly class SyncDocumentService
 
         if (!$force && $existing !== null && !$existing->isDeleted() && $existing->sourceSyncHash === $syncHash) {
             return GeneratedDocumentUpsert::Unchanged;
+        }
+
+        if ($existing !== null && !$existing->isDeleted() && $existing->isSourceOverridden) {
+            // Local override wins: do not overwrite title/body, do not requeue.
+            return GeneratedDocumentUpsert::SkippedOverride;
         }
 
         // Salt the content checksum with the source ref so two distinct source records with identical text

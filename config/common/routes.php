@@ -107,6 +107,12 @@ return [
             Route::post('/knowledge-bases/{slug}/documents')
                 ->action(Doc\Upload\Action::class)
                 ->name('kb.documents.upload'),
+            Route::get('/knowledge-bases/{slug}/documents/{documentId:\d+}/view')
+                ->action(Doc\View\Action::class)
+                ->name('kb.documents.view'),
+            Route::get('/knowledge-bases/{slug}/documents/{documentId:\d+}/download')
+                ->action(Doc\Download\Action::class)
+                ->name('kb.documents.download'),
             Route::post('/knowledge-bases/{slug}/documents/{documentId:\d+}/delete')
                 ->action(Doc\Delete\Action::class)
                 ->name('kb.documents.delete'),
@@ -122,6 +128,9 @@ return [
             Route::post('/knowledge-bases/{slug}/documents/{documentId:\d+}/toggle')
                 ->action(Doc\Toggle\Action::class)
                 ->name('kb.documents.toggle'),
+            Route::post('/knowledge-bases/{slug}/documents/{documentId:\d+}/reset-order58')
+                ->action(Doc\ResetOrder58\Action::class)
+                ->name('kb.documents.reset-order58'),
 
             // Manual text: a typed knowledge document. The edit form is nested under the document id; the
             // GET/POST pairs share a path but need distinct route names.

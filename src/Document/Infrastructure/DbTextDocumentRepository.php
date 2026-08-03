@@ -32,7 +32,7 @@ final readonly class DbTextDocumentRepository implements TextDocumentRepositoryI
     {
         $row = $this->connection
             ->createQuery()
-            ->select(['id', 'source_type', 'title', 'original_filename', 'source_text', 'checksum_sha256', 'stored_path'])
+            ->select(['id', 'source_type', 'title', 'original_filename', 'source_text', 'checksum_sha256', 'stored_path', 'is_source_overridden'])
             ->from(self::TABLE)
             ->where(['id' => $documentId, 'knowledge_base_id' => $knowledgeBaseId])
             ->andWhere(['<>', 'status', DocumentStatus::Deleted->value])
@@ -43,13 +43,16 @@ final readonly class DbTextDocumentRepository implements TextDocumentRepositoryI
             return null;
         }
 
+        $sourceText = $row['source_text'] === null ? '' : (string) $row['source_text'];
+
         return new EditableTextDocument(
             id: (int) $row['id'],
             sourceType: DocumentSourceType::from((string) $row['source_type']),
             title: $this->title($row['title'] ?? null, $row['original_filename'] ?? null),
-            sourceText: $row['source_text'] === null ? '' : (string) $row['source_text'],
+            sourceText: $sourceText,
             checksum: (string) $row['checksum_sha256'],
             storedPath: (string) $row['stored_path'],
+            isSourceOverridden: (bool) (int) ($row['is_source_overridden'] ?? 0),
         );
     }
 
@@ -111,7 +114,7 @@ final readonly class DbTextDocumentRepository implements TextDocumentRepositoryI
     {
         $rows = $this->connection
             ->createQuery()
-            ->select(['id', 'title', 'original_filename', 'source_type', 'kind', 'status', 'is_enabled', 'size_bytes', 'error_message', 'created_at'])
+            ->select(['id', 'title', 'original_filename', 'source_type', 'kind', 'status', 'is_enabled', 'size_bytes', 'error_message', 'created_at', 'is_source_overridden'])
             ->from(self::TABLE)
             ->where(['knowledge_base_id' => $knowledgeBaseId])
             ->andWhere(['<>', 'status', DocumentStatus::Deleted->value])
@@ -133,6 +136,7 @@ final readonly class DbTextDocumentRepository implements TextDocumentRepositoryI
                 sizeBytes: (int) $row['size_bytes'],
                 errorMessage: $row['error_message'] === null ? null : (string) $row['error_message'],
                 createdAt: DbDateTime::parse((string) $row['created_at']),
+                isSourceOverridden: (bool) (int) ($row['is_source_overridden'] ?? 0),
             );
         }
 

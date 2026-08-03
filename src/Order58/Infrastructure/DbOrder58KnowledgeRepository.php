@@ -121,6 +121,18 @@ final readonly class DbOrder58KnowledgeRepository implements Order58KnowledgeRep
         return $records;
     }
 
+    public function findBySourceId(int $sourceId): ?KnowledgeMirror
+    {
+        $row = $this->connection
+            ->createQuery()
+            ->from(self::TABLE)
+            ->where(['source_id' => $sourceId])
+            ->limit(1)
+            ->one();
+
+        return is_array($row) ? $this->hydrate($row) : null;
+    }
+
     public function countAll(): int
     {
         return (int) $this->connection->createQuery()->from(self::TABLE)->count();

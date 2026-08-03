@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Document\Web\ManualText;
 
+use App\Document\Domain\DocumentSourceType;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -31,6 +32,9 @@ final readonly class ShowAction
                 'documentId' => null,
                 'title' => '',
                 'content' => '',
+                'sourceType' => DocumentSourceType::ManualText,
+                'isSourceOverridden' => false,
+                'readOnly' => false,
             ]);
     }
 }

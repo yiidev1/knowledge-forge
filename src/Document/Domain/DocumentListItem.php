@@ -24,11 +24,17 @@ final readonly class DocumentListItem
         public int $sizeBytes,
         public ?string $errorMessage,
         public DateTimeImmutable $createdAt,
+        public bool $isSourceOverridden = false,
     ) {}
 
     public function isManualText(): bool
     {
         return $this->sourceType === DocumentSourceType::ManualText;
+    }
+
+    public function isOrder58(): bool
+    {
+        return $this->sourceType->isOrder58Generated();
     }
 
     /**

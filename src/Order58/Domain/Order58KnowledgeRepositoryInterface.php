@@ -37,6 +37,11 @@ interface Order58KnowledgeRepositoryInterface
      */
     public function findAllForStore(int $storeSourceId): array;
 
+    /**
+     * One knowledge mirror by Order58 source id (for Reset to Order58).
+     */
+    public function findBySourceId(int $sourceId): ?KnowledgeMirror;
+
     public function countAll(): int;
 
     public function countActive(): int;

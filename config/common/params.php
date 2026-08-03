@@ -131,6 +131,7 @@ return [
         'pageSize' => Environment::int('ORDER58_API_PAGE_SIZE'),
         'syncMaxAttempts' => Environment::int('ORDER58_SYNC_MAX_ATTEMPTS'),
         'pagesPerRun' => Environment::int('ORDER58_SYNC_PAGES_PER_RUN'),
+        'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
     ],
 
     'app/usage' => [
