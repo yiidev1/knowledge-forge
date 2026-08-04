@@ -160,10 +160,53 @@ Key columns & statuses:
 - `active_key` (UNIQUE, generated) — **coalescing**: a second click of the same operation while one is already
   pending/running is rejected as a duplicate, so you never double-run or double-load Order58.
 
-### 4.7 The rest (brief)
+### 4.7 `conversations` — one persistent thread per store + participant
+Why: chat history is **not** a list of many “start conversation” threads. There is **exactly one**
+canonical thread per Knowledge Base and logged-in participant.
+
+Key columns & uniqueness:
+- `knowledge_base_id` — which store/KB this thread belongs to (never switches).
+- `participant_type` **varchar** — `admin` | `agent`. Discriminator so numeric ids cannot collide.
+- `participant_id` **bigint unsigned** — for `admin`: local `admin_users.id`; for `agent`: Order58
+  `admin_id` (the agent’s identity).
+- **UNIQUE** `ux_conversations_kb_participant_typed` on
+  `(knowledge_base_id, participant_type, participant_id)`.
+- `agent_admin_id` — **legacy/compat only**. Kept in sync on write: `NULL` for admin threads, agent
+  id for agent threads. Application ownership uses `participant_type` + `participant_id`, not this
+  column alone.
+- `title` — usually the KB/store name; not used to create separate visible conversations.
+- `last_message_at` — sorts activity; recalculated when messages are added.
+
+Who owns which thread:
+
+| Who | `participant_type` | `participant_id` | Example |
+|-----|--------------------|------------------|---------|
+| Logged-in KF admin | `admin` | `admin_users.id` | Admin 1 on store A ≠ Admin 2 on store A |
+| Logged-in Order58 agent | `agent` | Order58 `admin_id` | Agent 139 on store A ≠ Agent 20 on store A |
+
+**Why type + id (not a single number):** KF admin id `1` and Order58 agent id `1` are different people.
+A plain numeric key would collide. `participant_type` separates them.
+
+**Older design (removed):** shared admin used `agent_admin_id IS NULL` and a generated
+`participant_key = COALESCE(agent_admin_id, 0)` so **all admins shared one thread** per store. That
+is gone. Migration `M260804120000TypedChatParticipants` backfilled shared admin rows to the sole
+active admin when exactly one existed; otherwise it refused to guess.
+
+### 4.8 `messages` — turns inside one conversation
+Why: user + assistant turns for a single thread; UI and OpenAI history both read from here.
+Key columns:
+- `conversation_id` — parent thread.
+- `role` — `user` | `assistant`.
+- `content`, `citations_json`, `usage_json`, `is_grounded`, `retrieval_status`, `openai_response_id`,
+  `model`, `created_at`.
+- Ordered for display as `created_at ASC, id ASC`.
+- UI loads the newest ~40 and can load older via cursor (`before_message_id`).
+- OpenAI prompt history is **bounded separately** (`CHAT_HISTORY_MESSAGE_LIMIT` /
+  `CHAT_HISTORY_CHAR_LIMIT`) — a long thread does not send the whole lifetime history to the model.
+
+### 4.9 The rest (brief)
 - `order58_knowledge_records` — mirrored Order58 knowledge entries (become `order58_knowledge` documents).
 - `order58_agents` — safe agent profiles (no credentials); used to gate agent login (`user_type = agent`).
-- `conversations` + `messages` — chat threads and turns; `messages.is_grounded` marks a cited answer.
 - `knowledge_base_rules` — extra answering rules per KB.
 - `admin_users`, `auth_login_attempts` — admin accounts + login throttling.
 - `ai_operations` — ledger of OpenAI calls (idempotency/reliability).
@@ -282,15 +325,79 @@ vector store".
 
 ## 8. Step by step: chatting with a store
 
-1. Admin opens **Store chat** (`/admin/order58/store-chat`) or the store's **Open chat**; agents use `/agent`.
-2. You need a **chat-ready** KB: `vector_store_status = ready` **and** ≥1 `ready`, enabled document. Otherwise
-   the page shows "No documents have finished indexing yet."
-3. You ask a question → a `conversations` row + a user `messages` row.
-4. The assistant searches **only this KB's vector store** (OpenAI file search), applies the KB's
-   `system_instructions` and rules, and answers.
-5. The answer is grounded: it is checked against retrieved sources, citations are attached, and
-   `messages.is_grounded` is set. If nothing relevant is found, it says so rather than inventing an answer.
-6. A conversation is permanently bound to its store/KB — it can never switch stores.
+Chat is a **WhatsApp-style single persistent thread** per store and logged-in participant — not a list of
+many conversations you must “Start” each time.
+
+### 8.1 Who gets which thread
+
+```
+Store / Knowledge Base A
+  ├── Admin 1 thread   (participant_type=admin,  participant_id=1)
+  ├── Admin 2 thread   (participant_type=admin,  participant_id=2)   ← separate history
+  ├── Agent 10 thread  (participant_type=agent,  participant_id=10)
+  └── Agent 20 thread  (participant_type=agent,  participant_id=20)
+
+Store / Knowledge Base B
+  ├── Admin 1 thread   (different row from Admin 1 on store A)
+  └── Agent 10 thread  (different row from Agent 10 on store A)
+```
+
+Isolation rules (always enforced in lookup and history):
+
+- Store A admin ≠ Store B admin (different `knowledge_base_id`).
+- Store A admin ≠ Store A agent (different `participant_type`).
+- Store A agent 10 ≠ Store A agent 20 (different `participant_id`).
+- Admin id `1` ≠ Agent id `1` (type separates them).
+- Opening another participant’s `conversationId` URL → **404** (never redirects into their history).
+
+### 8.2 Opening chat (GET — lookup only, no insert)
+
+1. Admin: **Store chat** (`/admin/order58/store-chat`) or the store card’s chat icon →
+   `GET /knowledge-bases/{slug}/chat`. Agent: `GET /agent/stores/{slug}/chat`.
+2. You need a **chat-ready** KB: `vector_store_status = ready` **and** ≥1 `ready`, enabled document.
+   Otherwise the composer is blocked with an explanation.
+3. The app resolves the participant:
+   - Admin → `CurrentAdmin` → `ChatParticipant::admin(admin_users.id)`.
+   - Agent → `CurrentAgent` → `ChatParticipant::agent(Order58 admin_id)`.
+4. It **looks up** the canonical conversation. If none exists yet → empty state (“Ask your first
+   question”). **No `conversations` row is created on GET** (browsing alone never leaves empty threads).
+5. If a thread exists → load the newest ~40 messages; show **Load older messages** when more exist.
+6. Header shows the **store / KB name**. Newest messages are at the bottom; page scrolls there on load.
+
+### 8.3 Sending a message (POST — find or create, then answer)
+
+1. Composer POSTs to the same slug URL (`chat.start` / `agent.chat.start`). Transport is normal
+   **POST + redirect** (no WebSockets / SSE). The UI may show “Sending…” / “Thinking…” while waiting.
+2. **findOrCreate** the canonical thread for `(knowledge_base_id, participant_type, participant_id)`:
+   - Insert if missing.
+   - If two requests race, the unique index makes one win; the other catches the duplicate-key error,
+     **re-selects** the existing row, and continues — the user never sees a race error.
+3. Save the user message → call OpenAI **Responses API with File Search** on **this KB’s vector store
+   only** → save the assistant message (citations, grounding, usage) on the **same** conversation.
+4. Redirect back to the slug chat page (same persistent thread). Further questions always reuse it.
+
+Legacy URLs with `{conversationId}` still work for bookmarks: if the id belongs to the **current**
+participant and KB → redirect to the slug chat; otherwise → **404**.
+
+### 8.4 History pagination vs OpenAI context (do not confuse them)
+
+| Layer | Behaviour |
+|-------|-----------|
+| **UI** | Newest 40 messages; “Load older” uses a stable cursor `(created_at, id)` via `/chat/history`. |
+| **OpenAI** | Only a **bounded** recent window (`CHAT_HISTORY_MESSAGE_LIMIT` / `CHAT_HISTORY_CHAR_LIMIT`) is sent. A long persistent thread does **not** grow prompt cost forever. |
+
+File Search, citations, grounding checks, and model selection are unchanged by the ownership redesign.
+
+### 8.5 Ops / migration notes (typed participants)
+
+```bash
+php yii chat:participant-backfill-report --write=default   # before migrate on a new environment
+php yii migrate:up                                         # applies M260804120000TypedChatParticipants
+```
+
+- Prefer a **mysqldump** before migrate. `migrate:down` only restores the old unique shape when each KB
+  has at most one admin thread; if multiple admins already have separate threads, down **aborts** and
+  you restore from the dump. It never deletes or merges messages.
 
 ---
 
@@ -346,3 +453,11 @@ Watch progress: `tail -f runtime/logs/worker.log`.
   indexed copy).
 - **"Who can an agent chat with?"** → `source_active = 1 AND agent_enabled = 1 AND vector_store_status = ready
   AND ≥1 enabled, ready document`. `account_id` never matters.
+- **"Do all admins share one chat per store?"** → **No.** Each admin has their own persistent thread
+  (`participant_type=admin`, `participant_id=admin_users.id`). Agents likewise each have their own
+  (`participant_type=agent`, Order58 `admin_id`).
+- **"Does opening chat create a conversation?"** → **No.** GET only looks up. The first **POST** (send
+  a question) find-or-creates the canonical thread.
+- **"Can admin 1 and agent 1 collide?"** → **No.** Ownership is `(type, id)`, not a single number.
+- **"Is chat real-time / sockets?"** → **No.** Normal form POST → OpenAI → redirect. Progressive
+  “Sending… / Thinking…” UI only.

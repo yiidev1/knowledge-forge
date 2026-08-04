@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Chat\Web\Index;
 
 use App\Auth\Application\CurrentAdmin;
+use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\ChatParams;
 use App\Chat\Application\FindOrCreateThreadService;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
-use App\Document\Domain\DocumentRepositoryInterface;
+use App\Chat\Web\MessageEditView;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
+use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -27,19 +30,23 @@ final readonly class Action
         private KnowledgeBaseFinder $finder,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
-        private DocumentRepositoryInterface $documents,
+        private ChatAvailabilityPolicy $availability,
         private MarkdownRenderer $markdown,
         private CurrentAdmin $currentAdmin,
+        private ClockInterface $clock,
+        private ChatParams $params,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug): ResponseInterface
     {
         $knowledgeBase = $this->finder->bySlug($slug);
-        $readyDocuments = $this->documents->countReadyForKnowledgeBase($knowledgeBase->id());
+        $reason = $this->availability->getUnavailableReason($knowledgeBase);
+        $chatReady = $reason->isAvailable();
         $participant = ChatParticipant::admin($this->currentAdmin->get()->id());
         $conversation = $this->threads->find($knowledgeBase->id(), $participant);
         $messages = [];
         $hasOlder = false;
+        $editView = MessageEditView::none();
 
         if ($conversation !== null) {
             $messages = $this->messages->findRecentByConversation(
@@ -48,6 +55,14 @@ final readonly class Action
             );
             $total = $this->messages->countByConversation($conversation->id);
             $hasOlder = $total > count($messages);
+            $editView = MessageEditView::compute(
+                $this->messages,
+                $conversation->id,
+                $messages,
+                $chatReady,
+                $this->clock->now(),
+                $this->params->editWindowMinutes,
+            );
         }
 
         return $this->viewRenderer
@@ -57,9 +72,12 @@ final readonly class Action
                 'conversation' => $conversation,
                 'messages' => $messages,
                 'hasOlder' => $hasOlder,
-                'chatReady' => $knowledgeBase->isReadyForChat() && $readyDocuments > 0,
+                'chatReady' => $chatReady,
                 'provisioned' => $knowledgeBase->isReadyForChat(),
+                'unavailableMessage' => $reason->message(),
                 'markdown' => $this->markdown,
+                'editView' => $editView,
+                'maxQuestionLength' => $this->params->maxQuestionLength,
             ]);
     }
 }

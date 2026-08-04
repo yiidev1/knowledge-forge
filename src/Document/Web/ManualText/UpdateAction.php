@@ -49,8 +49,10 @@ final readonly class UpdateAction
     ) {}
 
     public function __invoke(
-        #[RouteArgument] string $slug,
-        #[RouteArgument] int $documentId,
+        #[RouteArgument]
+        string $slug,
+        #[RouteArgument]
+        int $documentId,
         ServerRequestInterface $request,
     ): ResponseInterface {
         $knowledgeBase = $this->finder->bySlug($slug);

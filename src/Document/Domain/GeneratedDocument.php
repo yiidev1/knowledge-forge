@@ -18,10 +18,20 @@ final readonly class GeneratedDocument
         public string $storedPath,
         public string $storageToken,
         public bool $isSourceOverridden = false,
+        public bool $isEnabled = true,
     ) {}
 
     public function isDeleted(): bool
     {
         return $this->status === DocumentStatus::Deleted->value;
+    }
+
+    /**
+     * Explicitly disabled by an admin — as distinct from the Order58 "deleted" tombstone. A resync must not
+     * silently revive it (re-enable / re-index), so the sync leaves it untouched until the admin re-enables.
+     */
+    public function isAdminDisabled(): bool
+    {
+        return !$this->isEnabled && !$this->isDeleted();
     }
 }

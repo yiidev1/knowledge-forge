@@ -73,7 +73,7 @@ final readonly class Action
         $payload = [
             'has_older' => $hasOlder,
             'messages' => array_map(
-                fn(Message $m): array => $this->serialize($m),
+                $this->serialize(...),
                 $older,
             ),
         ];

@@ -15,6 +15,8 @@ enum GeneratedDocumentUpsert
     case Unchanged;
     /** Upstream changed but the document has a local override — mirror may update; document left alone. */
     case SkippedOverride;
+    /** Upstream changed but an admin explicitly disabled the document — left disabled and untouched. */
+    case SkippedDisabled;
 
     /**
      * True when work was queued for indexing (created or re-indexed).

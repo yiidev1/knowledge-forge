@@ -7,8 +7,10 @@ use App\Chat\Application\History\ConversationHistoryPolicyInterface;
 use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
+use App\Chat\Domain\MessageRevisionRepositoryInterface;
 use App\Chat\Infrastructure\DbConversationRepository;
 use App\Chat\Infrastructure\DbMessageRepository;
+use App\Chat\Infrastructure\DbMessageRevisionRepository;
 
 /** @var array $params */
 
@@ -17,6 +19,7 @@ use App\Chat\Infrastructure\DbMessageRepository;
 return [
     ConversationRepositoryInterface::class => DbConversationRepository::class,
     MessageRepositoryInterface::class => DbMessageRepository::class,
+    MessageRevisionRepositoryInterface::class => DbMessageRevisionRepository::class,
 
     ConversationHistoryPolicyInterface::class => [
         'class' => RecentMessagesHistoryPolicy::class,
@@ -39,6 +42,7 @@ return [
             'reasoningEffort' => $params['app/chat']['reasoningEffort'],
             'exhaustiveMaxResults' => $params['app/chat']['exhaustiveMaxResults'],
             'truncatedMessage' => $params['app/chat']['truncatedMessage'],
+            'editWindowMinutes' => $params['app/chat']['editWindowMinutes'],
         ],
     ],
 ];

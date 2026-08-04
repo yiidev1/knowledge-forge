@@ -31,9 +31,26 @@ interface DocumentRepositoryInterface
 
     /**
      * Count of documents that finished indexing, so chat can refuse to run against a base with nothing
-     * searchable yet.
+     * searchable yet. Counts every source type (including the Order58 store profile) and is used for
+     * vector-store inventory/usage reporting — NOT for chat availability, which uses the usable-snapshot
+     * checks below.
      */
     public function countReadyForKnowledgeBase(int $knowledgeBaseId): int;
+
+    /**
+     * Whether this knowledge base has a usable Order58 store-profile snapshot: an `order58_store_profile`
+     * document, enabled and not deleted, that currently has a completed vector-store file. Resilient to a
+     * resync in progress or a failed refresh — the previous completed file keeps it usable until a
+     * replacement is fully indexed. Scoped strictly to $knowledgeBaseId.
+     */
+    public function hasUsableOrder58StoreProfile(int $knowledgeBaseId): bool;
+
+    /**
+     * Whether this knowledge base has at least one usable *qualifying* document: enabled, not deleted, with
+     * a completed vector-store file, and whose source type is anything except `order58_store_profile` (the
+     * store profile never satisfies the qualifying-document requirement). Scoped strictly to $knowledgeBaseId.
+     */
+    public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool;
 
     /**
      * Whether a live document with this checksum already exists in the knowledge base. A fast

@@ -12,6 +12,7 @@ use App\Ai\Contract\Dto\RawCitation;
 use App\Auth\Application\CurrentAdmin;
 use App\Auth\Domain\AdminUser;
 use App\Chat\Application\AskKnowledgeBaseService;
+use App\Chat\Application\ChatAvailabilityPolicy;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\FindOrCreateThreadService;
@@ -36,6 +37,7 @@ use App\Tests\Support\Fake\Chat\InMemoryMessageRepository;
 use App\Tests\Support\Fake\Document\InMemoryDocumentRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
+use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseSourceRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryRuleRepository;
 use App\Tests\Support\Fake\Shared\RecordingSession;
 use App\Tests\Support\MutableClock;
@@ -89,6 +91,7 @@ final class ChatSessionReleaseTest extends Unit
 
         $this->knowledgeBases->seedReady(self::KB, 'hr-docs', 'vs_1');
         $this->documents->seed(self::DOC, self::KB, DocumentStatus::Ready);
+        $this->documents->setUsableQualifyingDocument(self::KB, true);
         $fileId = $this->indexedFiles->createPending(self::DOC, IndexedFileRole::DerivedMarkdown, 'derived/x.md');
         $this->indexedFiles->setUploaded($fileId, 'file_1', IndexStatus::Completed);
 
@@ -169,7 +172,7 @@ final class ChatSessionReleaseTest extends Unit
             new FindOrCreateThreadService($this->conversations, $clock),
             $this->messages,
             $this->rules,
-            $this->documents,
+            new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
             $this->recordingProvider(),
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),

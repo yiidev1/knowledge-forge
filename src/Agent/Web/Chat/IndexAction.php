@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Agent\Web\Chat;
 
 use App\Agent\Application\CurrentAgent;
+use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\ChatParams;
 use App\Chat\Application\FindOrCreateThreadService;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
-use App\Document\Domain\DocumentRepositoryInterface;
+use App\Chat\Web\MessageEditView;
+use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -26,18 +29,23 @@ final readonly class IndexAction
         private AgentStoreResolver $resolver,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
-        private DocumentRepositoryInterface $documents,
+        private ChatAvailabilityPolicy $availability,
         private CurrentAgent $currentAgent,
         private MarkdownRenderer $markdown,
+        private ClockInterface $clock,
+        private ChatParams $params,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug): ResponseInterface
     {
         $knowledgeBase = $this->resolver->resolve($slug);
+        $reason = $this->availability->getUnavailableReason($knowledgeBase);
+        $chatReady = $reason->isAvailable();
         $participant = ChatParticipant::agent($this->currentAgent->get()->adminId);
         $conversation = $this->threads->find($knowledgeBase->id(), $participant);
         $messages = [];
         $hasOlder = false;
+        $editView = MessageEditView::none();
 
         if ($conversation !== null) {
             $messages = $this->messages->findRecentByConversation(
@@ -45,6 +53,14 @@ final readonly class IndexAction
                 ChatThreadParams::RECENT_MESSAGE_LIMIT,
             );
             $hasOlder = $this->messages->countByConversation($conversation->id) > count($messages);
+            $editView = MessageEditView::compute(
+                $this->messages,
+                $conversation->id,
+                $messages,
+                $chatReady,
+                $this->clock->now(),
+                $this->params->editWindowMinutes,
+            );
         }
 
         return $this->viewRenderer
@@ -54,9 +70,11 @@ final readonly class IndexAction
                 'conversation' => $conversation,
                 'messages' => $messages,
                 'hasOlder' => $hasOlder,
-                'chatReady' => $knowledgeBase->isReadyForChat()
-                    && $this->documents->countReadyForKnowledgeBase($knowledgeBase->id()) > 0,
+                'chatReady' => $chatReady,
+                'unavailableMessage' => $reason->message(),
                 'markdown' => $this->markdown,
+                'editView' => $editView,
+                'maxQuestionLength' => $this->params->maxQuestionLength,
             ]);
     }
 }

@@ -1,0 +1,76 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Chat\Application;
+
+use App\Chat\Domain\Exception\ChatUnavailable;
+use App\Document\Domain\DocumentRepositoryInterface;
+use App\KnowledgeBase\Domain\KnowledgeBase;
+use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
+
+/**
+ * The one canonical decision for whether a knowledge base can be chatted with — shared by the admin and
+ * agent surfaces and by every server-side chat operation. Availability rules live nowhere else (no
+ * controller, template, agent service, or JavaScript duplicates them).
+ *
+ * The rule, evaluated from current database state and always scoped to the one knowledge base:
+ * - the base is active and its vector store is usable ({@see KnowledgeBase::isReadyForChat()}), AND
+ * - it has at least one usable *qualifying* (non-store-profile) document, AND
+ * - if it is Order58-linked, it also has a usable Order58 store-profile snapshot.
+ *
+ * "Usable" is the durable last-successful snapshot ({@see DocumentRepositoryInterface::hasUsableQualifyingDocument()}),
+ * so a resync in progress or a failed refresh — which leaves the previous completed vector-store file in
+ * place — never makes chat unavailable. The store profile never satisfies the qualifying requirement, and
+ * an admin-disabled document never counts.
+ */
+final readonly class ChatAvailabilityPolicy
+{
+    public function __construct(
+        private DocumentRepositoryInterface $documents,
+        private KnowledgeBaseSourceRepositoryInterface $sources,
+    ) {}
+
+    public function isAvailable(KnowledgeBase $knowledgeBase): bool
+    {
+        return $this->getUnavailableReason($knowledgeBase)->isAvailable();
+    }
+
+    public function getUnavailableReason(KnowledgeBase $knowledgeBase): ChatUnavailableReason
+    {
+        if (!$knowledgeBase->isReadyForChat()) {
+            return ChatUnavailableReason::NotProvisioned;
+        }
+
+        $knowledgeBaseId = $knowledgeBase->id();
+
+        // Order58-linked iff a store id resolves for this exact knowledge base (source_system='order58').
+        if ($this->sources->findOrder58StoreId($knowledgeBaseId) !== null) {
+            $ready = $this->documents->hasUsableOrder58StoreProfile($knowledgeBaseId)
+                && $this->documents->hasUsableQualifyingDocument($knowledgeBaseId);
+
+            return $ready ? ChatUnavailableReason::Available : ChatUnavailableReason::Order58NotReady;
+        }
+
+        return $this->documents->hasUsableQualifyingDocument($knowledgeBaseId)
+            ? ChatUnavailableReason::Available
+            : ChatUnavailableReason::NoQualifyingDocument;
+    }
+
+    /**
+     * @throws ChatUnavailable when chat is not available for this knowledge base.
+     */
+    public function assertAvailable(KnowledgeBase $knowledgeBase): void
+    {
+        $exception = match ($this->getUnavailableReason($knowledgeBase)) {
+            ChatUnavailableReason::Available => null,
+            ChatUnavailableReason::NotProvisioned => ChatUnavailable::notProvisioned(),
+            ChatUnavailableReason::Order58NotReady => ChatUnavailable::order58NotReady(),
+            ChatUnavailableReason::NoQualifyingDocument => ChatUnavailable::noReadyDocuments(),
+        };
+
+        if ($exception !== null) {
+            throw $exception;
+        }
+    }
+}

@@ -25,7 +25,19 @@ final class InMemoryIndexedFileRepository implements IndexedFileRepositoryInterf
     /** @var array<int, bool> */
     private array $pendingRemoval = [];
 
+    /** @var array<int, bool> document ids that are deleted/disabled (their flagged files become removable). */
+    private array $removableDocuments = [];
+
     private int $nextId = 1;
+
+    /**
+     * Marks a document deleted/disabled for the cleanup guard, mirroring the DB check
+     * (documents.status='deleted' OR is_enabled=0). Its flagged files then become eligible for cleanup.
+     */
+    public function markDocumentRemovable(int $documentId): void
+    {
+        $this->removableDocuments[$documentId] = true;
+    }
 
     public function createPending(int $documentId, IndexedFileRole $role, ?string $derivedPath): int
     {
@@ -136,15 +148,42 @@ final class InMemoryIndexedFileRepository implements IndexedFileRepositoryInterf
     {
         $result = [];
         foreach ($this->items as $file) {
-            if ($this->pendingRemoval[$file->id] ?? false) {
-                $result[] = $file;
-                if (count($result) >= $limit) {
-                    break;
-                }
+            if (!($this->pendingRemoval[$file->id] ?? false)) {
+                continue;
+            }
+            // Replacement guard (mirrors the DB): a flagged file is removable only when its document is
+            // deleted/disabled, OR a completed non-flagged replacement definitely exists. "No incomplete
+            // replacement" is NOT sufficient — a resync whose new file has not been created yet keeps the old.
+            if (!$this->isRemovable($file->documentId)) {
+                continue;
+            }
+            $result[] = $file;
+            if (count($result) >= $limit) {
+                break;
             }
         }
 
         return $result;
+    }
+
+    private function isRemovable(int $documentId): bool
+    {
+        if ($this->removableDocuments[$documentId] ?? false) {
+            return true;
+        }
+
+        foreach ($this->items as $file) {
+            if (
+                $file->documentId === $documentId
+                && !($this->pendingRemoval[$file->id] ?? false)
+                && $file->indexStatus === IndexStatus::Completed
+                && $file->openaiFileId !== null
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function delete(int $indexedFileId): void

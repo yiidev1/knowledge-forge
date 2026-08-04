@@ -30,7 +30,7 @@ final readonly class DbGeneratedDocumentRepository implements GeneratedDocumentR
     {
         $row = $this->connection
             ->createQuery()
-            ->select(['id', 'source_sync_hash', 'status', 'stored_path', 'storage_token', 'is_source_overridden'])
+            ->select(['id', 'source_sync_hash', 'status', 'stored_path', 'storage_token', 'is_source_overridden', 'is_enabled'])
             ->from(self::TABLE)
             ->where([
                 'knowledge_base_id' => $knowledgeBaseId,
@@ -51,6 +51,7 @@ final readonly class DbGeneratedDocumentRepository implements GeneratedDocumentR
             storedPath: (string) $row['stored_path'],
             storageToken: (string) $row['storage_token'],
             isSourceOverridden: (bool) (int) ($row['is_source_overridden'] ?? 0),
+            isEnabled: (bool) (int) ($row['is_enabled'] ?? 1),
         );
     }
 

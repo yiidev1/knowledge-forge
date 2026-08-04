@@ -203,7 +203,9 @@ final class ManualTextServiceTest extends Unit
         assertSame(TextUpdateOutcome::Reindexed, $outcome);
         assertSame([5], $this->texts->replaced);
         assertSame([], $this->texts->metadataUpdated);
-        assertCount(1, $this->indexedFiles->findPendingRemoval(10), 'the old file is flagged, not deleted');
+        // The old file is flagged (kept usable until the replacement completes; the cleanup guard's
+        // eligibility is covered by CleanupReplacementGuardTest).
+        assertSame([5], $this->indexedFiles->pendingRemovalDocumentIds());
         assertSame("New body\n", (string) file_get_contents($this->storageRoot . '/' . $storedPath));
         assertSame(['queued'], $this->events->statuses());
     }

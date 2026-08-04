@@ -8,7 +8,6 @@ use App\Document\Domain\CanonicalDocument;
 use App\Document\Domain\Document;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\DocumentRepositoryInterface;
-use App\Document\Domain\DocumentSourceType;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\NewDocument;
 use DateTimeImmutable;
@@ -40,6 +39,12 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
 
     /** @var list<int> */
     public array $clearedOverrides = [];
+
+    /** @var array<int, bool> Per-KB "has a usable Order58 store-profile snapshot" (test-controlled). */
+    private array $usableProfile = [];
+
+    /** @var array<int, bool> Per-KB "has a usable qualifying (non-profile) document" (test-controlled). */
+    private array $usableQualifying = [];
 
     private int $nextId = 1;
 
@@ -87,6 +92,26 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
     public function countLiveForKnowledgeBase(int $knowledgeBaseId): int
     {
         return count($this->findAllForKnowledgeBase($knowledgeBaseId));
+    }
+
+    public function hasUsableOrder58StoreProfile(int $knowledgeBaseId): bool
+    {
+        return $this->usableProfile[$knowledgeBaseId] ?? false;
+    }
+
+    public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool
+    {
+        return $this->usableQualifying[$knowledgeBaseId] ?? false;
+    }
+
+    public function setUsableStoreProfile(int $knowledgeBaseId, bool $usable): void
+    {
+        $this->usableProfile[$knowledgeBaseId] = $usable;
+    }
+
+    public function setUsableQualifyingDocument(int $knowledgeBaseId, bool $usable): void
+    {
+        $this->usableQualifying[$knowledgeBaseId] = $usable;
     }
 
     public function countReadyForKnowledgeBase(int $knowledgeBaseId): int

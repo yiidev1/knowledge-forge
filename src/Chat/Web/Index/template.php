@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Chat\Domain\Conversation;
 use App\Chat\Domain\Message;
+use App\Chat\Web\MessageEditView;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Yiisoft\Html\Html;
@@ -20,7 +21,10 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $hasOlder
  * @var bool $chatReady
  * @var bool $provisioned
+ * @var string|null $unavailableMessage
  * @var MarkdownRenderer $markdown
+ * @var MessageEditView $editView
+ * @var int $maxQuestionLength
  */
 
 $this->setTitle('Chat · ' . $knowledgeBase->name());
@@ -53,7 +57,7 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
     <div class="chat__messages" role="log" aria-live="polite" aria-label="Conversation messages" tabindex="0" data-chat-messages>
         <?php if ($hasOlder && $oldestId !== null): ?>
             <div class="chat__load-older">
-                <button type="button" class="btn btn--secondary btn--sm" data-load-older data-before-id="<?= (int) $oldestId ?>">
+                <button type="button" class="btn btn--secondary btn--sm" data-load-older data-before-id="<?= $oldestId ?>">
                     Load older messages
                 </button>
             </div>
@@ -64,10 +68,8 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                 <div class="chat__empty-icon" aria-hidden="true">💬</div>
                 <div class="chat__empty-title">Ask your first question</div>
                 <p class="util-muted">Answers come only from this knowledge base's indexed documents, with sources.</p>
-                <?php if (!$provisioned): ?>
-                    <p class="util-muted">This knowledge base is still being provisioned.</p>
-                <?php elseif (!$chatReady): ?>
-                    <p class="util-muted">No documents have finished indexing yet.</p>
+                <?php if (!$chatReady && $unavailableMessage !== null): ?>
+                    <p class="util-muted"><?= Html::encode($unavailableMessage) ?></p>
                 <?php endif; ?>
             </div>
         <?php else: ?>
@@ -76,17 +78,47 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                     <?php
                     $isUser = !$message->isAssistant();
                     $ts = $message->createdAt->format('Y-m-d H:i');
+                    $isEditable = $isUser && $conversation !== null && $editView->isEditable($message->id);
+                    $isRetry = $isUser && $conversation !== null && $editView->isRetry($message->id);
                     ?>
-                    <article class="chat-msg chat-msg--<?= $isUser ? 'user' : 'assistant' ?>" data-message-id="<?= (int) $message->id ?>">
+                    <article class="chat-msg chat-msg--<?= $isUser ? 'user' : 'assistant' ?>" data-message-id="<?= $message->id ?>">
                         <div class="chat-msg__role"><?= $isUser ? 'You' : 'Assistant' ?></div>
-                        <div class="chat-msg__body">
+                        <div class="chat-msg__body" data-msg-body>
                             <?php if ($isUser): ?>
                                 <?= nl2br(Html::encode($message->content)) ?>
                             <?php else: ?>
                                 <?= $markdown->toHtml($message->content) ?>
                             <?php endif; ?>
                         </div>
-                        <div class="chat-msg__time"><?= Html::encode($ts) ?></div>
+                        <?php if ($isEditable): ?>
+                            <button type="button" class="chat-msg__edit-icon" data-edit-toggle title="Edit question" aria-label="Edit question">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                            </button>
+                            <form method="post" class="chat-msg__edit" data-edit-form
+                                  action="<?= Html::encode($urlGenerator->generate('chat.message.edit', ['slug' => $slug, 'conversationId' => $conversation->id, 'messageId' => $message->id])) ?>">
+                                <?= $csrfField ?>
+                                <input type="hidden" name="expected_edit_count" value="<?= $message->editCount ?>">
+                                <label class="util-visually-hidden" for="edit-<?= $message->id ?>">Edit your question</label>
+                                <textarea class="field__control chat__input" id="edit-<?= $message->id ?>" name="content" rows="2"
+                                          maxlength="<?= $maxQuestionLength ?>" required><?= Html::encode($message->content) ?></textarea>
+                                <div class="chat-msg__edit-actions">
+                                    <button class="btn btn--primary btn--sm" type="submit">Save &amp; regenerate</button>
+                                    <button class="btn btn--secondary btn--sm" type="button" data-edit-cancel>Cancel</button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+                        <div class="chat-msg__time">
+                            <?= Html::encode($ts) ?>
+                            <?php if ($message->isEdited()): ?><span class="chat-msg__edited" title="This question was edited">· Edited</span><?php endif; ?>
+                        </div>
+                        <?php if ($isRetry): ?>
+                            <form method="post" class="chat-msg__retry" data-retry-form
+                                  action="<?= Html::encode($urlGenerator->generate('chat.message.regenerate', ['slug' => $slug, 'conversationId' => $conversation->id, 'messageId' => $message->id])) ?>">
+                                <?= $csrfField ?>
+                                <span class="chat-msg__retry-note">The answer couldn’t be generated.</span>
+                                <button class="btn btn--secondary btn--sm" type="submit">Retry</button>
+                            </form>
+                        <?php endif; ?>
                         <?php if ($message->isAssistant()): ?>
                             <?php if ($message->citations !== []): ?>
                                 <div class="chat-msg__citations">
@@ -108,11 +140,16 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
     <button type="button" class="chat__jump" hidden>↓ Jump to latest</button>
 
     <div class="chat__composer">
-        <?php if ($chatReady): ?>
+        <?php if ($editView->hasBlockedComposer()): ?>
+            <div class="alert alert--warning" data-composer-blocked>
+                <span class="alert__icon" aria-hidden="true">!</span>
+                <span>The previous answer couldn’t be generated. Use Retry above to finish it before asking a new question.</span>
+            </div>
+        <?php elseif ($chatReady): ?>
             <form method="post" action="<?= Html::encode($postUrl) ?>" class="chat__form">
                 <?= $csrfField ?>
                 <label class="util-visually-hidden" for="chat-question">Your question</label>
-                <textarea class="field__control chat__input" id="chat-question" name="question" rows="1" maxlength="2000"
+                <textarea class="field__control chat__input" id="chat-question" name="question" rows="1" maxlength="<?= $maxQuestionLength ?>"
                           placeholder="Ask a question about this knowledge base…" required></textarea>
                 <div class="chat__composer-actions">
                     <span class="chat__hint" aria-hidden="true">Enter to send · Shift+Enter for a new line</span>
@@ -120,9 +157,9 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                 </div>
             </form>
         <?php else: ?>
-            <div class="alert alert--info">
+            <div class="alert alert--info" data-composer-unavailable>
                 <span class="alert__icon" aria-hidden="true">i</span>
-                <span>This knowledge base is not currently available for chat.</span>
+                <span><?= Html::encode($unavailableMessage ?? 'This knowledge base is not currently available for chat.') ?></span>
             </div>
         <?php endif; ?>
     </div>

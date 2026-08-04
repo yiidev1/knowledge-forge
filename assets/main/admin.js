@@ -55,6 +55,17 @@
             return;
         }
 
+        // Editing a question or retrying its answer also regenerates synchronously; give the submit an
+        // optimistic "working" state, then let the browser navigate (PRG) as usual.
+        if (form.hasAttribute('data-edit-form')) {
+            showEditPending(form);
+            return;
+        }
+        if (form.hasAttribute('data-retry-form')) {
+            showRetryPending(form);
+            return;
+        }
+
         // If this is a chat form, show the question + a thinking indicator immediately. We do NOT cancel
         // the submit — the browser navigates as usual, and this state stays on screen during the
         // round-trip instead of a blank page with only the tab spinner.
@@ -151,6 +162,79 @@
             node.textContent = text;
         }
         return node;
+    }
+
+    // ---- Inline question editing + answer retry -------------------------------
+    // Reveal/cancel the inline edit form on the latest question, and give the edit/retry submits an
+    // optimistic "working" state. Delegated, so the strict CSP needs no inline handlers. The forms POST
+    // and navigate (PRG) like the composer, so the page reloads with the regenerated answer; this only
+    // sets expectations during the round-trip and never cancels the submit.
+    document.addEventListener('click', function (event) {
+        var target = event.target;
+        // Element, not HTMLElement: a click on the inline <svg>/<path> inside the pencil button is an
+        // SVGElement, and would otherwise be ignored — so the centre of the icon wouldn't respond.
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        var toggle = target.closest('[data-edit-toggle]');
+        if (toggle) {
+            event.preventDefault();
+            toggleEdit(toggle.closest('.chat-msg'), true);
+            return;
+        }
+
+        var cancel = target.closest('[data-edit-cancel]');
+        if (cancel) {
+            event.preventDefault();
+            toggleEdit(cancel.closest('.chat-msg'), false);
+        }
+    });
+
+    function toggleEdit(article, open) {
+        if (!article) {
+            return;
+        }
+        // A single state class drives visibility (body vs form, and the pencil) from CSS.
+        article.classList.toggle('chat-msg--editing', open);
+        if (open) {
+            var textarea = article.querySelector('textarea[name="content"]');
+            if (textarea) {
+                textarea.focus();
+                textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+            }
+        }
+    }
+
+    function showEditPending(form) {
+        if (form.dataset.submitting === '1') {
+            return; // guard against a duplicate submission
+        }
+        form.dataset.submitting = '1';
+        var textarea = form.querySelector('textarea[name="content"]');
+        if (textarea) {
+            textarea.setAttribute('readonly', 'readonly');
+        }
+        var cancel = form.querySelector('[data-edit-cancel]');
+        if (cancel) {
+            cancel.disabled = true;
+        }
+        setBusy(form.querySelector('button[type="submit"]'), 'Regenerating answer…');
+    }
+
+    function showRetryPending(form) {
+        if (form.dataset.submitting === '1') {
+            return;
+        }
+        form.dataset.submitting = '1';
+        setBusy(form.querySelector('button[type="submit"]'), 'Regenerating answer…');
+    }
+
+    function setBusy(button, label) {
+        if (button) {
+            button.disabled = true;
+            button.textContent = label;
+        }
     }
 
     // ---- Copy-to-clipboard for long identifiers ------------------------------

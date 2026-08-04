@@ -155,6 +155,8 @@ final class Environment
         'CHAT_HISTORY_MESSAGE_LIMIT' => ['type' => 'int', 'default' => 10, 'min' => 0, 'max' => 200],
         'CHAT_HISTORY_CHAR_LIMIT' => ['type' => 'int', 'default' => 8000, 'min' => 0, 'max' => 500000],
         'CHAT_MAX_QUESTION_LENGTH' => ['type' => 'int', 'default' => 2000, 'min' => 1, 'max' => 100000],
+        // How long a just-asked question stays editable, in minutes (server clock, from its created_at).
+        'CHAT_EDIT_WINDOW_MINUTES' => ['type' => 'int', 'default' => 20, 'min' => 1, 'max' => 1440],
         'CHAT_MAX_OUTPUT_TOKENS' => ['type' => 'int', 'default' => 1200, 'min' => 1, 'max' => 100000],
         'CHAT_REQUIRE_CITATIONS' => ['type' => 'bool', 'default' => true],
         'CHAT_FORCE_FILE_SEARCH' => ['type' => 'bool', 'default' => true],

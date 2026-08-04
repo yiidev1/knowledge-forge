@@ -48,7 +48,7 @@ final class DocumentActionsTest extends Unit
         $this->retryService()->retry(self::KB, self::DOC);
 
         assertSame(DocumentStatus::Queued, $this->documents->status(self::DOC));
-        assertCount(1, $this->indexedFiles->findPendingRemoval(10));
+        assertCount(1, $this->indexedFiles->pendingRemovalDocumentIds());
     }
 
     public function testRetryRejectsANonFailedDocument(): void
@@ -67,7 +67,7 @@ final class DocumentActionsTest extends Unit
         $this->reindexService()->reindex(self::KB, self::DOC);
 
         assertSame(DocumentStatus::Queued, $this->documents->status(self::DOC));
-        assertCount(1, $this->indexedFiles->findPendingRemoval(10));
+        assertCount(1, $this->indexedFiles->pendingRemovalDocumentIds());
     }
 
     public function testReindexRejectsANonReadyDocument(): void

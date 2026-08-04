@@ -15,12 +15,11 @@ use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\ConversationRepositoryInterface;
-use App\Chat\Domain\Exception\ChatUnavailable;
+use App\Chat\Domain\Exception\LatestQuestionUnanswered;
 use App\Chat\Domain\Exception\QuestionInvalid;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Domain\MessageRole;
 use App\Chat\Domain\NewMessage;
-use App\Document\Domain\DocumentRepositoryInterface;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\KnowledgeBase\Domain\RuleRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
@@ -49,7 +48,7 @@ final readonly class AskKnowledgeBaseService
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
         private RuleRepositoryInterface $rules,
-        private DocumentRepositoryInterface $documents,
+        private ChatAvailabilityPolicy $availability,
         private ChatCompletionProviderInterface $provider,
         private InstructionBuilder $instructionBuilder,
         private ConversationHistoryPolicyInterface $historyPolicy,
@@ -129,7 +128,8 @@ final readonly class AskKnowledgeBaseService
             $knowledgeBase->name(),
         );
 
-        $this->answer($knowledgeBase, $conversation->id, $question);
+        $this->guardLatestAnswered($conversation->id);
+        $this->askNewQuestion($knowledgeBase, $conversation->id, $question);
 
         return $conversation->id;
     }
@@ -141,20 +141,62 @@ final readonly class AskKnowledgeBaseService
     {
         $question = $this->validateQuestion($question);
         $this->assertChatAvailable($knowledgeBase);
+        $this->guardLatestAnswered($conversationId);
 
-        $this->answer($knowledgeBase, $conversationId, $question);
+        $this->askNewQuestion($knowledgeBase, $conversationId, $question);
     }
 
-    private function answer(KnowledgeBase $knowledgeBase, int $conversationId, string $question): void
+    /**
+     * Regenerates the answer to a question that was just edited. The edited user message already exists and
+     * its previous answer has already been superseded by the caller; this stores a fresh answer linked back
+     * to that question. History is the active turns *before* the edited message, so the superseded answer
+     * and anything after it never reach the model. A provider failure propagates as an
+     * {@see \App\Ai\Contract\Exception\AiException}; the caller decides how to surface the retry state.
+     */
+    public function regenerateForEditedMessage(
+        KnowledgeBase $knowledgeBase,
+        int $conversationId,
+        int $editedMessageId,
+        string $prompt,
+    ): void {
+        $history = $this->historyPolicy->select(
+            $this->messages->findActiveBefore($conversationId, $editedMessageId),
+        );
+
+        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $prompt, $history, $editedMessageId);
+    }
+
+    /**
+     * Stores a new user question, then generates and stores its answer. History is captured before the new
+     * question is persisted.
+     */
+    private function askNewQuestion(KnowledgeBase $knowledgeBase, int $conversationId, string $question): void
     {
-        // Prior turns, captured before the new question is stored.
         $history = $this->historyPolicy->select($this->messages->findByConversation($conversationId));
 
-        $this->messages->add(NewMessage::user($conversationId, $question), $this->clock->now());
+        $userMessageId = $this->messages->add(NewMessage::user($conversationId, $question), $this->clock->now());
 
+        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $question, $history, $userMessageId);
+    }
+
+    /**
+     * The generate-and-store core shared by asking and regenerating: ask the provider with forced
+     * retrieval, resolve citations, verify grounding, and store the assistant answer linked to the question
+     * it replies to. The link + {@see MessageRepositoryInterface::insertActiveAnswer()} uphold the
+     * one-active-answer invariant even under a concurrent regeneration.
+     *
+     * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
+     */
+    private function generateAndStoreAnswer(
+        KnowledgeBase $knowledgeBase,
+        int $conversationId,
+        string $prompt,
+        array $history,
+        int $replyToMessageId,
+    ): void {
         // "Every match" needs a wider net and different instructions than "the best match": one relevance
         // query returns the closest chunks, which cannot enumerate a set.
-        $exhaustive = $this->intentDetector->isExhaustive($question);
+        $exhaustive = $this->intentDetector->isExhaustive($prompt);
 
         $instructions = $this->instructionBuilder->build(
             $knowledgeBase->systemInstructions(),
@@ -172,7 +214,7 @@ final readonly class AskKnowledgeBaseService
             model: $this->params->model,
             instructions: $instructions,
             history: $history,
-            question: $question,
+            question: $prompt,
             vectorStoreId: $vectorStoreId,
             maxResults: $exhaustive ? $this->params->exhaustiveMaxResults : $this->params->maxResults,
             maxOutputTokens: $this->params->maxOutputTokens,
@@ -185,7 +227,7 @@ final readonly class AskKnowledgeBaseService
 
         $this->logAnswer($knowledgeBase, $conversationId, $result, $outcome, $exhaustive, $startedAt);
 
-        $this->messages->add(
+        $this->messages->insertActiveAnswer(
             new NewMessage(
                 conversationId: $conversationId,
                 role: MessageRole::Assistant,
@@ -196,6 +238,7 @@ final readonly class AskKnowledgeBaseService
                 retrievalStatus: $outcome->retrievalStatus,
                 providerResponseId: $result->providerResponseId,
                 model: $result->model,
+                replyToMessageId: $replyToMessageId,
             ),
             $this->clock->now(),
         );
@@ -203,7 +246,22 @@ final readonly class AskKnowledgeBaseService
         $this->conversations->touch($conversationId, $this->clock->now());
     }
 
-    private function validateQuestion(string $question): string
+    /**
+     * Rejects a new question while the thread's latest question is still unanswered (regeneration in flight
+     * or failed). Enforced here so the guard cannot be bypassed by posting directly, not only in the UI.
+     */
+    private function guardLatestAnswered(int $conversationId): void
+    {
+        if ($this->messages->hasUnansweredLatestUserMessage($conversationId)) {
+            throw LatestQuestionUnanswered::create();
+        }
+    }
+
+    /**
+     * Trims and bounds a question. Public so the edit flow validates identically — one definition of what a
+     * valid question is.
+     */
+    public function validateQuestion(string $question): string
     {
         $question = trim($question);
 
@@ -218,15 +276,14 @@ final readonly class AskKnowledgeBaseService
         return $question;
     }
 
-    private function assertChatAvailable(KnowledgeBase $knowledgeBase): void
+    /**
+     * Guards that the base can actually answer, via the one canonical {@see ChatAvailabilityPolicy}: a
+     * provisioned store, a usable qualifying (non-store-profile) document, and — for an Order58-linked base
+     * — a usable store-profile snapshot. Public so the edit flow refuses to regenerate against an
+     * unavailable base; both surfaces and every server-side chat operation share this single rule.
+     */
+    public function assertChatAvailable(KnowledgeBase $knowledgeBase): void
     {
-        if (!$knowledgeBase->isReadyForChat()) {
-            throw ChatUnavailable::notProvisioned();
-        }
-
-        if ($this->documents->countReadyForKnowledgeBase($knowledgeBase->id()) < 1) {
-            throw ChatUnavailable::noReadyDocuments();
-        }
+        $this->availability->assertAvailable($knowledgeBase);
     }
-
 }

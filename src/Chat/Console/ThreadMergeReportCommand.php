@@ -81,7 +81,7 @@ final class ThreadMergeReportCommand extends Command
         $mapLines = [];
         foreach ($groups as $group) {
             $canonical = (int) $group['canonical_id'];
-            $allIds = array_map('intval', explode(',', (string) $group['all_ids']));
+            $allIds = array_map(intval(...), explode(',', (string) $group['all_ids']));
             $dupes = array_values(array_filter($allIds, static fn(int $id): bool => $id !== $canonical));
             $toMerge += count($dupes);
             foreach ($dupes as $oldId) {

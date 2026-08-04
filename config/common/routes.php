@@ -163,6 +163,12 @@ return [
             Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}')
                 ->action(Chat\Ask\Action::class)
                 ->name('chat.ask'),
+            Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
+                ->action(Chat\EditMessage\Action::class)
+                ->name('chat.message.edit'),
+            Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
+                ->action(Chat\RegenerateMessage\Action::class)
+                ->name('chat.message.regenerate'),
 
             // OpenAI usage and vector-store inventory. Read-only, and deliberately absent from the
             // sidebar and every other page — it is an operator diagnostic reached by direct URL, not a
@@ -239,5 +245,11 @@ return [
             Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}')
                 ->action(AgentChat\AskAction::class)
                 ->name('agent.chat.ask'),
+            Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
+                ->action(AgentChat\EditMessageAction::class)
+                ->name('agent.chat.message.edit'),
+            Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
+                ->action(AgentChat\RegenerateMessageAction::class)
+                ->name('agent.chat.message.regenerate'),
         ),
 ];

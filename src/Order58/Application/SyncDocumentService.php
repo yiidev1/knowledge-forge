@@ -60,6 +60,13 @@ final readonly class SyncDocumentService
             return GeneratedDocumentUpsert::SkippedOverride;
         }
 
+        if ($existing !== null && $existing->isAdminDisabled()) {
+            // An admin explicitly disabled this document. A resync (even a forced rebuild) must not silently
+            // re-enable it or re-add its vector-store file; it stays disabled until the admin re-enables it,
+            // and it never counts toward chat availability. Its indexed files are cleaned up normally.
+            return GeneratedDocumentUpsert::SkippedDisabled;
+        }
+
         // Salt the content checksum with the source ref so two distinct source records with identical text
         // are never merged by the per-knowledge-base content-dedupe index.
         $checksum = hash('sha256', $sourceType->value . "\0" . $sourceRef . "\0" . $text);

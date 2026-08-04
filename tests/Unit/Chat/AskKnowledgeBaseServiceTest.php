@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Chat;
 
 use App\Chat\Application\AskKnowledgeBaseService;
+use App\Chat\Application\ChatAvailabilityPolicy;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\FindOrCreateThreadService;
@@ -32,6 +33,7 @@ use App\Tests\Support\Fake\Chat\InMemoryConversationRepository;
 use App\Tests\Support\Fake\Chat\InMemoryMessageRepository;
 use App\Tests\Support\Fake\Document\InMemoryDocumentRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
+use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseSourceRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryRuleRepository;
 use App\Tests\Support\MutableClock;
 use Codeception\Test\Unit;
@@ -79,6 +81,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
         // One indexed, ready document, and the index-file row a citation resolves through.
         $this->documents->seed(self::DOC, self::KB, DocumentStatus::Ready);
+        $this->documents->setUsableQualifyingDocument(self::KB, true);
         $fileId = $this->indexedFiles->createPending(self::DOC, IndexedFileRole::DerivedMarkdown, 'derived/x.md');
         $this->indexedFiles->setUploaded($fileId, 'file_1', IndexStatus::Completed);
 
@@ -239,7 +242,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
             new FindOrCreateThreadService($this->conversations, $this->clock),
             $this->messages,
             $this->rules,
-            $this->documents,
+            new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
             $this->provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),

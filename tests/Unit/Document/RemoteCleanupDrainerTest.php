@@ -50,6 +50,9 @@ final class RemoteCleanupDrainerTest extends Unit
 
         $this->knowledgeBases->seedReady(self::KB, 'kb', self::VS);
         $this->documents->seed($this->document());
+        // The document is deleted, so its flagged files are eligible for cleanup (mirrors the DB guard's
+        // documents.status='deleted' branch).
+        $this->indexedFiles->markDocumentRemovable(self::DOC);
     }
 
     public function testRemovesRemoteFileAndDropsTheRow(): void

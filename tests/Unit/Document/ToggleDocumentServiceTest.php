@@ -60,7 +60,9 @@ final class ToggleDocumentServiceTest extends Unit
         $this->service()->setEnabled(self::DOC, self::KB, false);
 
         assertSame([['id' => self::DOC, 'enabled' => false]], $this->texts->enabledCalls);
-        assertCount(1, $this->indexedFiles->findPendingRemoval(10));
+        // The file is flagged for removal; a disabled document's file is eligible for cleanup — that
+        // eligibility is verified against the real query in CleanupReplacementGuardTest.
+        assertSame([self::DOC], $this->indexedFiles->pendingRemovalDocumentIds());
         assertSame(['disabled'], $this->events->statuses());
         // The row is preserved, not requeued.
         assertSame(DocumentStatus::Ready, $this->documents->status(self::DOC));

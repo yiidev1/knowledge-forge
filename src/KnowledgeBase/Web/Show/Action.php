@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\KnowledgeBase\Web\Show;
 
+use App\Chat\Application\ChatAvailabilityPolicy;
 use App\Document\Application\Validation\SupportedFileTypes;
 use App\Document\Domain\DocumentListItem;
 use App\Document\Domain\DocumentSourceType;
@@ -31,6 +32,7 @@ final readonly class Action
         private TextDocumentRepositoryInterface $documents,
         private KnowledgeBaseSourceRepositoryInterface $source,
         private Order58DisplayParams $order58Display,
+        private ChatAvailabilityPolicy $availability,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug): ResponseInterface
@@ -45,6 +47,8 @@ final readonly class Action
             ));
         }
 
+        $chatReason = $this->availability->getUnavailableReason($knowledgeBase);
+
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
@@ -53,6 +57,8 @@ final readonly class Action
                 'documents' => $documents,
                 'uploadAccept' => SupportedFileTypes::acceptAttribute(),
                 'order58StoreId' => $this->source->findOrder58StoreId($knowledgeBase->id()),
+                'chatAvailable' => $chatReason->isAvailable(),
+                'chatUnavailableMessage' => $chatReason->message(),
             ]);
     }
 }

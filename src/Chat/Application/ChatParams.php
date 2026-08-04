@@ -36,5 +36,10 @@ final readonly class ChatParams
          */
         public string $truncatedMessage = 'The answer was cut short before it could be completed. '
             . 'Please ask for a narrower part of it — for example one section or one record at a time.',
+        /**
+         * How long after a question is asked it stays editable, in minutes, measured from its original
+         * created_at on the server clock. Only the latest question in a thread is ever editable.
+         */
+        public int $editWindowMinutes = 20,
     ) {}
 }

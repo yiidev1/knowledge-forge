@@ -20,6 +20,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var list<DocumentListItem> $documents
  * @var string $uploadAccept
  * @var int|null $order58StoreId
+ * @var bool $chatAvailable
+ * @var string|null $chatUnavailableMessage
  */
 
 // The first statement references $this so Psalm keeps the file-level @var docblock in scope.
@@ -65,8 +67,11 @@ $orderInputs = static function (array $order): string {
         <p class="page-header__subtitle util-mono">/<?= Html::encode($slug) ?></p>
     </div>
     <div class="util-row">
-        <?php if ($knowledgeBase->isReadyForChat()): ?>
+        <?php if ($chatAvailable): ?>
             <a class="btn btn--primary" href="<?= Html::encode($urlGenerator->generate('chat.index', ['slug' => $slug])) ?>">Open chat</a>
+        <?php else: ?>
+            <button type="button" class="btn btn--primary" disabled data-chat-unavailable
+                    title="<?= Html::encode($chatUnavailableMessage ?? '') ?>">Open chat</button>
         <?php endif; ?>
         <?php if ($order58StoreId !== null && $canManage): ?>
             <form method="post" action="<?= Html::encode($urlGenerator->generate('kb.sync-order58-knowledge', ['slug' => $slug])) ?>">

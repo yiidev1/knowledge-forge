@@ -72,6 +72,7 @@ return [
         'reasoningEffort' => Environment::string('CHAT_REASONING_EFFORT'),
         'exhaustiveMaxResults' => Environment::int('CHAT_EXHAUSTIVE_MAX_RESULTS'),
         'truncatedMessage' => Environment::string('CHAT_TRUNCATED_MESSAGE'),
+        'editWindowMinutes' => Environment::int('CHAT_EDIT_WINDOW_MINUTES'),
     ],
 
     'app/pdf' => [

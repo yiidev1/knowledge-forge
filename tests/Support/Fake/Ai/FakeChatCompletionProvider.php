@@ -39,6 +39,14 @@ final class FakeChatCompletionProvider implements ChatCompletionProviderInterfac
         $this->throw = $exception;
     }
 
+    /**
+     * Stop throwing — for exercising a retry after a simulated provider failure.
+     */
+    public function stopThrowing(): void
+    {
+        $this->throw = null;
+    }
+
     public function ask(GroundedAnswerRequest $request): GroundedAnswerResult
     {
         $this->lastRequest = $request;

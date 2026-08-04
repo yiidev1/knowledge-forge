@@ -7,9 +7,11 @@ namespace App\Chat\Domain\Exception;
 use App\Shared\Domain\Exception\DomainException;
 
 /**
- * Chat cannot run for this knowledge base yet: its vector store is not provisioned, or it has no
- * document that finished indexing. Answering from an empty or unprovisioned store would only ever
- * produce the fallback, so the UI blocks the question instead.
+ * Chat cannot run for this knowledge base yet: its vector store is not provisioned, or it has no usable
+ * qualifying document (the Order58 store profile alone never qualifies). Answering from an unprovisioned
+ * store or a base with no enabled, indexed knowledge document would only ever produce the fallback, so the
+ * UI blocks the question and the server rejects it. Messages are user-safe and identical for admin and
+ * agent — they never expose internal sync/vector-store detail.
  */
 final class ChatUnavailable extends DomainException
 {
@@ -25,6 +27,14 @@ final class ChatUnavailable extends DomainException
 
     public static function noReadyDocuments(): self
     {
-        return new self('This knowledge base has no indexed documents yet. Upload and index a document before asking a question.');
+        return new self('Chat is unavailable until at least one enabled Knowledge Base document has finished processing and is ready.');
+    }
+
+    /**
+     * An Order58-linked base is missing a usable store-profile snapshot and/or a usable qualifying document.
+     */
+    public static function order58NotReady(): self
+    {
+        return new self('Chat is unavailable until the store profile and at least one Knowledge Base document are ready.');
     }
 }

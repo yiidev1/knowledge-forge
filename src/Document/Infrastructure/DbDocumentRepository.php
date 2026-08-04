@@ -11,10 +11,12 @@ use App\Document\Domain\DocumentRepositoryInterface;
 use App\Document\Domain\DocumentSourceType;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\NewDocument;
+use App\Ai\Contract\Dto\IndexStatus;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\QueryInterface;
 
 use function is_array;
@@ -128,6 +130,43 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
         return (int) $this->query()
             ->where(['knowledge_base_id' => $knowledgeBaseId, 'status' => DocumentStatus::Ready->value, 'is_enabled' => 1])
             ->count();
+    }
+
+    public function hasUsableOrder58StoreProfile(int $knowledgeBaseId): bool
+    {
+        return $this->usableSnapshotExists($knowledgeBaseId, storeProfile: true);
+    }
+
+    public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool
+    {
+        return $this->usableSnapshotExists($knowledgeBaseId, storeProfile: false);
+    }
+
+    /**
+     * A document in this knowledge base is a *usable snapshot* when it is enabled, not deleted, and has at
+     * least one completed, attached vector-store file. The completed-file check reads
+     * {@see \App\Document\Domain\IndexedFileRepositoryInterface} state directly (index_status='completed'
+     * with an openai_file_id) rather than the mutable `documents.status`, so a resync — which flips the row
+     * to `queued` while the previous completed file is retained — never flips the base to unavailable. The
+     * completed file is retained across a refresh by the cleanup drainer's replacement guard.
+     */
+    private function usableSnapshotExists(int $knowledgeBaseId, bool $storeProfile): bool
+    {
+        $profile = DocumentSourceType::Order58StoreProfile->value;
+
+        $query = $this->connection->createQuery()
+            ->from(['d' => self::TABLE])
+            ->where(['d.knowledge_base_id' => $knowledgeBaseId, 'd.is_enabled' => 1])
+            ->andWhere(['<>', 'd.status', DocumentStatus::Deleted->value])
+            ->andWhere($storeProfile ? ['d.source_type' => $profile] : ['<>', 'd.source_type', $profile])
+            ->andWhere(new Expression(
+                'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
+                . ' WHERE f.[[document_id]] = d.[[id]]'
+                . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL)',
+                [':completed' => IndexStatus::Completed->value],
+            ));
+
+        return (int) $query->count() > 0;
     }
 
     public function liveChecksumExists(string $checksum, int $knowledgeBaseId, ?int $exceptDocumentId = null): bool

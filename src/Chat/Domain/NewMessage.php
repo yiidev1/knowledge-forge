@@ -24,6 +24,11 @@ final readonly class NewMessage
         public ?string $retrievalStatus = null,
         public ?string $providerResponseId = null,
         public ?string $model = null,
+        /**
+         * On an assistant answer, the id of the user question it replies to. Drives the one-active-answer
+         * invariant so an edited question's regenerated answer can be linked and de-duplicated.
+         */
+        public ?int $replyToMessageId = null,
     ) {}
 
     public static function user(int $conversationId, string $content): self

@@ -383,6 +383,40 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     opacity: .7;
 }
 .chat-msg--user .chat-msg__time { color: rgba(255, 255, 255, .85); }
+
+/* Inline question editing + answer retry */
+.chat-msg { position: relative; }
+.chat-msg__time { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.chat-msg__edited { font-style: italic; opacity: .85; }
+
+/* Pencil affordance beside the question — always visible so it is discoverable. */
+.chat-msg__edit-icon {
+    position: absolute; top: 4px; left: -40px;
+    width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 50%;
+    background: var(--surface); color: var(--text-muted);
+    cursor: pointer; opacity: 1; transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.chat-msg__edit-icon svg { width: 15px; height: 15px; display: block; pointer-events: none; }
+.chat-msg__edit-icon:hover,
+.chat-msg__edit-icon:focus-visible { color: var(--primary); border-color: var(--primary); background: var(--surface-2); }
+@media (max-width: 640px) {
+    .chat-msg__edit-icon { left: auto; right: 6px; top: 6px; }
+}
+
+/* Editing state: the form replaces the message text; the pencil and meta hide. */
+.chat-msg__edit { margin-top: .25rem; display: none; flex-direction: column; gap: .5rem; }
+.chat-msg--editing .chat-msg__edit { display: flex; }
+.chat-msg--editing .chat-msg__body,
+.chat-msg--editing .chat-msg__edit-icon,
+.chat-msg--editing .chat-msg__time { display: none; }
+.chat-msg__edit-actions { display: flex; gap: .5rem; }
+.chat-msg__retry {
+    margin-top: .6rem; padding-top: .55rem; border-top: 1px dashed var(--border);
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+}
+.chat-msg__retry-note { font-size: .82rem; color: var(--text-muted); }
 .chat__load-older {
     display: flex;
     justify-content: center;

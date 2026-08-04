@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Document\Infrastructure;
 
 use App\Ai\Contract\Dto\IndexStatus;
+use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\IndexedFile;
 use App\Document\Domain\IndexedFileRepositoryInterface;
 use App\Document\Domain\IndexedFileRole;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 
 use function is_array;
 
@@ -115,9 +117,26 @@ final readonly class DbIndexedFileRepository implements IndexedFileRepositoryInt
 
     public function findPendingRemoval(int $limit): array
     {
-        $rows = $this->query()
-            ->where(['pending_removal' => 1])
-            ->orderBy(['id' => SORT_ASC])
+        // Replacement guard. A flagged (old) file is eligible for removal ONLY when either:
+        //   (a) its document is explicitly deleted or disabled — no replacement is coming; or
+        //   (b) a completed, non-flagged replacement DEFINITELY exists for the same document.
+        // This is deliberately NOT "no incomplete replacement exists": a resync whose new file has not been
+        // created yet (the worker processes one document per run) also has no incomplete sibling, yet its
+        // old completed file must be retained until the replacement is actually completed — otherwise the
+        // knowledge base is briefly left with no usable copy. A failed replacement is likewise not a
+        // completed one, so the old file is retained through a failed refresh.
+        $rows = $this->connection->createQuery()
+            ->from(['f' => self::TABLE])
+            ->where(['f.pending_removal' => 1])
+            ->andWhere(new Expression(
+                'EXISTS (SELECT 1 FROM {{%documents}} d'
+                . ' WHERE d.[[id]] = f.[[document_id]] AND (d.[[status]] = :deleted OR d.[[is_enabled]] = 0))'
+                . ' OR EXISTS (SELECT 1 FROM {{%document_index_files}} g'
+                . ' WHERE g.[[document_id]] = f.[[document_id]]'
+                . ' AND g.[[pending_removal]] = 0 AND g.[[index_status]] = :completed AND g.[[openai_file_id]] IS NOT NULL)',
+                [':deleted' => DocumentStatus::Deleted->value, ':completed' => IndexStatus::Completed->value],
+            ))
+            ->orderBy(['f.id' => SORT_ASC])
             ->limit($limit)
             ->all();
 
