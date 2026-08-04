@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Chat\Infrastructure;
 
+use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\Conversation;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
@@ -14,7 +15,8 @@ use Yiisoft\Db\Query\QueryInterface;
 use function is_array;
 
 /**
- * MySQL-backed conversation repository. Every read is scoped by knowledge base.
+ * MySQL-backed conversation repository. Canonical ownership is participant_type + participant_id.
+ * agent_admin_id is kept in sync for compatibility (NULL for admin, agent id for agent).
  */
 final readonly class DbConversationRepository implements ConversationRepositoryInterface
 {
@@ -24,12 +26,33 @@ final readonly class DbConversationRepository implements ConversationRepositoryI
         private ConnectionInterface $connection,
     ) {}
 
-    public function create(int $knowledgeBaseId, string $title, DateTimeImmutable $now): int
+    public function findThread(int $knowledgeBaseId, ChatParticipant $participant): ?Conversation
     {
+        return $this->hydrate(
+            $this->query()
+                ->where([
+                    'knowledge_base_id' => $knowledgeBaseId,
+                    'participant_type' => $participant->type->value,
+                    'participant_id' => $participant->id,
+                ])
+                ->limit(1)
+                ->one(),
+        );
+    }
+
+    public function createThread(
+        int $knowledgeBaseId,
+        ChatParticipant $participant,
+        string $title,
+        DateTimeImmutable $now,
+    ): int {
         $formatted = DbDateTime::format($now);
 
         $this->connection->createCommand()->insert(self::TABLE, [
             'knowledge_base_id' => $knowledgeBaseId,
+            'agent_admin_id' => $participant->legacyAgentAdminId(),
+            'participant_type' => $participant->type->value,
+            'participant_id' => $participant->id,
             'title' => $title,
             'last_message_at' => $formatted,
             'created_at' => $formatted,
@@ -39,32 +62,22 @@ final readonly class DbConversationRepository implements ConversationRepositoryI
         return (int) $this->connection->getLastInsertId();
     }
 
-    public function findByIdForKnowledgeBase(int $conversationId, int $knowledgeBaseId): ?Conversation
-    {
+    public function findOwnedThreadById(
+        int $conversationId,
+        int $knowledgeBaseId,
+        ChatParticipant $participant,
+    ): ?Conversation {
         return $this->hydrate(
             $this->query()
-                ->where(['id' => $conversationId, 'knowledge_base_id' => $knowledgeBaseId])
+                ->where([
+                    'id' => $conversationId,
+                    'knowledge_base_id' => $knowledgeBaseId,
+                    'participant_type' => $participant->type->value,
+                    'participant_id' => $participant->id,
+                ])
                 ->limit(1)
                 ->one(),
         );
-    }
-
-    public function findAllForKnowledgeBase(int $knowledgeBaseId): array
-    {
-        $rows = $this->query()
-            ->where(['knowledge_base_id' => $knowledgeBaseId])
-            ->orderBy(['last_message_at' => SORT_DESC, 'id' => SORT_DESC])
-            ->all();
-
-        $result = [];
-        foreach ($rows as $row) {
-            $conversation = $this->hydrate($row);
-            if ($conversation !== null) {
-                $result[] = $conversation;
-            }
-        }
-
-        return $result;
     }
 
     public function touch(int $conversationId, DateTimeImmutable $now): void

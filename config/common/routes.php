@@ -147,13 +147,16 @@ return [
                 ->action(Doc\ManualText\UpdateAction::class)
                 ->name('kb.documents.edit'),
 
-            // Chat, nested under a knowledge base.
+            // Chat: one persistent admin thread per knowledge base (slug identifies the thread).
             Route::get('/knowledge-bases/{slug}/chat')
                 ->action(Chat\Index\Action::class)
                 ->name('chat.index'),
             Route::post('/knowledge-bases/{slug}/chat')
                 ->action(Chat\Start\Action::class)
                 ->name('chat.start'),
+            Route::get('/knowledge-bases/{slug}/chat/history')
+                ->action(Chat\History\Action::class)
+                ->name('chat.history'),
             Route::get('/knowledge-bases/{slug}/chat/{conversationId:\d+}')
                 ->action(Chat\Show\Action::class)
                 ->name('chat.show'),
@@ -227,6 +230,9 @@ return [
             Route::post('/agent/stores/{slug}/chat')
                 ->action(AgentChat\StartAction::class)
                 ->name('agent.chat.start'),
+            Route::get('/agent/stores/{slug}/chat/history')
+                ->action(AgentChat\HistoryAction::class)
+                ->name('agent.chat.history'),
             Route::get('/agent/stores/{slug}/chat/{conversationId:\d+}')
                 ->action(AgentChat\ShowAction::class)
                 ->name('agent.chat.show'),

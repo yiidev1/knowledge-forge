@@ -21,8 +21,7 @@ use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Session\SessionInterface;
 
 /**
- * A follow-up question within an agent conversation (POST /agent/stores/{slug}/chat/{conversationId}).
- * Retrieval stays bound to this store's vector store; the conversation can never switch stores.
+ * Legacy follow-up POST with conversation id for an agent thread.
  */
 final readonly class AskAction
 {
@@ -55,7 +54,6 @@ final readonly class AskAction
         }
 
         $question = FormData::fromRequest($request)->raw('question');
-
         $this->session->close();
 
         try {
@@ -66,6 +64,6 @@ final readonly class AskAction
             $this->flash->error('The assistant is temporarily unavailable. Please try again in a moment.');
         }
 
-        return $this->redirect->afterPost('agent.chat.show', ['slug' => $slug, 'conversationId' => $conversation->id]);
+        return $this->redirect->afterPost('agent.chat.index', ['slug' => $slug]);
     }
 }

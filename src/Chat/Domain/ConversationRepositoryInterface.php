@@ -7,22 +7,37 @@ namespace App\Chat\Domain;
 use DateTimeImmutable;
 
 /**
- * Persistence for conversations. Every lookup is scoped by knowledge base, so a conversation id from one
- * base can never be opened under another.
+ * Persistence for conversations. Lookups are scoped by knowledge base and typed participant.
  */
 interface ConversationRepositoryInterface
 {
-    public function create(int $knowledgeBaseId, string $title, DateTimeImmutable $now): int;
-
-    public function findByIdForKnowledgeBase(int $conversationId, int $knowledgeBaseId): ?Conversation;
-
     /**
-     * @return list<Conversation> Newest activity first.
+     * Canonical thread for a knowledge base + participant, or null if none exists yet.
      */
-    public function findAllForKnowledgeBase(int $knowledgeBaseId): array;
+    public function findThread(int $knowledgeBaseId, ChatParticipant $participant): ?Conversation;
 
     /**
-     * Records that the conversation just saw activity, so it sorts to the top of the list.
+     * Inserts a thread row. Relies on ux_conversations_kb_participant_typed; callers must handle
+     * IntegrityException by re-selecting.
+     */
+    public function createThread(
+        int $knowledgeBaseId,
+        ChatParticipant $participant,
+        string $title,
+        DateTimeImmutable $now,
+    ): int;
+
+    /**
+     * Conversation id must belong to this KB and the given participant.
+     */
+    public function findOwnedThreadById(
+        int $conversationId,
+        int $knowledgeBaseId,
+        ChatParticipant $participant,
+    ): ?Conversation;
+
+    /**
+     * Records that the conversation just saw activity.
      */
     public function touch(int $conversationId, DateTimeImmutable $now): void;
 }

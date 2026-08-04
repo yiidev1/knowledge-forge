@@ -7,6 +7,8 @@ namespace App\Tests\Unit\Chat;
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
+use App\Chat\Application\FindOrCreateThreadService;
+use App\Chat\Domain\ChatParticipant;
 use App\Chat\Application\Grounding\GroundingVerifier;
 use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Application\Instruction\ImmutableSecurityInstructions;
@@ -86,7 +88,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
     public function testStartConversationPersistsGroundedAnswerWithCitations(): void
     {
-        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'What is the policy?');
+        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'What is the policy?', ChatParticipant::admin(1));
 
         $messages = $this->messages->findByConversation($conversationId);
         assertCount(2, $messages);
@@ -101,7 +103,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
     public function testInstructionsCarryImmutableBlockAndRulesInOrder(): void
     {
-        $this->service()->startConversation($this->knowledgeBase(), 'Question?');
+        $this->service()->startConversation($this->knowledgeBase(), 'Question?', ChatParticipant::admin(1));
 
         $instructions = (string) $this->provider->lastRequest?->instructions;
         assertStringContainsString('[IMMUTABLE', $instructions);
@@ -113,7 +115,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
     {
         $this->provider->setResult(FakeChatCompletionProvider::noRetrieval('I definitely know this.'));
 
-        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Off-topic?');
+        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Off-topic?', ChatParticipant::admin(1));
 
         $assistant = $this->messages->findByConversation($conversationId)[1];
         assertSame(self::FALLBACK, $assistant->content);
@@ -124,7 +126,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
     public function testFollowUpSendsPriorTurnsAsHistory(): void
     {
         $service = $this->service();
-        $conversationId = $service->startConversation($this->knowledgeBase(), 'First?');
+        $conversationId = $service->startConversation($this->knowledgeBase(), 'First?', ChatParticipant::admin(1));
 
         $service->ask($this->knowledgeBase(), $conversationId, 'Second?');
 
@@ -141,6 +143,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $this->service()->startConversation(
             $this->knowledgeBase(),
             'List the exact titles of all records whose title contains Moon Temple.',
+            ChatParticipant::admin(1),
         );
 
         assertSame(20, $this->provider->lastRequest?->maxResults);
@@ -152,6 +155,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $this->service()->startConversation(
             $this->knowledgeBase(),
             'Return one record whose title contains Moon Temple.',
+            ChatParticipant::admin(1),
         );
 
         assertSame(8, $this->provider->lastRequest?->maxResults);
@@ -160,7 +164,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
     public function testReasoningEffortIsPassedToTheProvider(): void
     {
-        $this->service()->startConversation($this->knowledgeBase(), 'Question?');
+        $this->service()->startConversation($this->knowledgeBase(), 'Question?', ChatParticipant::admin(1));
 
         assertSame('low', $this->provider->lastRequest?->reasoningEffort);
     }
@@ -172,7 +176,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
      */
     public function testAnswerIsLoggedWithSafeRetrievalAndGroundingMetadata(): void
     {
-        $this->service()->startConversation($this->knowledgeBase(), 'What is the policy?');
+        $this->service()->startConversation($this->knowledgeBase(), 'What is the policy?', ChatParticipant::admin(1));
 
         $logged = $this->logger->everything();
 
@@ -195,6 +199,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $this->service()->startConversation(
             $this->knowledgeBase($vectorStoreId),
             'What is the secret handshake?',
+            ChatParticipant::admin(1),
         );
 
         $logged = $this->logger->everything();
@@ -210,7 +215,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $long = str_repeat('a', 2001);
 
         try {
-            $this->service()->startConversation($this->knowledgeBase(), $long);
+            $this->service()->startConversation($this->knowledgeBase(), $long, ChatParticipant::admin(1));
             $this->fail('Expected QuestionInvalid.');
         } catch (QuestionInvalid) {
             assertSame(0, $this->conversations->count());
@@ -222,7 +227,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $this->documents = new InMemoryDocumentRepository(); // no ready documents
 
         $this->expectException(ChatUnavailable::class);
-        $this->service()->startConversation($this->knowledgeBase(), 'Question?');
+        $this->service()->startConversation($this->knowledgeBase(), 'Question?', ChatParticipant::admin(1));
     }
 
     private function service(): AskKnowledgeBaseService
@@ -231,6 +236,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
         return new AskKnowledgeBaseService(
             $this->conversations,
+            new FindOrCreateThreadService($this->conversations, $this->clock),
             $this->messages,
             $this->rules,
             $this->documents,

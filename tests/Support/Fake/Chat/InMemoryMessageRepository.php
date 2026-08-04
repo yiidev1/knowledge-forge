@@ -9,8 +9,10 @@ use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Domain\NewMessage;
 use DateTimeImmutable;
 
+use function array_reverse;
 use function array_slice;
 use function array_values;
+use function usort;
 
 /**
  * In-memory message repository for unit tests.
@@ -49,6 +51,11 @@ final class InMemoryMessageRepository implements MessageRepositoryInterface
             }
         }
 
+        usort(
+            $result,
+            static fn(Message $a, Message $b): int => [$a->createdAt, $a->id] <=> [$b->createdAt, $b->id],
+        );
+
         return array_values($result);
     }
 
@@ -58,9 +65,37 @@ final class InMemoryMessageRepository implements MessageRepositoryInterface
             return [];
         }
 
-        // Mirror the DB repository: take the newest $limit (by id), return them oldest-first.
         $all = $this->findByConversation($conversationId);
 
         return array_slice($all, -$limit);
+    }
+
+    public function findBefore(int $conversationId, int $beforeMessageId, int $limit): ?array
+    {
+        if ($limit < 1) {
+            return [];
+        }
+
+        $cursor = $this->items[$beforeMessageId] ?? null;
+        if ($cursor === null || $cursor->conversationId !== $conversationId) {
+            return null;
+        }
+
+        $older = [];
+        foreach ($this->findByConversation($conversationId) as $message) {
+            if (
+                $message->createdAt < $cursor->createdAt
+                || ($message->createdAt == $cursor->createdAt && $message->id < $cursor->id)
+            ) {
+                $older[] = $message;
+            }
+        }
+
+        return array_slice($older, -$limit);
+    }
+
+    public function countByConversation(int $conversationId): int
+    {
+        return count($this->findByConversation($conversationId));
     }
 }

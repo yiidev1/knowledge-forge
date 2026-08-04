@@ -377,6 +377,17 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     margin-bottom: .35rem;
     opacity: .75;
 }
+.chat-msg__time {
+    margin-top: .45rem;
+    font-size: .72rem;
+    opacity: .7;
+}
+.chat-msg--user .chat-msg__time { color: rgba(255, 255, 255, .85); }
+.chat__load-older {
+    display: flex;
+    justify-content: center;
+    margin: 0 0 .85rem;
+}
 .chat-msg--user .chat-msg__role { color: rgba(255, 255, 255, .85); }
 .chat-msg--assistant .chat-msg__role { color: var(--text-muted); }
 

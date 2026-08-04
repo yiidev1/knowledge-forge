@@ -13,6 +13,7 @@ use App\Chat\Application\Grounding\GroundingVerifier;
 use App\Chat\Application\History\ConversationHistoryPolicyInterface;
 use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
+use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\Exception\ChatUnavailable;
 use App\Chat\Domain\Exception\QuestionInvalid;
@@ -27,7 +28,6 @@ use Psr\Log\LoggerInterface;
 
 use function count;
 use function mb_strlen;
-use function mb_substr;
 use function microtime;
 use function substr;
 use function trim;
@@ -44,10 +44,9 @@ use function trim;
  */
 final readonly class AskKnowledgeBaseService
 {
-    private const TITLE_MAX = 80;
-
     public function __construct(
         private ConversationRepositoryInterface $conversations,
+        private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
         private RuleRepositoryInterface $rules,
         private DocumentRepositoryInterface $documents,
@@ -111,24 +110,28 @@ final readonly class AskKnowledgeBaseService
     }
 
     /**
-     * Starts a new conversation from a first question and answers it.
+     * Asks the first (or next) question on the participant's canonical thread for this knowledge base.
+     * Finds or creates that conversation; never mints a new thread when one exists.
      *
-     * @return int The new conversation id.
+     * @return int The canonical conversation id.
      */
-    public function startConversation(KnowledgeBase $knowledgeBase, string $question): int
-    {
+    public function startConversation(
+        KnowledgeBase $knowledgeBase,
+        string $question,
+        ChatParticipant $participant,
+    ): int {
         $question = $this->validateQuestion($question);
         $this->assertChatAvailable($knowledgeBase);
 
-        $conversationId = $this->conversations->create(
+        $conversation = $this->threads->findOrCreate(
             $knowledgeBase->id(),
-            $this->titleFrom($question),
-            $this->clock->now(),
+            $participant,
+            $knowledgeBase->name(),
         );
 
-        $this->answer($knowledgeBase, $conversationId, $question);
+        $this->answer($knowledgeBase, $conversation->id, $question);
 
-        return $conversationId;
+        return $conversation->id;
     }
 
     /**
@@ -226,10 +229,4 @@ final readonly class AskKnowledgeBaseService
         }
     }
 
-    private function titleFrom(string $question): string
-    {
-        $title = trim(mb_substr($question, 0, self::TITLE_MAX));
-
-        return $title === '' ? 'Untitled conversation' : $title;
-    }
 }

@@ -252,5 +252,133 @@
             });
         }
         updateJump();
+
+        bindLoadOlder(container);
     });
+
+    /**
+     * Cursor-based older history. User message bodies use textContent only; assistant HTML comes from
+     * the server Markdown renderer (html_input=escape). Citation filenames use textContent.
+     */
+    function bindLoadOlder(container) {
+        var root = document.querySelector('[data-chat-root]');
+        if (!root) {
+            return;
+        }
+        var historyUrl = root.getAttribute('data-history-url');
+        if (!historyUrl) {
+            return;
+        }
+
+        document.addEventListener('click', function (event) {
+            var target = event.target;
+            if (!(target instanceof HTMLElement)) {
+                return;
+            }
+            var button = target.closest('[data-load-older]');
+            if (!button || !(button instanceof HTMLButtonElement)) {
+                return;
+            }
+            event.preventDefault();
+            if (button.disabled) {
+                return;
+            }
+
+            var beforeId = button.getAttribute('data-before-id');
+            if (!beforeId) {
+                return;
+            }
+
+            button.disabled = true;
+            var url = historyUrl + (historyUrl.indexOf('?') >= 0 ? '&' : '?') + 'before_message_id=' + encodeURIComponent(beforeId);
+
+            fetch(url, {
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('history ' + response.status);
+                }
+                return response.json();
+            }).then(function (payload) {
+                var thread = container.querySelector('[data-chat-thread]');
+                if (!thread) {
+                    var empty = container.querySelector('[data-chat-empty]');
+                    if (empty) {
+                        empty.remove();
+                    }
+                    thread = document.createElement('div');
+                    thread.className = 'chat-thread';
+                    thread.setAttribute('data-chat-thread', '');
+                    container.appendChild(thread);
+                }
+
+                var prevHeight = container.scrollHeight;
+                var messages = payload.messages || [];
+                var frag = document.createDocumentFragment();
+                for (var i = 0; i < messages.length; i++) {
+                    frag.appendChild(buildHistoryMessage(messages[i]));
+                }
+                thread.insertBefore(frag, thread.firstChild);
+                container.scrollTop = container.scrollHeight - prevHeight;
+
+                var wrap = button.closest('.chat__load-older');
+                if (payload.has_older && messages.length > 0) {
+                    button.disabled = false;
+                    button.setAttribute('data-before-id', String(messages[0].id));
+                } else if (wrap) {
+                    wrap.remove();
+                } else {
+                    button.remove();
+                }
+            }).catch(function () {
+                button.disabled = false;
+            });
+        });
+    }
+
+    function buildHistoryMessage(msg) {
+        var isUser = msg.role === 'user';
+        var article = el('article', 'chat-msg chat-msg--' + (isUser ? 'user' : 'assistant'));
+        article.setAttribute('data-message-id', String(msg.id));
+        article.appendChild(el('div', 'chat-msg__role', isUser ? 'You' : 'Assistant'));
+
+        var body = el('div', 'chat-msg__body');
+        if (isUser) {
+            // Never assign untrusted content to innerHTML.
+            String(msg.content || '').split('\n').forEach(function (line, index) {
+                if (index > 0) {
+                    body.appendChild(document.createElement('br'));
+                }
+                body.appendChild(document.createTextNode(line));
+            });
+        } else if (msg.html) {
+            // Server-rendered Markdown with html_input=escape.
+            body.innerHTML = msg.html;
+        } else {
+            body.appendChild(document.createTextNode(String(msg.content || '')));
+        }
+        article.appendChild(body);
+        article.appendChild(el('div', 'chat-msg__time', String(msg.created_at || '')));
+
+        if (!isUser) {
+            var citations = msg.citations || [];
+            if (citations.length > 0) {
+                var box = el('div', 'chat-msg__citations');
+                box.appendChild(el('span', 'chat-msg__citations-label', 'Sources'));
+                for (var c = 0; c < citations.length; c++) {
+                    var chip = el('span', 'chat-chip');
+                    chip.appendChild(document.createTextNode(String(citations[c].filename || '')));
+                    box.appendChild(chip);
+                }
+                article.appendChild(box);
+            } else if (!msg.is_grounded) {
+                var ung = el('div', 'chat-msg__citations util-muted');
+                ung.appendChild(document.createTextNode('No cited source for this answer.'));
+                article.appendChild(ung);
+            }
+        }
+
+        return article;
+    }
 })();

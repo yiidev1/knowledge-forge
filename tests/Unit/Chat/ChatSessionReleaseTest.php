@@ -9,9 +9,13 @@ use App\Ai\Contract\Dto\GroundedAnswerRequest;
 use App\Ai\Contract\Dto\GroundedAnswerResult;
 use App\Ai\Contract\Dto\IndexStatus;
 use App\Ai\Contract\Dto\RawCitation;
+use App\Auth\Application\CurrentAdmin;
+use App\Auth\Domain\AdminUser;
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
+use App\Chat\Application\FindOrCreateThreadService;
+use App\Chat\Domain\ChatParticipant;
 use App\Chat\Application\Grounding\GroundingVerifier;
 use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Application\Instruction\ImmutableSecurityInstructions;
@@ -88,7 +92,12 @@ final class ChatSessionReleaseTest extends Unit
         $fileId = $this->indexedFiles->createPending(self::DOC, IndexedFileRole::DerivedMarkdown, 'derived/x.md');
         $this->indexedFiles->setUploaded($fileId, 'file_1', IndexStatus::Completed);
 
-        $this->conversationId = $this->conversations->create(self::KB, 'A thread', (new MutableClock())->now());
+        $this->conversationId = $this->conversations->createThread(
+            self::KB,
+            ChatParticipant::admin(1),
+            'A thread',
+            (new MutableClock())->now(),
+        );
     }
 
     public function testSessionIsClosedBeforeTheProviderIsCalled(): void
@@ -126,10 +135,14 @@ final class ChatSessionReleaseTest extends Unit
 
     private function action(): Action
     {
+        $now = new \DateTimeImmutable('2026-01-01', new \DateTimeZone('UTC'));
+        $currentAdmin = new CurrentAdmin();
+        $currentAdmin->setAdmin(new AdminUser(1, 'admin', 'hash', true, null, $now, $now));
+
         return new Action(
             $this->askService(),
             new KnowledgeBaseFinder($this->knowledgeBases),
-            new ConversationFinder($this->conversations),
+            new ConversationFinder($this->conversations, $currentAdmin),
             new Redirect(new ResponseFactory(), $this->urlGenerator()),
             new FlashMessages(new Flash($this->session)),
             $this->session,
@@ -149,8 +162,11 @@ final class ChatSessionReleaseTest extends Unit
             maxQuestionLength: 2000,
         );
 
+        $clock = new MutableClock();
+
         return new AskKnowledgeBaseService(
             $this->conversations,
+            new FindOrCreateThreadService($this->conversations, $clock),
             $this->messages,
             $this->rules,
             $this->documents,
@@ -164,7 +180,7 @@ final class ChatSessionReleaseTest extends Unit
                 new SafeLogContext(new SecretRedactor(), new CorrelationId('corr-test')),
             ),
             new GroundingVerifier($params),
-            new MutableClock(),
+            $clock,
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),

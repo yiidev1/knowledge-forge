@@ -12,6 +12,7 @@ use App\Chat\Domain\ResolvedCitation;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\QueryInterface;
 
 use function array_map;
@@ -23,8 +24,7 @@ use function json_encode;
 use const JSON_THROW_ON_ERROR;
 
 /**
- * MySQL-backed message repository. Citations and usage are stored as JSON columns; the resolved
- * document id lives inside the citation JSON so rendering never re-queries.
+ * MySQL-backed message repository. Ordering is created_at ASC, id ASC for stable merge-safe chronology.
  */
 final readonly class DbMessageRepository implements MessageRepositoryInterface
 {
@@ -58,7 +58,7 @@ final readonly class DbMessageRepository implements MessageRepositoryInterface
     {
         $rows = $this->query()
             ->where(['conversation_id' => $conversationId])
-            ->orderBy(['id' => SORT_ASC])
+            ->orderBy(['created_at' => SORT_ASC, 'id' => SORT_ASC])
             ->all();
 
         return $this->hydrateAll($rows);
@@ -70,14 +70,52 @@ final readonly class DbMessageRepository implements MessageRepositoryInterface
             return [];
         }
 
-        // Newest-first + LIMIT so the database returns only the tail, then reverse to chronological.
         $rows = $this->query()
             ->where(['conversation_id' => $conversationId])
-            ->orderBy(['id' => SORT_DESC])
+            ->orderBy(['created_at' => SORT_DESC, 'id' => SORT_DESC])
             ->limit($limit)
             ->all();
 
         return array_reverse($this->hydrateAll($rows));
+    }
+
+    public function findBefore(int $conversationId, int $beforeMessageId, int $limit): ?array
+    {
+        if ($limit < 1) {
+            return [];
+        }
+
+        $cursor = $this->query()
+            ->select(['id', 'created_at'])
+            ->where(['id' => $beforeMessageId, 'conversation_id' => $conversationId])
+            ->limit(1)
+            ->one();
+
+        if (!is_array($cursor)) {
+            return null;
+        }
+
+        $createdAt = (string) $cursor['created_at'];
+        $cursorId = (int) $cursor['id'];
+
+        $rows = $this->query()
+            ->where(['conversation_id' => $conversationId])
+            ->andWhere(new Expression(
+                '([[created_at]] < :cursor_at) OR ([[created_at]] = :cursor_at AND [[id]] < :cursor_id)',
+                [':cursor_at' => $createdAt, ':cursor_id' => $cursorId],
+            ))
+            ->orderBy(['created_at' => SORT_DESC, 'id' => SORT_DESC])
+            ->limit($limit)
+            ->all();
+
+        return array_reverse($this->hydrateAll($rows));
+    }
+
+    public function countByConversation(int $conversationId): int
+    {
+        return (int) $this->query()
+            ->where(['conversation_id' => $conversationId])
+            ->count('*');
     }
 
     /**

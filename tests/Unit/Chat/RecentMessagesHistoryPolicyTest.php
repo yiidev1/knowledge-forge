@@ -59,6 +59,21 @@ final class RecentMessagesHistoryPolicyTest extends Unit
         assertCount(1, $selected);
     }
 
+    public function testHundredsOfStoredMessagesStillBoundProviderHistory(): void
+    {
+        $policy = new RecentMessagesHistoryPolicy(messageLimit: 10, charLimit: 8000);
+        $history = [];
+        for ($i = 1; $i <= 300; $i++) {
+            $history[] = $this->message($i, 'msg-' . $i);
+        }
+
+        $selected = $policy->select($history);
+
+        assertCount(10, $selected);
+        assertSame('msg-291', $selected[0]->text);
+        assertSame('msg-300', $selected[9]->text);
+    }
+
     private function message(int $id, string $content): Message
     {
         $now = new DateTimeImmutable('2026-01-01', new DateTimeZone('UTC'));

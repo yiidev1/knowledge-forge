@@ -14,17 +14,25 @@ interface MessageRepositoryInterface
     public function add(NewMessage $message, DateTimeImmutable $now): int;
 
     /**
-     * @return list<Message> Oldest first — the order the thread is rendered in.
+     * @return list<Message> Oldest first — created_at ASC, id ASC.
      */
     public function findByConversation(int $conversationId): array;
 
     /**
-     * The newest $limit messages of a conversation, returned oldest-first for chronological display.
+     * Newest $limit messages, returned oldest-first for chronological display.
      *
-     * The limit is applied in the database (newest-first + LIMIT), not by loading everything and slicing
-     * in PHP, so a long conversation never pulls its whole history into memory just to show the tail.
-     *
-     * @return list<Message> Up to $limit messages, oldest of the selected window first.
+     * @return list<Message>
      */
     public function findRecentByConversation(int $conversationId, int $limit): array;
+
+    /**
+     * Messages strictly before the cursor message, using a (created_at, id) tuple.
+     * Returns up to $limit rows in created_at ASC, id ASC. Empty if the cursor is missing
+     * or does not belong to the conversation (caller should 404).
+     *
+     * @return list<Message>|null null when the cursor message is not in this conversation
+     */
+    public function findBefore(int $conversationId, int $beforeMessageId, int $limit): ?array;
+
+    public function countByConversation(int $conversationId): int;
 }

@@ -4,23 +4,30 @@ declare(strict_types=1);
 
 namespace App\Chat\Web;
 
+use App\Auth\Application\CurrentAdmin;
+use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\Conversation;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\Exception\ConversationNotFound;
 
 /**
- * Resolves a `{conversationId}` within a knowledge base to a conversation, or a 404. Written once so the
- * scoped "load or fail" step is identical across the chat actions.
+ * Resolves a `{conversationId}` to the logged-in admin's thread for a knowledge base, or 404.
  */
 final readonly class ConversationFinder
 {
     public function __construct(
         private ConversationRepositoryInterface $repository,
+        private CurrentAdmin $currentAdmin,
     ) {}
 
     public function forKnowledgeBase(int $conversationId, int $knowledgeBaseId): Conversation
     {
-        $conversation = $this->repository->findByIdForKnowledgeBase($conversationId, $knowledgeBaseId);
+        $participant = ChatParticipant::admin($this->currentAdmin->get()->id());
+        $conversation = $this->repository->findOwnedThreadById(
+            $conversationId,
+            $knowledgeBaseId,
+            $participant,
+        );
 
         if (!$conversation instanceof Conversation) {
             throw ConversationNotFound::inKnowledgeBase($conversationId, $knowledgeBaseId);

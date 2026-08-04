@@ -48,9 +48,11 @@ final class ChatCest
     public function chatIsBlockedWhileProvisioning(WebTester $I): void
     {
         $I->amOnPage('/knowledge-bases/' . self::KB_SLUG . '/chat');
-        $I->see('Chat');
+        $I->see(self::KB_NAME);
         $I->see('still being provisioned');
         $I->dontSeeElement('textarea[name=question]');
+        $I->dontSee('Start conversation');
+        $I->dontSee('Conversations');
     }
 
     private function cleanup(): void
