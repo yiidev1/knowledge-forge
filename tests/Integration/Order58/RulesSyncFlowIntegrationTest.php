@@ -1,0 +1,270 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Integration\Order58;
+
+use App\Order58\Application\Mapper\RuleMapper;
+use App\Order58\Application\Order58SyncParams;
+use App\Order58\Application\Sync\RulesSyncHandler;
+use App\Order58\Application\Sync\SyncOutcome;
+use App\Order58\Contract\Dto\Order58Page;
+use App\Order58\Contract\Dto\Order58Pagination;
+use App\Order58\Contract\Dto\Order58RuleRecord;
+use App\Order58\Domain\Order58SyncType;
+use App\Order58\Domain\RuleMirror;
+use App\Order58\Domain\SyncRunStatus;
+use App\Order58\Infrastructure\DbOrder58RuleRepository;
+use App\Order58\Infrastructure\DbSyncRunRepository;
+use App\Rules\Application\RuleCatalogService;
+use App\Rules\Application\RuleClassificationRunner;
+use App\Rules\Application\RuleHasher;
+use App\Rules\Infrastructure\DbRuleCatalogRepository;
+use App\Shared\Application\Transaction\TransactionalRunner;
+use App\Tests\Support\Fake\Order58\FakeOrder58Client;
+use App\Tests\Support\IntegrationDb;
+use App\Tests\Support\RulesTestFactory;
+use Codeception\Test\Unit;
+use DateTimeImmutable;
+use DateTimeZone;
+use Yiisoft\Db\Connection\ConnectionInterface;
+
+use function sys_get_temp_dir;
+use function PHPUnit\Framework\assertNotNull;
+use function PHPUnit\Framework\assertSame;
+use function PHPUnit\Framework\assertTrue;
+
+/**
+ * The rules sync handler end-to-end against real MySQL, driven by a scripted Order58 client: a first sync
+ * mirrors and deduplicates, pagination follows the response's total_pages, a second identical sync writes no new
+ * rows (sync-hash skip), and mark-and-sweep — only after a complete scan — deactivates records missing upstream.
+ */
+final class RulesSyncFlowIntegrationTest extends Unit
+{
+    private const TITLE_MARK = 'ZZFLOW';
+    private const ADMIN = 972000000;
+    private const SOURCE_LO = 972000001;
+    private const SOURCE_HI = 972000099;
+
+    private ConnectionInterface $connection;
+    private DbOrder58RuleRepository $rules;
+    private RuleCatalogService $catalogService;
+    private RuleClassificationRunner $classifier;
+    private DbSyncRunRepository $runs;
+    private Order58SyncParams $params;
+    private DateTimeImmutable $now;
+
+    protected function _before(): void
+    {
+        $this->connection = IntegrationDb::connectOrSkip();
+        $this->rules = new DbOrder58RuleRepository($this->connection);
+        $catalogRepo = new DbRuleCatalogRepository($this->connection);
+        $this->catalogService = new RuleCatalogService($catalogRepo, new RuleHasher(), new TransactionalRunner($this->connection));
+        $this->classifier = RulesTestFactory::classificationRunner($this->connection, sys_get_temp_dir() . '/kf_rules_flow');
+
+        $this->runs = new DbSyncRunRepository($this->connection);
+        $this->params = new Order58SyncParams(pageSize: 100, maxAttempts: 3, pagesPerRun: 1000);
+        $this->now = new DateTimeImmutable('2026-08-05 00:00:00', new DateTimeZone('UTC'));
+        $this->cleanup();
+    }
+
+    protected function _after(): void
+    {
+        $this->cleanup();
+    }
+
+    public function testFirstSyncMirrorsAndDeduplicatesThenSecondSyncAddsNothing(): void
+    {
+        $client = $this->scriptedClient();
+
+        $first = $this->runSync($client);
+
+        assertSame(SyncRunStatus::Completed, $first->terminalStatus);
+        assertSame([1, 2], $client->listRulesCalls, 'pagination followed total_pages (two pages)');
+        assertSame(3, $first->progress->created, 'three raw source rules created');
+        assertSame(2, $first->progress->canonicalCreated, 'two canonical rules (the duplicate collapses)');
+        assertSame(1, $first->progress->exactDuplicates, 'one exact-duplicate source link');
+        assertSame(3, $this->sourceCount(), 'three raw rows mirrored');
+        assertSame(2, $this->canonicalCount(), 'two canonical rows');
+        // The two identical-content rules share one canonical; the second is an exact duplicate.
+        assertSame(
+            $this->catalogFor(self::SOURCE_LO),
+            $this->catalogFor(self::SOURCE_LO + 1),
+        );
+
+        // A second, identical sync must not create any new rows.
+        $second = $this->runSync($this->scriptedClient());
+
+        assertSame(SyncRunStatus::Completed, $second->terminalStatus);
+        assertSame(0, $second->progress->created);
+        assertSame(3, $second->progress->unchanged, 'all three rules unchanged by sync hash');
+        assertSame(0, $second->progress->canonicalCreated);
+        assertSame(3, $this->sourceCount(), 'still three raw rows — no duplicates');
+        assertSame(2, $this->canonicalCount(), 'still two canonical rows');
+    }
+
+    public function testSweepDeactivatesRecordsMissingFromTheLatestSync(): void
+    {
+        // A record from a prior run that the upstream no longer returns. Its last-seen marker is cleared to
+        // NULL so it is unambiguously "not seen" by the upcoming run, regardless of that run's id.
+        $stale = self::SOURCE_LO + 50;
+        $this->rules->save($this->mirror($stale, 'ZZFLOW stale', 'Gone upstream', 'hs'), 1, $this->now);
+        $this->connection->createCommand()
+            ->update('{{%order58_rule_records}}', ['last_seen_sync_run_id' => null], ['source_id' => $stale])
+            ->execute();
+        assertSame(1, $this->activeOf($stale));
+
+        $this->runSync($this->scriptedClient());
+
+        assertSame(0, $this->activeOf($stale), 'a record missing from a complete sync is soft-deactivated');
+        assertSame(1, $this->activeOf(self::SOURCE_LO), 'a record present this run stays active');
+    }
+
+    private function runSync(FakeOrder58Client $client): SyncOutcome
+    {
+        $handler = new RulesSyncHandler(
+            $client,
+            $this->rules,
+            new RuleMapper(),
+            $this->catalogService,
+            $this->classifier,
+            $this->runs,
+            $this->params,
+        );
+
+        $runId = $this->runs->enqueue(Order58SyncType::Rules, null, self::ADMIN, $this->now);
+        assertNotNull($runId);
+        assertTrue($this->runs->claim($runId, $this->now));
+        $run = $this->runs->findById($runId);
+        assertNotNull($run);
+
+        $outcome = $handler->handle($run, $this->now);
+
+        // Simulate the drainer finalising the run so the coalescing active_key frees for the next sync.
+        $this->runs->finish(
+            $runId,
+            $outcome->terminalStatus ?? SyncRunStatus::Completed,
+            $outcome->progress,
+            $outcome->errorCode,
+            $outcome->errorMessage,
+            $this->now,
+        );
+
+        return $outcome;
+    }
+
+    /**
+     * Two pages: page 1 has two identical-content rules (one is an exact duplicate); page 2 has a distinct rule.
+     */
+    private function scriptedClient(): FakeOrder58Client
+    {
+        $client = new FakeOrder58Client();
+        $client->rulePages = [
+            1 => new Order58Page([
+                $this->rule(self::SOURCE_LO, self::TITLE_MARK . ' A', 'Shared body', 'h1'),
+                $this->rule(self::SOURCE_LO + 1, self::TITLE_MARK . ' A', 'Shared body', 'h2'),
+            ], new Order58Pagination(1, 100, 3, 2)),
+            2 => new Order58Page([
+                $this->rule(self::SOURCE_LO + 2, self::TITLE_MARK . ' B', 'Other body', 'h3'),
+            ], new Order58Pagination(2, 100, 3, 2)),
+        ];
+
+        return $client;
+    }
+
+    private function rule(int $sourceId, string $title, string $description, string $hash): Order58RuleRecord
+    {
+        return new Order58RuleRecord(
+            id: $sourceId,
+            type: 'Rule',
+            title: $title,
+            description: $description,
+            ruleKeyword: null,
+            createdName: 'admin2',
+            sourceStoreId: null,
+            createdAt: null,
+            updatedAt: null,
+            syncHash: $hash,
+            raw: ['id' => $sourceId, 'title' => $title, 'description' => $description, '_sync_hash' => $hash],
+        );
+    }
+
+    private function mirror(int $sourceId, string $title, string $description, string $hash): RuleMirror
+    {
+        return new RuleMirror(
+            id: null,
+            sourceId: $sourceId,
+            type: 'Rule',
+            title: $title,
+            description: $description,
+            ruleKeyword: null,
+            createdName: 'admin2',
+            sourceStoreId: null,
+            active: true,
+            syncHash: $hash,
+            sourceCreatedAt: null,
+            sourceUpdatedAt: null,
+            snapshot: ['id' => $sourceId],
+        );
+    }
+
+    private function catalogFor(int $sourceId): ?int
+    {
+        $recordId = $this->rules->findIdBySourceId($sourceId);
+
+        return $recordId === null ? null : (new DbRuleCatalogRepository($this->connection))->findCanonicalIdForRecord($recordId);
+    }
+
+    private function activeOf(int $sourceId): int
+    {
+        return (int) $this->connection
+            ->createQuery()
+            ->select('is_active')
+            ->from('{{%order58_rule_records}}')
+            ->where(['source_id' => $sourceId])
+            ->scalar();
+    }
+
+    private function sourceCount(): int
+    {
+        return (int) $this->connection
+            ->createQuery()
+            ->from('{{%order58_rule_records}}')
+            ->where(['between', 'source_id', self::SOURCE_LO, self::SOURCE_HI])
+            ->count();
+    }
+
+    private function canonicalCount(): int
+    {
+        return (int) $this->connection
+            ->createQuery()
+            ->from('{{%rule_catalog_rules}}')
+            ->where(['like', 'title', self::TITLE_MARK])
+            ->count();
+    }
+
+    private function cleanup(): void
+    {
+        // Links/events reference the canonical rules with RESTRICT, so remove them first.
+        foreach (['{{%rule_store_links}}', '{{%rule_classification_events}}'] as $child) {
+            $this->connection->createCommand(
+                'DELETE [[c]] FROM ' . $child . ' [[c]]'
+                . ' JOIN {{%rule_catalog_rules}} [[k]] ON [[k]].[[id]] = [[c]].[[rule_catalog_rule_id]]'
+                . ' WHERE [[k]].[[title]] LIKE :mark',
+                [':mark' => self::TITLE_MARK . '%'],
+            )->execute();
+        }
+        $this->connection->createCommand(
+            'DELETE [[s]] FROM {{%rule_catalog_sources}} [[s]]'
+            . ' JOIN {{%order58_rule_records}} [[r]] ON [[r]].[[id]] = [[s]].[[order58_rule_record_id]]'
+            . ' WHERE [[r]].[[source_id]] BETWEEN :lo AND :hi',
+            [':lo' => self::SOURCE_LO, ':hi' => self::SOURCE_HI],
+        )->execute();
+        IntegrationDb::cleanup($this->connection, '{{%rule_catalog_rules}}', ['like', 'title', self::TITLE_MARK]);
+        $this->connection->createCommand(
+            'DELETE FROM {{%order58_rule_records}} WHERE [[source_id]] BETWEEN :lo AND :hi',
+            [':lo' => self::SOURCE_LO, ':hi' => self::SOURCE_HI],
+        )->execute();
+        IntegrationDb::cleanup($this->connection, '{{%integration_sync_runs}}', ['requested_by_admin_id' => self::ADMIN]);
+    }
+}

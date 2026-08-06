@@ -21,7 +21,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var array<string, SyncRun> $latest
  * @var SyncRun|null $health
  * @var list<SyncRun> $recent
- * @var array{stores: bool, knowledge: bool, agents: bool} $active
+ * @var array{stores: bool, knowledge: bool, agents: bool, rules: bool} $active
  */
 
 $this->setTitle('Order58 Data Management');
@@ -31,6 +31,7 @@ $syncUrl = $urlGenerator->generate('order58.sync');
 $checkUrl = $urlGenerator->generate('order58.check');
 $agentsUrl = $urlGenerator->generate('order58.agents');
 $storesUrl = $urlGenerator->generate('order58.stores');
+$rulesUrl = $urlGenerator->generate('order58.rules');
 
 $fmt = static fn(?DateTimeImmutable $d): string => $d === null ? '—' : $d->format('Y-m-d H:i') . ' UTC';
 
@@ -75,6 +76,7 @@ $button = static function (string $operation, string $label, bool $isActive) use
     <div class="util-row">
         <a class="btn btn--secondary" href="<?= Html::encode($storesUrl) ?>">Browse stores</a>
         <a class="btn btn--secondary" href="<?= Html::encode($agentsUrl) ?>">View agents</a>
+        <a class="btn btn--secondary" href="<?= Html::encode($rulesUrl) ?>">Rules</a>
     </div>
 </div>
 
@@ -104,7 +106,7 @@ $button = static function (string $operation, string $label, bool $isActive) use
         These are four independent axes. "Source active" mirrors Order58's <code>account.active</code>; the others are
         local: whether agents are allowed, whether the vector store is provisioned, and whether a store is fully ready for agents.
     </p>
-    <section class="stat-row">
+    <section class="grid grid--stats">
         <div class="stat"><div class="stat__value"><?= $stores['active'] ?> / <?= $stores['all'] ?></div><div class="stat__label">Source-active Order58 stores</div></div>
         <div class="stat"><div class="stat__value"><?= $knowledgeBases->agentEnabled ?> / <?= $knowledgeBases->total ?></div><div class="stat__label">Agent-enabled knowledge bases</div></div>
         <div class="stat"><div class="stat__value"><?= $knowledgeBases->ready ?> / <?= $knowledgeBases->total ?></div><div class="stat__label">Ready knowledge bases</div></div>
@@ -112,7 +114,7 @@ $button = static function (string $operation, string $label, bool $isActive) use
     </section>
 </section>
 
-<section class="stat-row">
+<section class="grid grid--stats">
     <div class="stat"><div class="stat__value"><?= $knowledge['active'] ?> / <?= $knowledge['all'] ?></div><div class="stat__label">Active / total knowledge records</div></div>
     <div class="stat"><div class="stat__value"><?= $agents['active'] ?> / <?= $agents['all'] ?></div><div class="stat__label">Active / total agents</div></div>
 </section>
@@ -138,6 +140,11 @@ $button = static function (string $operation, string $label, bool $isActive) use
                     <td><strong>Agents</strong><div class="field__hint">Mirrors safe agent profiles (no credentials).</div></td>
                     <td><?= $renderLatest($latest['agents'] ?? null) ?></td>
                     <td><?= $button('agents', 'Sync Agents', $active['agents']) ?></td>
+                </tr>
+                <tr>
+                    <td><strong>Rules</strong><div class="field__hint">Mirrors the global Order58 rules and builds the deduplicated canonical catalog. <a href="<?= Html::encode($urlGenerator->generate('order58.rules')) ?>">View rules report →</a></div></td>
+                    <td><?= $renderLatest($latest['rules'] ?? null) ?></td>
+                    <td><?= $button('rules', 'Sync Rules', $active['rules']) ?></td>
                 </tr>
             </tbody>
         </table>

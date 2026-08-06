@@ -247,6 +247,17 @@ p { margin: 0 0 1rem; }
 .field__error { font-size: .82rem; color: var(--error-text); margin-top: .3rem; }
 textarea.field__control { min-height: 110px; resize: vertical; }
 
+/* Read-only canonical source view: wrap every line (including long unbroken tokens) so nothing is clipped. */
+.source-view {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+    max-height: 70vh;
+    overflow: auto;
+    line-height: 1.55;
+}
+
 /* ---- Tables --------------------------------------------------------------- */
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
@@ -649,6 +660,19 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .dir-toolbar { margin-bottom: 1rem; }
 .dir-search { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
 .dir-search .field__control { flex: 1 1 260px; min-width: 0; }
+
+/* Rule review actions — spaced action groups with a constrained store picker. */
+.review-lede { color: var(--text-muted); margin: 0 0 1.25rem; line-height: 1.5; }
+.review-group { padding: 1rem 0; border-top: 1px solid var(--border); }
+.review-group:first-of-type { border-top: 0; padding-top: 0; }
+.review-group .field__hint { margin-top: .6rem; }
+.store-picker { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.store-picker__select { flex: 0 1 380px; max-width: 420px; min-width: 0; }
+@media (max-width: 560px) {
+    .store-picker { flex-direction: column; align-items: stretch; }
+    .store-picker__select { flex: 1 1 auto; max-width: none; }
+    .store-picker .btn { width: 100%; }
+}
 
 .btn--ghost { background: transparent; color: var(--text-muted); border-color: transparent; }
 .btn--ghost:hover { background: var(--surface-2); color: var(--text); }

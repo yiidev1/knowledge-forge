@@ -47,5 +47,5 @@ $this->setParameter('breadcrumbs', [
 
 <div class="card">
     <p class="field__hint" style="margin-top: 0;">Canonical local source (plain text). Not rendered as HTML.</p>
-    <pre class="field__control" style="white-space: pre-wrap; max-height: 70vh; overflow: auto;"><?= Html::encode($body) ?></pre>
+    <pre class="field__control source-view"><?= Html::encode($body) ?></pre>
 </div>

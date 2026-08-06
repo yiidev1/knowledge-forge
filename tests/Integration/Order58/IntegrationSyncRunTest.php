@@ -14,6 +14,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
+use function PHPUnit\Framework\assertArrayHasKey;
 use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertNull;
@@ -27,6 +28,7 @@ use function PHPUnit\Framework\assertTrue;
 final class IntegrationSyncRunTest extends Unit
 {
     private const SCOPE = 987654321;
+    private const RULES_ADMIN = 987654322;
 
     private ConnectionInterface $connection;
     private DbSyncRunRepository $repository;
@@ -48,6 +50,24 @@ final class IntegrationSyncRunTest extends Unit
     private function cleanup(): void
     {
         IntegrationDb::cleanup($this->connection, '{{%integration_sync_runs}}', ['scope_ref' => self::SCOPE]);
+        IntegrationDb::cleanup($this->connection, '{{%integration_sync_runs}}', ['requested_by_admin_id' => self::RULES_ADMIN]);
+    }
+
+    /**
+     * Regression: latestByType() must surface the latest Rules run so the Rules report's "Latest rules sync"
+     * panel is populated (it previously only covered stores/knowledge/agents, so it always read "not synced yet").
+     */
+    public function testLatestByTypeIncludesTheRulesSync(): void
+    {
+        $id = $this->repository->enqueue(Order58SyncType::Rules, null, self::RULES_ADMIN, $this->now);
+        assertNotNull($id);
+        $this->repository->finish($id, SyncRunStatus::Completed, new SyncProgress(created: 3), null, null, $this->now);
+
+        $latest = $this->repository->latestByType();
+
+        assertArrayHasKey('rules', $latest);
+        assertSame($id, $latest['rules']->id());
+        assertSame(SyncRunStatus::Completed, $latest['rules']->status());
     }
 
     public function testDuplicateActiveRunIsCoalesced(): void

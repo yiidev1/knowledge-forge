@@ -9,14 +9,15 @@ use App\Order58\Contract\Dto\Order58AuthResult;
 use App\Order58\Contract\Dto\Order58Health;
 use App\Order58\Contract\Dto\Order58KnowledgeRecord;
 use App\Order58\Contract\Dto\Order58Page;
+use App\Order58\Contract\Dto\Order58RuleRecord;
 use App\Order58\Contract\Exception\Order58Exception;
 use App\Order58\Contract\Order58ClientInterface;
 use LogicException;
 use SensitiveParameter;
 
 /**
- * A programmable {@see Order58ClientInterface} for tests. Only {@see authenticate()} is exercised so far;
- * the sync methods throw if a test reaches for them unexpectedly.
+ * A programmable {@see Order58ClientInterface} for tests. {@see authenticate()} and the rules list are
+ * exercised; the other sync methods throw if a test reaches for them unexpectedly.
  */
 final class FakeOrder58Client implements Order58ClientInterface
 {
@@ -25,6 +26,19 @@ final class FakeOrder58Client implements Order58ClientInterface
 
     /** Usernames authenticate() was called with. Passwords are deliberately never recorded. */
     public array $authenticatedUsernames = [];
+
+    /**
+     * Scripted rule pages keyed by requested page number.
+     *
+     * @var array<int, Order58Page<Order58RuleRecord>>
+     */
+    public array $rulePages = [];
+
+    /** Thrown by {@see listRules()} when set, to simulate a transport/API failure. */
+    public ?Order58Exception $rulesException = null;
+
+    /** @var list<int> Page numbers listRules() was called with, in order. */
+    public array $listRulesCalls = [];
 
     public function authenticate(string $username, #[SensitiveParameter] string $password): Order58AuthResult
     {
@@ -65,5 +79,21 @@ final class FakeOrder58Client implements Order58ClientInterface
     public function getKnowledgeRecord(int $id): Order58KnowledgeRecord
     {
         throw new LogicException('getKnowledgeRecord() is not used in this fake.');
+    }
+
+    public function listRules(int $page, int $perPage): Order58Page
+    {
+        $this->listRulesCalls[] = $page;
+
+        if ($this->rulesException !== null) {
+            throw $this->rulesException;
+        }
+
+        return $this->rulePages[$page] ?? throw new LogicException('No scripted rule page ' . $page . '.');
+    }
+
+    public function getRule(int $id): Order58RuleRecord
+    {
+        throw new LogicException('getRule() is not used in this fake.');
     }
 }

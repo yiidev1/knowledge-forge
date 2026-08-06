@@ -191,7 +191,7 @@ final readonly class DbSyncRunRepository implements SyncRunRepositoryInterface
     public function latestByType(): array
     {
         $result = [];
-        foreach ([Order58SyncType::Stores, Order58SyncType::Knowledge, Order58SyncType::Agents] as $type) {
+        foreach ([Order58SyncType::Stores, Order58SyncType::Knowledge, Order58SyncType::Agents, Order58SyncType::Rules] as $type) {
             $run = $this->hydrate(
                 $this->connection
                     ->createQuery()

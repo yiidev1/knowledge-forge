@@ -41,12 +41,15 @@ final readonly class DbKnowledgeBaseRepository implements KnowledgeBaseRepositor
         return (int) $this->query()->where(['slug' => $slug])->count() > 0;
     }
 
-    public function findAll(bool $includeArchived = false): array
+    public function findAll(bool $includeArchived = false, bool $excludeSystem = false): array
     {
         $query = $this->query()->orderBy(['name' => SORT_ASC, 'id' => SORT_ASC]);
 
         if (!$includeArchived) {
             $query->where(['status' => KnowledgeBaseStatus::Active->value]);
+        }
+        if ($excludeSystem) {
+            $query->andWhere(['purpose' => 'store']);
         }
 
         $result = [];
@@ -60,9 +63,14 @@ final readonly class DbKnowledgeBaseRepository implements KnowledgeBaseRepositor
         return $result;
     }
 
-    public function countActive(): int
+    public function countActive(bool $excludeSystem = false): int
     {
-        return (int) $this->query()->where(['status' => KnowledgeBaseStatus::Active->value])->count();
+        $query = $this->query()->where(['status' => KnowledgeBaseStatus::Active->value]);
+        if ($excludeSystem) {
+            $query->andWhere(['purpose' => 'store']);
+        }
+
+        return (int) $query->count();
     }
 
     public function create(string $name, string $slug, ?string $description, ?string $systemInstructions): int
@@ -75,6 +83,29 @@ final readonly class DbKnowledgeBaseRepository implements KnowledgeBaseRepositor
             'description' => $description,
             'system_instructions' => $systemInstructions,
             // New knowledge bases start pending; the background worker provisions the vector store.
+            'vector_store_status' => VectorStoreStatus::Pending->value,
+            'status' => KnowledgeBaseStatus::Active->value,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+
+        return (int) $this->connection->getLastInsertId();
+    }
+
+    public function createSystem(string $name, string $slug, string $purpose, string $sourceSystem): int
+    {
+        $now = DbDateTime::format($this->clock->now());
+
+        $this->connection->createCommand()->insert(self::TABLE, [
+            'name' => $name,
+            'slug' => $slug,
+            'purpose' => $purpose,
+            // A system base is not an Order58 store: no store source, and it never appears in the agent
+            // directory (agent_enabled = 0). The provisioning drainer still builds its vector store because
+            // source_store_id is NULL.
+            'source_system' => $sourceSystem,
+            'source_store_id' => null,
+            'agent_enabled' => 0,
             'vector_store_status' => VectorStoreStatus::Pending->value,
             'status' => KnowledgeBaseStatus::Active->value,
             'created_at' => $now,

@@ -29,6 +29,11 @@ final readonly class NewMessage
          * invariant so an edited question's regenerated answer can be linked and de-duplicated.
          */
         public ?int $replyToMessageId = null,
+        /**
+         * On an assistant answer, where the answer came from (store_knowledge / store_rule / common_rule /
+         * fallback). Null on user messages and on legacy answers.
+         */
+        public ?AnswerSource $answerSource = null,
     ) {}
 
     public static function user(int $conversationId, string $content): self

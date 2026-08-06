@@ -26,7 +26,7 @@ final readonly class Action
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
                 'username' => $this->currentAdmin->get()->username(),
-                'knowledgeBaseCount' => $this->knowledgeBases->countActive(),
+                'knowledgeBaseCount' => $this->knowledgeBases->countActive(excludeSystem: true),
             ]);
     }
 }

@@ -6,6 +6,7 @@ namespace App\Chat\Infrastructure;
 
 use App\Chat\Domain\Message;
 use App\Chat\Domain\MessageRepositoryInterface;
+use App\Chat\Domain\AnswerSource;
 use App\Chat\Domain\MessageRole;
 use App\Chat\Domain\NewMessage;
 use App\Chat\Domain\ResolvedCitation;
@@ -55,6 +56,7 @@ final readonly class DbMessageRepository implements MessageRepositoryInterface
             'openai_response_id' => $message->providerResponseId,
             'model' => $message->model,
             'reply_to_message_id' => $message->replyToMessageId,
+            'answer_source' => $message->answerSource?->value,
             'created_at' => DbDateTime::format($now),
         ])->execute();
 
@@ -334,6 +336,9 @@ final readonly class DbMessageRepository implements MessageRepositoryInterface
                 isset($row['edited_at']) && $row['edited_at'] !== null ? (string) $row['edited_at'] : null,
             ),
             editCount: (int) ($row['edit_count'] ?? 0),
+            answerSource: isset($row['answer_source']) && $row['answer_source'] !== null
+                ? AnswerSource::tryFrom((string) $row['answer_source'])
+                : null,
         );
     }
 

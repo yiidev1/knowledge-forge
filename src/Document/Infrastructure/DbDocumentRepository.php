@@ -20,6 +20,7 @@ use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\QueryInterface;
 
 use function is_array;
+use function is_string;
 
 /**
  * MySQL-backed document repository. Returns typed entities; scoped by knowledge base where relevant.
@@ -140,6 +141,37 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
     public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool
     {
         return $this->usableSnapshotExists($knowledgeBaseId, storeProfile: false);
+    }
+
+    public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool
+    {
+        $query = $this->connection->createQuery()
+            ->from(['d' => self::TABLE])
+            ->where([
+                'd.knowledge_base_id' => $knowledgeBaseId,
+                'd.is_enabled' => 1,
+                'd.source_type' => [DocumentSourceType::Order58RuleGlobal->value, DocumentSourceType::Order58RuleCommon->value],
+            ])
+            ->andWhere(['<>', 'd.status', DocumentStatus::Deleted->value])
+            ->andWhere(new Expression(
+                'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
+                . ' WHERE f.[[document_id]] = d.[[id]]'
+                . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL)',
+                [':completed' => IndexStatus::Completed->value],
+            ));
+
+        return (int) $query->count() > 0;
+    }
+
+    public function sourceTypeOfDocument(int $documentId): ?string
+    {
+        $value = $this->connection->createQuery()
+            ->select('source_type')
+            ->from(self::TABLE)
+            ->where(['id' => $documentId])
+            ->scalar();
+
+        return is_string($value) ? $value : null;
     }
 
     /**

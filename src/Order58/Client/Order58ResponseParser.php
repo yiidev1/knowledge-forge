@@ -12,6 +12,7 @@ use App\Order58\Contract\Dto\Order58Health;
 use App\Order58\Contract\Dto\Order58KnowledgeRecord;
 use App\Order58\Contract\Dto\Order58Page;
 use App\Order58\Contract\Dto\Order58Pagination;
+use App\Order58\Contract\Dto\Order58RuleRecord;
 use DateTimeImmutable;
 use DateTimeZone;
 use Throwable;
@@ -109,6 +110,29 @@ final readonly class Order58ResponseParser
     public function parseKnowledgeRecord(array $body): Order58KnowledgeRecord
     {
         return $this->knowledge($this->dataObject($body));
+    }
+
+    /**
+     * @param array<array-key, mixed> $body
+     *
+     * @return Order58Page<Order58RuleRecord>
+     */
+    public function parseRulesPage(array $body): Order58Page
+    {
+        $items = [];
+        foreach ($this->dataList($body) as $record) {
+            $items[] = $this->rule($record);
+        }
+
+        return new Order58Page($items, $this->pagination($body));
+    }
+
+    /**
+     * @param array<array-key, mixed> $body
+     */
+    public function parseRule(array $body): Order58RuleRecord
+    {
+        return $this->rule($this->dataObject($body));
     }
 
     /**
@@ -213,6 +237,28 @@ final readonly class Order58ResponseParser
             knowledgeNumber: $this->nullableStr($r, 'knowledge_number'),
             keyword: $this->nullableStr($r, 'knowledge_keyword'),
             type: $this->nullableStr($r, 'type'),
+            createdAt: $this->date($r, 'created_at'),
+            updatedAt: $this->date($r, 'updated_at'),
+            syncHash: $this->requireStr($r, '_sync_hash'),
+            raw: $r,
+        );
+    }
+
+    /**
+     * @param array<array-key, mixed> $r
+     */
+    private function rule(array $r): Order58RuleRecord
+    {
+        // `store_id` is not part of today's Rules payload; it is read defensively so a future authoritative
+        // store id flows straight through without a parser change.
+        return new Order58RuleRecord(
+            id: $this->requireInt($r, 'id'),
+            type: $this->nullableStr($r, 'type'),
+            title: $this->str($r, 'title'),
+            description: $this->str($r, 'description'),
+            ruleKeyword: $this->nullableStr($r, 'rule_keyword'),
+            createdName: $this->nullableStr($r, 'created_name'),
+            sourceStoreId: $this->nullableInt($r, 'store_id'),
             createdAt: $this->date($r, 'created_at'),
             updatedAt: $this->date($r, 'updated_at'),
             syncHash: $this->requireStr($r, '_sync_hash'),

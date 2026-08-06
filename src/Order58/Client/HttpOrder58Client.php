@@ -10,6 +10,7 @@ use App\Order58\Contract\Dto\Order58AuthResult;
 use App\Order58\Contract\Dto\Order58Health;
 use App\Order58\Contract\Dto\Order58KnowledgeRecord;
 use App\Order58\Contract\Dto\Order58Page;
+use App\Order58\Contract\Dto\Order58RuleRecord;
 use App\Order58\Contract\Order58ClientInterface;
 use App\Order58\Contract\Exception\Order58Exception;
 use App\Shared\Infrastructure\Log\SafeLogContext;
@@ -99,6 +100,20 @@ final readonly class HttpOrder58Client implements Order58ClientInterface
         $request = $this->request('GET', '/knowledge/' . rawurlencode((string) $id));
 
         return $this->parser->parseKnowledgeRecord($this->send($request, 'knowledge.get'));
+    }
+
+    public function listRules(int $page, int $perPage): Order58Page
+    {
+        $request = $this->request('GET', '/rules?' . http_build_query(['page' => $page, 'per_page' => $perPage]));
+
+        return $this->parser->parseRulesPage($this->send($request, 'rules.list'));
+    }
+
+    public function getRule(int $id): Order58RuleRecord
+    {
+        $request = $this->request('GET', '/rules/' . rawurlencode((string) $id));
+
+        return $this->parser->parseRule($this->send($request, 'rules.get'));
     }
 
     public function authenticate(string $username, #[SensitiveParameter] string $password): Order58AuthResult

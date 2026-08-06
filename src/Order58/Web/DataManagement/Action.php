@@ -53,6 +53,7 @@ final readonly class Action
                     'stores' => $this->runs->hasActive(Order58SyncType::Stores, null),
                     'knowledge' => $this->runs->hasActive(Order58SyncType::Knowledge, null),
                     'agents' => $this->runs->hasActive(Order58SyncType::Agents, null),
+                    'rules' => $this->runs->hasActive(Order58SyncType::Rules, null),
                 ],
             ]);
     }

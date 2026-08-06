@@ -7,12 +7,14 @@ namespace App\Chat\Application;
 use App\Ai\Contract\ChatCompletionProviderInterface;
 use App\Ai\Contract\Dto\GroundedAnswerRequest;
 use App\Ai\Contract\Dto\GroundedAnswerResult;
+use App\Ai\Contract\Exception\AiException;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\Grounding\GroundingOutcome;
 use App\Chat\Application\Grounding\GroundingVerifier;
 use App\Chat\Application\History\ConversationHistoryPolicyInterface;
 use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
+use App\Chat\Domain\AnswerSource;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\Exception\LatestQuestionUnanswered;
@@ -20,8 +22,11 @@ use App\Chat\Domain\Exception\QuestionInvalid;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Domain\MessageRole;
 use App\Chat\Domain\NewMessage;
+use App\Document\Domain\DocumentRepositoryInterface;
+use App\Document\Domain\DocumentSourceType;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\KnowledgeBase\Domain\RuleRepositoryInterface;
+use App\Rules\Application\CommonRulesReadiness;
 use App\Shared\Domain\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -58,6 +63,8 @@ final readonly class AskKnowledgeBaseService
         private ChatParams $params,
         private ExhaustiveIntentDetector $intentDetector,
         private LoggerInterface $logger,
+        private CommonRulesReadiness $commonRules,
+        private DocumentRepositoryInterface $documents,
     ) {}
 
     /**
@@ -180,10 +187,19 @@ final readonly class AskKnowledgeBaseService
     }
 
     /**
-     * The generate-and-store core shared by asking and regenerating: ask the provider with forced
-     * retrieval, resolve citations, verify grounding, and store the assistant answer linked to the question
-     * it replies to. The link + {@see MessageRepositoryInterface::insertActiveAnswer()} uphold the
-     * one-active-answer invariant even under a concurrent regeneration.
+     * The generate-and-store core shared by asking and regenerating, with a strict two-stage retrieval order:
+     *
+     *   1. Answer from THIS store's knowledge base. If grounded, store it (store_knowledge, or store_rule when
+     *      the winning citation is a store rule) — exactly as before. The store always has priority.
+     *   2. Only when the store produces no grounded answer, and a ready hidden Global Rules base exists, ask it.
+     *      That base holds a projection of EVERY approved rule (store-specific or common), so a rule mapped to
+     *      another store can answer here. A grounded global answer is stored (global_rule). A store-vector-store
+     *      infrastructure failure propagates (the store is authoritative); a *global*-stage infrastructure
+     *      failure is logged and degrades to the store's fallback rather than failing the whole request.
+     *   3. Otherwise store the store's ungrounded fallback (fallback).
+     *
+     * Exactly ONE assistant message is ever written, via {@see MessageRepositoryInterface::insertActiveAnswer()},
+     * upholding the one-active-answer invariant even under a concurrent regeneration.
      *
      * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
      */
@@ -194,6 +210,39 @@ final readonly class AskKnowledgeBaseService
         array $history,
         int $replyToMessageId,
     ): void {
+        // Stage 1 — the store's own knowledge base. A provider failure here propagates (temporarily unavailable).
+        $storeAttempt = $this->produceAnswer($knowledgeBase, $conversationId, $prompt, $history);
+
+        if ($storeAttempt->outcome->isGrounded) {
+            $this->persistAnswer($conversationId, $storeAttempt, $replyToMessageId, $this->storeAnswerSource($storeAttempt));
+
+            return;
+        }
+
+        // Stage 2 — the hidden Global Rules base (every approved rule), only when it is ready. Never affects
+        // store availability. A store-specific rule mapped to another store answers here, and only here.
+        $globalBase = $this->commonRules->readyKnowledgeBase();
+        if ($globalBase !== null) {
+            $globalAttempt = $this->tryProduceCommon($globalBase, $conversationId, $prompt, $history);
+            if ($globalAttempt !== null && $globalAttempt->outcome->isGrounded) {
+                $this->persistAnswer($conversationId, $globalAttempt, $replyToMessageId, AnswerSource::GlobalRule);
+
+                return;
+            }
+        }
+
+        // Stage 3 — the store's ungrounded fallback.
+        $this->persistAnswer($conversationId, $storeAttempt, $replyToMessageId, AnswerSource::Fallback);
+    }
+
+    /**
+     * Asks one knowledge base with forced retrieval, resolves citations and verifies grounding — WITHOUT
+     * persisting anything. Throws {@see AiException} on a provider failure.
+     *
+     * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
+     */
+    private function produceAnswer(KnowledgeBase $knowledgeBase, int $conversationId, string $prompt, array $history): AnswerAttempt
+    {
         // "Every match" needs a wider net and different instructions than "the best match": one relevance
         // query returns the closest chunks, which cannot enumerate a set.
         $exhaustive = $this->intentDetector->isExhaustive($prompt);
@@ -205,7 +254,7 @@ final readonly class AskKnowledgeBaseService
             $exhaustive,
         );
 
-        // Safe by construction: assertChatAvailable() has already required a ready store.
+        // Safe by construction: assertChatAvailable() (store) / readiness (common) required a ready store.
         $vectorStoreId = (string) $knowledgeBase->openaiVectorStoreId();
 
         $startedAt = microtime(true);
@@ -227,23 +276,63 @@ final readonly class AskKnowledgeBaseService
 
         $this->logAnswer($knowledgeBase, $conversationId, $result, $outcome, $exhaustive, $startedAt);
 
+        return new AnswerAttempt($result, $outcome);
+    }
+
+    /**
+     * Stage-2 produce that never breaks the request: a common-base infrastructure failure is logged and
+     * degrades to the store's fallback (we already hold a valid ungrounded stage-1 result).
+     *
+     * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
+     */
+    private function tryProduceCommon(KnowledgeBase $commonBase, int $conversationId, string $prompt, array $history): ?AnswerAttempt
+    {
+        try {
+            return $this->produceAnswer($commonBase, $conversationId, $prompt, $history);
+        } catch (AiException $e) {
+            $this->logger->warning('common-rules fallback failed', [
+                'conversation_id' => $conversationId,
+                'error' => $e::class,
+            ]);
+
+            return null;
+        }
+    }
+
+    private function persistAnswer(int $conversationId, AnswerAttempt $attempt, int $replyToMessageId, AnswerSource $answerSource): void
+    {
         $this->messages->insertActiveAnswer(
             new NewMessage(
                 conversationId: $conversationId,
                 role: MessageRole::Assistant,
-                content: $outcome->text,
-                citations: $outcome->citations,
-                usage: $result->usage->toArray(),
-                isGrounded: $outcome->isGrounded,
-                retrievalStatus: $outcome->retrievalStatus,
-                providerResponseId: $result->providerResponseId,
-                model: $result->model,
+                content: $attempt->outcome->text,
+                citations: $attempt->outcome->citations,
+                usage: $attempt->result->usage->toArray(),
+                isGrounded: $attempt->outcome->isGrounded,
+                retrievalStatus: $attempt->outcome->retrievalStatus,
+                providerResponseId: $attempt->result->providerResponseId,
+                model: $attempt->result->model,
                 replyToMessageId: $replyToMessageId,
+                answerSource: $answerSource,
             ),
             $this->clock->now(),
         );
 
         $this->conversations->touch($conversationId, $this->clock->now());
+    }
+
+    /**
+     * A grounded store answer is `store_rule` when its selected (highest-ranked) resolved citation is a store
+     * rule document, otherwise `store_knowledge` [clarification 4].
+     */
+    private function storeAnswerSource(AnswerAttempt $attempt): AnswerSource
+    {
+        $top = $attempt->outcome->citations[0] ?? null;
+        if ($top !== null && $this->documents->sourceTypeOfDocument($top->documentId) === DocumentSourceType::Order58RuleStore->value) {
+            return AnswerSource::StoreRule;
+        }
+
+        return AnswerSource::StoreKnowledge;
     }
 
     /**

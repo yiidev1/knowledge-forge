@@ -7,7 +7,7 @@ namespace App\Order58\Contract\Dto;
 /**
  * One page of a list endpoint: the typed records plus the pagination block.
  *
- * @template T of Order58Account|Order58Agent|Order58KnowledgeRecord
+ * @template T of Order58Account|Order58Agent|Order58KnowledgeRecord|Order58RuleRecord
  */
 final readonly class Order58Page
 {

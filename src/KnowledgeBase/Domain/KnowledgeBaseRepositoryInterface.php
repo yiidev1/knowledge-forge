@@ -20,12 +20,18 @@ interface KnowledgeBaseRepositoryInterface
 
     /**
      * @param bool $includeArchived When false, archived knowledge bases are omitted.
+     * @param bool $excludeSystem    When true, system knowledge bases (purpose <> 'store', e.g. the hidden
+     *                               Common-Rules base) are omitted. Defaults to false so internal callers
+     *                               (usage reconciliation, provisioning, cleanup) still see every base.
      *
      * @return list<KnowledgeBase> Ordered by name.
      */
-    public function findAll(bool $includeArchived = false): array;
+    public function findAll(bool $includeArchived = false, bool $excludeSystem = false): array;
 
-    public function countActive(): int;
+    /**
+     * @param bool $excludeSystem When true, system knowledge bases are not counted (see {@see findAll()}).
+     */
+    public function countActive(bool $excludeSystem = false): int;
 
     /**
      * @return int The id of the newly created knowledge base.
@@ -35,6 +41,17 @@ interface KnowledgeBaseRepositoryInterface
         string $slug,
         ?string $description,
         ?string $systemInstructions,
+    ): int;
+
+    /**
+     * Idempotently used to create a hidden, system-managed knowledge base with a specific `purpose` and
+     * `source_system`, `agent_enabled = 0` and no store source. Returns the new id.
+     */
+    public function createSystem(
+        string $name,
+        string $slug,
+        string $purpose,
+        string $sourceSystem,
     ): int;
 
     public function updateDetails(

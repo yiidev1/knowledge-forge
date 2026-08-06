@@ -82,7 +82,8 @@ interface SyncRunRepositoryInterface
     public function findById(int $id): ?SyncRun;
 
     /**
-     * The latest run per primary operation type, for the "latest status" panel.
+     * The latest run per top-level operation type (stores, knowledge, agents, rules), for the "latest status"
+     * panels on Data Management and the Rules report.
      *
      * @return array<string, SyncRun> Keyed by {@see Order58SyncType::value}.
      */

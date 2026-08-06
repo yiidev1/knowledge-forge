@@ -20,6 +20,8 @@ use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Application\Instruction\ImmutableSecurityInstructions;
 use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
+use App\Rules\Application\CommonRulesReadiness;
+use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use App\Shared\Application\Correlation\CorrelationId;
 use App\Shared\Infrastructure\Log\SafeLogContext;
@@ -160,6 +162,8 @@ final class AgentChatAvailabilityEnforcementTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
+            new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $this->documents),
+            $this->documents,
         );
     }
 

@@ -20,9 +20,18 @@ final class FakeChatCompletionProvider implements ChatCompletionProviderInterfac
 {
     public ?GroundedAnswerRequest $lastRequest = null;
 
+    /** @var list<string> The vector store ids ask() was called with, in order (stage order). */
+    public array $askedVectorStoreIds = [];
+
     private GroundedAnswerResult $result;
 
     private ?AiException $throw = null;
+
+    /** @var array<string, GroundedAnswerResult> Per-vector-store scripted results (two-stage tests). */
+    private array $resultsByStore = [];
+
+    /** @var array<string, AiException> Per-vector-store scripted failures. */
+    private array $throwByStore = [];
 
     public function __construct()
     {
@@ -32,6 +41,16 @@ final class FakeChatCompletionProvider implements ChatCompletionProviderInterfac
     public function setResult(GroundedAnswerResult $result): void
     {
         $this->result = $result;
+    }
+
+    public function setResultForStore(string $vectorStoreId, GroundedAnswerResult $result): void
+    {
+        $this->resultsByStore[$vectorStoreId] = $result;
+    }
+
+    public function throwForStore(string $vectorStoreId, AiException $exception): void
+    {
+        $this->throwByStore[$vectorStoreId] = $exception;
     }
 
     public function willThrow(AiException $exception): void
@@ -50,7 +69,14 @@ final class FakeChatCompletionProvider implements ChatCompletionProviderInterfac
     public function ask(GroundedAnswerRequest $request): GroundedAnswerResult
     {
         $this->lastRequest = $request;
+        $this->askedVectorStoreIds[] = $request->vectorStoreId;
 
+        if (isset($this->throwByStore[$request->vectorStoreId])) {
+            throw $this->throwByStore[$request->vectorStoreId];
+        }
+        if (isset($this->resultsByStore[$request->vectorStoreId])) {
+            return $this->resultsByStore[$request->vectorStoreId];
+        }
         if ($this->throw !== null) {
             throw $this->throw;
         }

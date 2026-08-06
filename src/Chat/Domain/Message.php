@@ -38,6 +38,7 @@ final readonly class Message
         public ?DateTimeImmutable $supersededAt = null,
         public ?DateTimeImmutable $editedAt = null,
         public int $editCount = 0,
+        public ?AnswerSource $answerSource = null,
     ) {}
 
     public function isAssistant(): bool

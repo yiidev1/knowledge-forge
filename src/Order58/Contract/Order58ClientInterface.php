@@ -9,6 +9,7 @@ use App\Order58\Contract\Dto\Order58AuthResult;
 use App\Order58\Contract\Dto\Order58Health;
 use App\Order58\Contract\Dto\Order58KnowledgeRecord;
 use App\Order58\Contract\Dto\Order58Page;
+use App\Order58\Contract\Dto\Order58RuleRecord;
 use App\Order58\Contract\Exception\Order58Exception;
 use SensitiveParameter;
 
@@ -59,6 +60,24 @@ interface Order58ClientInterface
      * @throws Order58Exception
      */
     public function getKnowledgeRecord(int $id): Order58KnowledgeRecord;
+
+    /**
+     * Lists global rules (`GET /rules`). The Rules API is store-agnostic today, so there is no scope
+     * parameter; the caller pages until {@see Order58Page::$pagination} reports no more.
+     *
+     * @return Order58Page<Order58RuleRecord>
+     *
+     * @throws Order58Exception
+     */
+    public function listRules(int $page, int $perPage): Order58Page;
+
+    /**
+     * Fetches one rule by source id (`GET /rules/{id}`). Reserved for targeted refresh/diagnostics — the full
+     * sync uses the paginated list, never one detail request per rule.
+     *
+     * @throws Order58Exception
+     */
+    public function getRule(int $id): Order58RuleRecord;
 
     /**
      * Verifies an agent's credentials server-side. The password is sent only in the request body and is

@@ -27,7 +27,8 @@ final readonly class ListKnowledgeBasesService
         $counts = $this->rules->countsByKnowledgeBase();
 
         $summaries = [];
-        foreach ($this->knowledgeBases->findAll($includeArchived) as $knowledgeBase) {
+        // The admin knowledge-base directory hides system bases (e.g. the hidden Common-Rules base).
+        foreach ($this->knowledgeBases->findAll($includeArchived, excludeSystem: true) as $knowledgeBase) {
             $count = $counts[$knowledgeBase->id()] ?? ['total' => 0, 'enabled' => 0];
             $summaries[] = new KnowledgeBaseSummary($knowledgeBase, $count['total'], $count['enabled']);
         }

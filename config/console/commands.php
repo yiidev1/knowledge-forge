@@ -13,6 +13,7 @@ return [
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,
+    'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
     'chat:thread-merge-report' => App\Chat\Console\ThreadMergeReportCommand::class,
     'chat:participant-backfill-report' => App\Chat\Console\ParticipantBackfillReportCommand::class,
 ];

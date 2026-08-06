@@ -39,6 +39,7 @@ final readonly class IntegrationSyncDrainer implements DrainerInterface
         private StoresSyncHandler $storesHandler,
         private AgentsSyncHandler $agentsHandler,
         private KnowledgeSyncHandler $knowledgeHandler,
+        private RulesSyncHandler $rulesHandler,
         private RebuildStoreHandler $rebuildHandler,
         private Order58SyncParams $params,
         private ClockInterface $clock,
@@ -97,6 +98,7 @@ final readonly class IntegrationSyncDrainer implements DrainerInterface
             Order58SyncType::Stores => $this->storesHandler,
             Order58SyncType::Agents => $this->agentsHandler,
             Order58SyncType::Knowledge, Order58SyncType::KnowledgeStore => $this->knowledgeHandler,
+            Order58SyncType::Rules => $this->rulesHandler,
             Order58SyncType::RebuildStore => $this->rebuildHandler,
             default => null,
         };

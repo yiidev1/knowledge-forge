@@ -46,6 +46,12 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
     /** @var array<int, bool> Per-KB "has a usable qualifying (non-profile) document" (test-controlled). */
     private array $usableQualifying = [];
 
+    /** @var array<int, bool> Per-KB "has a usable global rule document" (test-controlled). */
+    private array $usableGlobalRule = [];
+
+    /** @var array<int, string> Per-document source_type (test-controlled). */
+    private array $sourceTypes = [];
+
     private int $nextId = 1;
 
     public function findByIdForKnowledgeBase(int $documentId, int $knowledgeBaseId): ?Document
@@ -112,6 +118,26 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
     public function setUsableQualifyingDocument(int $knowledgeBaseId, bool $usable): void
     {
         $this->usableQualifying[$knowledgeBaseId] = $usable;
+    }
+
+    public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool
+    {
+        return $this->usableGlobalRule[$knowledgeBaseId] ?? false;
+    }
+
+    public function setUsableGlobalRuleDocument(int $knowledgeBaseId, bool $usable): void
+    {
+        $this->usableGlobalRule[$knowledgeBaseId] = $usable;
+    }
+
+    public function sourceTypeOfDocument(int $documentId): ?string
+    {
+        return $this->sourceTypes[$documentId] ?? null;
+    }
+
+    public function setSourceType(int $documentId, string $sourceType): void
+    {
+        $this->sourceTypes[$documentId] = $sourceType;
     }
 
     public function countReadyForKnowledgeBase(int $knowledgeBaseId): int

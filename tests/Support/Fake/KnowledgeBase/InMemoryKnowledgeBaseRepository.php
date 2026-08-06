@@ -45,8 +45,9 @@ final class InMemoryKnowledgeBaseRepository implements KnowledgeBaseRepositoryIn
         return $this->findBySlug($slug) !== null;
     }
 
-    public function findAll(bool $includeArchived = false): array
+    public function findAll(bool $includeArchived = false, bool $excludeSystem = false): array
     {
+        // The fake holds only normal ('store') knowledge bases, so $excludeSystem never changes the result.
         $result = [];
         foreach ($this->items as $kb) {
             if ($includeArchived || !$kb->isArchived()) {
@@ -59,9 +60,9 @@ final class InMemoryKnowledgeBaseRepository implements KnowledgeBaseRepositoryIn
         return array_values($result);
     }
 
-    public function countActive(): int
+    public function countActive(bool $excludeSystem = false): int
     {
-        return count($this->findAll(false));
+        return count($this->findAll(false, $excludeSystem));
     }
 
     public function create(string $name, string $slug, ?string $description, ?string $systemInstructions): int
@@ -70,6 +71,12 @@ final class InMemoryKnowledgeBaseRepository implements KnowledgeBaseRepositoryIn
         $this->items[$id] = $this->make($id, $name, $slug, $description, $systemInstructions, KnowledgeBaseStatus::Active);
 
         return $id;
+    }
+
+    public function createSystem(string $name, string $slug, string $purpose, string $sourceSystem): int
+    {
+        // The fake does not model the purpose/source discriminators; it stores the base like any other.
+        return $this->create($name, $slug, null, null);
     }
 
     public function updateDetails(int $id, string $name, ?string $description, ?string $systemInstructions): void

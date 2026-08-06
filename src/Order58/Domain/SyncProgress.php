@@ -27,6 +27,9 @@ final class SyncProgress
         public int $documentsQueued = 0,
         public int $documentsSkippedUnchanged = 0,
         public int $warnings = 0,
+        // Rules sync only: canonical catalog counters (0 for every other sync type).
+        public int $canonicalCreated = 0,
+        public int $exactDuplicates = 0,
     ) {}
 
     /**
@@ -52,6 +55,8 @@ final class SyncProgress
             documentsQueued: $int('documents_queued'),
             documentsSkippedUnchanged: $int('documents_skipped_unchanged'),
             warnings: $int('warnings'),
+            canonicalCreated: $int('canonical_created'),
+            exactDuplicates: $int('exact_duplicates'),
         );
     }
 
@@ -71,6 +76,8 @@ final class SyncProgress
             'documents_queued' => $this->documentsQueued,
             'documents_skipped_unchanged' => $this->documentsSkippedUnchanged,
             'warnings' => $this->warnings,
+            'canonical_created' => $this->canonicalCreated,
+            'exact_duplicates' => $this->exactDuplicates,
         ];
     }
 }

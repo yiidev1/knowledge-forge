@@ -34,6 +34,7 @@ final readonly class SyncAction
             'stores' => Order58SyncType::Stores,
             'knowledge' => Order58SyncType::Knowledge,
             'agents' => Order58SyncType::Agents,
+            'rules' => Order58SyncType::Rules,
             default => null,
         };
 

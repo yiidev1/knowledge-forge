@@ -13,6 +13,7 @@ enum Order58SyncType: string
     case Stores = 'stores';
     case Knowledge = 'knowledge';
     case Agents = 'agents';
+    case Rules = 'rules';
     case KnowledgeStore = 'knowledge_store';
     case RebuildStore = 'rebuild_store';
     case Health = 'health';
@@ -23,6 +24,7 @@ enum Order58SyncType: string
             self::Stores => 'Sync Stores',
             self::Knowledge => 'Sync Knowledge',
             self::Agents => 'Sync Agents',
+            self::Rules => 'Sync Rules',
             self::KnowledgeStore => "Sync This Store's Knowledge",
             self::RebuildStore => 'Rebuild Generated Documents',
             self::Health => 'Check Connection',

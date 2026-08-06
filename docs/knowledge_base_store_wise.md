@@ -823,4 +823,100 @@ Watch progress: `tail -f runtime/logs/worker.log`.
   (not `documents.status`), so refreshes don't flicker chat off (§12).
 - **"How does an agent log in?"** → against the **live Order58 API** (`POST /authenticate`), gated locally by
   `order58_agents.user_type = agent`. No agent password is stored here.
+
+---
+
+## 17. Order58 Rules (sync → classify → materialize → chat fallback)
+
+Order58 has a global **Rules** list (store-agnostic guidance). Knowledge Forge mirrors it, deduplicates it into a
+**canonical catalog**, classifies each rule (store-specific vs common vs unresolved), materializes only **confirmed**
+rules into searchable documents, and answers chat **store-first, common-rules-second, fallback-third**. Built in five
+additive phases; nothing here changes existing store/knowledge/agent behavior.
+
+### 17.1 New tables
+- **`order58_rule_records`** — raw mirror of the Rules API (one row per upstream rule; `source_id` UNIQUE,
+  `sync_hash`, `snapshot_json`, `is_active` soft-delete, `source_store_id` nullable/future). `title` is `TEXT`
+  (rule "titles" can be long free text).
+- **`rule_catalog_rules`** — canonical (deduplicated) rules. Identity = `canonical_hash` =
+  **SHA-256(normalized_title + "\0" + normalized_description)** (UNIQUE). `description_hash` groups *possible*
+  duplicates for review only. Carries `scope_type` (`common`/`store_specific`/`unresolved`) + `classification_status`.
+- **`rule_catalog_sources`** — audit link from every raw record to exactly one canonical (`primary`/`exact_duplicate`);
+  `order58_rule_record_id` UNIQUE.
+- **`order58_store_aliases`** — store name/company/domain aliases for matching; UNIQUE(`store_source_id`,`normalized_alias`).
+- **`rule_store_links`** — canonical↔store links with `match_status` (`suggested`/`confirmed`/`rejected`) +
+  `match_method`; UNIQUE(`rule_catalog_rule_id`,`store_source_id`).
+- **`rule_classification_events`** — append-only classification/review audit.
+
+All foreign keys between these are **RESTRICT** (audit rows are only soft-deactivated, never physically deleted).
+Additive columns: **`knowledge_bases.purpose`** (`store` default / `shared_rules` for the hidden base) and
+**`messages.answer_source`** (chat-source audit). New `documents.source_type` values `order58_rule_store` /
+`order58_rule_common` (VARCHAR — no migration). Migrations: `M260805100000`, `100100`, `100200` (widen title),
+`110000`, `120000` (purpose), `130000` (answer_source).
+
+### 17.2 Statuses
+- `classification_status`: `pending` → `auto_matched` / `manually_matched` / `suggested_common` / `confirmed_common`
+  / `ambiguous` / `unmatched` / `ignored`. **Only an admin sets `confirmed_common`** — a heuristic can only *suggest*.
+- `rule_store_links.match_status`: `suggested` (fuzzy) / `confirmed` (exact or admin) / `rejected`.
+- `messages.answer_source`: `store_knowledge` / `store_rule` / `common_rule` / `fallback`.
+
+### 17.3 Rules API (reused Order58 client/auth)
+- `GET /rules?page=&per_page=` — paginated list (the only endpoint the sync uses; `per_page=100`).
+- `GET /rules/{id}` — one rule; **reserved for targeted refresh/diagnostics**, never used in a normal full sync.
+Pagination follows the response's `total_pages`; the existing capped backoff (honoring `Retry-After`), `pagesPerRun`
+yield, and flock serialization keep the sync gentle on the upstream server.
+
+### 17.4 Sync + worker (`type = rules`)
+Admin **Data Management → Sync Rules** enqueues an `integration_sync_runs` row (coalesced by `active_key`). The
+worker's `IntegrationSyncDrainer` dispatches it to `RulesSyncHandler`, which: pages the list → mirrors each record
+(`_sync_hash` skip) → links it to a canonical (exact dedupe) → **classifies** (deterministic matching) → **materializes**
+confirmed rules → mark-and-sweep **only after the final page**. Idempotent: a second identical sync creates no new rows.
+
+### 17.5 Dedupe policy
+Two raw rules collapse into one canonical rule **only when both** their normalized title **and** description match
+(never by title alone — several "Moon Temple" rules with different bodies stay separate). Description-only matches are
+surfaced as *possible duplicates* for review, never auto-merged. Every raw row is preserved and audit-linked. An
+upstream content change re-links the same source to a new canonical (never a duplicate) and recomputes active flags.
+
+### 17.6 Store matching (strict priority)
+1. `source_store_id` (future authoritative id) — highest confidence. 2. exact **domain** alias. 3. exact **title**
+alias (whole-word). 4. exact **description** alias. 5. **fuzzy** → *suggestion only*, never auto-confirmed. Multiple
+exact stores → **ambiguous**. An apparent-but-unknown store name → **unmatched** (never "common"). A future
+`source_store_id` that conflicts with a manually-confirmed mapping records a `store_id_conflict` event, preserves the
+reviewed mapping, and never silently moves documents.
+
+### 17.7 Common-rule safety
+"No store detected" is **never** automatically "common". A general-language phrase can only yield `suggested_common`;
+**only an explicit admin confirmation** sets `scope_type=common` + `confirmed_common`, and only `confirmed_common`
+rules are materialized into the hidden base. Pending / suggested_common / ambiguous / unmatched rules are never
+searchable and never answer chat.
+
+### 17.8 Materialization + the hidden Common-Rules base
+Confirmed **store-specific** rules become an `order58_rule_store` document in that store's KB; confirmed **common**
+rules become an `order58_rule_common` document in a single hidden **Common-Rules** knowledge base (slug
+`order58-common-rules`, `purpose=shared_rules`, `agent_enabled=0`, no store source). It is created **lazily** (first
+confirmed common rule), provisions its vector store through the normal drainer, and is **excluded** from the admin KB
+directory, admin store directory and agent directory — but stays reachable to provisioning, indexing, cleanup, health
+and usage. Materialization reuses `SyncDocumentService` (create/update/disable + the replacement guard). **Admin review
+actions reconcile the projection immediately** (no full re-sync, no OpenAI in the request). Rule document body:
+`# Rule: {title}` / Scope / Matched store / Rule: {description}.
+
+### 17.9 Chat: store-first → common-second → fallback
+`AskKnowledgeBaseService` answers from the **store** KB first. Only if that produces no *grounded* answer, and the
+hidden Common-Rules base is **ready** (a dedicated readiness check — `vector_store_status=ready` AND ≥1 usable enabled
+`order58_rule_common` document; it does **not** use or change the store `ChatAvailabilityPolicy`), it asks the common
+base. A grounded common answer is saved as `common_rule`; otherwise the store's fallback is saved. **Exactly one**
+assistant message is written. A store-stage infrastructure error propagates (temporarily unavailable); a common-stage
+error degrades to the store fallback. `answer_source` = `store_rule` when the winning citation is a store-rule document,
+else `store_knowledge`. The common base can never make an unavailable store chattable.
+
+### 17.10 Reporting (`/admin/order58/rules`)
+Read-only: source/canonical totals, exact-duplicate + possible-duplicate counts, the classification breakdown, the
+searchable-document status breakdown, the latest sync counters, and a **reconciliation warning** when active source
+rules are not all accounted for by a canonical link. Review actions POST to `/admin/order58/rules/review` (CSRF).
+
+### 17.11 Failure/retry & commands
+Invalid JSON / `success=false` fail the run safely; a partial/failed pagination never sweeps. Transient HTTP →
+existing backoff; duplicate-key races caught narrowly. Local writes are transactional; no OpenAI call is held in a DB
+transaction or a browser request (except chat answering). Commands: `php yii migrate:up` (apply the rules migrations),
+then Admin → **Sync Rules** → the worker (`kf:worker:run`, cron) does the rest; watch `runtime/logs/worker.log`.
 </content>

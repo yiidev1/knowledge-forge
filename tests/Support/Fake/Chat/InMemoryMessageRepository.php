@@ -44,6 +44,7 @@ final class InMemoryMessageRepository implements MessageRepositoryInterface
             model: $message->model,
             createdAt: $now,
             replyToMessageId: $message->replyToMessageId,
+            answerSource: $message->answerSource,
         );
 
         return $id;

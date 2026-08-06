@@ -161,4 +161,63 @@ final class Order58ResponseParserTest extends Unit
             'pagination' => ['page' => 1, 'per_page' => 10, 'total' => 1, 'total_pages' => 1],
         ]);
     }
+
+    public function testParsesRulesPageWithStableIdAndFutureStoreId(): void
+    {
+        $page = $this->parser()->parseRulesPage([
+            'success' => true,
+            'data' => [[
+                'id' => 33,
+                'type' => 'Rule',
+                'title' => 'Advance Order',
+                'description' => 'Accept advance orders before opening.',
+                'rule_keyword' => 'order',
+                'created_name' => 'admin2',
+                // A future authoritative store id must flow straight through.
+                'store_id' => 123,
+                '_sync_hash' => 'hr',
+                'unexpected_future_field' => 'ignored',
+            ]],
+            'pagination' => ['page' => 1, 'per_page' => 100, 'total' => 276, 'total_pages' => 3],
+        ]);
+
+        $rule = $page->items[0];
+        assertSame(33, $rule->id);
+        assertSame('Advance Order', $rule->title);
+        assertSame('Accept advance orders before opening.', $rule->description);
+        assertSame('order', $rule->ruleKeyword);
+        assertSame('admin2', $rule->createdName);
+        assertSame(123, $rule->sourceStoreId);
+        assertSame('hr', $rule->syncHash);
+        // Pagination metadata is honoured (the sync follows total_pages, never a hardcoded count).
+        assertSame(3, $page->pagination->totalPages);
+        assertTrue($page->pagination->hasMore());
+    }
+
+    public function testRulesWithoutAStoreIdLeaveItNull(): void
+    {
+        $page = $this->parser()->parseRulesPage([
+            'success' => true,
+            'data' => [['id' => 3, 'title' => 'Callback', 'description' => 'Call back.', '_sync_hash' => 'h']],
+            'pagination' => ['page' => 1, 'per_page' => 100, 'total' => 1, 'total_pages' => 1],
+        ]);
+
+        assertNull($page->items[0]->sourceStoreId);
+    }
+
+    public function testRulesSuccessFalseIsRejected(): void
+    {
+        $this->expectException(Order58InvalidResponse::class);
+        $this->parser()->parseRulesPage(['success' => false, 'error' => ['code' => 'X', 'message' => 'nope']]);
+    }
+
+    public function testRulesMissingSyncHashIsRejected(): void
+    {
+        $this->expectException(Order58InvalidResponse::class);
+        $this->parser()->parseRulesPage([
+            'success' => true,
+            'data' => [['id' => 3, 'title' => 'No hash', 'description' => 'x']],
+            'pagination' => ['page' => 1, 'per_page' => 100, 'total' => 1, 'total_pages' => 1],
+        ]);
+    }
 }

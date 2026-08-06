@@ -9,6 +9,9 @@ use App\Ai\Contract\Dto\RawCitation;
 use App\Ai\Contract\Exception\AiProcessingFailed;
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Rules\Application\CommonRulesReadiness;
+use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
+use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\EditChatMessageService;
@@ -432,6 +435,11 @@ final class EditChatMessageServiceTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
+            new CommonRulesReadiness(
+                new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()),
+                $this->documents,
+            ),
+            $this->documents,
         );
     }
 

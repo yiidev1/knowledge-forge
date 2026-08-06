@@ -53,6 +53,20 @@ interface DocumentRepositoryInterface
     public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool;
 
     /**
+     * Whether the (hidden Global Rules) knowledge base has at least one usable, completed, enabled global rule
+     * document (`order58_rule_global`, or a legacy `order58_rule_common` awaiting re-projection). The dedicated
+     * readiness check for the stage-2 global-rules chat fallback — it does NOT go through
+     * {@see \App\Chat\Application\ChatAvailabilityPolicy}, which governs store chat only.
+     */
+    public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool;
+
+    /**
+     * The `source_type` of a document by id, or null if it does not exist. Used to label a chat answer's
+     * source (store_rule vs store_knowledge) from its winning citation.
+     */
+    public function sourceTypeOfDocument(int $documentId): ?string;
+
+    /**
      * Whether a live document with this checksum already exists in the knowledge base. A fast
      * pre-check; the database's unique index is the actual guarantee against a race.
      *

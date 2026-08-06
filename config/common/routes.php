@@ -18,6 +18,10 @@ use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
+use App\Rules\Web\Detail as RulesDetail;
+use App\Rules\Web\Report as RulesReport;
+use App\Rules\Web\Review as RulesReview;
+use App\Rules\Web\RulesList as RulesList;
 use App\Shared\Web\Middleware\DomainExceptionMiddleware;
 use App\Web\Dashboard;
 use Yiisoft\Router\Group;
@@ -195,6 +199,22 @@ return [
             Route::get('/admin/order58/agents')
                 ->action(Order58Agents\Action::class)
                 ->name('order58.agents'),
+            // Read-only Order58 rules report: raw source mirror + deduplicated canonical catalog summary.
+            Route::get('/admin/order58/rules')
+                ->action(RulesReport\Action::class)
+                ->name('order58.rules'),
+            // The detailed, filterable per-rule listing.
+            Route::get('/admin/order58/rules/list')
+                ->action(RulesList\Action::class)
+                ->name('order58.rules.list'),
+            // The per-rule review detail page.
+            Route::get('/admin/order58/rules/{ruleId:\d+}')
+                ->action(RulesDetail\Action::class)
+                ->name('order58.rules.detail'),
+            // Admin classification review — each decision reconciles the searchable projection immediately.
+            Route::post('/admin/order58/rules/review')
+                ->action(RulesReview\Action::class)
+                ->name('order58.rules.review'),
             Route::post('/admin/order58/stores/{storeId:\d+}/sync-knowledge')
                 ->action(Order58Data\StoreKnowledgeSyncAction::class)
                 ->name('order58.store.knowledge'),
