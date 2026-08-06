@@ -661,6 +661,9 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .dir-search { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
 .dir-search .field__control { flex: 1 1 260px; min-width: 0; }
 
+/* Active stat card (readiness filter highlight). */
+.stat--active { outline: 2px solid var(--primary); outline-offset: 0; }
+
 /* Rule review actions — spaced action groups with a constrained store picker. */
 .review-lede { color: var(--text-muted); margin: 0 0 1.25rem; line-height: 1.5; }
 .review-group { padding: 1rem 0; border-top: 1px solid var(--border); }

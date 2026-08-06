@@ -19,6 +19,8 @@ use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Rules\Web\Detail as RulesDetail;
+use App\Rules\Web\GlobalBase as RulesGlobalBase;
+use App\Rules\Web\Readiness as RulesReadiness;
 use App\Rules\Web\Report as RulesReport;
 use App\Rules\Web\Review as RulesReview;
 use App\Rules\Web\RulesList as RulesList;
@@ -203,7 +205,15 @@ return [
             Route::get('/admin/order58/rules')
                 ->action(RulesReport\Action::class)
                 ->name('order58.rules'),
-            // The detailed, filterable per-rule listing.
+            // Everyday operational readiness view of materialized rule documents (the Browse-rules destination).
+            Route::get('/admin/order58/rules/readiness')
+                ->action(RulesReadiness\Action::class)
+                ->name('order58.rules.readiness'),
+            // Hidden, URL-only diagnostic view of the hidden Global/Common Rules base (not linked from any nav).
+            Route::get('/admin/order58/rules/global')
+                ->action(RulesGlobalBase\Action::class)
+                ->name('order58.rules.global'),
+            // The detailed, filterable per-rule listing (advanced/diagnostic — reachable by direct URL only).
             Route::get('/admin/order58/rules/list')
                 ->action(RulesList\Action::class)
                 ->name('order58.rules.list'),
