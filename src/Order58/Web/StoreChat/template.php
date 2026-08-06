@@ -93,8 +93,15 @@ $dirUrl = static function (array $overrides) use ($base, $search, $letter, $page
             /** @var StoreDirectoryItem $store */
             $chatUrl = $urlGenerator->generate('chat.index', ['slug' => $store->slug]);
             $location = $store->locationLine();
+            $active = $store->sourceActive;
+            // An inactive store is a non-clickable, highlighted card (chatting it is disabled); an active store
+            // is the usual link card.
+            $tag = $active ? 'a' : 'div';
+            $attrs = $active
+                ? 'class="store-card store-card--link" href="' . Html::encode($chatUrl) . '"'
+                : 'class="store-card store-card--inactive" aria-disabled="true"';
             ?>
-            <a class="store-card store-card--link" href="<?= Html::encode($chatUrl) ?>">
+            <<?= $tag ?> <?= $attrs ?>>
                 <div class="store-card__body">
                     <h2 class="store-card__name"><?= Html::encode($store->name) ?></h2>
                     <?php if ($store->company !== null): ?>
@@ -104,11 +111,18 @@ $dirUrl = static function (array $overrides) use ($base, $search, $letter, $page
                         <div class="store-card__meta util-muted">📍 <?= Html::encode($location) ?></div>
                     <?php endif; ?>
                     <div class="store-card__meta util-mono util-muted">Store #<?= $store->sourceId ?></div>
+                    <?php if (!$active): ?>
+                        <div class="store-card__badges"><span class="badge badge--source-inactive" title="Order58 reports this store as inactive">Source inactive</span></div>
+                    <?php endif; ?>
                 </div>
                 <div class="store-card__footer">
-                    <span class="btn btn--primary btn--block">Open chat</span>
+                    <?php if ($active): ?>
+                        <span class="btn btn--primary btn--block">Open chat</span>
+                    <?php else: ?>
+                        <span class="btn btn--primary btn--block" aria-disabled="true">Chat unavailable</span>
+                    <?php endif; ?>
                 </div>
-            </a>
+            </<?= $tag ?>>
         <?php endforeach; ?>
     </div>
 

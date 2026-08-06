@@ -128,8 +128,8 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $lett
             $agentAccessUrl = $urlGenerator->generate('order58.store.agent-access', ['storeId' => $store->sourceId]);
             $chatReady = $status === StoreKnowledgeStatus::Ready;
             ?>
-            <article class="store-card<?= $chatReady ? ' store-card--has-chat' : '' ?>">
-                <?php if ($chatReady): ?>
+            <article class="store-card<?= $chatReady ? ' store-card--has-chat' : '' ?><?= $store->sourceActive ? '' : ' store-card--inactive' ?>">
+                <?php if ($chatReady && $store->sourceActive): ?>
                     <a class="store-card__chat" href="<?= Html::encode($chatUrl) ?>" title="Open chat" aria-label="Open chat for <?= Html::encode($store->name) ?>">💬</a>
                 <?php endif; ?>
                 <div class="store-card__body">
@@ -143,8 +143,14 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $lett
                     <div class="store-card__meta util-mono util-muted">Store #<?= $store->sourceId ?></div>
 
                     <div class="store-card__badges">
+                        <?php if (!$store->sourceActive): ?>
+                            <span class="badge badge--source-inactive" title="Order58 reports this store as inactive">Source inactive</span>
+                        <?php endif; ?>
                         <span class="badge badge--<?= Html::encode($status->badge()) ?>"><?= Html::encode($status->label()) ?></span>
                     </div>
+                    <?php if (!$store->sourceActive): ?>
+                        <p class="store-card__inactive-note">Hidden from agents while source is inactive.</p>
+                    <?php endif; ?>
                 </div>
 
                 <div class="store-card__actions">

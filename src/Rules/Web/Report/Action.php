@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Rules\Web\Report;
 
+use App\Order58\Domain\Order58SyncType;
 use App\Order58\Domain\SyncRunRepositoryInterface;
 use App\Rules\Contract\RuleReportReaderInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -31,6 +32,7 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'summary' => $this->reader->summary(),
                 'latest' => $this->runs->latestByType()['rules'] ?? null,
+                'syncing' => $this->runs->hasActive(Order58SyncType::Rules, null),
             ]);
     }
 }

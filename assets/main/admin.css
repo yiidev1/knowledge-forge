@@ -747,6 +747,16 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .store-card__actions form { margin: 0; }
 .store-card__footer { padding: .85rem 1.15rem; border-top: 1px solid var(--border); }
 
+/* Inactive Order58 store: a normal neutral card (no coloured border or tint — an inactive source is NOT an
+   error). The only signals are a muted "Source inactive" badge, slightly muted text, and a small note, so the
+   real KB status badges (green/blue/red) stay dominant. */
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; pointer-events: none; }
+.store-card--inactive .store-card__name a { color: var(--text-muted); }
+.store-card--inactive .store-card__meta { color: var(--text-muted); }
+.store-card--inactive.store-card--link { pointer-events: none; cursor: default; }
+.badge--source-inactive { color: var(--text-muted); background: rgba(148, 163, 184, .12); border-color: rgba(148, 163, 184, .30); }
+.store-card__inactive-note { margin: .4rem 0 0; color: var(--text-muted); font-size: .75rem; line-height: 1.4; }
+
 .pager { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 1.25rem 0; }
 .pager__status { font-size: .88rem; color: var(--text-muted); }
 

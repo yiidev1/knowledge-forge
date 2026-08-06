@@ -54,6 +54,17 @@ final class RuleReadinessCest
         $I->see('Pending');
     }
 
+    public function rulesReportShowsASyncRulesButtonThatPostsToTheSyncRoute(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage('/admin/order58/rules');
+        $I->see('Sync Rules');
+        // The button enqueues a rules sync (operation=rules) and returns to this page. Asserted structurally so
+        // the test never actually triggers a sync run.
+        $I->seeElement("form[action*='/admin/order58/sync'] input[name='operation'][value='rules']");
+        $I->seeElement("form[action*='/admin/order58/sync'] input[name='return'][value='order58.rules']");
+    }
+
     public function advancedListPageIsPreservedAndReachableByUrl(WebTester $I): void
     {
         $this->login($I);

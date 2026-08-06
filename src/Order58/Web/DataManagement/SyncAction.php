@@ -30,7 +30,8 @@ final readonly class SyncAction
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
-        $type = match (FormData::fromRequest($request)->string('operation')) {
+        $form = FormData::fromRequest($request);
+        $type = match ($form->string('operation')) {
             'stores' => Order58SyncType::Stores,
             'knowledge' => Order58SyncType::Knowledge,
             'agents' => Order58SyncType::Agents,
@@ -38,10 +39,14 @@ final readonly class SyncAction
             default => null,
         };
 
+        // Post/Redirect/Get target: the rules report may trigger a rules sync and expects to land back on
+        // itself. Allow-listed so the return value can never become an open redirect.
+        $return = $form->string('return') === 'order58.rules' ? 'order58.rules' : 'order58.index';
+
         if ($type === null) {
             $this->flash->error('Unknown synchronization operation.');
 
-            return $this->redirect->afterPost('order58.index');
+            return $this->redirect->afterPost($return);
         }
 
         if ($this->enqueue->enqueue($type, null, $this->currentAdmin->get()->id())) {
@@ -50,6 +55,6 @@ final readonly class SyncAction
             $this->flash->error($type->label() . ' is already queued or running.');
         }
 
-        return $this->redirect->afterPost('order58.index');
+        return $this->redirect->afterPost($return);
     }
 }

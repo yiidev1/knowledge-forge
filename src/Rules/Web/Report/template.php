@@ -6,12 +6,15 @@ use App\Order58\Domain\SyncRun;
 use App\Rules\Domain\RuleReportSummary;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
+use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
+ * @var Csrf $csrf
  * @var RuleReportSummary $summary
  * @var SyncRun|null $latest
+ * @var bool $syncing
  */
 
 $this->setTitle('Order58 Rules');
@@ -25,7 +28,13 @@ $fmt = static fn(?DateTimeImmutable $d): string => $d === null ? '—' : $d->for
         <p class="page-header__subtitle">The mirrored Order58 rules, the deduplicated canonical catalog, their store-matching classification, and the materialized searchable documents. Classification is kept separate from retrieval: <strong>every active rule is globally available by default</strong> (indexed into the hidden Global Rules base) unless an admin ignores or disables it, and a store-matched rule is <em>additionally</em> indexed into its store's knowledge base. Chat answers the store first, then falls back to the global rules.</p>
     </div>
     <div class="util-row">
-        <a class="btn btn--primary" href="<?= Html::encode($urlGenerator->generate('order58.rules.readiness')) ?>">Browse rules →</a>
+        <form method="post" action="<?= Html::encode($urlGenerator->generate('order58.sync')) ?>" class="inline-form">
+            <?= $csrf->hiddenInput() ?>
+            <input type="hidden" name="operation" value="rules">
+            <input type="hidden" name="return" value="order58.rules">
+            <button class="btn btn--primary" type="submit"<?= $syncing ? ' disabled' : '' ?>><?= $syncing ? 'Syncing rules…' : 'Sync Rules' ?></button>
+        </form>
+        <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.rules.readiness')) ?>">Browse rules →</a>
         <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.index')) ?>">← Data Management</a>
     </div>
 </div>
