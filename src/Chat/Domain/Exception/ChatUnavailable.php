@@ -20,6 +20,11 @@ final class ChatUnavailable extends DomainException
         return 'chat_unavailable';
     }
 
+    public static function sourceInactive(): self
+    {
+        return new self('This store is inactive in Order58, so chat is unavailable until the source store becomes active again.');
+    }
+
     public static function notProvisioned(): self
     {
         return new self('This knowledge base is still being provisioned. Chat becomes available once it is ready.');

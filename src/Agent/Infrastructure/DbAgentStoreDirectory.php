@@ -6,6 +6,7 @@ namespace App\Agent\Infrastructure;
 
 use App\Agent\Domain\AgentStore;
 use App\Agent\Domain\AgentStoreDirectoryInterface;
+use App\KnowledgeBase\Infrastructure\KnowledgeBaseChatEligibilitySql;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\QueryInterface;
@@ -85,14 +86,13 @@ final readonly class DbAgentStoreDirectory implements AgentStoreDirectoryInterfa
 
     private function predicate(QueryInterface $query): QueryInterface
     {
+        // The agent realm = the canonical chat-eligibility (source active, KB ready, a usable *indexed* document,
+        // and — for Order58 bases — a usable store profile) AND the admin's agent_enabled switch. Sharing
+        // {@see KnowledgeBaseChatEligibilitySql} keeps the list, the by-slug 404 gate and the count identical to
+        // the per-request ChatAvailabilityPolicy, so an agent can never reach a store the policy would reject.
         return $query
-            ->where(['kb.status' => 'active', 'kb.vector_store_status' => 'ready', 'kb.agent_enabled' => 1])
-            ->andWhere(['or', ['kb.source_store_id' => null], ['kb.source_active' => 1]])
-            ->andWhere(new Expression(
-                'EXISTS (SELECT 1 FROM `documents` `d`'
-                . ' WHERE `d`.`knowledge_base_id` = `kb`.`id`'
-                . " AND `d`.`status` = 'ready' AND `d`.`is_enabled` = 1)",
-            ));
+            ->where(['kb.agent_enabled' => 1])
+            ->andWhere(new Expression(KnowledgeBaseChatEligibilitySql::isEligible()));
     }
 
     /**

@@ -19,6 +19,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var array{all: int, active: int} $agents
  * @var array{all: int, active: int} $knowledge
  * @var array<string, SyncRun> $latest
+ * @var array<string, App\Order58\Domain\SyncFreshness> $freshness
+ * @var App\Shared\Application\Time\AppTimeZone $appTimeZone
  * @var SyncRun|null $health
  * @var list<SyncRun> $recent
  * @var array{stores: bool, knowledge: bool, agents: bool, rules: bool} $active
@@ -34,6 +36,22 @@ $storesUrl = $urlGenerator->generate('order58.stores');
 $rulesUrl = $urlGenerator->generate('order58.rules');
 
 $fmt = static fn(?DateTimeImmutable $d): string => $d === null ? '—' : $d->format('Y-m-d H:i') . ' UTC';
+
+// Independent per-type freshness (last SUCCESSFUL sync never overwritten by a later failure). Times display in
+// the configured application timezone (DB stays UTC); the state logic lives in Order58SyncFreshnessService.
+$renderFreshness = static function (?App\Order58\Domain\SyncFreshness $f) use ($appTimeZone): string {
+    if ($f === null) {
+        return '<span class="badge badge--muted">Never synced</span>';
+    }
+    $time = static fn(?DateTimeImmutable $d): string => $d === null ? 'never' : $appTimeZone->format($d);
+    $badge = '<span class="badge badge--' . Html::encode($f->state->badge()) . '">' . Html::encode($f->state->label()) . '</span>';
+    $lines = '<div class="field__hint">Last success: ' . Html::encode($time($f->lastSuccessAt)) . '</div>';
+    if ($f->nextScheduledAt !== null) {
+        $lines .= '<div class="field__hint">Next: ' . Html::encode($time($f->nextScheduledAt)) . '</div>';
+    }
+
+    return $badge . $lines;
+};
 
 $renderLatest = static function (?SyncRun $run) use ($fmt): string {
     if ($run === null) {
@@ -124,25 +142,29 @@ $button = static function (string $operation, string $label, bool $isActive) use
     <p class="field__hint">Each operation is independent — a running sync only disables its own button.</p>
     <div class="table-wrap">
         <table class="table">
-            <thead><tr><th>Operation</th><th>Latest status</th><th></th></tr></thead>
+            <thead><tr><th>Operation</th><th>Freshness</th><th>Latest status</th><th></th></tr></thead>
             <tbody>
                 <tr>
                     <td><strong>Stores</strong><div class="field__hint">Full account scan; creates one knowledge base per store.</div></td>
+                    <td><?= $renderFreshness($freshness['stores'] ?? null) ?></td>
                     <td><?= $renderLatest($latest['stores'] ?? null) ?></td>
                     <td><?= $button('stores', 'Sync Stores', $active['stores']) ?></td>
                 </tr>
                 <tr>
                     <td><strong>Knowledge</strong><div class="field__hint">Generates deterministic knowledge documents for each store.</div></td>
+                    <td><?= $renderFreshness($freshness['knowledge'] ?? null) ?></td>
                     <td><?= $renderLatest($latest['knowledge'] ?? null) ?></td>
                     <td><?= $button('knowledge', 'Sync Knowledge', $active['knowledge']) ?></td>
                 </tr>
                 <tr>
                     <td><strong>Agents</strong><div class="field__hint">Mirrors safe agent profiles (no credentials).</div></td>
+                    <td><?= $renderFreshness($freshness['agents'] ?? null) ?></td>
                     <td><?= $renderLatest($latest['agents'] ?? null) ?></td>
                     <td><?= $button('agents', 'Sync Agents', $active['agents']) ?></td>
                 </tr>
                 <tr>
-                    <td><strong>Rules</strong><div class="field__hint">Mirrors the global Order58 rules and builds the deduplicated canonical catalog. <a href="<?= Html::encode($urlGenerator->generate('order58.rules')) ?>">View rules report →</a></div></td>
+                    <td><strong>Rules</strong><div class="field__hint">Mirrors the global Order58 rules and builds the deduplicated canonical catalog. <a href="<?= Html::encode($urlGenerator->generate('order58.rules.list')) ?>">View rule list →</a></div></td>
+                    <td><?= $renderFreshness($freshness['rules'] ?? null) ?></td>
                     <td><?= $renderLatest($latest['rules'] ?? null) ?></td>
                     <td><?= $button('rules', 'Sync Rules', $active['rules']) ?></td>
                 </tr>

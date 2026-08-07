@@ -2,25 +2,30 @@
 
 declare(strict_types=1);
 
+use App\Order58\Domain\SyncFreshness;
 use App\Rules\Domain\RuleReportFilter;
 use App\Rules\Domain\RuleReportResult;
+use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
+use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
+ * @var Csrf $csrf
  * @var RuleReportResult $result
  * @var string $search
  * @var RuleReportFilter $filter
  * @var int $page
+ * @var SyncFreshness $freshness
+ * @var AppTimeZone $appTimeZone
  */
 
-$this->setTitle('Order58 Rules — Browse');
+$this->setTitle('Order58 Rules — Rule list');
 $this->setParameter('breadcrumbs', [
     ['label' => 'Order58 Data Management', 'url' => $urlGenerator->generate('order58.index')],
-    ['label' => 'Rules', 'url' => $urlGenerator->generate('order58.rules')],
-    ['label' => 'Browse'],
+    ['label' => 'Rule list'],
 ]);
 
 $listUrl = static function (array $overrides) use ($urlGenerator, $search, $filter, $page): string {
@@ -46,13 +51,22 @@ $dash = static fn(?string $v): string => $v === null || $v === '' ? '—' : Html
 ?>
 <div class="page-header">
     <div>
-        <h1 class="page-header__title">Browse rules</h1>
-        <p class="page-header__subtitle">Every canonical rule with its classification, matched store, duplicate group size and searchable-document status.</p>
+        <h1 class="page-header__title">Rule list</h1>
+        <p class="page-header__subtitle">Every canonical Order58 rule with its classification, matched store, duplicate group size and searchable-document status.</p>
     </div>
     <div class="util-row">
+        <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.rules.readiness')) ?>">Rule readiness</a>
         <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.rules')) ?>">← Summary</a>
     </div>
 </div>
+
+<?= $this->render(dirname(__DIR__) . '/_partial/rules-sync-banner', [
+    'urlGenerator' => $urlGenerator,
+    'csrf' => $csrf,
+    'freshness' => $freshness,
+    'appTimeZone' => $appTimeZone,
+    'returnRoute' => 'order58.rules.list',
+]) ?>
 
 <div class="dir-toolbar">
     <form class="dir-search" method="get" action="<?= Html::encode($urlGenerator->generate('order58.rules.list')) ?>" role="search">

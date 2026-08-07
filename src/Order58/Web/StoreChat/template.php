@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Order58\Domain\StoreAgentAvailabilityFilter;
+use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
+use App\Order58\Domain\StoreSourceStatusFilter;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -13,6 +16,9 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var UrlGeneratorInterface $urlGenerator
  * @var StoreDirectoryResult $result
  * @var string $search
+ * @var StoreDirectoryFilter $filter
+ * @var StoreSourceStatusFilter $sourceStatus
+ * @var StoreAgentAvailabilityFilter $agent
  * @var string $letter
  * @var int $page
  */
@@ -25,17 +31,40 @@ $this->setParameter('breadcrumbs', [
 
 $base = $urlGenerator->generate('order58.store-chat');
 
+$chatReasonLabel = static fn(?string $code): string => match ($code) {
+    'source_inactive' => 'Source inactive',
+    'not_provisioned' => 'Vector store processing',
+    'order58_not_ready', 'no_qualifying_document' => 'No ready knowledge',
+    default => 'Not ready',
+};
+
 /**
  * @param array<string, string|int> $overrides
  */
-$dirUrl = static function (array $overrides) use ($base, $search, $letter, $page): string {
-    $state = ['q' => $search, 'letter' => $letter, 'page' => $page];
+$dirUrl = static function (array $overrides) use ($base, $search, $filter, $sourceStatus, $agent, $letter, $page): string {
+    $state = [
+        'q' => $search,
+        'filter' => $filter->value,
+        'status' => $sourceStatus->value,
+        'agent' => $agent->value,
+        'letter' => $letter,
+        'page' => $page,
+    ];
     foreach ($overrides as $key => $value) {
         $state[$key] = (string) $value;
     }
     $params = [];
     if ($state['q'] !== '') {
         $params['q'] = $state['q'];
+    }
+    if ($state['filter'] !== StoreDirectoryFilter::All->value) {
+        $params['filter'] = $state['filter'];
+    }
+    if ($state['status'] !== StoreSourceStatusFilter::All->value) {
+        $params['status'] = $state['status'];
+    }
+    if ($state['agent'] !== StoreAgentAvailabilityFilter::All->value) {
+        $params['agent'] = $state['agent'];
     }
     if ($state['letter'] !== AlphabetIndex::ALL) {
         $params['letter'] = $state['letter'];
@@ -63,6 +92,16 @@ $dirUrl = static function (array $overrides) use ($base, $search, $letter, $page
             <a class="btn btn--ghost" href="<?= Html::encode($dirUrl(['q' => '', 'page' => 1])) ?>">Clear</a>
         <?php endif; ?>
     </form>
+</div>
+
+<div class="filter-bar" role="group" aria-label="Filter by knowledge status">
+    <?php foreach (StoreDirectoryFilter::cases() as $option): ?>
+        <a class="filter-chip<?= $option === $filter ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['filter' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
+    <?php endforeach; ?>
+    <span class="filter-bar__sep" aria-hidden="true"></span>
+    <?php foreach (StoreSourceStatusFilter::cases() as $option): ?>
+        <a class="filter-chip<?= $option === $sourceStatus ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['status' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
+    <?php endforeach; ?>
 </div>
 
 <nav class="alpha-nav" aria-label="Browse by letter">
@@ -93,17 +132,20 @@ $dirUrl = static function (array $overrides) use ($base, $search, $letter, $page
             /** @var StoreDirectoryItem $store */
             $chatUrl = $urlGenerator->generate('chat.index', ['slug' => $store->slug]);
             $location = $store->locationLine();
-            $active = $store->sourceActive;
-            // An inactive store is a non-clickable, highlighted card (chatting it is disabled); an active store
-            // is the usual link card.
-            $tag = $active ? 'a' : 'div';
-            $attrs = $active
+            $eligible = $store->chatEligible;
+            // Chat-eligible stores are the usual link card; ineligible ones are non-clickable with the reason.
+            $tag = $eligible ? 'a' : 'div';
+            $attrs = $eligible
                 ? 'class="store-card store-card--link" href="' . Html::encode($chatUrl) . '"'
-                : 'class="store-card store-card--inactive" aria-disabled="true"';
+                : 'class="store-card" aria-disabled="true"';
             ?>
             <<?= $tag ?> <?= $attrs ?>>
                 <div class="store-card__body">
-                    <h2 class="store-card__name"><?= Html::encode($store->name) ?></h2>
+                    <div class="store-card__head">
+                        <h2 class="store-card__name"><?= Html::encode($store->name) ?></h2>
+                        <?php $countOk = $store->knowledgeDocsTotal > 0 && $store->knowledgeDocsIndexed === $store->knowledgeDocsTotal; ?>
+                        <span class="store-card__kb-count<?= $countOk ? ' store-card__kb-count--ok' : '' ?>" title="<?= $store->knowledgeRecordCount ?> knowledge records · <?= $store->knowledgeDocsIndexed ?>/<?= $store->knowledgeDocsTotal ?> documents indexed"><?= $store->knowledgeRecordCount ?> · <?= $store->knowledgeDocsIndexed ?>/<?= $store->knowledgeDocsTotal ?></span>
+                    </div>
                     <?php if ($store->company !== null): ?>
                         <div class="store-card__meta"><?= Html::encode($store->company) ?></div>
                     <?php endif; ?>
@@ -111,15 +153,17 @@ $dirUrl = static function (array $overrides) use ($base, $search, $letter, $page
                         <div class="store-card__meta util-muted">📍 <?= Html::encode($location) ?></div>
                     <?php endif; ?>
                     <div class="store-card__meta util-mono util-muted">Store #<?= $store->sourceId ?></div>
-                    <?php if (!$active): ?>
-                        <div class="store-card__badges"><span class="badge badge--source-inactive" title="Order58 reports this store as inactive">Source inactive</span></div>
-                    <?php endif; ?>
+                    <div class="store-card__badges">
+                        <?php if (!$store->sourceActive): ?>
+                            <span class="badge badge--error" title="Order58 reports this store as inactive">🔴 Source inactive</span>
+                        <?php endif; ?>
+                    </div>
                 </div>
                 <div class="store-card__footer">
-                    <?php if ($active): ?>
+                    <?php if ($eligible): ?>
                         <span class="btn btn--primary btn--block">Open chat</span>
                     <?php else: ?>
-                        <span class="btn btn--primary btn--block" aria-disabled="true">Chat unavailable</span>
+                        <span class="btn btn--primary btn--block" aria-disabled="true">Chat unavailable — <?= Html::encode($chatReasonLabel($store->chatReason)) ?></span>
                     <?php endif; ?>
                 </div>
             </<?= $tag ?>>

@@ -90,6 +90,16 @@ interface SyncRunRepositoryInterface
     public function latestByType(): array;
 
     /**
+     * The most recent *successful* completion time per top-level type — the latest `completed_at` among runs
+     * with status `completed` or `completed_with_warnings`. A failed run never appears here, so it can never
+     * overwrite the last-successful timestamp. One grouped query (no per-type N+1).
+     *
+     * @return array<string, DateTimeImmutable> Keyed by {@see Order58SyncType::value}; missing when a type has
+     *                                           never succeeded.
+     */
+    public function lastSuccessfulAtByType(): array;
+
+    /**
      * The most recent completed `health` run, for the API-status panel (rendered from local state).
      */
     public function latestHealth(): ?SyncRun;

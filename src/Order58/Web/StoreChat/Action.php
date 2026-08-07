@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\StoreChat;
 
+use App\Order58\Domain\StoreAgentAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
+use App\Order58\Domain\StoreSourceStatusFilter;
 use App\Shared\Web\Support\AlphabetIndex;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -18,10 +20,9 @@ use function min;
 use function trim;
 
 /**
- * The admin "Store chat" picker (GET /admin/order58/store-chat): an alphabetical, searchable list of the
- * stores that can actually be chatted with — vector store ready and holding at least one enabled, ready
- * document. Choosing one opens that store's chat. Same directory machinery as the store list, restricted to
- * chat-ready stores.
+ * The admin "Store chat" picker (GET /admin/order58/store-chat): an alphabetical, searchable, filterable list of
+ * every mirrored store. Chat-eligible stores link straight to chat; ineligible ones are shown disabled with the
+ * reason. Same directory machinery, filters and canonical eligibility as the store list.
  */
 final readonly class Action
 {
@@ -35,20 +36,26 @@ final readonly class Action
     public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
         $params = $request->getQueryParams();
-        $rawSearch = $params['q'] ?? null;
-        $rawLetter = $params['letter'] ?? null;
-        $rawPage = $params['page'] ?? null;
+        $search = is_string($params['q'] ?? null) ? trim((string) $params['q']) : '';
+        $filter = StoreDirectoryFilter::fromRequest(is_string($params['filter'] ?? null) ? (string) $params['filter'] : null);
+        $sourceStatus = StoreSourceStatusFilter::fromRequest(is_string($params['status'] ?? null) ? (string) $params['status'] : null);
+        $agent = StoreAgentAvailabilityFilter::fromRequest(is_string($params['agent'] ?? null) ? (string) $params['agent'] : null);
+        $letter = AlphabetIndex::normalize(is_string($params['letter'] ?? null) ? (string) $params['letter'] : null);
+        $page = is_string($params['page'] ?? null) ? max(1, (int) $params['page']) : 1;
 
-        $search = is_string($rawSearch) ? trim($rawSearch) : '';
-        $letter = AlphabetIndex::normalize(is_string($rawLetter) ? $rawLetter : null);
-        $page = is_string($rawPage) ? max(1, (int) $rawPage) : 1;
-
-        $query = new StoreDirectoryQuery($search, StoreDirectoryFilter::All, $letter, $page, self::PER_PAGE);
-        $result = $this->reader->search($query);
-
+        $build = static fn(int $p): StoreDirectoryQuery => new StoreDirectoryQuery(
+            $search,
+            $filter,
+            $letter,
+            $p,
+            self::PER_PAGE,
+            false,
+            $sourceStatus,
+            $agent,
+        );
+        $result = $this->reader->search($build($page));
         if ($page > $result->pageCount()) {
-            $query = new StoreDirectoryQuery($search, StoreDirectoryFilter::All, $letter, $result->pageCount(), self::PER_PAGE);
-            $result = $this->reader->search($query);
+            $result = $this->reader->search($build($result->pageCount()));
         }
 
         return $this->viewRenderer
@@ -56,6 +63,9 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'result' => $result,
                 'search' => $search,
+                'filter' => $filter,
+                'sourceStatus' => $sourceStatus,
+                'agent' => $agent,
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
             ]);

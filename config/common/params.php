@@ -19,6 +19,9 @@ use Yiisoft\Yii\View\Renderer\CsrfViewInjection;
 return [
     'application' => require __DIR__ . '/application.php',
 
+    // The one application timezone (business/scheduling/display). DB storage stays UTC.
+    'app/timezone' => Environment::string('APP_TIMEZONE'),
+
     'app/auth' => [
         'maxLoginAttempts' => Environment::int('AUTH_MAX_LOGIN_ATTEMPTS'),
         'loginWindowMinutes' => Environment::int('AUTH_LOGIN_WINDOW_MINUTES'),

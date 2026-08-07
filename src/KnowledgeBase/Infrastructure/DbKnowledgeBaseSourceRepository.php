@@ -6,6 +6,7 @@ namespace App\KnowledgeBase\Infrastructure;
 
 use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\KnowledgeBase\Domain\KnowledgeBaseStatus;
+use App\KnowledgeBase\Domain\Order58SourceState;
 use App\KnowledgeBase\Domain\SourceKnowledgeBaseCounts;
 use App\KnowledgeBase\Domain\VectorStoreStatus;
 use App\Shared\Infrastructure\Db\DbDateTime;
@@ -51,6 +52,23 @@ final readonly class DbKnowledgeBaseSourceRepository implements KnowledgeBaseSou
             ->scalar();
 
         return is_numeric($value) ? (int) $value : null;
+    }
+
+    public function findOrder58SourceState(int $knowledgeBaseId): ?Order58SourceState
+    {
+        $row = $this->connection
+            ->createQuery()
+            ->select(['source_store_id', 'source_active'])
+            ->from(self::TABLE)
+            ->where(['id' => $knowledgeBaseId, 'source_system' => 'order58'])
+            ->limit(1)
+            ->one();
+
+        if (!is_array($row) || $row['source_store_id'] === null) {
+            return null;
+        }
+
+        return new Order58SourceState((int) $row['source_store_id'], (bool) (int) $row['source_active']);
     }
 
     public function createForSource(

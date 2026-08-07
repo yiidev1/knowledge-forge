@@ -35,6 +35,18 @@ final readonly class StoreDirectoryItem
         public int $knowledgeRecordCount,
         public ?DateTimeImmutable $lastSourceSyncedAt,
         public StoreKnowledgeStatus $knowledgeStatus,
+        /** Whether the store is chat-eligible by the canonical policy (SQL-mirrored). */
+        public bool $chatEligible = false,
+        /**
+         * When not chat-eligible, the raw {@see \App\Chat\Application\ChatUnavailableReason} code
+         * (source_inactive / not_provisioned / order58_not_ready / no_qualifying_document); null when eligible.
+         * A raw string, so the Order58 module needs no dependency on the Chat module.
+         */
+        public ?string $chatReason = null,
+        /** All enabled, non-deleted Order58 knowledge documents generated for this store. */
+        public int $knowledgeDocsTotal = 0,
+        /** Of those, how many have a completed, attached index-file snapshot (searchable). */
+        public int $knowledgeDocsIndexed = 0,
     ) {}
 
     /**

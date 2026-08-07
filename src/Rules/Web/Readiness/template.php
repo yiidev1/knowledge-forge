@@ -2,20 +2,26 @@
 
 declare(strict_types=1);
 
+use App\Order58\Domain\SyncFreshness;
 use App\Rules\Domain\RuleReadinessFilter;
 use App\Rules\Domain\RuleReadinessResult;
 use App\Rules\Domain\RuleReadinessSummary;
+use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
+use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
+ * @var Csrf $csrf
  * @var RuleReadinessSummary $summary
  * @var RuleReadinessResult $result
  * @var string $search
  * @var RuleReadinessFilter $filter
  * @var int $page
+ * @var SyncFreshness $freshness
+ * @var AppTimeZone $appTimeZone
  */
 
 $this->setTitle('Order58 Rules — Readiness');
@@ -61,27 +67,37 @@ if ($search !== '') {
         <h1 class="page-header__title">Rule readiness</h1>
         <p class="page-header__subtitle">Materialized Order58 rule documents and their OpenAI File Search stage. A document is <strong>Ready</strong> only once it has a completed, attached index file.</p>
     </div>
-    <div class="util-row">
-        <a class="btn btn--secondary" href="<?= Html::encode($urlGenerator->generate('order58.rules')) ?>">← Summary</a>
-    </div>
+
 </div>
+
+<?= $this->render(dirname(__DIR__) . '/_partial/rules-sync-banner', [
+    'urlGenerator' => $urlGenerator,
+    'csrf' => $csrf,
+    'freshness' => $freshness,
+    'appTimeZone' => $appTimeZone,
+    'returnRoute' => 'order58.rules.readiness',
+]) ?>
 
 <section class="grid grid--stats">
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::All ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'all', 'page' => 1])) ?>">
-        <div class="stat__value"><?= $summary->total() ?></div><div class="stat__label">Total</div>
+        <div class="stat__value"><?= $summary->total() ?></div>
+        <div class="stat__label">Total</div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Ready ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'ready', 'page' => 1])) ?>">
-        <div class="stat__value"><?= $summary->ready ?></div><div class="stat__label">Ready</div>
+        <div class="stat__value"><?= $summary->ready ?></div>
+        <div class="stat__label">Ready</div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Pending ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'pending', 'page' => 1])) ?>">
         <div class="stat__value"><?= $summary->pending() ?></div>
         <div class="stat__label">Pending <span class="util-muted">· Q <?= $summary->queued ?> / P <?= $summary->processing ?> / I <?= $summary->indexing ?></span></div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Failed ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'failed', 'page' => 1])) ?>">
-        <div class="stat__value"><?= $summary->failed ?></div><div class="stat__label">Failed</div>
+        <div class="stat__value"><?= $summary->failed ?></div>
+        <div class="stat__label">Failed</div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Disabled ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'disabled', 'page' => 1])) ?>">
-        <div class="stat__value"><?= $summary->disabled ?></div><div class="stat__label">Disabled</div>
+        <div class="stat__value"><?= $summary->disabled ?></div>
+        <div class="stat__label">Disabled</div>
     </a>
 </section>
 
@@ -91,7 +107,7 @@ if ($search !== '') {
             <input type="hidden" name="filter" value="<?= Html::encode($filter->value) ?>">
         <?php endif; ?>
         <input class="field__control" type="search" name="q" value="<?= Html::encode($search) ?>"
-               placeholder="Search rule, id or store…" aria-label="Search rule documents">
+            placeholder="Search rule, id or store…" aria-label="Search rule documents">
         <button class="btn btn--secondary" type="submit">Search</button>
         <?php if ($search !== ''): ?>
             <a class="btn btn--ghost" href="<?= Html::encode($pageUrl(['q' => '', 'page' => 1])) ?>">Clear</a>
@@ -102,7 +118,7 @@ if ($search !== '') {
 <div class="filter-bar" role="group" aria-label="Filter by status">
     <?php foreach (RuleReadinessFilter::cases() as $case): ?>
         <a class="filter-chip<?= $case === $filter ? ' filter-chip--active' : '' ?>"
-           href="<?= Html::encode($pageUrl(['filter' => $case->value, 'page' => 1])) ?>"><?= Html::encode($case->label()) ?></a>
+            href="<?= Html::encode($pageUrl(['filter' => $case->value, 'page' => 1])) ?>"><?= Html::encode($case->label()) ?></a>
     <?php endforeach; ?>
 </div>
 
@@ -117,9 +133,17 @@ if ($search !== '') {
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
-                <thead><tr>
-                    <th>Rule</th><th>Type</th><th>Store</th><th>Status</th><th>OpenAI file</th><th>Updated</th><th>Error</th>
-                </tr></thead>
+                <thead>
+                    <tr>
+                        <th>Rule</th>
+                        <th>Type</th>
+                        <th>Store</th>
+                        <th>Status</th>
+                        <th>OpenAI file</th>
+                        <th>Updated</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
                 <tbody>
                     <?php foreach ($result->items as $item): ?>
                         <tr>
@@ -135,13 +159,14 @@ if ($search !== '') {
                             <td><?php $fid = $item->shortFileId(); ?><?php if ($fid !== null): ?><code><?= Html::encode($fid) ?></code><?php else: ?><span class="util-muted">—</span><?php endif; ?></td>
                             <td class="util-muted"><?= Html::encode($item->updatedAt) ?></td>
                             <td>
-                                <?php $err = (string) ($item->error ?? ''); ?>
+                                <?php $err = $item->error ?? ''; ?>
                                 <?php if ($err === ''): ?>
                                     <span class="util-muted">—</span>
                                 <?php elseif (mb_strlen($err) <= 60): ?>
                                     <span class="util-muted"><?= Html::encode($err) ?></span>
                                 <?php else: ?>
-                                    <details><summary class="util-muted"><?= Html::encode(mb_substr($err, 0, 60)) ?>…</summary>
+                                    <details>
+                                        <summary class="util-muted"><?= Html::encode(mb_substr($err, 0, 60)) ?>…</summary>
                                         <div class="field__hint" style="white-space: pre-wrap; overflow-wrap: anywhere;"><?= Html::encode($err) ?></div>
                                     </details>
                                 <?php endif; ?>

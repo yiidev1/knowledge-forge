@@ -11,6 +11,7 @@ use App\Order58\Client\Order58Credentials;
 use App\Order58\Client\Order58HttpProfile;
 use App\Shared\Application\Correlation\CorrelationId;
 use App\Shared\Application\Health\HealthChecker;
+use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Shared\Infrastructure\Db\DbParams;
@@ -27,6 +28,10 @@ use Yiisoft\Definitions\Reference;
 // only boundary where a string key becomes a constructor argument; everything downstream is typed.
 return [
     ClockInterface::class => SystemClock::class,
+
+    AppTimeZone::class => [
+        '__construct()' => ['timezone' => $params['app/timezone']],
+    ],
 
     CorrelationId::class => static fn(): CorrelationId => new CorrelationId(),
 

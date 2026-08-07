@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Support\Fake\KnowledgeBase;
 
 use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
+use App\KnowledgeBase\Domain\Order58SourceState;
 use App\KnowledgeBase\Domain\SourceKnowledgeBaseCounts;
 use BadMethodCallException;
 use DateTimeImmutable;
@@ -19,14 +20,28 @@ final class InMemoryKnowledgeBaseSourceRepository implements KnowledgeBaseSource
     /** @var array<int, int> knowledge base id => Order58 store id (present ⇒ Order58-linked). */
     private array $order58StoreIds = [];
 
-    public function linkToOrder58(int $knowledgeBaseId, int $storeId): void
+    /** @var array<int, bool> knowledge base id => whether its Order58 source store is active. */
+    private array $order58Active = [];
+
+    public function linkToOrder58(int $knowledgeBaseId, int $storeId, bool $active = true): void
     {
         $this->order58StoreIds[$knowledgeBaseId] = $storeId;
+        $this->order58Active[$knowledgeBaseId] = $active;
     }
 
     public function findOrder58StoreId(int $knowledgeBaseId): ?int
     {
         return $this->order58StoreIds[$knowledgeBaseId] ?? null;
+    }
+
+    public function findOrder58SourceState(int $knowledgeBaseId): ?Order58SourceState
+    {
+        $storeId = $this->order58StoreIds[$knowledgeBaseId] ?? null;
+        if ($storeId === null) {
+            return null;
+        }
+
+        return new Order58SourceState($storeId, $this->order58Active[$knowledgeBaseId] ?? true);
     }
 
     public function findIdBySource(string $sourceSystem, int $sourceStoreId): ?int

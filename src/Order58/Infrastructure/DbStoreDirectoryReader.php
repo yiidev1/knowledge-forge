@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Order58\Infrastructure;
 
 use App\KnowledgeBase\Domain\VectorStoreStatus;
+use App\KnowledgeBase\Infrastructure\KnowledgeBaseChatEligibilitySql;
+use App\Order58\Domain\StoreAgentAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreDirectoryResult;
 use App\Order58\Domain\StoreKnowledgeStatus;
+use App\Order58\Domain\StoreSourceStatusFilter;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -55,7 +58,8 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
                 'slug' => 'kb.slug',
                 'name' => 'kb.name',
                 'company' => 's.company',
-                'source_active' => 's.active',
+                // Gate-consistent: the mirrored KB flag is exactly what the chat policy reads.
+                'source_active' => 'kb.source_active',
                 'agent_enabled' => 'kb.agent_enabled',
                 'vector_store_status' => 'kb.vector_store_status',
                 'last_synced' => 'kb.last_source_synced_at',
@@ -72,6 +76,17 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
                 ),
                 'has_in_progress' => new Expression(self::HAS_IN_PROGRESS_DOC),
                 'has_failed' => new Expression(self::HAS_FAILED_DOC),
+                'chat_reason' => new Expression(KnowledgeBaseChatEligibilitySql::reasonCase()),
+                'docs_total' => new Expression(
+                    "(SELECT COUNT(*) FROM `documents` `d` WHERE `d`.`knowledge_base_id` = `kb`.`id`"
+                    . " AND `d`.`source_type` = 'order58_knowledge' AND `d`.`is_enabled` = 1 AND `d`.`status` <> 'deleted')",
+                ),
+                'docs_indexed' => new Expression(
+                    "(SELECT COUNT(*) FROM `documents` `d` WHERE `d`.`knowledge_base_id` = `kb`.`id`"
+                    . " AND `d`.`source_type` = 'order58_knowledge' AND `d`.`is_enabled` = 1 AND `d`.`status` <> 'deleted'"
+                    . ' AND EXISTS (SELECT 1 FROM `document_index_files` `f` WHERE `f`.`document_id` = `d`.`id`'
+                    . " AND `f`.`index_status` = 'completed' AND `f`.`openai_file_id` IS NOT NULL))",
+                ),
             ])
             ->orderBy(['kb.name' => SORT_ASC, 'kb.id' => SORT_ASC])
             ->limit($query->perPage)
@@ -111,12 +126,21 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
         $this->applyFilter($q, $query->filter);
         $this->applySearch($q, $query->search);
 
+        // Independent axes — source-active and agent-access — never folded into the pipeline filter.
+        match ($query->sourceStatus) {
+            StoreSourceStatusFilter::All => null,
+            StoreSourceStatusFilter::Active => $q->andWhere(['kb.source_active' => 1]),
+            StoreSourceStatusFilter::Inactive => $q->andWhere(['kb.source_active' => 0]),
+        };
+        match ($query->agentAvailability) {
+            StoreAgentAvailabilityFilter::All => null,
+            StoreAgentAvailabilityFilter::Enabled => $q->andWhere(['kb.agent_enabled' => 1]),
+            StoreAgentAvailabilityFilter::Disabled => $q->andWhere(['kb.agent_enabled' => 0]),
+        };
+
+        // The store-chat picker shows only stores that are chat-eligible by the canonical policy.
         if ($query->chatReadyOnly) {
-            $q->andWhere(['kb.vector_store_status' => VectorStoreStatus::Ready->value])
-                ->andWhere(new Expression(
-                    'EXISTS (SELECT 1 FROM `documents` `d` WHERE `d`.`knowledge_base_id` = `kb`.`id`'
-                    . " AND `d`.`status` = 'ready' AND `d`.`is_enabled` = 1)",
-                ));
+            $q->andWhere(new Expression(KnowledgeBaseChatEligibilitySql::isEligible()));
         }
 
         return $q;
@@ -202,6 +226,8 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
     {
         $vectorStoreStatus = VectorStoreStatus::tryFrom((string) ($row['vector_store_status'] ?? '')) ?? VectorStoreStatus::Pending;
         $readyDocuments = (int) ($row['doc_count'] ?? 0);
+        $reason = (string) ($row['chat_reason'] ?? '');
+        $eligible = $reason === 'available';
 
         return new StoreDirectoryItem(
             sourceId: (int) $row['source_id'],
@@ -224,6 +250,10 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
                 hasFailedDocument: (bool) (int) ($row['has_failed'] ?? 0),
                 vectorStoreStatus: $vectorStoreStatus,
             ),
+            chatEligible: $eligible,
+            chatReason: $eligible ? null : $reason,
+            knowledgeDocsTotal: (int) ($row['docs_total'] ?? 0),
+            knowledgeDocsIndexed: (int) ($row['docs_indexed'] ?? 0),
         );
     }
 

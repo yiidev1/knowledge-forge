@@ -25,6 +25,16 @@ final readonly class EnqueueSyncService
      */
     public function enqueue(Order58SyncType $type, ?int $scopeRef, ?int $requestedByAdminId): bool
     {
-        return $this->runs->enqueue($type, $scopeRef, $requestedByAdminId, $this->clock->now()) !== null;
+        return $this->enqueueReturningId($type, $scopeRef, $requestedByAdminId) !== null;
+    }
+
+    /**
+     * Like {@see enqueue()} but returns the created run id (or null when coalesced by an existing active run),
+     * so a caller — e.g. the daily scheduler — can record exactly which run it enqueued without a race-prone
+     * "select the latest row" lookup. The id comes straight from the coalescing insert.
+     */
+    public function enqueueReturningId(Order58SyncType $type, ?int $scopeRef, ?int $requestedByAdminId): ?int
+    {
+        return $this->runs->enqueue($type, $scopeRef, $requestedByAdminId, $this->clock->now());
     }
 }

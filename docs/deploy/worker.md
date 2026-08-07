@@ -69,6 +69,58 @@ MAILTO=""
 * **`--limit=1`** — one document per minute is deliberate: it bounds memory, OpenAI spend and blast
   radius. Raise only after watching `worker.log`.
 
+## Daily Order58 sync schedulers (Knowledge 02:00, Rules 03:00 America/New_York)
+
+Two **independent, enqueue-only** commands turn the daily refresh on. They do **no** Order58/OpenAI work — each
+just inserts one `integration_sync_runs` row (idempotent per New-York calendar day) and returns; the per-minute
+worker above drains it with the usual pagination, backoff, `_sync_hash` skip and lock. They are separate jobs with
+separate run records and freshness — a rules failure never affects knowledge, and vice-versa.
+
+Use `CRON_TZ` so the schedule follows New York wall-clock across DST (the app also computes the NY calendar date
+and the 02:00/03:00 due-time from `APP_TIMEZONE`, so it is correct even if the cron implementation ignores
+`CRON_TZ`). Same `www-data` crontab:
+
+```cron
+CRON_TZ=America/New_York
+0 2 * * * /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/locks/order58-schedule.lock /usr/bin/php /var/www/html/knowledge-forge/yii kf:order58:schedule-knowledge >> /var/www/html/knowledge-forge/runtime/logs/order58-schedule.log 2>&1
+0 3 * * * /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/locks/order58-schedule.lock /usr/bin/php /var/www/html/knowledge-forge/yii kf:order58:schedule-rules >> /var/www/html/knowledge-forge/runtime/logs/order58-schedule.log 2>&1
+```
+
+* **Dedicated lock file** (`order58-schedule.lock`, NOT the worker's `worker.lock`) — the schedulers are trivial
+  and must never contend with document processing.
+* **Catch-up after downtime.** A scheduler only acts once its local time (02:00/03:00 NY) has passed and today's
+  NY date is not yet `enqueued`. So if the box was down at 02:00, add an hourly catch-up and the day is still
+  scheduled once, exactly once, when it comes back:
+  ```cron
+  # optional, downtime-resilient: recovers a missed day without ever double-scheduling
+  17 * * * * /usr/bin/flock -n .../order58-schedule.lock /usr/bin/php .../yii kf:order58:schedule-knowledge >> .../order58-schedule.log 2>&1
+  47 * * * * /usr/bin/flock -n .../order58-schedule.lock /usr/bin/php .../yii kf:order58:schedule-rules >> .../order58-schedule.log 2>&1
+  ```
+  The `UNIQUE(sync_type, ny_date)` reservation guarantees **at most one successful scheduled run per type per NY
+  day**, so running the schedulers hourly is safe. Manual admin syncs never touch that table and are never blocked.
+
+**If `CRON_TZ` is unsupported** (e.g. BusyBox cron), do **not** convert to a fixed UTC hour (New York shifts
+between EST/EDT). Either run the schedulers hourly (the app's own `APP_TIMEZONE` due-check fires them at the right
+NY time and the idempotency guard prevents duplicates), or use a systemd timer with `OnCalendar` +
+`Persistent=true`:
+
+```ini
+# /etc/systemd/system/order58-rules-sync.timer
+[Timer]
+OnCalendar=*-*-* 03:00:00 America/New_York
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+(with a matching `order58-rules-sync.service` running `ExecStart=/usr/bin/php .../yii kf:order58:schedule-rules`,
+and an analogous `…-knowledge…` pair at `02:00:00`).
+
+**Smart / incremental sync.** The Order58 API exposes no incremental parameter (only `page`/`per_page`), so each
+scheduled run is a full paginated scan that is *change-driven*, not incrementally fetched: the upstream `_sync_hash`
+skips the DB write **and** the OpenAI re-index for unchanged records (INSERT new / UPDATE changed / SKIP
+unchanged), and mark-and-sweep deactivates removed records **only after a fully completed final page** — a partial
+run never sweeps. This keeps the nightly load bounded without any unsafe deletion.
+
 ## Log rotation
 
 `/etc/logrotate.d/knowledge-forge`:

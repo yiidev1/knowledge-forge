@@ -209,6 +209,27 @@ final readonly class DbSyncRunRepository implements SyncRunRepositoryInterface
         return $result;
     }
 
+    public function lastSuccessfulAtByType(): array
+    {
+        $rows = $this->connection
+            ->createQuery()
+            ->select(['type', 'last_success' => new Expression('MAX(`completed_at`)')])
+            ->from(self::TABLE)
+            ->where(['status' => [SyncRunStatus::Completed->value, SyncRunStatus::CompletedWithWarnings->value]])
+            ->andWhere(['not', ['completed_at' => null]])
+            ->groupBy('type')
+            ->all();
+
+        $out = [];
+        foreach ($rows as $row) {
+            if (is_array($row) && is_string($row['last_success'] ?? null)) {
+                $out[(string) $row['type']] = DbDateTime::parse((string) $row['last_success']);
+            }
+        }
+
+        return $out;
+    }
+
     public function latestHealth(): ?SyncRun
     {
         return $this->hydrate(

@@ -15,7 +15,9 @@ use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
  * controller, template, agent service, or JavaScript duplicates them).
  *
  * The rule, evaluated from current database state and always scoped to the one knowledge base:
- * - the base is active and its vector store is usable ({@see KnowledgeBase::isReadyForChat()}), AND
+ * - if it is Order58-linked, its source store is active (an inactive store is never chattable), AND
+ * - the base is active and its vector store is usable ({@see KnowledgeBase::isReadyForChat()}) with a
+ *   non-null OpenAI vector-store id, AND
  * - it has at least one usable *qualifying* (non-store-profile) document, AND
  * - if it is Order58-linked, it also has a usable Order58 store-profile snapshot.
  *
@@ -38,14 +40,24 @@ final readonly class ChatAvailabilityPolicy
 
     public function getUnavailableReason(KnowledgeBase $knowledgeBase): ChatUnavailableReason
     {
-        if (!$knowledgeBase->isReadyForChat()) {
+        $knowledgeBaseId = $knowledgeBase->id();
+
+        // Order58-linked iff a source-mapping resolves for this exact knowledge base (source_system='order58').
+        $source = $this->sources->findOrder58SourceState($knowledgeBaseId);
+
+        // An inactive source store is never chattable — this outranks provisioning/document state so the admin
+        // and agent both see the actionable reason.
+        if ($source !== null && !$source->active) {
+            return ChatUnavailableReason::SourceInactive;
+        }
+
+        // Ready status + a real vector store. The null-id check defends the write-side invariant (a Ready
+        // status must carry an id) rather than trusting it.
+        if (!$knowledgeBase->isReadyForChat() || $knowledgeBase->openaiVectorStoreId() === null) {
             return ChatUnavailableReason::NotProvisioned;
         }
 
-        $knowledgeBaseId = $knowledgeBase->id();
-
-        // Order58-linked iff a store id resolves for this exact knowledge base (source_system='order58').
-        if ($this->sources->findOrder58StoreId($knowledgeBaseId) !== null) {
+        if ($source !== null) {
             $ready = $this->documents->hasUsableOrder58StoreProfile($knowledgeBaseId)
                 && $this->documents->hasUsableQualifyingDocument($knowledgeBaseId);
 
@@ -64,6 +76,7 @@ final readonly class ChatAvailabilityPolicy
     {
         $exception = match ($this->getUnavailableReason($knowledgeBase)) {
             ChatUnavailableReason::Available => null,
+            ChatUnavailableReason::SourceInactive => ChatUnavailable::sourceInactive(),
             ChatUnavailableReason::NotProvisioned => ChatUnavailable::notProvisioned(),
             ChatUnavailableReason::Order58NotReady => ChatUnavailable::order58NotReady(),
             ChatUnavailableReason::NoQualifyingDocument => ChatUnavailable::noReadyDocuments(),

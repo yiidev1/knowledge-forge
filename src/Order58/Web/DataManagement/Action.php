@@ -7,6 +7,8 @@ namespace App\Order58\Web\DataManagement;
 use App\Agent\Domain\AgentStoreDirectoryInterface;
 use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\Order58\Application\EnsureStoreKnowledgeBaseService;
+use App\Order58\Application\Order58SyncFreshnessService;
+use App\Shared\Application\Time\AppTimeZone;
 use App\Order58\Domain\Order58AgentRepositoryInterface;
 use App\Order58\Domain\Order58KnowledgeRepositoryInterface;
 use App\Order58\Domain\Order58StoreRepositoryInterface;
@@ -32,6 +34,8 @@ final readonly class Action
         private KnowledgeBaseSourceRepositoryInterface $knowledgeBases,
         private AgentStoreDirectoryInterface $agentDirectory,
         private SyncRunRepositoryInterface $runs,
+        private Order58SyncFreshnessService $freshness,
+        private AppTimeZone $appTimeZone,
     ) {}
 
     public function __invoke(): ResponseInterface
@@ -47,6 +51,8 @@ final readonly class Action
                 'agents' => ['all' => $this->agents->countAll(), 'active' => $this->agents->countActive()],
                 'knowledge' => ['all' => $this->knowledge->countAll(), 'active' => $this->knowledge->countActive()],
                 'latest' => $this->runs->latestByType(),
+                'freshness' => $this->freshness->all(),
+                'appTimeZone' => $this->appTimeZone,
                 'health' => $this->runs->latestHealth(),
                 'recent' => $this->runs->recent(15),
                 'active' => [

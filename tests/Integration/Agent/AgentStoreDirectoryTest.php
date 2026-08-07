@@ -123,6 +123,8 @@ final class AgentStoreDirectoryTest extends Unit
         $this->connection->createCommand()->update('{{%knowledge_bases}}', [
             'agent_enabled' => $agentEnabled ? 1 : 0,
             'vector_store_status' => $ready ? 'ready' : 'pending',
+            // A Ready vector store must carry a (unique) id — the canonical policy null-checks it.
+            'openai_vector_store_id' => $ready ? 'vs_agent_' . $sourceId : null,
             'updated_at' => $ts,
         ], ['id' => $id])->execute();
 
@@ -132,6 +134,15 @@ final class AgentStoreDirectoryTest extends Unit
     }
 
     private function seedReadyDocument(int $knowledgeBaseId): void
+    {
+        // The canonical usable set for an Order58 base: a qualifying (knowledge) document AND the store-profile,
+        // each with a completed, attached index-file snapshot — matching ChatAvailabilityPolicy /
+        // KnowledgeBaseChatEligibilitySql (which key on document_index_files, not documents.status).
+        $this->seedUsableDocument($knowledgeBaseId, 'order58_knowledge');
+        $this->seedUsableDocument($knowledgeBaseId, 'order58_store_profile');
+    }
+
+    private function seedUsableDocument(int $knowledgeBaseId, string $sourceType): void
     {
         $ts = DbDateTime::format($this->now);
         $token = bin2hex(random_bytes(16));
@@ -143,10 +154,22 @@ final class AgentStoreDirectoryTest extends Unit
             'mime_type' => 'text/markdown',
             'extension' => 'md',
             'size_bytes' => 10,
-            'checksum_sha256' => str_repeat('a', 64),
+            'checksum_sha256' => bin2hex(random_bytes(32)),
             'kind' => 'text',
+            'source_type' => $sourceType,
             'status' => 'ready',
             'is_enabled' => 1,
+            'created_at' => $ts,
+            'updated_at' => $ts,
+        ])->execute();
+
+        $docId = (int) $this->connection->getLastInsertID();
+        $this->connection->createCommand()->insert('{{%document_index_files}}', [
+            'document_id' => $docId,
+            'role' => 'source',
+            'openai_file_id' => 'file_' . $token,
+            'index_status' => 'completed',
+            'pending_removal' => 0,
             'created_at' => $ts,
             'updated_at' => $ts,
         ])->execute();

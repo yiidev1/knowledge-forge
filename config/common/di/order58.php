@@ -39,6 +39,7 @@ return [
     Order58KnowledgeRepositoryInterface::class => DbOrder58KnowledgeRepository::class,
     Order58RuleRepositoryInterface::class => DbOrder58RuleRepository::class,
     SyncRunRepositoryInterface::class => DbSyncRunRepository::class,
+    App\Order58\Domain\DailySyncScheduleRepositoryInterface::class => App\Order58\Infrastructure\DbDailySyncScheduleRepository::class,
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
 
     Order58RetryPolicy::class => [

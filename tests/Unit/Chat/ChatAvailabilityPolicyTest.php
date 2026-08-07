@@ -83,6 +83,39 @@ final class ChatAvailabilityPolicyTest extends Unit
         assertSame(ChatUnavailableReason::NoQualifyingDocument, $this->policy()->getUnavailableReason($this->readyKb(self::KB_A)));
     }
 
+    public function testSourceInactiveOrder58BaseIsUnavailableEvenWhenReadyWithDocuments(): void
+    {
+        // Linked to an INACTIVE Order58 store; everything else is ready. Source-inactive outranks all.
+        $this->sources->linkToOrder58(self::KB_A, 1491, active: false);
+        $this->documents->setUsableStoreProfile(self::KB_A, true);
+        $this->documents->setUsableQualifyingDocument(self::KB_A, true);
+
+        assertFalse($this->policy()->isAvailable($this->readyKb(self::KB_A)));
+        assertSame(ChatUnavailableReason::SourceInactive, $this->policy()->getUnavailableReason($this->readyKb(self::KB_A)));
+    }
+
+    public function testReadyStatusWithNullVectorStoreIdIsNotProvisioned(): void
+    {
+        // A Ready status but a missing vector-store id (invariant violated) must not be treated as available.
+        $this->documents->setUsableQualifyingDocument(self::KB_A, true);
+
+        $kb = new KnowledgeBase(
+            self::KB_A,
+            'Store',
+            'store',
+            null,
+            null,
+            null, // openai_vector_store_id
+            VectorStoreStatus::Ready,
+            null,
+            KnowledgeBaseStatus::Active,
+            new DateTimeImmutable('2026-01-01', new DateTimeZone('UTC')),
+            new DateTimeImmutable('2026-01-01', new DateTimeZone('UTC')),
+        );
+
+        assertSame(ChatUnavailableReason::NotProvisioned, $this->policy()->getUnavailableReason($kb));
+    }
+
     public function testUnprovisionedBaseIsUnavailableRegardlessOfDocuments(): void
     {
         $this->sources->linkToOrder58(self::KB_A, 1491);

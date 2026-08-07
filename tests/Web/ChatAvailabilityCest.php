@@ -91,14 +91,13 @@ final class ChatAvailabilityCest
         $I->dontSeeElement('a.btn--primary[href$="/chat"]');
     }
 
-    public function chatPageIsReadOnlyAndBlockedWhenUnavailable(WebTester $I): void
+    public function chatGetIsHardBlockedAndRedirectsWhenUnavailable(WebTester $I): void
     {
+        // An ineligible Order58 store's chat GET is hard-blocked server-side: it redirects to the store-chat
+        // picker instead of rendering the (previously read-only) page, so a direct URL cannot open it.
         $I->amOnPage('/knowledge-bases/' . self::PROFILE_SLUG . '/chat');
-        // Existing history remains visible (read-only)…
-        $I->see('A seeded past question');
-        $I->see('A seeded past answer');
-        // …but the composer is blocked and no question box is offered.
-        $I->seeElement('[data-composer-unavailable]');
+        $I->seeInCurrentUrl('/admin/order58/store-chat');
+        $I->dontSee('A seeded past question');
         $I->dontSeeElement('textarea[name=question]');
     }
 
@@ -133,9 +132,13 @@ final class ChatAvailabilityCest
             'name' => 'Avail ' . $slug,
             'slug' => $slug,
             'vector_store_status' => 'ready',
+            // A Ready vector store must carry a (unique) id — the canonical policy null-checks it.
+            'openai_vector_store_id' => 'vs_avail_' . $order58StoreId,
             'status' => 'active',
             'source_system' => 'order58',
             'source_store_id' => $order58StoreId,
+            // These fixtures represent active source stores (source-inactive is covered by Order58ChatGateCest).
+            'source_active' => 1,
             'created_at' => $this->ts,
             'updated_at' => $this->ts,
         ])->execute();

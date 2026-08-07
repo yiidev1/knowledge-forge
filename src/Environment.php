@@ -61,6 +61,10 @@ final class Environment
         'APP_ENV' => ['type' => 'enum', 'default' => self::PROD, 'values' => self::ENVIRONMENTS],
         'APP_DEBUG' => ['type' => 'bool', 'default' => false],
         'APP_C3' => ['type' => 'bool', 'default' => false],
+        // The one application timezone for business/scheduling/display decisions. Database timestamps stay UTC;
+        // this only governs the daily-sync wall-clock (02:00/03:00), the NY calendar date used for daily
+        // idempotency, and user-facing time formatting. A named IANA zone so DST is handled automatically.
+        'APP_TIMEZONE' => ['type' => 'string', 'default' => 'America/New_York'],
         // URL prefix the application is served under when it does not own the domain root, e.g.
         // `/knowledge-forge` behind `https://example.com/knowledge-forge/`. Empty means domain root.
         'APP_BASE_PATH' => ['type' => 'string', 'default' => ''],

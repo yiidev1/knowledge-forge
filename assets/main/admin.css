@@ -141,6 +141,21 @@ p { margin: 0 0 1rem; }
 .sidebar__link--active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); }
 .sidebar__link-icon { width: 18px; text-align: center; flex: 0 0 auto; opacity: .85; }
 
+/* Collapsible Knowledge Bases A–Z group (reuses the Order58 store directory via ?letter=). */
+.sidebar__kb { padding: 0 .75rem; }
+.sidebar__kb-summary { list-style: none; cursor: pointer; }
+.sidebar__kb-summary::-webkit-details-marker { display: none; }
+.sidebar__kb-caret { margin-left: auto; font-size: .7rem; opacity: .7; transition: transform .12s; }
+.sidebar__kb[open] .sidebar__kb-caret { transform: rotate(180deg); }
+.sidebar__az { display: flex; flex-wrap: wrap; gap: .2rem; padding: .35rem .25rem .5rem 2.4rem; }
+.sidebar__az-item {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5rem; height: 1.5rem; padding: 0 .3rem; border-radius: .3rem;
+    font-size: .78rem; color: var(--sidebar-text); opacity: .8; text-decoration: none;
+}
+.sidebar__az-item:hover { background: var(--sidebar-active-bg); color: #fff; opacity: 1; text-decoration: none; }
+.sidebar__az-item--active { background: var(--primary); color: #fff; opacity: 1; }
+
 .sidebar__spacer { flex: 1 1 auto; }
 
 .sidebar__user {
@@ -680,7 +695,10 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .btn--ghost { background: transparent; color: var(--text-muted); border-color: transparent; }
 .btn--ghost:hover { background: var(--surface-2); color: var(--text); }
 
-.filter-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; align-items: center; }
+.filter-bar__sep { width: 1px; align-self: stretch; min-height: 1.2rem; background: var(--border); margin: 0 .35rem; }
+.rules-sync-banner { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.25rem; padding: .5rem .85rem; }
+.rules-sync-banner__info { font-size: .82rem; line-height: 1.4; }
 .filter-chip {
     display: inline-flex; align-items: center; padding: .34rem .8rem;
     font-size: .85rem; font-weight: 600; color: var(--text-muted);
@@ -737,6 +755,17 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .store-card__name a:hover { color: var(--primary); }
 .store-card__meta { font-size: .86rem; margin-bottom: .2rem; overflow-wrap: anywhere; }
 .store-card__badges { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0 .5rem; }
+/* Card header row: name on the left, a small knowledge-count pill in the top-right corner (records · indexed/total).
+   Sits inside the body, so on cards with the absolute 💬 shortcut it stays within the reserved right padding. */
+.store-card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; margin: 0 0 .35rem; }
+.store-card__head .store-card__name { margin: 0; }
+.store-card__kb-count {
+    flex: none; align-self: flex-start;
+    font-size: .72rem; font-variant-numeric: tabular-nums; white-space: nowrap;
+    color: var(--text-muted); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: .4rem; padding: .1rem .4rem;
+}
+.store-card__kb-count--ok { color: var(--success-text); background: var(--success-bg); border-color: var(--success-border); }
 .store-card__stats { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .82rem; color: var(--text-muted); }
 .store-card__stats strong { color: var(--text); }
 .store-card__actions {

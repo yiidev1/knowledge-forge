@@ -13,6 +13,8 @@ use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
+use function in_array;
+
 /**
  * Enqueues one of the three independent primary syncs (POST /admin/order58/sync).
  *
@@ -39,9 +41,12 @@ final readonly class SyncAction
             default => null,
         };
 
-        // Post/Redirect/Get target: the rules report may trigger a rules sync and expects to land back on
-        // itself. Allow-listed so the return value can never become an open redirect.
-        $return = $form->string('return') === 'order58.rules' ? 'order58.rules' : 'order58.index';
+        // Post/Redirect/Get target: a rules page (summary, rule list, readiness) may trigger a rules sync and
+        // expects to land back on itself. Allow-listed so the return value can never become an open redirect.
+        $requestedReturn = $form->string('return');
+        $return = in_array($requestedReturn, ['order58.rules', 'order58.rules.list', 'order58.rules.readiness'], true)
+            ? $requestedReturn
+            : 'order58.index';
 
         if ($type === null) {
             $this->flash->error('Unknown synchronization operation.');

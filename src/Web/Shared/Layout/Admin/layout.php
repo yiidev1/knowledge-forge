@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Auth\Application\CurrentAdmin;
 use App\Shared\Web\Flash\FlashMessages;
+use App\Shared\Web\Support\AlphabetIndex;
 use App\Web\Shared\Layout\Admin\AdminAsset;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\CurrentRoute;
@@ -31,6 +32,15 @@ $this->addJsFiles($assetManager->getJsFiles());
 $activeRoute = $currentRoute->getName() ?? '';
 $admin = $currentAdmin->getOrNull();
 
+// The active A–Z letter for the Knowledge Bases sidebar (from the ?letter= query on the store directory).
+$activeLetter = AlphabetIndex::ALL;
+$currentUri = $currentRoute->getUri();
+if ($currentUri !== null) {
+    parse_str($currentUri->getQuery(), $queryParams);
+    $letterParam = $queryParams['letter'] ?? null;
+    $activeLetter = AlphabetIndex::normalize(is_string($letterParam) ? $letterParam : null);
+}
+
 /** @var list<array{level: string, message: string}> $flashMessages */
 $flashMessages = $flash->consume();
 
@@ -53,6 +63,7 @@ $this->beginPage();
 <div class="app">
     <?= $this->render(__DIR__ . '/_sidebar', [
         'activeRoute' => $activeRoute,
+        'activeLetter' => $activeLetter,
         'admin' => $admin,
         'urlGenerator' => $urlGenerator,
         'applicationParams' => $applicationParams,

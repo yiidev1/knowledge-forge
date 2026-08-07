@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\Stores;
 
+use App\Order58\Domain\StoreAgentAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
+use App\Order58\Domain\StoreSourceStatusFilter;
 use App\Shared\Web\Support\AlphabetIndex;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -41,16 +43,26 @@ final readonly class Action
 
         $search = is_string($rawSearch) ? trim($rawSearch) : '';
         $filter = StoreDirectoryFilter::fromRequest(is_string($rawFilter) ? $rawFilter : null);
+        $sourceStatus = StoreSourceStatusFilter::fromRequest(is_string($params['status'] ?? null) ? (string) $params['status'] : null);
+        $agent = StoreAgentAvailabilityFilter::fromRequest(is_string($params['agent'] ?? null) ? (string) $params['agent'] : null);
         $letter = AlphabetIndex::normalize(is_string($rawLetter) ? $rawLetter : null);
         $page = is_string($rawPage) ? max(1, (int) $rawPage) : 1;
 
-        $query = new StoreDirectoryQuery($search, $filter, $letter, $page, self::PER_PAGE);
-        $result = $this->reader->search($query);
+        $build = static fn(int $p): StoreDirectoryQuery => new StoreDirectoryQuery(
+            $search,
+            $filter,
+            $letter,
+            $p,
+            self::PER_PAGE,
+            false,
+            $sourceStatus,
+            $agent,
+        );
+        $result = $this->reader->search($build($page));
 
         // Clamp an out-of-range page (e.g. after a filter change) to the last page.
         if ($page > $result->pageCount()) {
-            $query = new StoreDirectoryQuery($search, $filter, $letter, $result->pageCount(), self::PER_PAGE);
-            $result = $this->reader->search($query);
+            $result = $this->reader->search($build($result->pageCount()));
         }
 
         return $this->viewRenderer
@@ -59,6 +71,8 @@ final readonly class Action
                 'result' => $result,
                 'search' => $search,
                 'filter' => $filter,
+                'sourceStatus' => $sourceStatus,
+                'agent' => $agent,
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
             ]);

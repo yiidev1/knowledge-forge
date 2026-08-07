@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Rules\Web\Readiness;
 
+use App\Order58\Application\Order58SyncFreshnessService;
+use App\Order58\Domain\Order58SyncType;
 use App\Rules\Contract\RuleReadinessReaderInterface;
+use App\Shared\Application\Time\AppTimeZone;
 use App\Rules\Domain\RuleReadinessFilter;
 use App\Rules\Domain\RuleReadinessQuery;
 use Psr\Http\Message\ResponseInterface;
@@ -29,6 +32,8 @@ final readonly class Action
     public function __construct(
         private WebViewRenderer $viewRenderer,
         private RuleReadinessReaderInterface $reader,
+        private Order58SyncFreshnessService $freshness,
+        private AppTimeZone $appTimeZone,
     ) {}
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
@@ -51,6 +56,8 @@ final readonly class Action
                 'search' => $search,
                 'filter' => $filter,
                 'page' => $result->currentPage(),
+                'freshness' => $this->freshness->all()[Order58SyncType::Rules->value],
+                'appTimeZone' => $this->appTimeZone,
             ]);
     }
 }

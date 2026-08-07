@@ -25,6 +25,12 @@ interface KnowledgeBaseSourceRepositoryInterface
     public function findOrder58StoreId(int $knowledgeBaseId): ?int;
 
     /**
+     * The Order58 source-mapping state (store id + upstream active flag) of a knowledge base, or null when it
+     * is not Order58-sourced. Used by the canonical chat-availability policy to require an active source.
+     */
+    public function findOrder58SourceState(int $knowledgeBaseId): ?Order58SourceState;
+
+    /**
      * @return int The new knowledge base id.
      */
     public function createForSource(

@@ -14,6 +14,9 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var array<string, int> $counts
  * @var string $letter
  * @var string $search
+ * @var int $page
+ * @var int $pageCount
+ * @var int $totalMatched
  * @var int $totalAvailable
  */
 
@@ -21,11 +24,22 @@ $this->setTitle('Stores');
 
 $base = $urlGenerator->generate('agent.home');
 
-// A directory URL that keeps the current search while switching letter (or vice-versa).
+// A directory URL that keeps the current search while switching letter (or vice-versa); resets to page 1.
 $dirUrl = static function (string $forLetter, string $forSearch) use ($base): string {
     $params = array_filter([
         'letter' => $forLetter === AlphabetIndex::ALL ? '' : $forLetter,
         'q' => $forSearch,
+    ], static fn(string $v): bool => $v !== '');
+
+    return $params === [] ? $base : $base . '?' . http_build_query($params);
+};
+
+// A pager URL that keeps letter + search while changing page.
+$pageUrl = static function (int $forPage) use ($base, $letter, $search): string {
+    $params = array_filter([
+        'letter' => $letter === AlphabetIndex::ALL ? '' : $letter,
+        'q' => $search,
+        'page' => $forPage > 1 ? (string) $forPage : '',
     ], static fn(string $v): bool => $v !== '');
 
     return $params === [] ? $base : $base . '?' . http_build_query($params);
@@ -108,5 +122,21 @@ $dirUrl = static function (string $forLetter, string $forSearch) use ($base): st
                 </article>
             <?php endforeach; ?>
         </div>
+
+        <?php if ($pageCount > 1): ?>
+            <nav class="pager" aria-label="Pagination">
+                <?php if ($page > 1): ?>
+                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page - 1)) ?>">← Previous</a>
+                <?php else: ?>
+                    <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">← Previous</span>
+                <?php endif; ?>
+                <span class="pager__status">Page <?= $page ?> of <?= $pageCount ?></span>
+                <?php if ($page < $pageCount): ?>
+                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page + 1)) ?>">Next →</a>
+                <?php else: ?>
+                    <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">Next →</span>
+                <?php endif; ?>
+            </nav>
+        <?php endif; ?>
     <?php endif; ?>
 <?php endif; ?>

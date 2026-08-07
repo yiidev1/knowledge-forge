@@ -12,9 +12,12 @@ use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
+use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
+use App\Shared\Web\Flash\FlashMessages;
+use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
@@ -22,6 +25,11 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 /**
  * Persistent admin chat for a knowledge base (GET /knowledge-bases/{slug}/chat).
  * Looks up this admin's thread; does not create a row. Missing thread → empty state.
+ *
+ * An Order58-linked store that is not chat-eligible (source inactive, not provisioned, or no usable indexed
+ * knowledge) is hard-blocked here too: the GET redirects to the store-chat picker with the non-sensitive reason,
+ * so a direct URL cannot open chat for an ineligible store. (Manual, non-Order58 bases keep the soft state so
+ * their history stays viewable.)
  */
 final readonly class Action
 {
@@ -35,6 +43,9 @@ final readonly class Action
         private CurrentAdmin $currentAdmin,
         private ClockInterface $clock,
         private ChatParams $params,
+        private KnowledgeBaseSourceRepositoryInterface $sources,
+        private Redirect $redirect,
+        private FlashMessages $flash,
     ) {}
 
     public function __invoke(#[RouteArgument] string $slug): ResponseInterface
@@ -42,6 +53,13 @@ final readonly class Action
         $knowledgeBase = $this->finder->bySlug($slug);
         $reason = $this->availability->getUnavailableReason($knowledgeBase);
         $chatReady = $reason->isAvailable();
+
+        // Hard-block a direct GET to an ineligible Order58 store's chat — redirect to the picker with the reason.
+        if (!$chatReady && $this->sources->findOrder58StoreId($knowledgeBase->id()) !== null) {
+            $this->flash->error($reason->message() ?? 'Chat is unavailable for this store.');
+
+            return $this->redirect->toRoute('order58.store-chat');
+        }
         $participant = ChatParticipant::admin($this->currentAdmin->get()->id());
         $conversation = $this->threads->find($knowledgeBase->id(), $participant);
         $messages = [];

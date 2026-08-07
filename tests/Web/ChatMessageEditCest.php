@@ -57,6 +57,8 @@ final class ChatMessageEditCest
             'name' => self::KB_NAME,
             'slug' => self::KB_SLUG,
             'vector_store_status' => 'ready',
+            // A Ready vector store must carry a (unique) id — the canonical policy null-checks it.
+            'openai_vector_store_id' => 'vs_' . self::KB_SLUG,
             'status' => 'active',
             'created_at' => $ts,
             'updated_at' => $ts,
