@@ -22,7 +22,13 @@ key.
   runs on every answer: no retrieval, no usable results, or no resolvable citation ⇒ the configured
   fallback sentence, never a guess.
 
-See the phase notes in the git history and `docs/` for the detailed design.
+**Start here for the full A–Z project guide** (structure, flows, every database table — what / why /
+when — worker, Order58, chat, setup):
+**[`docs/KNOWLEDGE_FORGE_A_TO_Z.md`](docs/KNOWLEDGE_FORGE_A_TO_Z.md)**.
+
+For the deepest table-by-table schema plus "which route/command writes which row and which external
+API it calls", see also
+**[`docs/DATABASE_SCHEMA_AND_API_EFFECTS.md`](docs/DATABASE_SCHEMA_AND_API_EFFECTS.md)**.
 
 ---
 

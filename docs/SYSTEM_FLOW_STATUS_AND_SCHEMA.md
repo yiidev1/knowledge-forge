@@ -9,6 +9,7 @@ Related docs (do not replace this one):
 | [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | Full project guide (setup, routes, env, deploy) |
 | [`knowledge_base_store_wise.md`](knowledge_base_store_wise.md) | Order58 store → KB → chat (A→Z) |
 | [`deploy/worker.md`](deploy/worker.md) | Cron + flock worker operations |
+| [`DATABASE_SCHEMA_AND_API_EFFECTS.md`](DATABASE_SCHEMA_AND_API_EFFECTS.md) | Column-level schema + route/command → row-write → external-API matrix |
 
 ---
 
