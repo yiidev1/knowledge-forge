@@ -184,13 +184,19 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
      */
     private function usableSnapshotExists(int $knowledgeBaseId, bool $storeProfile): bool
     {
-        $profile = DocumentSourceType::Order58StoreProfile->value;
+        // A qualifying document is genuine answerable content: the store-profile snapshot AND the rule projections
+        // (store/global/common) are excluded, so a base whose only ready content is rules/profile is not chattable.
+        // The excluded set is the single source of truth on DocumentSourceType, shared with the SQL eligibility
+        // fragment. The store-profile check itself still matches exactly the profile source type.
+        $sourceTypeCondition = $storeProfile
+            ? ['d.source_type' => DocumentSourceType::Order58StoreProfile->value]
+            : ['not in', 'd.source_type', DocumentSourceType::nonQualifyingChatContentValues()];
 
         $query = $this->connection->createQuery()
             ->from(['d' => self::TABLE])
             ->where(['d.knowledge_base_id' => $knowledgeBaseId, 'd.is_enabled' => 1])
             ->andWhere(['<>', 'd.status', DocumentStatus::Deleted->value])
-            ->andWhere($storeProfile ? ['d.source_type' => $profile] : ['<>', 'd.source_type', $profile])
+            ->andWhere($sourceTypeCondition)
             ->andWhere(new Expression(
                 'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
                 . ' WHERE f.[[document_id]] = d.[[id]]'

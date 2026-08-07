@@ -77,6 +77,10 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
                 'has_in_progress' => new Expression(self::HAS_IN_PROGRESS_DOC),
                 'has_failed' => new Expression(self::HAS_FAILED_DOC),
                 'chat_reason' => new Expression(KnowledgeBaseChatEligibilitySql::reasonCase()),
+                // The "Order58 Knowledge" count shown on the card is deliberately the mirrored knowledge-record
+                // documents only — it is an informational count, NOT the chat gate, and may legitimately read 0/0
+                // while chat is enabled by manual/uploaded content. Chat-eligibility is decided separately by
+                // KnowledgeBaseChatEligibilitySql (which excludes rule projections and the store-profile snapshot).
                 'docs_total' => new Expression(
                     "(SELECT COUNT(*) FROM `documents` `d` WHERE `d`.`knowledge_base_id` = `kb`.`id`"
                     . " AND `d`.`source_type` = 'order58_knowledge' AND `d`.`is_enabled` = 1 AND `d`.`status` <> 'deleted')",

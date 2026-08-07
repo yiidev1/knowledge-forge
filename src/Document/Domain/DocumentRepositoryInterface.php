@@ -46,9 +46,12 @@ interface DocumentRepositoryInterface
     public function hasUsableOrder58StoreProfile(int $knowledgeBaseId): bool;
 
     /**
-     * Whether this knowledge base has at least one usable *qualifying* document: enabled, not deleted, with
-     * a completed vector-store file, and whose source type is anything except `order58_store_profile` (the
-     * store profile never satisfies the qualifying-document requirement). Scoped strictly to $knowledgeBaseId.
+     * Whether this knowledge base has at least one usable *qualifying* document: enabled, not deleted, with a
+     * completed vector-store file, and whose source type is genuine answerable content. The store-profile
+     * snapshot and the rule projections (order58_rule_store/global/common) never satisfy this requirement — a
+     * base whose only ready content is rules and/or the profile is not chattable. The excluded set is
+     * {@see \App\Document\Domain\DocumentSourceType::nonQualifyingChatContentValues()}. Scoped strictly to
+     * $knowledgeBaseId.
      */
     public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool;
 

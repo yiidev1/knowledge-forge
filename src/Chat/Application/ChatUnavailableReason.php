@@ -33,8 +33,8 @@ enum ChatUnavailableReason: string
             self::Available => null,
             self::SourceInactive => 'This store is inactive in Order58, so chat is unavailable until the source store becomes active again.',
             self::NotProvisioned => 'This knowledge base is still being provisioned. Chat becomes available once it is ready.',
-            self::Order58NotReady => 'Chat is unavailable until the store profile and at least one Knowledge Base document are ready.',
-            self::NoQualifyingDocument => 'Chat is unavailable until at least one enabled Knowledge Base document has finished processing and is ready.',
+            self::Order58NotReady => 'Chat is unavailable until this store has at least one ready knowledge document (Order58 knowledge, manual text, or an uploaded file). Store rules and the store profile on their own do not enable chat.',
+            self::NoQualifyingDocument => 'Chat is unavailable until at least one enabled knowledge document has finished processing and is ready. Rule documents on their own do not enable chat.',
         };
     }
 

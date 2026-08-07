@@ -18,13 +18,15 @@ use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
  * - if it is Order58-linked, its source store is active (an inactive store is never chattable), AND
  * - the base is active and its vector store is usable ({@see KnowledgeBase::isReadyForChat()}) with a
  *   non-null OpenAI vector-store id, AND
- * - it has at least one usable *qualifying* (non-store-profile) document, AND
+ * - it has at least one usable *qualifying* document — genuine answerable content, NOT the store-profile
+ *   snapshot and NOT a rule projection (order58_rule_store/global/common); a base whose only ready content is
+ *   rules and/or the profile is never chattable, AND
  * - if it is Order58-linked, it also has a usable Order58 store-profile snapshot.
  *
  * "Usable" is the durable last-successful snapshot ({@see DocumentRepositoryInterface::hasUsableQualifyingDocument()}),
  * so a resync in progress or a failed refresh — which leaves the previous completed vector-store file in
- * place — never makes chat unavailable. The store profile never satisfies the qualifying requirement, and
- * an admin-disabled document never counts.
+ * place — never makes chat unavailable. Neither the store profile nor a rule projection satisfies the
+ * qualifying requirement, and an admin-disabled document never counts.
  */
 final readonly class ChatAvailabilityPolicy
 {

@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace App\KnowledgeBase\Infrastructure;
 
+use App\Document\Domain\DocumentSourceType;
+
+use function array_map;
+use function implode;
+
 /**
  * The SQL projection of {@see \App\Chat\Application\ChatAvailabilityPolicy} — the ONE readiness definition,
  * expressed for bounded list queries so the admin store directory, the store-chat picker and the agent
@@ -16,12 +21,23 @@ namespace App\KnowledgeBase\Infrastructure;
  */
 final class KnowledgeBaseChatEligibilitySql
 {
-    /** A usable qualifying (non-store-profile) document: enabled, not deleted, with a completed+attached index file. */
+    /**
+     * A usable *qualifying* document: enabled, not deleted, with a completed+attached index file, whose source
+     * type is genuine answerable content. The store-profile snapshot AND the rule projections
+     * (store/global/common) are excluded — a base whose only ready content is rules/profile is NOT chattable.
+     * The excluded set comes from {@see DocumentSourceType::nonQualifyingChatContentValues()} (the single
+     * source of truth shared with the PHP policy), so the two definitions can never diverge.
+     */
     public static function usableQualifyingDoc(): string
     {
+        $excluded = implode(', ', array_map(
+            static fn(string $value): string => "'" . $value . "'",
+            DocumentSourceType::nonQualifyingChatContentValues(),
+        ));
+
         return "EXISTS (SELECT 1 FROM `documents` `d` WHERE `d`.`knowledge_base_id` = `kb`.`id`"
             . " AND `d`.`is_enabled` = 1 AND `d`.`status` <> 'deleted'"
-            . " AND `d`.`source_type` <> 'order58_store_profile'"
+            . " AND `d`.`source_type` NOT IN ($excluded)"
             . ' AND EXISTS (SELECT 1 FROM `document_index_files` `f` WHERE `f`.`document_id` = `d`.`id`'
             . " AND `f`.`index_status` = 'completed' AND `f`.`openai_file_id` IS NOT NULL))";
     }

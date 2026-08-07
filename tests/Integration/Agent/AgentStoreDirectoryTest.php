@@ -26,7 +26,8 @@ use function PHPUnit\Framework\assertSame;
 
 /**
  * The agent store-availability predicate against real MySQL. A store is offered to agents only when it is
- * source-active, agent-enabled, vector-store ready, and has at least one enabled, ready document. The
+ * source-active, agent-enabled, vector-store ready, and has at least one enabled, usable *genuine content*
+ * document (Order58 knowledge or an admin upload — never a rule projection or the store profile alone). The
  * lookup takes no agent identity, so `account_id` can play no part. Sentinel ids keep the shared dev
  * database undisturbed.
  */
@@ -37,8 +38,9 @@ final class AgentStoreDirectoryTest extends Unit
     private const DISABLED = 900000303;
     private const NOT_READY = 900000304;
     private const NO_DOCS = 900000305;
+    private const RULES_ONLY = 900000306;
 
-    private const ALL = [self::ELIGIBLE, self::INACTIVE, self::DISABLED, self::NOT_READY, self::NO_DOCS];
+    private const ALL = [self::ELIGIBLE, self::INACTIVE, self::DISABLED, self::NOT_READY, self::NO_DOCS, self::RULES_ONLY];
 
     private ConnectionInterface $connection;
     private DbAgentStoreDirectory $directory;
@@ -97,6 +99,19 @@ final class AgentStoreDirectoryTest extends Unit
 
         $this->seedStore(self::NO_DOCS, true);
         $this->seedKb(self::NO_DOCS, 'zzqa-agent-nodocs', sourceActive: true, agentEnabled: true, ready: true, withDoc: false);
+
+        // Rule-only: profile + rule projections ready, but NO genuine content → must be hidden from agents (rules
+        // do not qualify). Everything else (source active, agent-enabled, vector ready) passes, isolating the rule.
+        $this->seedStore(self::RULES_ONLY, true);
+        $this->seedKb(
+            self::RULES_ONLY,
+            'zzqa-agent-rulesonly',
+            sourceActive: true,
+            agentEnabled: true,
+            ready: true,
+            withDoc: false,
+            docTypes: ['order58_store_profile', 'order58_rule_store', 'order58_rule_global', 'order58_rule_common'],
+        );
     }
 
     private function seedStore(int $sourceId, bool $active): void
@@ -115,7 +130,12 @@ final class AgentStoreDirectoryTest extends Unit
         ])->execute();
     }
 
-    private function seedKb(int $sourceId, string $slug, bool $sourceActive, bool $agentEnabled, bool $ready, bool $withDoc): void
+    /**
+     * @param list<string>|null $docTypes When provided, seeds exactly these usable document source types instead
+     *                                     of the default qualifying-knowledge + profile pair — used to isolate a
+     *                                     rule-only store (profile + rule projections, no genuine content).
+     */
+    private function seedKb(int $sourceId, string $slug, bool $sourceActive, bool $agentEnabled, bool $ready, bool $withDoc, ?array $docTypes = null): void
     {
         $id = $this->knowledgeBases->createForSource('Agent Sentinel ' . $sourceId, $slug, 'order58', $sourceId, 'Agent Sentinel', $sourceActive, $this->now);
 
@@ -127,6 +147,14 @@ final class AgentStoreDirectoryTest extends Unit
             'openai_vector_store_id' => $ready ? 'vs_agent_' . $sourceId : null,
             'updated_at' => $ts,
         ], ['id' => $id])->execute();
+
+        if ($docTypes !== null) {
+            foreach ($docTypes as $sourceType) {
+                $this->seedUsableDocument($id, $sourceType);
+            }
+
+            return;
+        }
 
         if ($withDoc) {
             $this->seedReadyDocument($id);
@@ -197,11 +225,14 @@ final class AgentStoreDirectoryTest extends Unit
         assertNotContains('zzqa-agent-disabled', $slugs, 'an agent-disabled store must be hidden');
         assertNotContains('zzqa-agent-notready', $slugs, 'a not-ready knowledge base must be hidden');
         assertNotContains('zzqa-agent-nodocs', $slugs, 'a store with no enabled ready document must be hidden');
+        assertNotContains('zzqa-agent-rulesonly', $slugs, 'a rule-only store (no genuine content) must be hidden');
 
         assertNull($this->directory->findAvailableBySlug('zzqa-agent-inactive'));
         assertNull($this->directory->findAvailableBySlug('zzqa-agent-disabled'));
         assertNull($this->directory->findAvailableBySlug('zzqa-agent-notready'));
         assertNull($this->directory->findAvailableBySlug('zzqa-agent-nodocs'));
+        // The by-slug 404 gate excludes the rule-only store too, so an agent cannot reach it by typing the slug.
+        assertNull($this->directory->findAvailableBySlug('zzqa-agent-rulesonly'));
     }
 
     public function testAvailabilityTakesNoAgentIdentitySoAccountIdCannotFilter(): void

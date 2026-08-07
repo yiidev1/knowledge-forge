@@ -50,4 +50,43 @@ enum DocumentSourceType: string
             || $this === self::Order58RuleGlobal
             || $this === self::Order58RuleCommon;
     }
+
+    /**
+     * Whether a document of this source type, once usable/indexed, is genuine *answerable* content that can make
+     * a knowledge base chattable on its own.
+     *
+     * Excluded (NOT qualifying by themselves):
+     * - the background {@see Order58StoreProfile} snapshot (store metadata, not answerable content), and
+     * - the rule projections {@see Order58RuleStore}/{@see Order58RuleGlobal}/{@see Order58RuleCommon} — rules
+     *   refine *how* genuine content is answered; a base whose only ready content is rules must not enable chat.
+     *
+     * Everything else — Order58 knowledge records and admin uploads (manual text, PDF, text file, image) — is
+     * genuine content and qualifies. This is the ONE definition of "qualifying chat content"; the SQL eligibility
+     * fragment and the PHP availability policy both derive their exclusion from it, so they can never diverge.
+     */
+    public function isQualifyingChatContent(): bool
+    {
+        return match ($this) {
+            self::Order58StoreProfile,
+            self::Order58RuleStore,
+            self::Order58RuleGlobal,
+            self::Order58RuleCommon => false,
+            default => true,
+        };
+    }
+
+    /**
+     * The raw `source_type` values that are NOT qualifying chat content (the store profile + the rule
+     * projections), for reuse by the PHP policy and the SQL eligibility fragment. Derived from
+     * {@see isQualifyingChatContent()} so the exclusion is defined in exactly one place.
+     *
+     * @return list<string>
+     */
+    public static function nonQualifyingChatContentValues(): array
+    {
+        return array_values(array_map(
+            static fn(self $type): string => $type->value,
+            array_filter(self::cases(), static fn(self $type): bool => !$type->isQualifyingChatContent()),
+        ));
+    }
 }
