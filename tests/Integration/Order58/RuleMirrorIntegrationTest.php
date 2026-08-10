@@ -15,9 +15,11 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use function array_column;
 use function str_repeat;
 use function PHPUnit\Framework\assertContains;
+use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertNotContains;
 use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertSame;
+use function PHPUnit\Framework\assertTrue;
 
 /**
  * The Order58 rule mirror against real MySQL: idempotent upsert by source_id, the sync-hash lookup, and the
@@ -114,6 +116,30 @@ final class RuleMirrorIntegrationTest extends Unit
 
         assertNotContains(self::SEEN, $deactivated);
         assertSame(1, $this->activeOf(self::SEEN));
+    }
+
+    public function testMarkSeenReactivatesAStaleInactiveRecordWithoutRewritingContent(): void
+    {
+        $this->repository->save($this->mirror(self::SEEN, 'h1'), 100, $this->now);
+        $this->connection->createCommand()
+            ->update('{{%order58_rule_records}}', ['is_active' => 0], ['source_id' => self::SEEN])
+            ->execute();
+        assertSame(0, $this->activeOf(self::SEEN));
+        assertSame('h1', $this->repository->findSyncHash(self::SEEN));
+
+        $changed = $this->repository->markSeen(self::SEEN, 200, $this->now, true);
+
+        assertTrue($changed);
+        assertSame(1, $this->activeOf(self::SEEN));
+        assertSame('h1', $this->repository->findSyncHash(self::SEEN), 'content hash untouched');
+        assertFalse($this->repository->markSeen(self::SEEN, 201, $this->now, true), 'already active → no activity change');
+    }
+
+    public function testMarkSeenCanDeactivateWhenUpstreamExplicitlyInactive(): void
+    {
+        $this->repository->save($this->mirror(self::SEEN, 'h1'), 100, $this->now);
+        assertTrue($this->repository->markSeen(self::SEEN, 200, $this->now, false));
+        assertSame(0, $this->activeOf(self::SEEN));
     }
 
     public function testSweepDeactivatesUnseenRecordsAndReturnsTheirRowIds(): void

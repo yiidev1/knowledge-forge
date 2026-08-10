@@ -145,6 +145,8 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
 
     public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool
     {
+        // Rule Chat requires a completed, attached index that is not pending remote removal — a retiring
+        // file must not keep the composer enabled after its replacement/cleanup has been flagged.
         $query = $this->connection->createQuery()
             ->from(['d' => self::TABLE])
             ->where([
@@ -156,7 +158,8 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
             ->andWhere(new Expression(
                 'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
                 . ' WHERE f.[[document_id]] = d.[[id]]'
-                . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL)',
+                . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL'
+                . ' AND f.[[pending_removal]] = 0)',
                 [':completed' => IndexStatus::Completed->value],
             ));
 

@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace App\Rules\Domain;
 
 /**
- * The operational stage of a materialized rule document, derived from the durable index-file snapshot (never
- * from `documents.status` alone). "Pending" is a user-facing grouping of Queued/Processing/Indexing.
+ * Operational readiness of one synced Order58 rule (source-mirror grain), derived from local DB state:
+ * source activity, catalog availability, and — when present — the global projection's index-file snapshot.
+ *
+ * "Pending" is a user-facing grouping of Queued/Processing/Indexing. Ready is the only state that counts
+ * toward Rule Chat usability.
  */
 enum RuleReadinessStatus: string
 {
@@ -16,6 +19,8 @@ enum RuleReadinessStatus: string
     case Indexing = 'indexing';
     case Failed = 'failed';
     case Disabled = 'disabled';
+    case Inactive = 'inactive';
+    case NotMaterialized = 'not_materialized';
 
     public function label(): string
     {
@@ -26,6 +31,8 @@ enum RuleReadinessStatus: string
             self::Indexing => 'Indexing',
             self::Failed => 'Failed',
             self::Disabled => 'Disabled',
+            self::Inactive => 'Inactive',
+            self::NotMaterialized => 'Not materialized',
         };
     }
 
@@ -37,7 +44,7 @@ enum RuleReadinessStatus: string
             self::Queued, self::Processing => 'info',
             self::Indexing => 'warning',
             self::Failed => 'error',
-            self::Disabled => 'muted',
+            self::Disabled, self::Inactive, self::NotMaterialized => 'muted',
         };
     }
 

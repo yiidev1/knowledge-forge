@@ -42,4 +42,9 @@ final class ChatUnavailable extends DomainException
     {
         return new self('Chat is unavailable until the store profile and at least one Knowledge Base document are ready.');
     }
+
+    public static function noIndexedRules(): self
+    {
+        return new self('Rule chat is unavailable because no indexed rules are currently available.');
+    }
 }

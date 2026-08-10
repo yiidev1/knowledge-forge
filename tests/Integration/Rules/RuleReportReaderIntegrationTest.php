@@ -33,6 +33,7 @@ use function str_pad;
 use function substr;
 use function sys_get_temp_dir;
 use function PHPUnit\Framework\assertNotNull;
+use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertTrue;
 
@@ -202,7 +203,8 @@ final class RuleReportReaderIntegrationTest extends Unit
         ])->execute();
         $this->kbSources->createForSource('ZZRPT GA Store', 'zzrpt-ga-store', 'order58', $store, 'ZZRPT GA Store', true, $this->now);
 
-        // A confirmed store-specific rule → store projection (stage 1) + global projection (stage 2 for any store).
+        // A confirmed store-specific rule → NO store projection (store chat answers only from store knowledge) but
+        // a global projection (the Rule Chat corpus). Classification/scope are still preserved for reporting.
         $canonical = $this->classified('ZZRPT GA Rule', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
         (new DbRuleStoreLinkRepository($this->connection))->setAdminLink($canonical, $store, StoreMatchStatus::Confirmed, 7, $this->now);
         $this->reconciler->reconcile($canonical, $this->now);
@@ -213,7 +215,7 @@ final class RuleReportReaderIntegrationTest extends Unit
         $item = $result->items[0];
         assertSame('manually_matched', $item->classificationStatus, 'store classification is preserved for reporting');
         assertTrue($item->isGloballyAvailable());
-        assertSame('queued', $item->storeDocumentStatus);
+        assertNull($item->storeDocumentStatus, 'store-rule documents are no longer projected into store KBs');
         assertSame('queued', $item->globalDocumentStatus);
     }
 

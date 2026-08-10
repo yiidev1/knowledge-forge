@@ -26,6 +26,7 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use function str_pad;
 use function substr;
 use function sys_get_temp_dir;
+use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertSame;
 
 use const STR_PAD_LEFT;
@@ -86,7 +87,7 @@ final class RuleReviewIntegrationTest extends Unit
         assertSame('queued', $this->docStatus($globalKb?->id() ?? 0, DocumentSourceType::Order58RuleGlobal, (string) $canonical));
     }
 
-    public function testConfirmStoreImmediatelyMaterializesTheStoreAndGlobalDocuments(): void
+    public function testConfirmStoreMaterializesOnlyTheGlobalDocumentNotAStoreDocument(): void
     {
         $storeKb = $this->kbSources->createForSource('ZZREVIEW Store', 'zzreview-store', 'order58', self::STORE, 'ZZREVIEW Store', true, $this->now);
         $canonical = $this->seedPending('ZZREVIEW Advance', 'Accept advance orders');
@@ -95,34 +96,36 @@ final class RuleReviewIntegrationTest extends Unit
 
         $globalKb = (new EnsureCommonRulesKnowledgeBaseService($this->kbs))->find();
         assertSame(ClassificationStatus::ManuallyMatched->value, $this->statusOf($canonical));
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
-        assertSame('queued', $this->docStatus($globalKb?->id() ?? 0, DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'a confirmed store rule is also globally available');
+        // Store chat answers only from genuine store knowledge: confirming a store no longer projects a store-rule
+        // document into the store KB. The rule is globally available for Rule Chat.
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'no store-rule document is created for the store');
+        assertSame('queued', $this->docStatus($globalKb?->id() ?? 0, DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'the confirmed store rule is globally available');
     }
 
-    public function testRejectingAStoreRetiresTheDocumentAndFallsBackToPending(): void
+    public function testRejectingAStoreFallsBackToPendingAndPreservesTheGlobalProjection(): void
     {
         $storeKb = $this->kbSources->createForSource('ZZREVIEW Store', 'zzreview-store', 'order58', self::STORE, 'ZZREVIEW Store', true, $this->now);
         $canonical = $this->seedPending('ZZREVIEW Reject', 'Accept advance orders');
         $this->review->confirmStore($canonical, self::STORE, self::ADMIN);
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'no store-rule document is ever created');
 
         $this->review->rejectStore($canonical, self::STORE, self::ADMIN);
 
         assertSame(ClassificationStatus::Pending->value, $this->statusOf($canonical), 'falls back to pending, never silently common');
-        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'still no store-rule document');
         assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'rejecting a store preserves the global projection');
     }
 
-    public function testIgnoreRetiresBothProjections(): void
+    public function testIgnoreRetiresTheGlobalProjection(): void
     {
         $storeKb = $this->kbSources->createForSource('ZZREVIEW Store', 'zzreview-store', 'order58', self::STORE, 'ZZREVIEW Store', true, $this->now);
         $canonical = $this->seedPending('ZZREVIEW Ignore', 'Accept advance orders');
         $this->review->confirmStore($canonical, self::STORE, self::ADMIN);
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'no store-rule document is created');
+        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical));
 
         $this->review->ignore($canonical, self::ADMIN);
 
-        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
         assertSame('deleted', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'an ignored rule is not globally available');
     }
 

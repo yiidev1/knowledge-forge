@@ -7,11 +7,13 @@ use App\Agent\Web\Home as AgentHome;
 use App\Agent\Web\Login as AgentLogin;
 use App\Agent\Web\Logout as AgentLogout;
 use App\Agent\Web\Middleware\RequireAgentMiddleware;
+use App\Agent\Web\RuleChat as AgentRuleChat;
 use App\Ai\Web\Usage;
 use App\Auth\Web\Login;
 use App\Auth\Web\Logout;
 use App\Auth\Web\Middleware\RequireAdminMiddleware;
 use App\Chat\Web as Chat;
+use App\Chat\Web\RuleChat as AdminRuleChat;
 use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
@@ -246,6 +248,29 @@ return [
             Route::get('/admin/order58/store-chat')
                 ->action(Order58StoreChat\Action::class)
                 ->name('order58.store-chat'),
+
+            // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
+            Route::get('/admin/rule-chat')
+                ->action(AdminRuleChat\Index\Action::class)
+                ->name('admin.rule-chat.index'),
+            Route::post('/admin/rule-chat')
+                ->action(AdminRuleChat\Start\Action::class)
+                ->name('admin.rule-chat.start'),
+            Route::get('/admin/rule-chat/history')
+                ->action(AdminRuleChat\History\Action::class)
+                ->name('admin.rule-chat.history'),
+            Route::get('/admin/rule-chat/{conversationId:\d+}')
+                ->action(AdminRuleChat\Show\Action::class)
+                ->name('admin.rule-chat.show'),
+            Route::post('/admin/rule-chat/{conversationId:\d+}')
+                ->action(AdminRuleChat\Ask\Action::class)
+                ->name('admin.rule-chat.ask'),
+            Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
+                ->action(AdminRuleChat\EditMessage\Action::class)
+                ->name('admin.rule-chat.message.edit'),
+            Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
+                ->action(AdminRuleChat\RegenerateMessage\Action::class)
+                ->name('admin.rule-chat.message.regenerate'),
         ),
 
     // Order58 agents: a separate authenticated realm behind RequireAgentMiddleware. Agents can select any
@@ -260,6 +285,27 @@ return [
             Route::get('/agent')
                 ->action(AgentHome\Action::class)
                 ->name('agent.home'),
+            Route::get('/agent/rule-chat')
+                ->action(AgentRuleChat\IndexAction::class)
+                ->name('agent.rule-chat.index'),
+            Route::post('/agent/rule-chat')
+                ->action(AgentRuleChat\StartAction::class)
+                ->name('agent.rule-chat.start'),
+            Route::get('/agent/rule-chat/history')
+                ->action(AgentRuleChat\HistoryAction::class)
+                ->name('agent.rule-chat.history'),
+            Route::get('/agent/rule-chat/{conversationId:\d+}')
+                ->action(AgentRuleChat\ShowAction::class)
+                ->name('agent.rule-chat.show'),
+            Route::post('/agent/rule-chat/{conversationId:\d+}')
+                ->action(AgentRuleChat\AskAction::class)
+                ->name('agent.rule-chat.ask'),
+            Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
+                ->action(AgentRuleChat\EditMessageAction::class)
+                ->name('agent.rule-chat.message.edit'),
+            Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
+                ->action(AgentRuleChat\RegenerateMessageAction::class)
+                ->name('agent.rule-chat.message.regenerate'),
             Route::get('/agent/stores/{slug}/chat')
                 ->action(AgentChat\IndexAction::class)
                 ->name('agent.chat.index'),

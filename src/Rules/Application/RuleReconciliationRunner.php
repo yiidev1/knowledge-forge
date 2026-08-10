@@ -6,6 +6,7 @@ namespace App\Rules\Application;
 
 use App\Rules\Contract\RuleCatalogRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
+use DateTimeImmutable;
 
 use function count;
 
@@ -28,13 +29,14 @@ final readonly class RuleReconciliationRunner
 
     /**
      * Reconciles all active canonical rules. Returns the number of rules processed.
+     * Uses `$now` when provided (e.g. during a rules sync); otherwise the shared clock.
      */
-    public function reconcileAllActive(): int
+    public function reconcileAllActive(?DateTimeImmutable $now = null): int
     {
-        $now = $this->clock->now();
+        $at = $now ?? $this->clock->now();
         $ids = $this->catalog->listActiveCanonicalIds();
         foreach ($ids as $canonicalId) {
-            $this->reconciler->reconcile($canonicalId, $now);
+            $this->reconciler->reconcile($canonicalId, $at);
         }
 
         return count($ids);

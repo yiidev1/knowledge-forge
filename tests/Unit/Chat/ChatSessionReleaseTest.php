@@ -13,6 +13,9 @@ use App\Auth\Application\CurrentAdmin;
 use App\Auth\Domain\AdminUser;
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\RuleChatAvailability;
+use App\Rules\Application\CommonRulesReadiness;
+use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\FindOrCreateThreadService;
@@ -22,8 +25,6 @@ use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Application\Instruction\ImmutableSecurityInstructions;
 use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
-use App\Rules\Application\CommonRulesReadiness;
-use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Chat\Web\Ask\Action;
 use App\Chat\Web\ConversationFinder;
 use App\Document\Domain\DocumentStatus;
@@ -175,6 +176,7 @@ final class ChatSessionReleaseTest extends Unit
             $this->messages,
             $this->rules,
             new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $this->documents)),
             $this->recordingProvider(),
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),
@@ -189,7 +191,6 @@ final class ChatSessionReleaseTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
-            new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $this->documents),
             $this->documents,
         );
     }

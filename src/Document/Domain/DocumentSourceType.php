@@ -52,6 +52,17 @@ enum DocumentSourceType: string
     }
 
     /**
+     * Order58 rule projections (store-local, global, or legacy common). Used by chat retrieval/citation scope —
+     * orthogonal to {@see isQualifyingChatContent()}, which only decides whether a base is *enabled* for Store Chat.
+     */
+    public function isOrder58RuleProjection(): bool
+    {
+        return $this === self::Order58RuleStore
+            || $this === self::Order58RuleGlobal
+            || $this === self::Order58RuleCommon;
+    }
+
+    /**
      * Whether a document of this source type, once usable/indexed, is genuine *answerable* content that can make
      * a knowledge base chattable on its own.
      *
@@ -63,6 +74,10 @@ enum DocumentSourceType: string
      * Everything else — Order58 knowledge records and admin uploads (manual text, PDF, text file, image) — is
      * genuine content and qualifies. This is the ONE definition of "qualifying chat content"; the SQL eligibility
      * fragment and the PHP availability policy both derive their exclusion from it, so they can never diverge.
+     *
+     * Availability qualification is deliberately separate from retrieval/citation eligibility
+     * ({@see \App\Chat\Domain\ChatRetrievalScope}): a store profile may still be a valid citation source even
+     * though it never enables Store Chat by itself.
      */
     public function isQualifyingChatContent(): bool
     {

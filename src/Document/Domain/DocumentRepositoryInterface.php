@@ -56,10 +56,10 @@ interface DocumentRepositoryInterface
     public function hasUsableQualifyingDocument(int $knowledgeBaseId): bool;
 
     /**
-     * Whether the (hidden Global Rules) knowledge base has at least one usable, completed, enabled global rule
-     * document (`order58_rule_global`, or a legacy `order58_rule_common` awaiting re-projection). The dedicated
-     * readiness check for the stage-2 global-rules chat fallback — it does NOT go through
-     * {@see \App\Chat\Application\ChatAvailabilityPolicy}, which governs store chat only.
+     * Whether the (hidden Global Rules) knowledge base has at least one usable Ready global rule document
+     * (`order58_rule_global`, or legacy `order58_rule_common`): enabled, non-deleted, with a completed attached
+     * index file (`openai_file_id` set) that is not flagged `pending_removal`. Synced-but-unindexed rules do
+     * not qualify. Used only by Rule Chat readiness — not by store {@see \App\Chat\Application\ChatAvailabilityPolicy}.
      */
     public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool;
 

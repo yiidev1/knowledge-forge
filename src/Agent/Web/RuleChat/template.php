@@ -1,0 +1,155 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Chat\Domain\Conversation;
+use App\Chat\Domain\Message;
+use App\Chat\Web\MessageEditView;
+use App\KnowledgeBase\Domain\KnowledgeBase;
+use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
+use Yiisoft\Html\Html;
+use Yiisoft\Router\UrlGeneratorInterface;
+use Yiisoft\Yii\View\Renderer\Csrf;
+
+/**
+ * @var Yiisoft\View\WebView $this
+ * @var UrlGeneratorInterface $urlGenerator
+ * @var Csrf $csrf
+ * @var KnowledgeBase|null $knowledgeBase
+ * @var Conversation|null $conversation
+ * @var list<Message> $messages
+ * @var bool $hasOlder
+ * @var bool $chatReady
+ * @var string|null $unavailableMessage
+ * @var MarkdownRenderer $markdown
+ * @var MessageEditView $editView
+ * @var int $maxQuestionLength
+ */
+
+$this->setTitle('Rule Chat');
+
+$postUrl = $urlGenerator->generate('agent.rule-chat.start');
+$historyUrl = $urlGenerator->generate('agent.rule-chat.history');
+$homeUrl = $urlGenerator->generate('agent.home');
+$csrfField = (string) $csrf->hiddenInput();
+$oldestId = $messages !== [] ? $messages[0]->id : null;
+?>
+<div class="chat" data-chat-root data-history-url="<?= Html::encode($historyUrl) ?>">
+    <header class="chat__header">
+        <div class="chat__heading">
+            <h1 class="chat__title">Rule Chat</h1>
+            <p class="chat__subtitle">Ask questions about Order58 rules. Answers are grounded only in indexed rules.</p>
+        </div>
+        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($homeUrl) ?>">← Stores</a>
+    </header>
+
+    <div class="chat__messages" role="log" aria-live="polite" aria-label="Conversation messages" tabindex="0" data-chat-messages>
+        <?php if ($hasOlder && $oldestId !== null && $conversation !== null): ?>
+            <div class="chat__load-older">
+                <button type="button" class="btn btn--secondary btn--sm" data-load-older data-before-id="<?= $oldestId ?>">
+                    Load older messages
+                </button>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($messages === []): ?>
+            <div class="chat__empty" data-chat-empty>
+                <div class="chat__empty-icon" aria-hidden="true">📋</div>
+                <div class="chat__empty-title">Ask about Order58 rules</div>
+                <p class="util-muted">Your Rule Chat is private to you. Answers come only from indexed rules.</p>
+                <?php if (!$chatReady && $unavailableMessage !== null): ?>
+                    <p class="util-muted"><?= Html::encode($unavailableMessage) ?></p>
+                <?php endif; ?>
+            </div>
+        <?php else: ?>
+            <div class="chat-thread" data-chat-thread>
+                <?php foreach ($messages as $message): ?>
+                    <?php
+                    $isUser = !$message->isAssistant();
+                    $ts = $message->createdAt->format('Y-m-d H:i');
+                    $isEditable = $isUser && $conversation !== null && $editView->isEditable($message->id);
+                    $isRetry = $isUser && $conversation !== null && $editView->isRetry($message->id);
+                    ?>
+                    <article class="chat-msg chat-msg--<?= $isUser ? 'user' : 'assistant' ?>" data-message-id="<?= $message->id ?>">
+                        <div class="chat-msg__role"><?= $isUser ? 'You' : 'Assistant' ?></div>
+                        <div class="chat-msg__body" data-msg-body>
+                            <?php if ($isUser): ?>
+                                <?= nl2br(Html::encode($message->content)) ?>
+                            <?php else: ?>
+                                <?= $markdown->toHtml($message->content) ?>
+                            <?php endif; ?>
+                        </div>
+                        <?php if ($isEditable): ?>
+                            <button type="button" class="chat-msg__edit-icon" data-edit-toggle title="Edit question" aria-label="Edit question">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                            </button>
+                            <form method="post" class="chat-msg__edit" data-edit-form
+                                  action="<?= Html::encode($urlGenerator->generate('agent.rule-chat.message.edit', ['conversationId' => $conversation->id, 'messageId' => $message->id])) ?>">
+                                <?= $csrfField ?>
+                                <input type="hidden" name="expected_edit_count" value="<?= $message->editCount ?>">
+                                <label class="util-visually-hidden" for="edit-<?= $message->id ?>">Edit your question</label>
+                                <textarea class="field__control chat__input" id="edit-<?= $message->id ?>" name="content" rows="2"
+                                          maxlength="<?= $maxQuestionLength ?>" required><?= Html::encode($message->content) ?></textarea>
+                                <div class="chat-msg__edit-actions">
+                                    <button class="btn btn--primary btn--sm" type="submit">Save &amp; regenerate</button>
+                                    <button class="btn btn--secondary btn--sm" type="button" data-edit-cancel>Cancel</button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+                        <div class="chat-msg__time">
+                            <?= Html::encode($ts) ?>
+                            <?php if ($message->isEdited()): ?><span class="chat-msg__edited" title="This question was edited">· Edited</span><?php endif; ?>
+                        </div>
+                        <?php if ($isRetry): ?>
+                            <form method="post" class="chat-msg__retry" data-retry-form
+                                  action="<?= Html::encode($urlGenerator->generate('agent.rule-chat.message.regenerate', ['conversationId' => $conversation->id, 'messageId' => $message->id])) ?>">
+                                <?= $csrfField ?>
+                                <span class="chat-msg__retry-note">The answer couldn’t be generated.</span>
+                                <button class="btn btn--secondary btn--sm" type="submit">Retry</button>
+                            </form>
+                        <?php endif; ?>
+                        <?php if ($message->isAssistant()): ?>
+                            <?php if ($message->citations !== []): ?>
+                                <div class="chat-msg__citations">
+                                    <span class="chat-msg__citations-label">Sources</span>
+                                    <?php foreach ($message->citations as $citation): ?>
+                                        <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php elseif (!$message->isGrounded): ?>
+                                <div class="chat-msg__citations util-muted">No cited source for this answer.</div>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <button type="button" class="chat__jump" hidden>↓ Jump to latest</button>
+
+    <div class="chat__composer">
+        <?php if ($editView->hasBlockedComposer()): ?>
+            <div class="alert alert--warning" data-composer-blocked>
+                <span class="alert__icon" aria-hidden="true">!</span>
+                <span>The previous answer couldn’t be generated. Use Retry above to finish it before asking a new question.</span>
+            </div>
+        <?php elseif ($chatReady): ?>
+            <form method="post" action="<?= Html::encode($postUrl) ?>" class="chat__form">
+                <?= $csrfField ?>
+                <label class="util-visually-hidden" for="chat-question">Your question</label>
+                <textarea class="field__control chat__input" id="chat-question" name="question" rows="1" maxlength="<?= $maxQuestionLength ?>"
+                          placeholder="Ask a question about Order58 rules…" required></textarea>
+                <div class="chat__composer-actions">
+                    <span class="chat__hint" aria-hidden="true">Enter to send · Shift+Enter for a new line</span>
+                    <button class="btn btn--primary" type="submit">Send</button>
+                </div>
+            </form>
+        <?php else: ?>
+            <div class="alert alert--info" data-composer-unavailable>
+                <span class="alert__icon" aria-hidden="true">i</span>
+                <span><?= Html::encode($unavailableMessage ?? 'Rule chat is unavailable because no indexed rules are currently available.') ?></span>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>

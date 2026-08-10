@@ -6,6 +6,9 @@ namespace App\Tests\Unit\Chat;
 
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\RuleChatAvailability;
+use App\Rules\Application\CommonRulesReadiness;
+use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\FindOrCreateThreadService;
@@ -33,12 +36,8 @@ use App\Tests\Support\Fake\Chat\InMemoryConversationRepository;
 use App\Tests\Support\Fake\Chat\InMemoryMessageRepository;
 use App\Tests\Support\Fake\Document\InMemoryDocumentRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
-use App\Ai\Contract\Dto\AiErrorDetails;
 use App\Ai\Contract\Dto\RawCitation;
-use App\Ai\Contract\Exception\AiProcessingFailed;
 use App\Chat\Domain\AnswerSource;
-use App\Rules\Application\CommonRulesReadiness;
-use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseSourceRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryRuleRepository;
@@ -71,10 +70,10 @@ final class AskKnowledgeBaseServiceTest extends Unit
     private InMemoryRuleRepository $rules;
     private InMemoryDocumentRepository $documents;
     private InMemoryIndexedFileRepository $indexedFiles;
+    private InMemoryKnowledgeBaseRepository $knowledgeBases;
     private FakeChatCompletionProvider $provider;
     private MutableClock $clock;
     private CapturingLogger $logger;
-    private InMemoryKnowledgeBaseRepository $commonKbRepo;
 
     protected function _before(): void
     {
@@ -84,9 +83,9 @@ final class AskKnowledgeBaseServiceTest extends Unit
         $this->rules = new InMemoryRuleRepository();
         $this->documents = new InMemoryDocumentRepository();
         $this->indexedFiles = new InMemoryIndexedFileRepository();
+        $this->knowledgeBases = new InMemoryKnowledgeBaseRepository();
         $this->provider = new FakeChatCompletionProvider();
         $this->clock = new MutableClock();
-        $this->commonKbRepo = new InMemoryKnowledgeBaseRepository();
 
         // One indexed, ready document, and the index-file row a citation resolves through.
         $this->documents->seed(self::DOC, self::KB, DocumentStatus::Ready);
@@ -252,6 +251,7 @@ final class AskKnowledgeBaseServiceTest extends Unit
             $this->messages,
             $this->rules,
             new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService($this->knowledgeBases), $this->documents)),
             $this->provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),
@@ -266,57 +266,114 @@ final class AskKnowledgeBaseServiceTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             $this->logger,
-            new CommonRulesReadiness(
-                new EnsureCommonRulesKnowledgeBaseService($this->commonKbRepo),
-                $this->documents,
-            ),
             $this->documents,
         );
     }
 
-    /**
-     * Seeds a ready hidden Global Rules base with a usable global-rule document AND a citation ('file_c') that
-     * resolves to it, so a stage-2 global answer can actually be grounded. The base holds a projection of every
-     * approved rule, so a rule mapped to another store answers here — and only here, after the store fails.
-     */
-    private function seedReadyCommonBase(int $id = 99): int
+    public function testStoreChatSearchesOnlyItsOwnVectorStoreForAGroundedAnswer(): void
     {
-        $this->commonKbRepo->seedReady($id, EnsureCommonRulesKnowledgeBaseService::SLUG, 'vs_common');
-        $this->documents->setUsableGlobalRuleDocument($id, true);
-        $this->documents->seed(5000, $id, DocumentStatus::Ready);
-        $fileId = $this->indexedFiles->createPending(5000, IndexedFileRole::DerivedMarkdown, 'derived/c.md');
-        $this->indexedFiles->setUploaded($fileId, 'file_c', IndexStatus::Completed);
-
-        return $id;
-    }
-
-    public function testGroundedStoreAnswerIsSavedAndTheCommonBaseIsNotSearched(): void
-    {
-        $this->seedReadyCommonBase();
-
         $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
 
         $assistant = $this->messages->findByConversation($conversationId)[1];
         assertSame('An answer.', $assistant->content);
         assertSame(AnswerSource::StoreKnowledge, $assistant->answerSource);
-        assertSame(['vs_1'], $this->provider->askedVectorStoreIds, 'a grounded store answer never triggers the common search');
+        assertSame(['vs_1'], $this->provider->askedVectorStoreIds, 'store chat searches only its own vector store');
     }
 
-    public function testStoreRuleSourceWhenTheWinningCitationIsARuleDocument(): void
+    public function testStoreRuleCitationIsRejectedByStoreChatScope(): void
     {
-        // The store's grounded citation resolves to a store-rule document.
+        // Phase 2: Store Chat must not ground on Order58 rule projections, even if File Search returns them.
         $this->documents->setSourceType(self::DOC, 'order58_rule_store');
 
         $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
 
-        assertSame(AnswerSource::StoreRule, $this->messages->findByConversation($conversationId)[1]->answerSource);
+        $assistant = $this->messages->findByConversation($conversationId)[1];
+        assertSame(self::FALLBACK, $assistant->content);
+        assertSame(AnswerSource::Fallback, $assistant->answerSource);
+        assertTrue(!$assistant->isGrounded);
     }
 
-    public function testUngroundedStoreFallsBackToAGroundedGlobalRule(): void
+    public function testStoreChatAcceptsStoreProfileCitationWhenRetrieved(): void
     {
-        // A rule mapped to another store lives in the global base; this store can only reach it at stage 2, and
-        // only because its own knowledge base produced no grounded answer.
-        $this->seedReadyCommonBase();
+        // Availability qualification excludes the profile, but citation eligibility does not — profile may still ground.
+        $this->documents->setSourceType(self::DOC, 'order58_store_profile');
+        $this->documents->setUsableQualifyingDocument(self::KB, true); // seeded separately as readiness
+
+        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
+
+        $assistant = $this->messages->findByConversation($conversationId)[1];
+        assertTrue($assistant->isGrounded);
+        assertSame(AnswerSource::StoreKnowledge, $assistant->answerSource);
+    }
+
+    public function testRuleChatGroundsOnGlobalRuleCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_rule_global');
+        $this->documents->setUsableGlobalRuleDocument(self::KB, true);
+        $this->seedRulesKnowledgeBase();
+
+        $conversationId = $this->service()->startConversation(
+            $this->knowledgeBase('vs_rules'),
+            'What is the rule?',
+            ChatParticipant::admin(1),
+            \App\Chat\Domain\ChatRetrievalScope::RuleOnly,
+        );
+
+        $assistant = $this->messages->findByConversation($conversationId)[1];
+        assertTrue($assistant->isGrounded);
+        assertSame(AnswerSource::GlobalRule, $assistant->answerSource);
+        assertSame(['vs_rules'], $this->provider->askedVectorStoreIds);
+        $instructions = (string) $this->provider->lastRequest?->instructions;
+        assertStringContainsString('[rule chat]', $instructions);
+        assertStringNotContainsString('[knowledge base rules]', $instructions);
+    }
+
+    public function testRuleChatRejectsNonRuleCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_knowledge');
+        $this->documents->setUsableGlobalRuleDocument(self::KB, true);
+        $this->seedRulesKnowledgeBase();
+
+        $conversationId = $this->service()->startConversation(
+            $this->knowledgeBase('vs_rules'),
+            'Q?',
+            ChatParticipant::admin(1),
+            \App\Chat\Domain\ChatRetrievalScope::RuleOnly,
+        );
+
+        $assistant = $this->messages->findByConversation($conversationId)[1];
+        assertSame(self::FALLBACK, $assistant->content);
+        assertSame(AnswerSource::Fallback, $assistant->answerSource);
+    }
+
+    public function testRuleChatUnavailableWhenNoIndexedRules(): void
+    {
+        $this->expectException(ChatUnavailable::class);
+        $this->service()->startConversation(
+            $this->knowledgeBase('vs_rules'),
+            'Q?',
+            ChatParticipant::admin(1),
+            \App\Chat\Domain\ChatRetrievalScope::RuleOnly,
+        );
+    }
+
+    private function seedRulesKnowledgeBase(string $vectorStoreId = 'vs_rules'): void
+    {
+        $this->knowledgeBases->seedReady(
+            self::KB,
+            EnsureCommonRulesKnowledgeBaseService::SLUG,
+            $vectorStoreId,
+        );
+    }
+
+    /**
+     * The Phase-1 retrieval boundary: Store Chat must never consult the hidden global/common rules base. Even
+     * with a groundable global-rules answer configured on another vector store, an ungrounded store result
+     * becomes the fallback and the global vector store is never searched — rule content is served only by the
+     * dedicated Rule Chat now.
+     */
+    public function testStoreChatNeverConsultsTheGlobalRulesBaseWhenUngrounded(): void
+    {
         $this->provider->setResultForStore('vs_1', FakeChatCompletionProvider::noRetrieval('store cannot answer'));
         $this->provider->setResultForStore('vs_common', FakeChatCompletionProvider::grounded('Global answer.', [new RawCitation('file_c', 'c.md', 0)]));
 
@@ -324,48 +381,9 @@ final class AskKnowledgeBaseServiceTest extends Unit
 
         $messages = $this->messages->findByConversation($conversationId);
         assertCount(2, $messages, 'exactly one assistant answer is saved');
-        assertSame('Global answer.', $messages[1]->content);
-        assertSame(AnswerSource::GlobalRule, $messages[1]->answerSource);
-        assertSame(['vs_1', 'vs_common'], $this->provider->askedVectorStoreIds, 'store is searched first, then the global base');
-    }
-
-    public function testNeitherGroundedSavesTheStoreFallbackOnce(): void
-    {
-        $this->seedReadyCommonBase();
-        $this->provider->setResultForStore('vs_1', FakeChatCompletionProvider::noRetrieval('no'));
-        $this->provider->setResultForStore('vs_common', FakeChatCompletionProvider::noRetrieval('no'));
-
-        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
-
-        $messages = $this->messages->findByConversation($conversationId);
-        assertCount(2, $messages);
-        assertSame(self::FALLBACK, $messages[1]->content);
+        assertSame(self::FALLBACK, $messages[1]->content, 'store chat must not return a global-rules answer');
         assertSame(AnswerSource::Fallback, $messages[1]->answerSource);
-    }
-
-    public function testCommonStageInfrastructureFailureDegradesToTheStoreFallback(): void
-    {
-        $this->seedReadyCommonBase();
-        $this->provider->setResultForStore('vs_1', FakeChatCompletionProvider::noRetrieval('no'));
-        $this->provider->throwForStore('vs_common', new AiProcessingFailed(AiErrorDetails::of('boom', 'common down', transient: true)));
-
-        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
-
-        $messages = $this->messages->findByConversation($conversationId);
-        assertCount(2, $messages, 'a stage-2 failure must not fail the request');
-        assertSame(self::FALLBACK, $messages[1]->content);
-        assertSame(AnswerSource::Fallback, $messages[1]->answerSource);
-    }
-
-    public function testWhenNoCommonBaseIsReadyTheStoreFallbackIsUsed(): void
-    {
-        // No common base seeded → readiness returns null → common is never searched.
-        $this->provider->setResultForStore('vs_1', FakeChatCompletionProvider::noRetrieval('no'));
-
-        $conversationId = $this->service()->startConversation($this->knowledgeBase(), 'Q?', ChatParticipant::admin(1));
-
-        assertSame(self::FALLBACK, $this->messages->findByConversation($conversationId)[1]->content);
-        assertSame(['vs_1'], $this->provider->askedVectorStoreIds);
+        assertSame(['vs_1'], $this->provider->askedVectorStoreIds, 'the global rules base is never searched by store chat');
     }
 
     private function params(): ChatParams

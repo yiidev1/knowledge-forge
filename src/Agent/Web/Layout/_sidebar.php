@@ -19,6 +19,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 // list so it reads like the admin sidebar and can grow if the agent gains more pages.
 $items = [
     ['label' => 'Store List', 'icon' => '🏬', 'route' => 'agent.home', 'match' => ['agent.home', 'agent.chat.']],
+    ['label' => 'Rule Chat', 'icon' => '📜', 'route' => 'agent.rule-chat.index', 'match' => ['agent.rule-chat.']],
 ];
 
 $navItems = [];

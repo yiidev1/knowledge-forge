@@ -15,6 +15,7 @@ enum RuleReadinessFilter: string
     case Pending = 'pending';
     case Failed = 'failed';
     case Disabled = 'disabled';
+    case NotMaterialized = 'not_materialized';
 
     public static function fromRequest(?string $value): self
     {
@@ -28,7 +29,8 @@ enum RuleReadinessFilter: string
             self::Ready => 'Ready',
             self::Pending => 'Pending',
             self::Failed => 'Failed',
-            self::Disabled => 'Disabled',
+            self::Disabled => 'Disabled / Inactive',
+            self::NotMaterialized => 'Not materialized',
         };
     }
 
@@ -48,7 +50,11 @@ enum RuleReadinessFilter: string
                 RuleReadinessStatus::Indexing->value,
             ],
             self::Failed => [RuleReadinessStatus::Failed->value],
-            self::Disabled => [RuleReadinessStatus::Disabled->value],
+            self::Disabled => [
+                RuleReadinessStatus::Disabled->value,
+                RuleReadinessStatus::Inactive->value,
+            ],
+            self::NotMaterialized => [RuleReadinessStatus::NotMaterialized->value],
         };
     }
 }

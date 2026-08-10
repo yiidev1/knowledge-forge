@@ -9,9 +9,9 @@ use App\Ai\Contract\Dto\RawCitation;
 use App\Ai\Contract\Exception\AiProcessingFailed;
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\RuleChatAvailability;
 use App\Rules\Application\CommonRulesReadiness;
 use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
-use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\EditChatMessageService;
@@ -46,6 +46,7 @@ use App\Tests\Support\Fake\Chat\InMemoryMessageRevisionRepository;
 use App\Tests\Support\Fake\Document\InMemoryDocumentRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
 use App\Tests\Support\Fake\ImmediateTransactionRunner;
+use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseSourceRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryRuleRepository;
 use App\Tests\Support\MutableClock;
@@ -421,6 +422,7 @@ final class EditChatMessageServiceTest extends Unit
             $this->messages,
             $this->rules,
             new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $this->documents)),
             $this->provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),
@@ -435,10 +437,6 @@ final class EditChatMessageServiceTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
-            new CommonRulesReadiness(
-                new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()),
-                $this->documents,
-            ),
             $this->documents,
         );
     }

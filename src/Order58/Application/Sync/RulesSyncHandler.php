@@ -16,17 +16,25 @@ use App\Order58\Domain\SyncRunRepositoryInterface;
 use App\Rules\Application\RuleCatalogOutcome;
 use App\Rules\Application\RuleCatalogService;
 use App\Rules\Application\RuleClassificationRunner;
+use App\Rules\Application\RuleReconciliationRunner;
 use App\Rules\Domain\ClassificationContext;
 use DateTimeImmutable;
 
 /**
  * Full paginated scan of the Order58 Rules API. Mirrors each rule into `order58_rule_records` and links it to a
- * canonical rule (exact-content dedupe). Phase 1 stops here: classification, store matching and document
- * materialization are later phases and nothing here makes a rule searchable.
+ * canonical rule (exact-content dedupe). After a successful full scan, automatically reconciles global rule
+ * projections (hidden shared-rules KB + `order58_rule_global` documents) through the existing local queue —
+ * never calling OpenAI from this path.
  *
  * The scan is gentle on the upstream server: it uses the paginated list only (never `GET /rules/{id}`), pages
  * `per_page` at a time and follows the response's `total_pages`, yields after `pagesPerRun` pages so a large
  * catalog drains across worker passes, and relies on the client's capped backoff (which honors `Retry-After`).
+ *
+ * Sync semantics:
+ *  - new      → INSERT (save) + catalog link + classify/reconcile
+ *  - changed  → UPDATE (save) + catalog relink as needed + classify/reconcile
+ *  - unchanged → skip content rewrite / reclassify / unnecessary reindex; still reconcile `is_active` from
+ *    upstream truth (explicit `active` when present, else presence = active)
  *
  * Mark-and-sweep runs only after the final page succeeds: unseen active records are soft-deactivated and their
  * canonical rules' active flags recomputed. An interrupted (partial) run never sweeps, so it never wrongly
@@ -40,6 +48,7 @@ final readonly class RulesSyncHandler implements Order58SyncHandlerInterface
         private RuleMapper $mapper,
         private RuleCatalogService $catalog,
         private RuleClassificationRunner $classifier,
+        private RuleReconciliationRunner $projections,
         private SyncRunRepositoryInterface $runs,
         private Order58SyncParams $params,
     ) {}
@@ -87,6 +96,10 @@ final readonly class RulesSyncHandler implements Order58SyncHandlerInterface
             $progress->deactivated++;
         }
 
+        // Successful full scan: ensure every active/global-eligible canonical has a queued projection.
+        // Idempotent — unchanged global documents are not requeued; the worker owns OpenAI work.
+        $this->projections->reconcileAllActive($now);
+
         return SyncOutcome::completed($progress);
     }
 
@@ -94,12 +107,32 @@ final readonly class RulesSyncHandler implements Order58SyncHandlerInterface
     {
         $existingHash = $this->rules->findSyncHash($record->id);
         $hashUnchanged = $existingHash === $record->syncHash;
+        $desiredActive = RuleMapper::resolveActive($record);
 
         if ($hashUnchanged) {
-            $this->rules->markSeen($record->id, $runId, $now);
-        } else {
-            $this->rules->save($this->mapper->toMirror($record), $runId, $now);
+            // Content skip path: no content rewrite, no reclassify, no forced reindex — but lifecycle state
+            // must still follow upstream truth (fixes stale is_active=0 while the rule is still present).
+            $activityChanged = $this->rules->markSeen($record->id, $runId, $now, $desiredActive);
+            $recordId = $this->rules->findIdBySourceId($record->id);
+            if ($recordId === null) {
+                $progress->warnings++;
+                $progress->unchanged++;
+
+                return;
+            }
+
+            if ($activityChanged) {
+                $this->catalog->recomputeActiveForRecord($recordId, $now);
+                // Projection create/retire for the activity flip; end-of-scan reconcileAllActive heals the rest.
+                $this->classifier->reconcileForRecord($recordId, $now);
+            }
+
+            $progress->unchanged++;
+
+            return;
         }
+
+        $this->rules->save($this->mapper->toMirror($record), $runId, $now);
 
         $recordId = $this->rules->findIdBySourceId($record->id);
         if ($recordId === null) {
@@ -116,10 +149,8 @@ final readonly class RulesSyncHandler implements Order58SyncHandlerInterface
 
         if ($existingHash === null) {
             $progress->created++;
-        } elseif (!$hashUnchanged) {
-            $progress->updated++;
         } else {
-            $progress->unchanged++;
+            $progress->updated++;
         }
 
         match ($outcome) {

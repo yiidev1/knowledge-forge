@@ -6,6 +6,9 @@ namespace App\Tests\Unit\Chat;
 
 use App\Chat\Application\AskKnowledgeBaseService;
 use App\Chat\Application\ChatAvailabilityPolicy;
+use App\Chat\Application\RuleChatAvailability;
+use App\Rules\Application\CommonRulesReadiness;
+use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\Citation\CitationResolver;
 use App\Chat\Application\FindOrCreateThreadService;
@@ -15,9 +18,6 @@ use App\Chat\Application\History\RecentMessagesHistoryPolicy;
 use App\Chat\Application\Instruction\ImmutableSecurityInstructions;
 use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
-use App\Rules\Application\CommonRulesReadiness;
-use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
-use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Ai\Contract\Dto\IndexStatus;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\IndexedFileRole;
@@ -32,6 +32,7 @@ use App\Tests\Support\Fake\Chat\InMemoryConversationRepository;
 use App\Tests\Support\Fake\Chat\InMemoryMessageRepository;
 use App\Tests\Support\Fake\Document\InMemoryDocumentRepository;
 use App\Tests\Support\Fake\Document\InMemoryIndexedFileRepository;
+use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryKnowledgeBaseSourceRepository;
 use App\Tests\Support\Fake\KnowledgeBase\InMemoryRuleRepository;
 use App\Tests\Support\MutableClock;
@@ -82,6 +83,7 @@ final class PersistentThreadHistoryBoundTest extends Unit
             $messages,
             new InMemoryRuleRepository(),
             new ChatAvailabilityPolicy($documents, new InMemoryKnowledgeBaseSourceRepository()),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $documents)),
             $provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(4, 8000),
@@ -96,7 +98,6 @@ final class PersistentThreadHistoryBoundTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
-            new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $documents),
             $documents,
         );
 
@@ -144,6 +145,7 @@ final class PersistentThreadHistoryBoundTest extends Unit
             $messages,
             new InMemoryRuleRepository(),
             new ChatAvailabilityPolicy($documents, new InMemoryKnowledgeBaseSourceRepository()),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $documents)),
             $provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),
@@ -158,7 +160,6 @@ final class PersistentThreadHistoryBoundTest extends Unit
             $params,
             new ExhaustiveIntentDetector(),
             new NullLogger(),
-            new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $documents),
             $documents,
         );
 

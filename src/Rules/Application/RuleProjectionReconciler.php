@@ -27,17 +27,17 @@ use function in_array;
  * rule). For a canonical rule that is active:
  *  - **Global projection** (`order58_rule_global` in the hidden Global Rules base): created for EVERY active,
  *    globally-available rule, whatever its classification (store-specific, common, ambiguous, unmatched or
- *    pending). This is the stage-2 fallback every store can use.
- *  - **Store projection** (`order58_rule_store` in the matched store KB): created only for a store-specific rule
- *    (`auto_matched` or `manually_matched`) that has a confirmed store link — the stage-1 priority for that store.
+ *    pending). This is the single searchable corpus that backs Rule Chat.
+ *  - **Store projection** (`order58_rule_store` in a store KB): NO LONGER CREATED. Store chat must answer only
+ *    from genuine store knowledge, so rule documents are not projected into store vector stores; any that were
+ *    projected in the past are retired here (and swept fleet-wide by `kf:rules:retire-store-projections`).
  *  - An inactive (upstream-removed) rule, or one an admin ignored/disabled (`is_globally_available = 0`), is
  *    NOT globally available and its global projection is retired.
  *
  * Retirement is comprehensive and idempotent: ignoring, disabling global availability, or upstream deactivation
- * retires the global projection; losing store-specific status or a confirmed store retires the store projection;
- * changing the matched store moves the store document to the new store while the global document is preserved.
- * A repeated pass over unchanged data creates and disables nothing new. The legacy `order58_rule_common`
- * projection is superseded by `order58_rule_global` and retired on sight.
+ * retires the global projection; every store projection this rule ever had is retired unconditionally. A repeated
+ * pass over unchanged data creates and disables nothing new. The legacy `order58_rule_common` projection is
+ * superseded by `order58_rule_global` and retired on sight. The canonical rule catalog is never modified here.
  */
 final readonly class RuleProjectionReconciler
 {
@@ -85,7 +85,7 @@ final readonly class RuleProjectionReconciler
         $globalStoreName = $materializeStore ? $this->storeName($confirmedStoreIds[0]) : null;
 
         $this->reconcileGlobal($globallyAvailable, $ref, $title, $body, $syncHash, $globalScope, $globalStoreName, $now);
-        $this->reconcileStores($materializeStore, $confirmedStoreIds, $canonicalId, $ref, $title, $body, $syncHash, $now);
+        $this->reconcileStores($canonicalId, $ref, $now);
     }
 
     private function reconcileGlobal(bool $materialize, string $ref, string $title, string $body, string $syncHash, string $scope, ?string $storeName, DateTimeImmutable $now): void
@@ -117,35 +117,14 @@ final readonly class RuleProjectionReconciler
     }
 
     /**
-     * @param list<int> $confirmedStoreIds
+     * Store-rule documents are no longer projected into store knowledge bases — store chat must answer only from
+     * genuine store knowledge. Any store document previously projected for this rule (in any linked store) is
+     * retired through the standard disable → pending-removal → worker-cleanup path (no OpenAI call here). The
+     * canonical rule and its global projection are left untouched. Idempotent: already-retired documents no-op.
      */
-    private function reconcileStores(bool $materialize, array $confirmedStoreIds, int $canonicalId, string $ref, string $title, string $body, string $syncHash, DateTimeImmutable $now): void
+    private function reconcileStores(int $canonicalId, string $ref, DateTimeImmutable $now): void
     {
-        $confirmed = [];
-        if ($materialize) {
-            foreach ($confirmedStoreIds as $storeId) {
-                $confirmed[$storeId] = true;
-                $kbId = $this->knowledgeBases->findIdBySource(EnsureStoreKnowledgeBaseService::SOURCE, $storeId);
-                if ($kbId === null) {
-                    continue; // the store's knowledge base has not been synced yet
-                }
-                $this->documents->upsertGenerated(
-                    $kbId,
-                    DocumentSourceType::Order58RuleStore,
-                    $ref,
-                    $title,
-                    $syncHash,
-                    $this->renderer->render($title, $body, 'Store-specific', $this->storeName($storeId)),
-                    $now,
-                );
-            }
-        }
-
-        // Retire the store document anywhere it was linked but is no longer a confirmed materialization target.
         foreach ($this->links->findLinkedStoreIds($canonicalId) as $storeId) {
-            if (isset($confirmed[$storeId])) {
-                continue;
-            }
             $kbId = $this->knowledgeBases->findIdBySource(EnsureStoreKnowledgeBaseService::SOURCE, $storeId);
             if ($kbId !== null) {
                 $this->documents->disableGenerated($kbId, DocumentSourceType::Order58RuleStore, $ref, $now);

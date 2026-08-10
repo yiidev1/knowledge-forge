@@ -20,6 +20,15 @@ interface GeneratedDocumentRepositoryInterface
     public function findBySource(int $knowledgeBaseId, string $sourceType, string $sourceRef): ?GeneratedDocument;
 
     /**
+     * Every live (enabled, not-deleted) generated document of this source type across all knowledge bases, as
+     * (knowledge base, source ref) locations. Backs a fleet-wide retire/report of a projection type whose owning
+     * rule link may no longer exist. One bounded query — no per-row lookup.
+     *
+     * @return list<GeneratedDocumentLocation>
+     */
+    public function findLiveLocationsByType(string $sourceType): array;
+
+    /**
      * Inserts a new generated document as `queued` (kind = text), ready for the existing processing drainer.
      *
      * @return int The new document id.

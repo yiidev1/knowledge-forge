@@ -113,6 +113,11 @@ final class Order58DocumentOverrideTest extends Unit
                 }
 
                 public function disable(int $id, \DateTimeImmutable $now): void {}
+
+                public function findLiveLocationsByType(string $sourceType): array
+                {
+                    return [];
+                }
             },
             $this->storage,
             $this->indexedFiles,

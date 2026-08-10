@@ -16,17 +16,17 @@ use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
 use App\Chat\Domain\AnswerSource;
 use App\Chat\Domain\ChatParticipant;
+use App\Chat\Domain\ChatRetrievalScope;
 use App\Chat\Domain\ConversationRepositoryInterface;
+use App\Chat\Domain\Exception\ChatUnavailable;
 use App\Chat\Domain\Exception\LatestQuestionUnanswered;
 use App\Chat\Domain\Exception\QuestionInvalid;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Domain\MessageRole;
 use App\Chat\Domain\NewMessage;
 use App\Document\Domain\DocumentRepositoryInterface;
-use App\Document\Domain\DocumentSourceType;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\KnowledgeBase\Domain\RuleRepositoryInterface;
-use App\Rules\Application\CommonRulesReadiness;
 use App\Shared\Domain\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -45,6 +45,9 @@ use function trim;
  * grounding (an uncited or unretrieved answer becomes the fallback) → persist the assistant message with
  * its verdict. A provider failure propagates as an {@see \App\Ai\Contract\Exception\AiException} for the
  * action to surface; the question stays recorded so the thread still makes sense.
+ *
+ * {@see ChatRetrievalScope} selects Store Chat vs Rule Chat citation/instruction behaviour. Store Chat never
+ * consults the hidden global rules base; Rule Chat answers only against that base with rule-only scope.
  */
 final readonly class AskKnowledgeBaseService
 {
@@ -54,6 +57,7 @@ final readonly class AskKnowledgeBaseService
         private MessageRepositoryInterface $messages,
         private RuleRepositoryInterface $rules,
         private ChatAvailabilityPolicy $availability,
+        private RuleChatAvailability $ruleChatAvailability,
         private ChatCompletionProviderInterface $provider,
         private InstructionBuilder $instructionBuilder,
         private ConversationHistoryPolicyInterface $historyPolicy,
@@ -63,7 +67,6 @@ final readonly class AskKnowledgeBaseService
         private ChatParams $params,
         private ExhaustiveIntentDetector $intentDetector,
         private LoggerInterface $logger,
-        private CommonRulesReadiness $commonRules,
         private DocumentRepositoryInterface $documents,
     ) {}
 
@@ -82,10 +85,12 @@ final readonly class AskKnowledgeBaseService
         GroundingOutcome $outcome,
         bool $exhaustive,
         float $startedAt,
+        ChatRetrievalScope $scope,
     ): void {
         $this->logger->info('chat answer', [
             'knowledge_base_id' => $knowledgeBase->id(),
             'conversation_id' => $conversationId,
+            'retrieval_scope' => $scope->value,
             'vector_store_suffix' => substr((string) $knowledgeBase->openaiVectorStoreId(), -6),
             'openai_response_id' => $result->providerResponseId,
             'model' => $result->model,
@@ -125,9 +130,10 @@ final readonly class AskKnowledgeBaseService
         KnowledgeBase $knowledgeBase,
         string $question,
         ChatParticipant $participant,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
     ): int {
         $question = $this->validateQuestion($question);
-        $this->assertChatAvailable($knowledgeBase);
+        $this->assertChatAvailable($knowledgeBase, $scope);
 
         $conversation = $this->threads->findOrCreate(
             $knowledgeBase->id(),
@@ -136,7 +142,7 @@ final readonly class AskKnowledgeBaseService
         );
 
         $this->guardLatestAnswered($conversation->id);
-        $this->askNewQuestion($knowledgeBase, $conversation->id, $question);
+        $this->askNewQuestion($knowledgeBase, $conversation->id, $question, $scope);
 
         return $conversation->id;
     }
@@ -144,13 +150,17 @@ final readonly class AskKnowledgeBaseService
     /**
      * Answers a question within an existing conversation.
      */
-    public function ask(KnowledgeBase $knowledgeBase, int $conversationId, string $question): void
-    {
+    public function ask(
+        KnowledgeBase $knowledgeBase,
+        int $conversationId,
+        string $question,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
+    ): void {
         $question = $this->validateQuestion($question);
-        $this->assertChatAvailable($knowledgeBase);
+        $this->assertChatAvailable($knowledgeBase, $scope);
         $this->guardLatestAnswered($conversationId);
 
-        $this->askNewQuestion($knowledgeBase, $conversationId, $question);
+        $this->askNewQuestion($knowledgeBase, $conversationId, $question, $scope);
     }
 
     /**
@@ -165,38 +175,40 @@ final readonly class AskKnowledgeBaseService
         int $conversationId,
         int $editedMessageId,
         string $prompt,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
     ): void {
         $history = $this->historyPolicy->select(
             $this->messages->findActiveBefore($conversationId, $editedMessageId),
         );
 
-        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $prompt, $history, $editedMessageId);
+        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $prompt, $history, $editedMessageId, $scope);
     }
 
     /**
      * Stores a new user question, then generates and stores its answer. History is captured before the new
      * question is persisted.
      */
-    private function askNewQuestion(KnowledgeBase $knowledgeBase, int $conversationId, string $question): void
-    {
+    private function askNewQuestion(
+        KnowledgeBase $knowledgeBase,
+        int $conversationId,
+        string $question,
+        ChatRetrievalScope $scope,
+    ): void {
         $history = $this->historyPolicy->select($this->messages->findByConversation($conversationId));
 
         $userMessageId = $this->messages->add(NewMessage::user($conversationId, $question), $this->clock->now());
 
-        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $question, $history, $userMessageId);
+        $this->generateAndStoreAnswer($knowledgeBase, $conversationId, $question, $history, $userMessageId, $scope);
     }
 
     /**
-     * The generate-and-store core shared by asking and regenerating, with a strict two-stage retrieval order:
+     * The generate-and-store core shared by asking and regenerating. SINGLE-STAGE retrieval: answer only from
+     * THIS knowledge base's own vector store. Grounded answers are labelled by {@see ChatRetrievalScope};
+     * otherwise the ungrounded fallback is stored.
      *
-     *   1. Answer from THIS store's knowledge base. If grounded, store it (store_knowledge, or store_rule when
-     *      the winning citation is a store rule) — exactly as before. The store always has priority.
-     *   2. Only when the store produces no grounded answer, and a ready hidden Global Rules base exists, ask it.
-     *      That base holds a projection of EVERY approved rule (store-specific or common), so a rule mapped to
-     *      another store can answer here. A grounded global answer is stored (global_rule). A store-vector-store
-     *      infrastructure failure propagates (the store is authoritative); a *global*-stage infrastructure
-     *      failure is logged and degrades to the store's fallback rather than failing the whole request.
-     *   3. Otherwise store the store's ungrounded fallback (fallback).
+     * Store chat deliberately never consults the hidden global/common rules base: rule content is served only
+     * by the dedicated Rule Chat. Citation scope additionally rejects Order58 rule projections in Store Chat
+     * and non-rule sources in Rule Chat.
      *
      * Exactly ONE assistant message is ever written, via {@see MessageRepositoryInterface::insertActiveAnswer()},
      * upholding the one-active-answer invariant even under a concurrent regeneration.
@@ -209,30 +221,15 @@ final readonly class AskKnowledgeBaseService
         string $prompt,
         array $history,
         int $replyToMessageId,
+        ChatRetrievalScope $scope,
     ): void {
-        // Stage 1 — the store's own knowledge base. A provider failure here propagates (temporarily unavailable).
-        $storeAttempt = $this->produceAnswer($knowledgeBase, $conversationId, $prompt, $history);
+        $attempt = $this->produceAnswer($knowledgeBase, $conversationId, $prompt, $history, $scope);
 
-        if ($storeAttempt->outcome->isGrounded) {
-            $this->persistAnswer($conversationId, $storeAttempt, $replyToMessageId, $this->storeAnswerSource($storeAttempt));
+        $answerSource = $attempt->outcome->isGrounded
+            ? $this->answerSourceFor($scope)
+            : AnswerSource::Fallback;
 
-            return;
-        }
-
-        // Stage 2 — the hidden Global Rules base (every approved rule), only when it is ready. Never affects
-        // store availability. A store-specific rule mapped to another store answers here, and only here.
-        $globalBase = $this->commonRules->readyKnowledgeBase();
-        if ($globalBase !== null) {
-            $globalAttempt = $this->tryProduceCommon($globalBase, $conversationId, $prompt, $history);
-            if ($globalAttempt !== null && $globalAttempt->outcome->isGrounded) {
-                $this->persistAnswer($conversationId, $globalAttempt, $replyToMessageId, AnswerSource::GlobalRule);
-
-                return;
-            }
-        }
-
-        // Stage 3 — the store's ungrounded fallback.
-        $this->persistAnswer($conversationId, $storeAttempt, $replyToMessageId, AnswerSource::Fallback);
+        $this->persistAnswer($conversationId, $attempt, $replyToMessageId, $answerSource);
     }
 
     /**
@@ -241,20 +238,27 @@ final readonly class AskKnowledgeBaseService
      *
      * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
      */
-    private function produceAnswer(KnowledgeBase $knowledgeBase, int $conversationId, string $prompt, array $history): AnswerAttempt
-    {
+    private function produceAnswer(
+        KnowledgeBase $knowledgeBase,
+        int $conversationId,
+        string $prompt,
+        array $history,
+        ChatRetrievalScope $scope,
+    ): AnswerAttempt {
         // "Every match" needs a wider net and different instructions than "the best match": one relevance
         // query returns the closest chunks, which cannot enumerate a set.
         $exhaustive = $this->intentDetector->isExhaustive($prompt);
 
-        $instructions = $this->instructionBuilder->build(
-            $knowledgeBase->systemInstructions(),
-            $this->rules->findEnabledForKnowledgeBase($knowledgeBase->id()),
-            $this->params->fallbackMessage,
-            $exhaustive,
-        );
+        $instructions = $scope === ChatRetrievalScope::RuleOnly
+            ? $this->instructionBuilder->buildForRuleChat($this->params->fallbackMessage, $exhaustive)
+            : $this->instructionBuilder->build(
+                $knowledgeBase->systemInstructions(),
+                $this->rules->findEnabledForKnowledgeBase($knowledgeBase->id()),
+                $this->params->fallbackMessage,
+                $exhaustive,
+            );
 
-        // Safe by construction: assertChatAvailable() (store) / readiness (common) required a ready store.
+        // Safe by construction: assertChatAvailable() required a ready store.
         $vectorStoreId = (string) $knowledgeBase->openaiVectorStoreId();
 
         $startedAt = microtime(true);
@@ -271,32 +275,12 @@ final readonly class AskKnowledgeBaseService
             reasoningEffort: $this->params->reasoningEffort,
         ));
 
-        $citations = $this->citationResolver->resolve($result->citations, $knowledgeBase->id());
+        $citations = $this->citationResolver->resolve($result->citations, $knowledgeBase->id(), $scope);
         $outcome = $this->verifier->verify($result, $citations);
 
-        $this->logAnswer($knowledgeBase, $conversationId, $result, $outcome, $exhaustive, $startedAt);
+        $this->logAnswer($knowledgeBase, $conversationId, $result, $outcome, $exhaustive, $startedAt, $scope);
 
         return new AnswerAttempt($result, $outcome);
-    }
-
-    /**
-     * Stage-2 produce that never breaks the request: a common-base infrastructure failure is logged and
-     * degrades to the store's fallback (we already hold a valid ungrounded stage-1 result).
-     *
-     * @param list<\App\Ai\Contract\Dto\ChatMessage> $history
-     */
-    private function tryProduceCommon(KnowledgeBase $commonBase, int $conversationId, string $prompt, array $history): ?AnswerAttempt
-    {
-        try {
-            return $this->produceAnswer($commonBase, $conversationId, $prompt, $history);
-        } catch (AiException $e) {
-            $this->logger->warning('common-rules fallback failed', [
-                'conversation_id' => $conversationId,
-                'error' => $e::class,
-            ]);
-
-            return null;
-        }
     }
 
     private function persistAnswer(int $conversationId, AnswerAttempt $attempt, int $replyToMessageId, AnswerSource $answerSource): void
@@ -321,18 +305,12 @@ final readonly class AskKnowledgeBaseService
         $this->conversations->touch($conversationId, $this->clock->now());
     }
 
-    /**
-     * A grounded store answer is `store_rule` when its selected (highest-ranked) resolved citation is a store
-     * rule document, otherwise `store_knowledge` [clarification 4].
-     */
-    private function storeAnswerSource(AnswerAttempt $attempt): AnswerSource
+    private function answerSourceFor(ChatRetrievalScope $scope): AnswerSource
     {
-        $top = $attempt->outcome->citations[0] ?? null;
-        if ($top !== null && $this->documents->sourceTypeOfDocument($top->documentId) === DocumentSourceType::Order58RuleStore->value) {
-            return AnswerSource::StoreRule;
-        }
-
-        return AnswerSource::StoreKnowledge;
+        return match ($scope) {
+            ChatRetrievalScope::RuleOnly => AnswerSource::GlobalRule,
+            ChatRetrievalScope::StoreKnowledge => AnswerSource::StoreKnowledge,
+        };
     }
 
     /**
@@ -366,13 +344,22 @@ final readonly class AskKnowledgeBaseService
     }
 
     /**
-     * Guards that the base can actually answer, via the one canonical {@see ChatAvailabilityPolicy}: a
-     * provisioned store, a usable qualifying (non-store-profile) document, and — for an Order58-linked base
-     * — a usable store-profile snapshot. Public so the edit flow refuses to regenerate against an
-     * unavailable base; both surfaces and every server-side chat operation share this single rule.
+     * Guards that the surface can answer. Store Chat uses {@see ChatAvailabilityPolicy}; Rule Chat uses
+     * {@see RuleChatAvailability}. Public so the edit flow refuses to regenerate against an unavailable base.
      */
-    public function assertChatAvailable(KnowledgeBase $knowledgeBase): void
-    {
+    public function assertChatAvailable(
+        KnowledgeBase $knowledgeBase,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
+    ): void {
+        if ($scope === ChatRetrievalScope::RuleOnly) {
+            $ready = $this->ruleChatAvailability->assertAvailable();
+            if ($ready->id() !== $knowledgeBase->id()) {
+                throw ChatUnavailable::noIndexedRules();
+            }
+
+            return;
+        }
+
         $this->availability->assertAvailable($knowledgeBase);
     }
 }

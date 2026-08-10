@@ -34,16 +34,27 @@ use Yiisoft\Db\Connection\ConnectionInterface;
  */
 final class RulesTestFactory
 {
-    public static function reconciler(ConnectionInterface $connection, string $storageRoot): RuleProjectionReconciler
+    /**
+     * The real, DB-backed document→index queue service (no OpenAI) used by rule projection and the fleet
+     * retire command.
+     */
+    public static function syncDocumentService(ConnectionInterface $connection, string $storageRoot): SyncDocumentService
     {
         $clock = new SystemClock();
-        $documents = new SyncDocumentService(
+
+        return new SyncDocumentService(
             new DbGeneratedDocumentRepository($connection),
             new LocalDocumentStorage(new StoragePaths($storageRoot, $storageRoot . '/worker.lock', $storageRoot . '/logs')),
             new DbIndexedFileRepository($connection, $clock),
             new DbProcessingEventRepository($connection, $clock),
             new SafeFilenameGenerator(),
         );
+    }
+
+    public static function reconciler(ConnectionInterface $connection, string $storageRoot): RuleProjectionReconciler
+    {
+        $clock = new SystemClock();
+        $documents = self::syncDocumentService($connection, $storageRoot);
 
         return new RuleProjectionReconciler(
             new DbRuleCatalogRepository($connection),
@@ -65,13 +76,7 @@ final class RulesTestFactory
         $aliases = new DbStoreAliasRepository($connection);
         $knowledgeBases = new DbKnowledgeBaseRepository($connection, $clock);
 
-        $documents = new SyncDocumentService(
-            new DbGeneratedDocumentRepository($connection),
-            new LocalDocumentStorage(new StoragePaths($storageRoot, $storageRoot . '/worker.lock', $storageRoot . '/logs')),
-            new DbIndexedFileRepository($connection, $clock),
-            new DbProcessingEventRepository($connection, $clock),
-            new SafeFilenameGenerator(),
-        );
+        $documents = self::syncDocumentService($connection, $storageRoot);
 
         $reconciler = new RuleProjectionReconciler(
             $catalog,

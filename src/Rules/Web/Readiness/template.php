@@ -52,20 +52,25 @@ $pageUrl = static function (array $overrides) use ($urlGenerator, $search, $filt
 $dash = static fn(?string $v): string => $v === null || $v === '' ? '—' : Html::encode($v);
 
 $emptyMessage = match ($filter) {
-    RuleReadinessFilter::Failed => 'No failed rule documents.',
-    RuleReadinessFilter::Pending => 'No pending rule documents.',
-    RuleReadinessFilter::Ready => 'No ready rule documents.',
-    RuleReadinessFilter::Disabled => 'No disabled rule documents.',
-    RuleReadinessFilter::All => 'No rule documents have been materialized yet.',
+    RuleReadinessFilter::Failed => 'No failed rules.',
+    RuleReadinessFilter::Pending => 'No pending rules.',
+    RuleReadinessFilter::Ready => 'No ready rules. Rule Chat stays unavailable until at least one rule is indexed.',
+    RuleReadinessFilter::Disabled => 'No disabled or inactive rules.',
+    RuleReadinessFilter::NotMaterialized => 'No rules waiting for materialization.',
+    RuleReadinessFilter::All => 'No Order58 rules have been synced yet.',
 };
 if ($search !== '') {
-    $emptyMessage = 'No rule documents match this search.';
+    $emptyMessage = 'No rules match this search.';
 }
 ?>
 <div class="page-header">
     <div>
         <h1 class="page-header__title">Rule readiness</h1>
-        <p class="page-header__subtitle">Materialized Order58 rule documents and their OpenAI File Search stage. A document is <strong>Ready</strong> only once it has a completed, attached index file.</p>
+        <p class="page-header__subtitle">
+            Synced Order58 rules and their pipeline stage through global projection and OpenAI File Search.
+            <strong>Synced does not mean Ready.</strong> A rule is <strong>Ready</strong> only with a live global
+            projection and a completed, attached index file — that is what enables Rule Chat.
+        </p>
     </div>
 
 </div>
@@ -81,7 +86,7 @@ if ($search !== '') {
 <section class="grid grid--stats">
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::All ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'all', 'page' => 1])) ?>">
         <div class="stat__value"><?= $summary->total() ?></div>
-        <div class="stat__label">Total</div>
+        <div class="stat__label">Synced</div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Ready ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'ready', 'page' => 1])) ?>">
         <div class="stat__value"><?= $summary->ready ?></div>
@@ -96,8 +101,12 @@ if ($search !== '') {
         <div class="stat__label">Failed</div>
     </a>
     <a class="stat stat--link<?= $filter === RuleReadinessFilter::Disabled ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'disabled', 'page' => 1])) ?>">
-        <div class="stat__value"><?= $summary->disabled ?></div>
-        <div class="stat__label">Disabled</div>
+        <div class="stat__value"><?= $summary->disabledOrInactive() ?></div>
+        <div class="stat__label">Disabled / Inactive</div>
+    </a>
+    <a class="stat stat--link<?= $filter === RuleReadinessFilter::NotMaterialized ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'not_materialized', 'page' => 1])) ?>">
+        <div class="stat__value"><?= $summary->notMaterialized ?></div>
+        <div class="stat__label">Not materialized</div>
     </a>
 </section>
 
@@ -107,7 +116,7 @@ if ($search !== '') {
             <input type="hidden" name="filter" value="<?= Html::encode($filter->value) ?>">
         <?php endif; ?>
         <input class="field__control" type="search" name="q" value="<?= Html::encode($search) ?>"
-            placeholder="Search rule, id or store…" aria-label="Search rule documents">
+            placeholder="Search rule, source id, canonical id or store…" aria-label="Search synced rules">
         <button class="btn btn--secondary" type="submit">Search</button>
         <?php if ($search !== ''): ?>
             <a class="btn btn--ghost" href="<?= Html::encode($pageUrl(['q' => '', 'page' => 1])) ?>">Clear</a>
@@ -124,7 +133,7 @@ if ($search !== '') {
 
 <section class="card">
     <div class="util-row" style="justify-content: space-between; align-items: baseline;">
-        <h2 class="card__title" style="margin: 0;"><?= $result->total ?> document<?= $result->total === 1 ? '' : 's' ?></h2>
+        <h2 class="card__title" style="margin: 0;"><?= $result->total ?> synced rule<?= $result->total === 1 ? '' : 's' ?></h2>
         <span class="util-muted">Page <?= $page ?> of <?= $result->pageCount() ?></span>
     </div>
 
@@ -148,13 +157,14 @@ if ($search !== '') {
                     <?php foreach ($result->items as $item): ?>
                         <tr>
                             <td>
+                                <span class="util-muted">src #<?= $item->sourceId ?></span>
                                 <?php if ($item->canonicalId !== null): ?>
-                                    <a href="<?= Html::encode($urlGenerator->generate('order58.rules.detail', ['ruleId' => $item->canonicalId])) ?>"><strong>#<?= $item->canonicalId ?></strong></a>
+                                    · <a href="<?= Html::encode($urlGenerator->generate('order58.rules.detail', ['ruleId' => $item->canonicalId])) ?>"><strong>#<?= $item->canonicalId ?></strong></a>
                                 <?php endif; ?>
-                                <?= Html::encode($item->title) ?>
+                                <div><?= Html::encode($item->title) ?></div>
                             </td>
                             <td><?= Html::encode($item->typeLabel()) ?></td>
-                            <td><?= $item->isStoreSpecific ? $dash($item->storeName) : '—' ?></td>
+                            <td><?= $item->isStoreSpecific() ? $dash($item->storeName) : '—' ?></td>
                             <td><span class="badge badge--<?= Html::encode($item->status->badge()) ?>"><?= Html::encode($item->status->label()) ?></span></td>
                             <td><?php $fid = $item->shortFileId(); ?><?php if ($fid !== null): ?><code><?= Html::encode($fid) ?></code><?php else: ?><span class="util-muted">—</span><?php endif; ?></td>
                             <td class="util-muted"><?= Html::encode($item->updatedAt) ?></td>
@@ -177,16 +187,10 @@ if ($search !== '') {
             </table>
         </div>
 
-        <?php if ($result->pageCount() > 1): ?>
-            <div class="pager" style="margin-top: 1rem; display: flex; gap: .5rem; align-items: center;">
-                <?php if ($page > 1): ?>
-                    <a class="btn btn--secondary" href="<?= Html::encode($pageUrl(['page' => $page - 1])) ?>">← Previous</a>
-                <?php endif; ?>
-                <span class="util-muted">Page <?= $page ?> of <?= $result->pageCount() ?></span>
-                <?php if ($page < $result->pageCount()): ?>
-                    <a class="btn btn--secondary" href="<?= Html::encode($pageUrl(['page' => $page + 1])) ?>">Next →</a>
-                <?php endif; ?>
-            </div>
-        <?php endif; ?>
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $page,
+            'pageCount' => $result->pageCount(),
+            'pageUrl' => static fn(int $p): string => $pageUrl(['page' => $p]),
+        ]) ?>
     <?php endif; ?>
 </section>

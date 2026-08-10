@@ -18,8 +18,8 @@ use Yiisoft\Db\Exception\IntegrityException;
  * (purpose), yet still provisions its vector store through the normal drainer and is reachable to internal
  * services (indexing, cleanup, usage, and the Phase 4 common-rules fallback).
  *
- * It is created lazily — only when the first common rule is confirmed — so no empty hidden base exists until it
- * is actually needed.
+ * It is created lazily — only when the first eligible global rule projection needs a home — so no empty
+ * hidden base exists until it is actually needed.
  */
 final readonly class EnsureCommonRulesKnowledgeBaseService
 {

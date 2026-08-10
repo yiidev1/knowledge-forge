@@ -19,11 +19,11 @@ use function max;
 use function trim;
 
 /**
- * Operational readiness view for materialized Order58 rule documents (GET /admin/order58/rules/readiness).
+ * Operational readiness view for synced Order58 rules (GET /admin/order58/rules/readiness).
  *
- * The everyday monitoring page: count cards + a table answering "how many rule documents are ready / pending /
- * failed / disabled, and which document is in which stage". Classification/duplicate/ambiguous/review filters
- * live only on the advanced /rules/list page. Read-only; renders from local state (no OpenAI call).
+ * Everyday monitoring: every mirrored source rule appears (even when not yet materialized), with a truthful
+ * pipeline status (Ready / Pending / Failed / Disabled / Inactive / Not materialized). Ready is the only
+ * state that enables Rule Chat. Classification filters live on /rules/list. Read-only; no OpenAI call.
  */
 final readonly class Action
 {

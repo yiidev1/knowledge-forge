@@ -6,7 +6,8 @@ namespace App\Rules\Domain;
 
 /**
  * The count cards on the readiness page. Every figure uses the same operational-status derivation as the table
- * filters, so a card count always equals the rows returned by the matching filter.
+ * filters, so a card count always equals the rows returned by the matching filter. {@see total()} is the count of
+ * synced Order58 source rules in the view (not necessarily materialized documents).
  */
 final readonly class RuleReadinessSummary
 {
@@ -17,6 +18,8 @@ final readonly class RuleReadinessSummary
         public int $indexing = 0,
         public int $failed = 0,
         public int $disabled = 0,
+        public int $inactive = 0,
+        public int $notMaterialized = 0,
     ) {}
 
     public function pending(): int
@@ -24,9 +27,21 @@ final readonly class RuleReadinessSummary
         return $this->queued + $this->processing + $this->indexing;
     }
 
+    /** Disabled + Inactive — the combined "Disabled / Inactive" card and filter. */
+    public function disabledOrInactive(): int
+    {
+        return $this->disabled + $this->inactive;
+    }
+
+    /** Synced Order58 source rules matching the current search (all operational statuses). */
     public function total(): int
     {
-        return $this->ready + $this->pending() + $this->failed + $this->disabled;
+        return $this->ready
+            + $this->pending()
+            + $this->failed
+            + $this->disabled
+            + $this->inactive
+            + $this->notMaterialized;
     }
 
     /**
@@ -41,6 +56,8 @@ final readonly class RuleReadinessSummary
             indexing: $counts[RuleReadinessStatus::Indexing->value] ?? 0,
             failed: $counts[RuleReadinessStatus::Failed->value] ?? 0,
             disabled: $counts[RuleReadinessStatus::Disabled->value] ?? 0,
+            inactive: $counts[RuleReadinessStatus::Inactive->value] ?? 0,
+            notMaterialized: $counts[RuleReadinessStatus::NotMaterialized->value] ?? 0,
         );
     }
 }

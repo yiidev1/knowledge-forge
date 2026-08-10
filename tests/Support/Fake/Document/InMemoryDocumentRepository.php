@@ -8,6 +8,7 @@ use App\Document\Domain\CanonicalDocument;
 use App\Document\Domain\Document;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\DocumentRepositoryInterface;
+use App\Document\Domain\DocumentSourceType;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\NewDocument;
 use DateTimeImmutable;
@@ -250,6 +251,7 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
         if ($id >= $this->nextId) {
             $this->nextId = $id + 1;
         }
+        $this->sourceTypes[$id] ??= DocumentSourceType::UploadedPdf->value;
     }
 
     public function markDeleted(int $documentId): void

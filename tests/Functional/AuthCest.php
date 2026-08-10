@@ -47,4 +47,20 @@ final class AuthCest
         assertSame(302, $response->getStatusCode());
         assertSame('/login', $response->getHeaderLine('Location'));
     }
+
+    public function adminRuleChatRequiresAuthentication(FunctionalTester $tester): void
+    {
+        $response = $tester->sendRequest(new ServerRequest(uri: '/admin/rule-chat'));
+
+        assertSame(302, $response->getStatusCode());
+        assertSame('/login', $response->getHeaderLine('Location'));
+    }
+
+    public function agentRuleChatRequiresAuthentication(FunctionalTester $tester): void
+    {
+        $response = $tester->sendRequest(new ServerRequest(uri: '/agent/rule-chat'));
+
+        assertSame(302, $response->getStatusCode());
+        assertSame('/agent/login', $response->getHeaderLine('Location'));
+    }
 }

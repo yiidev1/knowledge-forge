@@ -6,6 +6,7 @@ namespace App\Chat\Application;
 
 use App\Ai\Contract\Exception\AiException;
 use App\Chat\Domain\ChatParticipant;
+use App\Chat\Domain\ChatRetrievalScope;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\Exception\ConversationNotFound;
 use App\Chat\Domain\Exception\EditConflict;
@@ -65,8 +66,9 @@ final readonly class EditChatMessageService
         int $messageId,
         string $newContent,
         int $expectedEditCount,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
     ): MessageEditOutcome {
-        $this->ask->assertChatAvailable($knowledgeBase);
+        $this->ask->assertChatAvailable($knowledgeBase, $scope);
         $target = $this->resolveLatestEditableTarget($knowledgeBase, $participant, $conversationId, $messageId);
 
         $deadline = $target->createdAt->modify('+' . $this->params->editWindowMinutes . ' minutes');
@@ -101,7 +103,7 @@ final readonly class EditChatMessageService
             $this->messages->supersedeAnswersFor($messageId, $now);
         });
 
-        return $this->regenerate($knowledgeBase, $conversationId, $messageId, $prompt);
+        return $this->regenerate($knowledgeBase, $conversationId, $messageId, $prompt, $scope);
     }
 
     /**
@@ -117,15 +119,16 @@ final readonly class EditChatMessageService
         ChatParticipant $participant,
         int $conversationId,
         int $messageId,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
     ): MessageEditOutcome {
-        $this->ask->assertChatAvailable($knowledgeBase);
+        $this->ask->assertChatAvailable($knowledgeBase, $scope);
         $target = $this->resolveLatestEditableTarget($knowledgeBase, $participant, $conversationId, $messageId);
 
         if (!$this->messages->hasUnansweredLatestUserMessage($conversationId)) {
             return MessageEditOutcome::regenerated();
         }
 
-        return $this->regenerate($knowledgeBase, $conversationId, $messageId, $target->content);
+        return $this->regenerate($knowledgeBase, $conversationId, $messageId, $target->content, $scope);
     }
 
     /**
@@ -166,9 +169,10 @@ final readonly class EditChatMessageService
         int $conversationId,
         int $messageId,
         string $prompt,
+        ChatRetrievalScope $scope,
     ): MessageEditOutcome {
         try {
-            $this->ask->regenerateForEditedMessage($knowledgeBase, $conversationId, $messageId, $prompt);
+            $this->ask->regenerateForEditedMessage($knowledgeBase, $conversationId, $messageId, $prompt, $scope);
 
             return MessageEditOutcome::regenerated();
         } catch (AiException) {

@@ -18,6 +18,7 @@ use App\Rules\Domain\StoreMatchStatus;
 use App\Rules\Infrastructure\DbRuleCatalogRepository;
 use App\Rules\Infrastructure\DbRuleStoreLinkRepository;
 use App\Shared\Domain\Clock\SystemClock;
+use App\Shared\Infrastructure\Db\DbDateTime;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\RulesTestFactory;
 use Codeception\Test\Unit;
@@ -26,6 +27,7 @@ use DateTimeZone;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
 use function array_map;
+use function hash;
 use function str_pad;
 use function substr;
 use function sys_get_temp_dir;
@@ -41,10 +43,12 @@ use const STR_PAD_LEFT;
 /**
  * Materialization against real MySQL. Classification is separate from retrieval availability: EVERY active,
  * globally-available rule (any classification — store-specific, common, ambiguous, unmatched or pending) gets a
- * global projection in the hidden Global Rules base, and a store-specific rule with a confirmed store link ALSO
- * gets a store projection in its store KB. Repeats create no duplicates; ignoring / disabling global
- * availability / deactivating retires projections; changing the matched store moves the store projection while
- * preserving the global one.
+ * global projection in the hidden Global Rules base, which is the single corpus Rule Chat answers from.
+ *
+ * Store-rule documents are NO LONGER projected into store KBs (store chat must answer only from genuine store
+ * knowledge): a store-specific rule gets only the global projection, and any legacy store projection is retired
+ * by reconcile. Repeats create no duplicates; ignoring / disabling global availability / deactivating retires the
+ * global projection.
  */
 final class RuleMaterializationIntegrationTest extends Unit
 {
@@ -52,7 +56,6 @@ final class RuleMaterializationIntegrationTest extends Unit
     private const STORE = 974000010;
     private const STORE_SLUG = 'zzmat-store-1';
     private const STORE_B = 974000020;
-    private const STORE_B_SLUG = 'zzmat-store-2';
 
     private ConnectionInterface $connection;
     private DbRuleCatalogRepository $catalog;
@@ -82,7 +85,7 @@ final class RuleMaterializationIntegrationTest extends Unit
         $this->cleanup();
     }
 
-    public function testConfirmedStoreRuleMaterializesBothProjectionsAndIsIdempotent(): void
+    public function testStoreSpecificRuleGetsOnlyTheGlobalProjectionAndIsIdempotent(): void
     {
         $storeKb = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
         $canonical = $this->seedCanonical('ZZMAT Advance orders', 'Accept advance orders.', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
@@ -90,33 +93,31 @@ final class RuleMaterializationIntegrationTest extends Unit
 
         $this->reconciler->reconcile($canonical, $this->now);
 
-        // Store projection (stage-1 for its store) AND a global projection (stage-2 fallback for every store).
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
-        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'a confirmed store rule is also globally available');
+        // No store projection — store chat must answer only from genuine store knowledge. Only the global
+        // projection (the Rule Chat corpus) is created.
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'no store-rule document is projected into the store KB');
+        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'the rule is globally available for Rule Chat');
 
-        // A second reconcile of unchanged data creates no duplicate document (either projection).
+        // A second reconcile of unchanged data creates no duplicate global document and still no store document.
         $this->reconciler->reconcile($canonical, $this->now);
-        assertSame(1, $this->docCount($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        assertSame(0, $this->docCount($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
         assertSame(1, $this->docCount($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical));
     }
 
-    public function testChangingTheMatchedStoreMovesTheStoreProjectionButPreservesTheGlobal(): void
+    public function testAPreExistingStoreProjectionIsRetiredByReconcile(): void
     {
-        $storeA = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
-        $storeB = $this->kbSources->createForSource('ZZMAT Store B', self::STORE_B_SLUG, 'order58', self::STORE_B, 'ZZMAT Store B', true, $this->now);
-        $canonical = $this->seedCanonical('ZZMAT Move', 'Accept advance orders.', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
-        $this->links->setAdminLink($canonical, self::STORE, StoreMatchStatus::Confirmed, 7, $this->now);
-        $this->reconciler->reconcile($canonical, $this->now);
-        assertSame('queued', $this->docStatus($storeA, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        // A store-rule document projected before the boundary change must be retired by reconcile so store chat
+        // can no longer retrieve it, while the global projection remains for Rule Chat.
+        $storeKb = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
+        $canonical = $this->seedCanonical('ZZMAT Legacy', 'Accept advance orders.', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
+        $this->links->upsertSystemLink($canonical, self::STORE, StoreMatchStatus::Confirmed, StoreMatchMethod::TitleExactAlias, 'ZZMAT Store', 0.9, $this->now);
+        $this->seedLegacyStoreProjection($storeKb, (string) $canonical);
+        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the legacy store projection exists before reconcile');
 
-        // Admin changes the matched store: reject A, confirm B.
-        $this->links->setAdminLink($canonical, self::STORE, StoreMatchStatus::Rejected, 7, $this->now);
-        $this->links->setAdminLink($canonical, self::STORE_B, StoreMatchStatus::Confirmed, 7, $this->now);
         $this->reconciler->reconcile($canonical, $this->now);
 
-        assertSame('deleted', $this->docStatus($storeA, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the old store projection is retired');
-        assertSame('queued', $this->docStatus($storeB, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the new store projection is created');
-        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'the global projection is preserved across the move');
+        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the legacy store projection is retired');
+        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'the global projection remains for Rule Chat');
     }
 
     public function testUpstreamDeactivationRetiresBothProjections(): void
@@ -124,29 +125,30 @@ final class RuleMaterializationIntegrationTest extends Unit
         $storeKb = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
         $canonical = $this->seedCanonical('ZZMAT Gone', 'Accept advance orders.', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
         $this->links->upsertSystemLink($canonical, self::STORE, StoreMatchStatus::Confirmed, StoreMatchMethod::TitleExactAlias, 'ZZMAT Store', 0.9, $this->now);
+        $this->seedLegacyStoreProjection($storeKb, (string) $canonical);
         $this->reconciler->reconcile($canonical, $this->now);
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        // The legacy store projection is already retired by the first reconcile; the global projection is created.
+        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
         assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical));
 
-        // The upstream source is removed → the canonical goes inactive. Reconciling retires everything.
+        // The upstream source is removed → the canonical goes inactive. Reconciling retires the global projection too.
         $this->connection->createCommand()->update('{{%rule_catalog_rules}}', ['is_active' => 0], ['id' => $canonical])->execute();
         $this->reconciler->reconcile($canonical, $this->now);
 
-        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
         assertSame('deleted', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'an inactive rule is not globally available');
     }
 
-    public function testAutoMatchedRuleMaterializesBothProjectionsWithoutManualConfirmation(): void
+    public function testAutoMatchedRuleGetsOnlyTheGlobalProjection(): void
     {
         $storeKb = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
         $canonical = $this->seedCanonical('ZZMAT Auto', 'Accept advance orders.', ClassificationStatus::AutoMatched, RuleScope::StoreSpecific);
-        // A deterministic single match is a CONFIRMED system link — searchable without any admin step.
+        // A deterministic single match is a CONFIRMED system link — still no store projection is created.
         $this->links->upsertSystemLink($canonical, self::STORE, StoreMatchStatus::Confirmed, StoreMatchMethod::TitleExactAlias, 'ZZMAT Store', 0.9, $this->now);
 
         $this->reconciler->reconcile($canonical, $this->now);
 
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the matched store gets the rule at stage 1');
-        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'and it is globally available at stage 2');
+        assertNull($this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'no store projection is created even for an auto-matched store rule');
+        assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'it is globally available for Rule Chat');
     }
 
     public function testPendingRuleGetsAGlobalProjectionButNoStoreProjection(): void
@@ -188,9 +190,31 @@ final class RuleMaterializationIntegrationTest extends Unit
         assertTrue($count >= 1, 'the backfill reconciled at least the seeded active rule');
         assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $pending));
 
-        // A second backfill creates no duplicate global document.
+        // A second backfill creates no duplicate global document and does not requeue.
+        $updatedAt = (string) $this->connection->createQuery()
+            ->select('updated_at')
+            ->from('{{%documents}}')
+            ->where([
+                'knowledge_base_id' => $this->globalKbId(),
+                'source_type' => DocumentSourceType::Order58RuleGlobal->value,
+                'source_ref' => (string) $pending,
+            ])
+            ->scalar();
         $runner->reconcileAllActive();
         assertSame(1, $this->docCount($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $pending));
+        assertSame(
+            $updatedAt,
+            (string) $this->connection->createQuery()
+                ->select('updated_at')
+                ->from('{{%documents}}')
+                ->where([
+                    'knowledge_base_id' => $this->globalKbId(),
+                    'source_type' => DocumentSourceType::Order58RuleGlobal->value,
+                    'source_ref' => (string) $pending,
+                ])
+                ->scalar(),
+            'unchanged eligible rule projection is skipped (no requeue)',
+        );
     }
 
     public function testDisablingGlobalAvailabilityRetiresTheGlobalProjection(): void
@@ -228,17 +252,46 @@ final class RuleMaterializationIntegrationTest extends Unit
         $storeKb = $this->kbSources->createForSource('ZZMAT Store', self::STORE_SLUG, 'order58', self::STORE, 'ZZMAT Store', true, $this->now);
         $canonical = $this->seedCanonical('ZZMAT Retire', 'Accept advance orders.', ClassificationStatus::ManuallyMatched, RuleScope::StoreSpecific);
         $this->links->upsertSystemLink($canonical, self::STORE, StoreMatchStatus::Confirmed, StoreMatchMethod::TitleExactAlias, 'ZZMAT', 0.9, $this->now);
+        $this->seedLegacyStoreProjection($storeKb, (string) $canonical);
         $this->reconciler->reconcile($canonical, $this->now);
-        assertSame('queued', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
+        // First reconcile retires the legacy store projection and creates the global one.
+        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical));
         assertSame('queued', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical));
 
-        // An admin ignores the rule (status ignored + global availability off); both projections retire.
+        // An admin ignores the rule (status ignored + global availability off); the global projection retires.
         $this->catalog->updateClassification($canonical, RuleScope::Unresolved->value, ClassificationStatus::Ignored->value, 'ignored', null, 7, $this->now);
         $this->catalog->setGloballyAvailable($canonical, false, $this->now);
         $this->reconciler->reconcile($canonical, $this->now);
 
-        assertSame('deleted', $this->docStatus($storeKb, DocumentSourceType::Order58RuleStore, (string) $canonical), 'the store projection is retired');
         assertSame('deleted', $this->docStatus($this->globalKbId(), DocumentSourceType::Order58RuleGlobal, (string) $canonical), 'an ignored rule is no longer globally available');
+    }
+
+    /**
+     * Inserts a store-rule document straight into a store KB to simulate a projection created before the boundary
+     * change, so a test can assert reconcile retires it. Minimal columns only (the rest have DB defaults).
+     */
+    private function seedLegacyStoreProjection(int $knowledgeBaseId, string $ref): void
+    {
+        $ts = DbDateTime::format($this->now);
+        $token = 'zzmat_legacy_' . $ref . '_' . ++$this->seq;
+        $this->connection->createCommand()->insert('{{%documents}}', [
+            'knowledge_base_id' => $knowledgeBaseId,
+            'original_filename' => 'legacy-rule.md',
+            'stored_path' => 'kb/' . $knowledgeBaseId . '/' . $token . '.md',
+            'storage_token' => $token,
+            'mime_type' => 'text/markdown',
+            'extension' => 'md',
+            'size_bytes' => 10,
+            'checksum_sha256' => hash('sha256', $token),
+            'kind' => 'text',
+            'source_type' => DocumentSourceType::Order58RuleStore->value,
+            'source_ref' => $ref,
+            'source_sync_hash' => 'legacyhash',
+            'status' => 'queued',
+            'is_enabled' => 1,
+            'created_at' => $ts,
+            'updated_at' => $ts,
+        ])->execute();
     }
 
     private function seedCanonical(string $title, string $body, ClassificationStatus $status, RuleScope $scope): int

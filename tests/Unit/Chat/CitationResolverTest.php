@@ -7,6 +7,7 @@ namespace App\Tests\Unit\Chat;
 use App\Ai\Contract\Dto\IndexStatus;
 use App\Ai\Contract\Dto\RawCitation;
 use App\Chat\Application\Citation\CitationResolver;
+use App\Chat\Domain\ChatRetrievalScope;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\IndexedFileRole;
 use App\Shared\Application\Correlation\CorrelationId;
@@ -70,6 +71,58 @@ final class CitationResolverTest extends Unit
         $resolved = $this->resolver()->resolve(
             [new RawCitation('file_1', 'x.md', 0), new RawCitation('file_1', 'x.md', 1)],
             self::KB,
+        );
+
+        assertCount(1, $resolved);
+    }
+
+    public function testStoreScopeDropsRuleProjectionCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_rule_global');
+
+        $resolved = $this->resolver()->resolve(
+            [new RawCitation('file_1', 'x.md', 0)],
+            self::KB,
+            ChatRetrievalScope::StoreKnowledge,
+        );
+
+        assertCount(0, $resolved);
+    }
+
+    public function testRuleScopeDropsKnowledgeCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_knowledge');
+
+        $resolved = $this->resolver()->resolve(
+            [new RawCitation('file_1', 'x.md', 0)],
+            self::KB,
+            ChatRetrievalScope::RuleOnly,
+        );
+
+        assertCount(0, $resolved);
+    }
+
+    public function testRuleScopeKeepsGlobalRuleCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_rule_global');
+
+        $resolved = $this->resolver()->resolve(
+            [new RawCitation('file_1', 'x.md', 0)],
+            self::KB,
+            ChatRetrievalScope::RuleOnly,
+        );
+
+        assertCount(1, $resolved);
+    }
+
+    public function testStoreScopeKeepsStoreProfileCitation(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_store_profile');
+
+        $resolved = $this->resolver()->resolve(
+            [new RawCitation('file_1', 'x.md', 0)],
+            self::KB,
+            ChatRetrievalScope::StoreKnowledge,
         );
 
         assertCount(1, $resolved);

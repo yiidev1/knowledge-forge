@@ -80,4 +80,34 @@ final readonly class InstructionBuilder
 
         return implode("\n\n", $sections);
     }
+
+    /**
+     * Rule Chat instruction profile: answer only from retrieved rule documents. Does not inject per-store
+     * knowledge-base behavioral rules or store system instructions — retrieval/citation scope is the hard
+     * boundary; this wording is secondary defense.
+     */
+    public function buildForRuleChat(string $fallbackSentence, bool $exhaustive = false): string
+    {
+        $sections = [
+            $this->security->header($fallbackSentence),
+            self::RULE_CHAT_DIRECTIVE,
+        ];
+
+        if ($exhaustive) {
+            $sections[] = self::EXHAUSTIVE_DIRECTIVE;
+        }
+
+        $sections[] = $this->security->reminder();
+
+        return implode("\n\n", $sections);
+    }
+
+    private const RULE_CHAT_DIRECTIVE = <<<'TEXT'
+        [rule chat]
+        You are a rules-only assistant. Answer the user's question only from the rule documents returned by
+        File Search. Do not use store knowledge, uploaded documents, manual knowledge, Order58 knowledge
+        records, store profiles, general model knowledge, assumptions, or unsupported information. If
+        retrieved rules do not directly support the answer, return the configured fallback. Every factual
+        answer must be grounded in valid rule citations.
+        TEXT;
 }

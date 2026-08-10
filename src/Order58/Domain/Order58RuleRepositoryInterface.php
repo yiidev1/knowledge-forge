@@ -21,7 +21,15 @@ interface Order58RuleRepositoryInterface
 
     public function save(RuleMirror $record, int $runId, DateTimeImmutable $now): void;
 
-    public function markSeen(int $sourceId, int $runId, DateTimeImmutable $now): void;
+    /**
+     * Stamps last-seen for this run and reconciles authoritative `is_active` without rewriting content.
+     * Order58 Rules currently omit an explicit active flag, so presence in a scan means active (`$active =
+     * true`). When an explicit flag appears upstream, pass it through so unchanged content still refreshes
+     * lifecycle state.
+     *
+     * @return bool true when `is_active` changed (e.g. stale-inactive → active)
+     */
+    public function markSeen(int $sourceId, int $runId, DateTimeImmutable $now, bool $active = true): bool;
 
     /**
      * Soft-deactivates active records not seen by this full rules run (NULL-safe). Never deletes a row.

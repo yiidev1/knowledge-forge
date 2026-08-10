@@ -206,19 +206,9 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $sour
         <?php endforeach; ?>
     </div>
 
-    <?php if ($result->pageCount() > 1): ?>
-        <nav class="pager" aria-label="Pagination">
-            <?php if ($page > 1): ?>
-                <a class="btn btn--secondary btn--sm" href="<?= Html::encode($dirUrl(['page' => $page - 1])) ?>">← Previous</a>
-            <?php else: ?>
-                <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">← Previous</span>
-            <?php endif; ?>
-            <span class="pager__status">Page <?= $page ?> of <?= $result->pageCount() ?></span>
-            <?php if ($page < $result->pageCount()): ?>
-                <a class="btn btn--secondary btn--sm" href="<?= Html::encode($dirUrl(['page' => $page + 1])) ?>">Next →</a>
-            <?php else: ?>
-                <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">Next →</span>
-            <?php endif; ?>
-        </nav>
-    <?php endif; ?>
+    <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+        'page' => $page,
+        'pageCount' => $result->pageCount(),
+        'pageUrl' => static fn(int $p): string => $dirUrl(['page' => $p]),
+    ]) ?>
 <?php endif; ?>

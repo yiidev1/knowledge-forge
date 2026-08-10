@@ -8,16 +8,17 @@ use function mb_strlen;
 use function mb_substr;
 
 /**
- * One materialized rule document on the readiness page: its canonical rule ref, a store or common label, the
- * operational stage, the searchable OpenAI file id (if any) and the latest error (for failed items only).
+ * One synced Order58 source rule on the readiness page: its source id, optional canonical/document refs,
+ * classification label, operational stage, searchable OpenAI file id (if any) and latest error (failed only).
  */
 final readonly class RuleReadinessItem
 {
     public function __construct(
-        public int $documentId,
+        public int $sourceId,
+        public ?int $documentId,
         public ?int $canonicalId,
         public string $title,
-        public bool $isStoreSpecific,
+        public string $classificationLabel,
         public ?string $storeName,
         public RuleReadinessStatus $status,
         public ?string $openaiFileId,
@@ -27,7 +28,13 @@ final readonly class RuleReadinessItem
 
     public function typeLabel(): string
     {
-        return $this->isStoreSpecific ? 'Store-specific' : 'Common';
+        return $this->classificationLabel;
+    }
+
+    /** Whether a confirmed store link applies (for the Store column). */
+    public function isStoreSpecific(): bool
+    {
+        return $this->storeName !== null && $this->storeName !== '';
     }
 
     /** A short, safe preview of the OpenAI file id (never a secret; file ids are not credentials). */

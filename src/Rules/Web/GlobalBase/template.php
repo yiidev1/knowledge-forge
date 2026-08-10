@@ -77,7 +77,7 @@ $vsBadge = static fn(string $status): string => $status === 'ready' ? 'success' 
         <a class="stat stat--link<?= $filter === RuleReadinessFilter::Ready ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'ready', 'page' => 1])) ?>"><div class="stat__value"><?= $summary->ready ?></div><div class="stat__label">Ready</div></a>
         <a class="stat stat--link<?= $filter === RuleReadinessFilter::Pending ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'pending', 'page' => 1])) ?>"><div class="stat__value"><?= $summary->pending() ?></div><div class="stat__label">Pending</div></a>
         <a class="stat stat--link<?= $filter === RuleReadinessFilter::Failed ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'failed', 'page' => 1])) ?>"><div class="stat__value"><?= $summary->failed ?></div><div class="stat__label">Failed</div></a>
-        <a class="stat stat--link<?= $filter === RuleReadinessFilter::Disabled ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'disabled', 'page' => 1])) ?>"><div class="stat__value"><?= $summary->disabled ?></div><div class="stat__label">Disabled</div></a>
+        <a class="stat stat--link<?= $filter === RuleReadinessFilter::Disabled ? ' stat--active' : '' ?>" href="<?= Html::encode($pageUrl(['filter' => 'disabled', 'page' => 1])) ?>"><div class="stat__value"><?= $summary->disabledOrInactive() ?></div><div class="stat__label">Disabled / Inactive</div></a>
     </section>
 
     <div class="dir-toolbar" style="margin-top: 1.25rem;">
@@ -106,8 +106,9 @@ $vsBadge = static fn(string $status): string => $status === 'ready' ? 'success' 
                         <?php foreach ($result->items as $item): ?>
                             <tr>
                                 <td>
-                                    <?php if ($item->canonicalId !== null): ?><a href="<?= Html::encode($urlGenerator->generate('order58.rules.detail', ['ruleId' => $item->canonicalId])) ?>"><strong>#<?= $item->canonicalId ?></strong></a> <?php endif; ?>
-                                    <?= Html::encode($item->title) ?>
+                                    <span class="util-muted">src #<?= $item->sourceId ?></span>
+                                    <?php if ($item->canonicalId !== null): ?> · <a href="<?= Html::encode($urlGenerator->generate('order58.rules.detail', ['ruleId' => $item->canonicalId])) ?>"><strong>#<?= $item->canonicalId ?></strong></a><?php endif; ?>
+                                    <div><?= Html::encode($item->title) ?></div>
                                 </td>
                                 <td><span class="badge badge--<?= Html::encode($item->status->badge()) ?>"><?= Html::encode($item->status->label()) ?></span></td>
                                 <td><?php $fid = $item->shortFileId(); ?><?php if ($fid !== null): ?><code><?= Html::encode($fid) ?></code><?php else: ?><span class="util-muted">—</span><?php endif; ?></td>
@@ -117,13 +118,11 @@ $vsBadge = static fn(string $status): string => $status === 'ready' ? 'success' 
                     </tbody>
                 </table>
             </div>
-            <?php if ($result->pageCount() > 1): ?>
-                <div class="pager" style="margin-top: 1rem; display: flex; gap: .5rem; align-items: center;">
-                    <?php if ($page > 1): ?><a class="btn btn--secondary" href="<?= Html::encode($pageUrl(['page' => $page - 1])) ?>">← Previous</a><?php endif; ?>
-                    <span class="util-muted">Page <?= $page ?> of <?= $result->pageCount() ?></span>
-                    <?php if ($page < $result->pageCount()): ?><a class="btn btn--secondary" href="<?= Html::encode($pageUrl(['page' => $page + 1])) ?>">Next →</a><?php endif; ?>
-                </div>
-            <?php endif; ?>
+            <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+                'page' => $page,
+                'pageCount' => $result->pageCount(),
+                'pageUrl' => static fn(int $p): string => $pageUrl(['page' => $p]),
+            ]) ?>
         <?php endif; ?>
     </section>
 <?php endif; ?>

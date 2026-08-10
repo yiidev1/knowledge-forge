@@ -16,6 +16,8 @@ return [
     'kf:order58:schedule-knowledge' => App\Order58\Console\ScheduleKnowledgeSyncCommand::class,
     'kf:order58:schedule-rules' => App\Order58\Console\ScheduleRulesSyncCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
+    'kf:rules:repair-lifecycle' => App\Rules\Console\RepairRuleLifecycleCommand::class,
+    'kf:rules:retire-store-projections' => App\Rules\Console\RetireStoreRuleProjectionsCommand::class,
     'chat:thread-merge-report' => App\Chat\Console\ThreadMergeReportCommand::class,
     'chat:participant-backfill-report' => App\Chat\Console\ParticipantBackfillReportCommand::class,
 ];

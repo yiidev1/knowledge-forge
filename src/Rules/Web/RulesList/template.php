@@ -123,14 +123,10 @@ $dash = static fn(?string $v): string => $v === null || $v === '' ? '—' : Html
             </table>
         </div>
 
-        <div class="pager" style="margin-top: 1rem; display: flex; gap: .5rem; align-items: center;">
-            <?php if ($page > 1): ?>
-                <a class="btn btn--secondary" href="<?= Html::encode($listUrl(['page' => $page - 1])) ?>">← Previous</a>
-            <?php endif; ?>
-            <span class="util-muted">Page <?= $page ?> of <?= $result->pageCount() ?></span>
-            <?php if ($page < $result->pageCount()): ?>
-                <a class="btn btn--secondary" href="<?= Html::encode($listUrl(['page' => $page + 1])) ?>">Next →</a>
-            <?php endif; ?>
-        </div>
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $page,
+            'pageCount' => $result->pageCount(),
+            'pageUrl' => static fn(int $p): string => $listUrl(['page' => $p]),
+        ]) ?>
     <?php endif; ?>
 </section>

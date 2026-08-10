@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Chat\Application\Citation;
 
 use App\Ai\Contract\Dto\RawCitation;
+use App\Chat\Domain\ChatRetrievalScope;
 use App\Chat\Domain\ResolvedCitation;
 use App\Document\Domain\DocumentRepositoryInterface;
 use App\Document\Domain\IndexedFileRepositoryInterface;
@@ -19,6 +20,10 @@ use Psr\Log\LoggerInterface;
  * A file id that resolves to no live document in THIS knowledge base is dropped and logged — never
  * shown, never invented. Resolution is scoped by knowledge base, so a citation can never leak a
  * document from another base. Duplicates (a document cited by several chunks) collapse to one.
+ *
+ * {@see ChatRetrievalScope} is a second hard filter: Store Chat rejects Order58 rule projections; Rule Chat
+ * accepts only rule projections. Out-of-scope citations are dropped the same way as unresolvable ones so
+ * grounding cannot treat them as evidence.
  */
 final readonly class CitationResolver
 {
@@ -34,8 +39,11 @@ final readonly class CitationResolver
      *
      * @return list<ResolvedCitation>
      */
-    public function resolve(array $rawCitations, int $knowledgeBaseId): array
-    {
+    public function resolve(
+        array $rawCitations,
+        int $knowledgeBaseId,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
+    ): array {
         $resolved = [];
         $seenDocuments = [];
 
@@ -49,6 +57,12 @@ final readonly class CitationResolver
             $document = $this->documents->findByIdForKnowledgeBase($indexedFile->documentId, $knowledgeBaseId);
             if ($document === null) {
                 $this->drop($raw->fileId, 'document not in this knowledge base');
+                continue;
+            }
+
+            $sourceType = $this->documents->sourceTypeOfDocument($document->id());
+            if (!$scope->allowsValue($sourceType)) {
+                $this->drop($raw->fileId, 'source type outside chat retrieval scope');
                 continue;
             }
 

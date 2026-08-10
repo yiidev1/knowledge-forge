@@ -123,20 +123,10 @@ $pageUrl = static function (int $forPage) use ($base, $letter, $search): string 
             <?php endforeach; ?>
         </div>
 
-        <?php if ($pageCount > 1): ?>
-            <nav class="pager" aria-label="Pagination">
-                <?php if ($page > 1): ?>
-                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page - 1)) ?>">← Previous</a>
-                <?php else: ?>
-                    <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">← Previous</span>
-                <?php endif; ?>
-                <span class="pager__status">Page <?= $page ?> of <?= $pageCount ?></span>
-                <?php if ($page < $pageCount): ?>
-                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page + 1)) ?>">Next →</a>
-                <?php else: ?>
-                    <span class="btn btn--secondary btn--sm" aria-disabled="true" style="opacity:.5;">Next →</span>
-                <?php endif; ?>
-            </nav>
-        <?php endif; ?>
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $page,
+            'pageCount' => $pageCount,
+            'pageUrl' => static fn(int $p): string => $pageUrl($p),
+        ]) ?>
     <?php endif; ?>
 <?php endif; ?>

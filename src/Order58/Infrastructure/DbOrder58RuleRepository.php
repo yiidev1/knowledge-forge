@@ -80,15 +80,37 @@ final readonly class DbOrder58RuleRepository implements Order58RuleRepositoryInt
         $this->connection->createCommand()->upsert(self::TABLE, $insert, $update)->execute();
     }
 
-    public function markSeen(int $sourceId, int $runId, DateTimeImmutable $now): void
+    public function markSeen(int $sourceId, int $runId, DateTimeImmutable $now, bool $active = true): bool
     {
         $ts = DbDateTime::format($now);
+        $desired = $active ? 1 : 0;
+
+        $current = $this->connection
+            ->createQuery()
+            ->select('is_active')
+            ->from(self::TABLE)
+            ->where(['source_id' => $sourceId])
+            ->scalar();
+
+        if ($current === false || $current === null) {
+            return false;
+        }
+
+        $wasActive = (int) $current === 1;
+        $activityChanged = $wasActive !== $active;
 
         $this->connection->createCommand()->update(
             self::TABLE,
-            ['last_seen_sync_run_id' => $runId, 'synced_at' => $ts, 'updated_at' => $ts],
+            [
+                'last_seen_sync_run_id' => $runId,
+                'is_active' => $desired,
+                'synced_at' => $ts,
+                'updated_at' => $ts,
+            ],
             ['source_id' => $sourceId],
         )->execute();
+
+        return $activityChanged;
     }
 
     public function deactivateNotSeen(int $runId, DateTimeImmutable $now): array

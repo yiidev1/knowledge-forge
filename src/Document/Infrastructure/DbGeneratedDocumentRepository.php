@@ -7,6 +7,7 @@ namespace App\Document\Infrastructure;
 use App\Document\Domain\DocumentKind;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\GeneratedDocument;
+use App\Document\Domain\GeneratedDocumentLocation;
 use App\Document\Domain\GeneratedDocumentRepositoryInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
@@ -53,6 +54,30 @@ final readonly class DbGeneratedDocumentRepository implements GeneratedDocumentR
             isSourceOverridden: (bool) (int) ($row['is_source_overridden'] ?? 0),
             isEnabled: (bool) (int) ($row['is_enabled'] ?? 1),
         );
+    }
+
+    public function findLiveLocationsByType(string $sourceType): array
+    {
+        $rows = $this->connection
+            ->createQuery()
+            ->select(['knowledge_base_id', 'source_ref'])
+            ->from(self::TABLE)
+            ->where(['source_type' => $sourceType, 'is_enabled' => 1])
+            ->andWhere(['<>', 'status', DocumentStatus::Deleted->value])
+            ->andWhere(['not', ['source_ref' => null]])
+            ->all();
+
+        $locations = [];
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $locations[] = new GeneratedDocumentLocation(
+                    knowledgeBaseId: (int) $row['knowledge_base_id'],
+                    sourceRef: (string) $row['source_ref'],
+                );
+            }
+        }
+
+        return $locations;
     }
 
     public function create(
