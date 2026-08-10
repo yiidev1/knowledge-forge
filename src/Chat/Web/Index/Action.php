@@ -14,7 +14,6 @@ use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
 use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
-use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\Redirect;
@@ -41,7 +40,6 @@ final readonly class Action
         private ChatAvailabilityPolicy $availability,
         private MarkdownRenderer $markdown,
         private CurrentAdmin $currentAdmin,
-        private ClockInterface $clock,
         private ChatParams $params,
         private KnowledgeBaseSourceRepositoryInterface $sources,
         private Redirect $redirect,
@@ -76,10 +74,7 @@ final readonly class Action
             $editView = MessageEditView::compute(
                 $this->messages,
                 $conversation->id,
-                $messages,
                 $chatReady,
-                $this->clock->now(),
-                $this->params->editWindowMinutes,
             );
         }
 

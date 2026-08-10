@@ -42,7 +42,6 @@ return [
             'reasoningEffort' => $params['app/chat']['reasoningEffort'],
             'exhaustiveMaxResults' => $params['app/chat']['exhaustiveMaxResults'],
             'truncatedMessage' => $params['app/chat']['truncatedMessage'],
-            'editWindowMinutes' => $params['app/chat']['editWindowMinutes'],
         ],
     ],
 ];

@@ -10,7 +10,6 @@ use App\Chat\Domain\ChatRetrievalScope;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\Exception\ConversationNotFound;
 use App\Chat\Domain\Exception\EditConflict;
-use App\Chat\Domain\Exception\EditWindowExpired;
 use App\Chat\Domain\Exception\MessageNotEditable;
 use App\Chat\Domain\Exception\MessageNotFound;
 use App\Chat\Domain\Exception\NotLatestQuestion;
@@ -27,13 +26,13 @@ use App\Shared\Domain\Exception\NotFoundException;
  * Edits the latest question in a chat thread and regenerates its answer.
  *
  * The rules are deliberately narrow so exactly one answer is ever invalidated: only the newest user
- * question is editable, only within a time window measured on the server clock, and only by the participant
- * who owns the thread. An edit runs in two phases. First a short DB transaction commits the durable facts —
- * the new question text (under an optimistic lock on edit_count), an audit revision of the prior text, and
- * the superseding of the old answer. Then, outside the transaction, the assistant answer is regenerated
- * synchronously. If the provider fails, the committed edit is intentionally left in place with no active
- * answer: a recoverable "Retry" state, reported via {@see MessageEditOutcome} rather than an exception, so
- * the question is never lost and no duplicate active answer can appear.
+ * question is editable (at any age), and only by the participant who owns the thread. An edit runs in two
+ * phases. First a short DB transaction commits the durable facts — the new question text (under an
+ * optimistic lock on edit_count), an audit revision of the prior text, and the superseding of the old
+ * answer. Then, outside the transaction, the assistant answer is regenerated synchronously. If the
+ * provider fails, the committed edit is intentionally left in place with no active answer: a recoverable
+ * "Retry" state, reported via {@see MessageEditOutcome} rather than an exception, so the question is never
+ * lost and no duplicate active answer can appear.
  *
  * Ownership and the edit target are always resolved server-side from the typed participant and scoped
  * lookups; a forged conversation or message id is indistinguishable from a missing one (404). This service
@@ -48,14 +47,13 @@ final readonly class EditChatMessageService
         private AskKnowledgeBaseService $ask,
         private TransactionRunnerInterface $transaction,
         private ClockInterface $clock,
-        private ChatParams $params,
     ) {}
 
     /**
      * Edits the latest question and regenerates its answer.
      *
      * @throws NotFoundException when ownership or the target does not resolve (404)
-     * @throws NotLatestQuestion|EditWindowExpired|EditConflict|UnchangedContent recoverable, surfaced as a flash
+     * @throws NotLatestQuestion|EditConflict|UnchangedContent recoverable, surfaced as a flash
      * @throws \App\Chat\Domain\Exception\QuestionInvalid empty or oversized content
      * @throws \App\Chat\Domain\Exception\ChatUnavailable the base cannot answer
      */
@@ -70,11 +68,6 @@ final readonly class EditChatMessageService
     ): MessageEditOutcome {
         $this->ask->assertChatAvailable($knowledgeBase, $scope);
         $target = $this->resolveLatestEditableTarget($knowledgeBase, $participant, $conversationId, $messageId);
-
-        $deadline = $target->createdAt->modify('+' . $this->params->editWindowMinutes . ' minutes');
-        if ($this->clock->now() > $deadline) {
-            throw EditWindowExpired::after($this->params->editWindowMinutes);
-        }
 
         $prompt = $this->ask->validateQuestion($newContent);
         if ($prompt === $target->content) {
@@ -108,7 +101,7 @@ final readonly class EditChatMessageService
 
     /**
      * Retries a failed regeneration of the latest question's answer. Idempotent: if an active answer already
-     * exists it is a no-op. Allowed past the edit window — recovering an unanswered turn is not an edit.
+     * exists it is a no-op.
      *
      * @throws NotFoundException when ownership or the target does not resolve (404)
      * @throws NotLatestQuestion the target is no longer the latest question
@@ -132,8 +125,7 @@ final readonly class EditChatMessageService
     }
 
     /**
-     * Resolves the edit/regenerate target with all server-side ownership and eligibility checks except the
-     * time window (which only the edit path applies).
+     * Resolves the edit/regenerate target with all server-side ownership and eligibility checks.
      */
     private function resolveLatestEditableTarget(
         KnowledgeBase $knowledgeBase,

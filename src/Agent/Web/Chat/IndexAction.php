@@ -12,7 +12,6 @@ use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
-use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -32,7 +31,6 @@ final readonly class IndexAction
         private ChatAvailabilityPolicy $availability,
         private CurrentAgent $currentAgent,
         private MarkdownRenderer $markdown,
-        private ClockInterface $clock,
         private ChatParams $params,
     ) {}
 
@@ -56,10 +54,7 @@ final readonly class IndexAction
             $editView = MessageEditView::compute(
                 $this->messages,
                 $conversation->id,
-                $messages,
                 $chatReady,
-                $this->clock->now(),
-                $this->params->editWindowMinutes,
             );
         }
 

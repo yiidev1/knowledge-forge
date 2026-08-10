@@ -18,7 +18,7 @@ use Yiisoft\Session\SessionInterface;
 /**
  * Retries a failed answer regeneration for this agent's latest question
  * (POST /agent/stores/{slug}/chat/{conversationId}/messages/{messageId}/regenerate). Idempotent; ownership
- * resolved server-side; allowed past the edit window.
+ * resolved server-side.
  */
 final readonly class RegenerateMessageAction
 {

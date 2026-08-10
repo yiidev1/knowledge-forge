@@ -23,12 +23,12 @@ use App\Chat\Application\Instruction\InstructionBuilder;
 use App\Chat\Application\Retrieval\ExhaustiveIntentDetector;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\Exception\EditConflict;
-use App\Chat\Domain\Exception\EditWindowExpired;
 use App\Chat\Domain\Exception\LatestQuestionUnanswered;
 use App\Chat\Domain\Exception\NotLatestQuestion;
 use App\Chat\Domain\Exception\QuestionInvalid;
 use App\Chat\Domain\Exception\UnchangedContent;
 use App\Chat\Domain\ParticipantType;
+use App\Chat\Domain\ChatRetrievalScope;
 use App\Ai\Contract\Dto\IndexStatus;
 use App\Document\Domain\DocumentStatus;
 use App\Document\Domain\IndexedFileRole;
@@ -58,6 +58,7 @@ use Psr\Log\NullLogger;
 use function array_filter;
 use function array_map;
 use function array_values;
+use function str_contains;
 use function PHPUnit\Framework\assertCount;
 use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertNotContains;
@@ -66,10 +67,10 @@ use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertTrue;
 
 /**
- * The editing rules, end to end minus HTTP and the database: only the latest question is editable, only
- * within the window and by its owner; an edit saves a revision, supersedes the old answer, and regenerates
- * a single linked answer; a provider failure is recoverable; retries are idempotent; and a thread whose
- * latest question is unanswered refuses a new question.
+ * The editing rules, end to end minus HTTP and the database: only the latest question is editable at any
+ * age and only by its owner; an edit saves a revision, supersedes the old answer, and regenerates a single
+ * linked answer; a provider failure is recoverable; retries are idempotent; and a thread whose latest
+ * question is unanswered refuses a new question.
  */
 final class EditChatMessageServiceTest extends Unit
 {
@@ -85,6 +86,7 @@ final class EditChatMessageServiceTest extends Unit
     private InMemoryRuleRepository $rules;
     private InMemoryDocumentRepository $documents;
     private InMemoryIndexedFileRepository $indexedFiles;
+    private InMemoryKnowledgeBaseRepository $knowledgeBases;
     private FakeChatCompletionProvider $provider;
     private MutableClock $clock;
 
@@ -96,6 +98,7 @@ final class EditChatMessageServiceTest extends Unit
         $this->rules = new InMemoryRuleRepository();
         $this->documents = new InMemoryDocumentRepository();
         $this->indexedFiles = new InMemoryIndexedFileRepository();
+        $this->knowledgeBases = new InMemoryKnowledgeBaseRepository();
         $this->provider = new FakeChatCompletionProvider();
         $this->clock = new MutableClock();
 
@@ -108,7 +111,7 @@ final class EditChatMessageServiceTest extends Unit
         $this->indexedFiles->setUploaded($fileId, 'file_1', IndexStatus::Completed);
     }
 
-    public function testAdminEditsLatestWithinWindowRegeneratesAndLinksAnswer(): void
+    public function testAdminEditsLatestQuestionRegeneratesAndLinksAnswer(): void
     {
         $participant = ChatParticipant::admin(1);
         $conversationId = $this->seed($participant, 'First question?');
@@ -149,7 +152,7 @@ final class EditChatMessageServiceTest extends Unit
         assertSame('An answer.', $superseded[0]->content);
     }
 
-    public function testAgentEditsLatestWithinWindow(): void
+    public function testAgentEditsLatestQuestion(): void
     {
         $participant = ChatParticipant::agent(1);
         $conversationId = $this->seed($participant, 'Agent question?');
@@ -165,22 +168,35 @@ final class EditChatMessageServiceTest extends Unit
         assertSame(1, $this->activeAnswerCount($conversationId, $userId));
     }
 
-    public function testEditAfterWindowIsRejectedAndNothingChanges(): void
+    /**
+     * @dataProvider oldLatestAges
+     */
+    public function testLatestQuestionRemainsEditableRegardlessOfAge(string $advance): void
     {
         $participant = ChatParticipant::admin(1);
         $conversationId = $this->seed($participant, 'First question?');
         $userId = $this->latestUserId($conversationId);
 
-        $this->clock->advance('+21 minutes');
+        $this->clock->advance($advance);
 
-        try {
-            $this->editService()->edit($this->knowledgeBase(), $participant, $conversationId, $userId, 'Too late?', 0);
-            $this->fail('Expected EditWindowExpired.');
-        } catch (EditWindowExpired) {
-            assertSame('First question?', $this->messages->findByIdInConversation($userId, $conversationId)?->content);
-            assertCount(0, $this->revisions->findByMessage($userId));
-            assertSame(1, $this->activeAnswerCount($conversationId, $userId));
-        }
+        $outcome = $this->editService()->edit($this->knowledgeBase(), $participant, $conversationId, $userId, 'Edited later?', 0);
+
+        assertTrue($outcome->answerRegenerated);
+        assertSame('Edited later?', $this->messages->findByIdInConversation($userId, $conversationId)?->content);
+        assertCount(1, $this->revisions->findByMessage($userId));
+        assertSame(1, $this->activeAnswerCount($conversationId, $userId));
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public function oldLatestAges(): iterable
+    {
+        yield '5 minutes' => ['+5 minutes'];
+        yield '20 minutes' => ['+20 minutes'];
+        yield '21 minutes (former cutoff)' => ['+21 minutes'];
+        yield '3 days' => ['+3 days'];
+        yield '6 months' => ['+6 months'];
     }
 
     public function testAssistantMessageIsNotEditable(): void
@@ -197,12 +213,15 @@ final class EditChatMessageServiceTest extends Unit
         }
     }
 
-    public function testNonLatestQuestionIsRejected(): void
+    public function testNonLatestQuestionIsRejectedEvenWhenRecent(): void
     {
         $participant = ChatParticipant::admin(1);
         $conversationId = $this->seed($participant, 'First question?');
         $firstUserId = $this->latestUserId($conversationId);
         $this->askService()->ask($this->knowledgeBase(), $conversationId, 'Second question?');
+
+        // Advance only one minute — age must not make an older question editable.
+        $this->clock->advance('+1 minute');
 
         $this->expectException(NotLatestQuestion::class);
         $this->editService()->edit($this->knowledgeBase(), $participant, $conversationId, $firstUserId, 'Editing the older one?', 0);
@@ -236,6 +255,16 @@ final class EditChatMessageServiceTest extends Unit
 
         $this->expectException(NotFoundException::class);
         $this->editService()->edit($this->knowledgeBase(), ChatParticipant::admin(2), $conversationId, $userId, 'Hijack?', 0);
+    }
+
+    public function testAnotherAgentCannotEdit(): void
+    {
+        $owner = ChatParticipant::agent(1);
+        $conversationId = $this->seed($owner, 'Agent question?');
+        $userId = $this->latestUserId($conversationId);
+
+        $this->expectException(NotFoundException::class);
+        $this->editService()->edit($this->knowledgeBase(), ChatParticipant::agent(2), $conversationId, $userId, 'Hijack?', 0);
     }
 
     public function testAgentWithSameNumericIdCannotEditAdminThread(): void
@@ -298,6 +327,50 @@ final class EditChatMessageServiceTest extends Unit
         assertSame(['First question?', 'Answer one.'], $history);
         assertNotContains('Answer two.', $history);
         assertSame('Second edited?', $this->provider->lastRequest?->question);
+    }
+
+    public function testStoreChatEditUsesStoreKnowledgeInstructions(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        $conversationId = $this->seed($participant, 'First question?');
+        $userId = $this->latestUserId($conversationId);
+
+        $this->editService()->edit(
+            $this->knowledgeBase(),
+            $participant,
+            $conversationId,
+            $userId,
+            'Edited store question?',
+            0,
+            ChatRetrievalScope::StoreKnowledge,
+        );
+
+        $instructions = (string) ($this->provider->lastRequest?->instructions ?? '');
+        assertFalse(str_contains($instructions, '[rule chat]'));
+        assertTrue(str_contains($instructions, '[reminder]'));
+    }
+
+    public function testRuleChatEditUsesRuleOnlyInstructions(): void
+    {
+        $this->knowledgeBases->seedReady(self::KB, EnsureCommonRulesKnowledgeBaseService::SLUG, 'vs_1');
+        $this->documents->setUsableGlobalRuleDocument(self::KB, true);
+        $participant = ChatParticipant::admin(1);
+        $conversationId = $this->seed($participant, 'First rule question?');
+        $userId = $this->latestUserId($conversationId);
+
+        $this->editService()->edit(
+            $this->knowledgeBase(),
+            $participant,
+            $conversationId,
+            $userId,
+            'Edited rule question?',
+            0,
+            ChatRetrievalScope::RuleOnly,
+        );
+
+        $instructions = (string) ($this->provider->lastRequest?->instructions ?? '');
+        assertTrue(str_contains($instructions, '[rule chat]'));
+        assertSame(1, $this->activeAnswerCount($conversationId, $userId));
     }
 
     public function testRegenerationFailureLeavesRecoverableRetryState(): void
@@ -422,7 +495,7 @@ final class EditChatMessageServiceTest extends Unit
             $this->messages,
             $this->rules,
             new ChatAvailabilityPolicy($this->documents, new InMemoryKnowledgeBaseSourceRepository()),
-            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService(new InMemoryKnowledgeBaseRepository()), $this->documents)),
+            new RuleChatAvailability(new CommonRulesReadiness(new EnsureCommonRulesKnowledgeBaseService($this->knowledgeBases), $this->documents)),
             $this->provider,
             new InstructionBuilder(new ImmutableSecurityInstructions()),
             new RecentMessagesHistoryPolicy(10, 8000),
@@ -450,7 +523,6 @@ final class EditChatMessageServiceTest extends Unit
             $this->askService(),
             new ImmediateTransactionRunner(),
             $this->clock,
-            $this->params(),
         );
     }
 
@@ -467,7 +539,6 @@ final class EditChatMessageServiceTest extends Unit
             maxQuestionLength: 2000,
             reasoningEffort: 'low',
             exhaustiveMaxResults: 20,
-            editWindowMinutes: 20,
         );
     }
 

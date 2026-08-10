@@ -12,7 +12,6 @@ use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
-use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
@@ -30,7 +29,6 @@ final readonly class Action
         private MessageRepositoryInterface $messages,
         private MarkdownRenderer $markdown,
         private CurrentAdmin $currentAdmin,
-        private ClockInterface $clock,
         private ChatParams $params,
     ) {}
 
@@ -57,10 +55,7 @@ final readonly class Action
                 $editView = MessageEditView::compute(
                     $this->messages,
                     $conversation->id,
-                    $messages,
                     $chatReady,
-                    $this->clock->now(),
-                    $this->params->editWindowMinutes,
                 );
             }
         }

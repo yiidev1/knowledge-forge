@@ -17,14 +17,13 @@ use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertTrue;
 
 /**
- * The server-computed edit affordances the templates rely on: only the latest question is editable and
- * only within the window; a latest question with no active answer is offered a retry and blocks the
- * composer; and nothing is offered when the base is not chat-ready.
+ * The server-computed edit affordances the templates rely on: only the latest question is editable at any
+ * age; a latest question with no active answer is offered a retry and blocks the composer; and nothing is
+ * offered when the base is not chat-ready.
  */
 final class MessageEditViewTest extends Unit
 {
     private const CONVERSATION = 100;
-    private const WINDOW = 20;
 
     private InMemoryMessageRepository $messages;
     private DateTimeImmutable $now;
@@ -35,27 +34,41 @@ final class MessageEditViewTest extends Unit
         $this->now = new DateTimeImmutable('2026-01-01 12:00:00', new DateTimeZone('UTC'));
     }
 
-    public function testLatestQuestionWithinWindowIsEditableAndNotRetryable(): void
+    public function testLatestQuestionFiveMinutesOldIsEditable(): void
     {
         $userId = $this->messages->add(NewMessage::user(self::CONVERSATION, 'Q'), $this->now);
         $this->messages->insertActiveAnswer($this->answer($userId), $this->now->modify('+1 second'));
 
-        $view = $this->compute(true, $this->now->modify('+5 minutes'));
+        // Age is irrelevant — compute no longer takes a clock.
+        $view = $this->compute(true);
 
         assertTrue($view->isEditable($userId));
         assertFalse($view->isRetry($userId));
         assertFalse($view->hasBlockedComposer());
     }
 
-    public function testQuestionPastWindowIsNotEditable(): void
+    public function testLatestQuestionPastFormerTwentyMinuteWindowIsStillEditable(): void
     {
         $userId = $this->messages->add(NewMessage::user(self::CONVERSATION, 'Q'), $this->now);
         $this->messages->insertActiveAnswer($this->answer($userId), $this->now->modify('+1 second'));
 
-        $view = $this->compute(true, $this->now->modify('+21 minutes'));
+        $view = $this->compute(true);
 
-        assertFalse($view->isEditable($userId));
-        assertNull($view->editableMessageId);
+        assertTrue($view->isEditable($userId));
+        assertNull($view->retryMessageId);
+    }
+
+    public function testLatestQuestionDaysAndMonthsOldIsEditable(): void
+    {
+        $userId = $this->messages->add(
+            NewMessage::user(self::CONVERSATION, 'Q'),
+            $this->now->modify('-6 months'),
+        );
+        $this->messages->insertActiveAnswer($this->answer($userId), $this->now->modify('-6 months +1 second'));
+
+        $view = $this->compute(true);
+
+        assertTrue($view->isEditable($userId));
     }
 
     public function testOnlyTheLatestQuestionIsEditable(): void
@@ -65,7 +78,7 @@ final class MessageEditViewTest extends Unit
         $secondUser = $this->messages->add(NewMessage::user(self::CONVERSATION, 'Q2'), $this->now->modify('+2 seconds'));
         $this->messages->insertActiveAnswer($this->answer($secondUser), $this->now->modify('+3 seconds'));
 
-        $view = $this->compute(true, $this->now->modify('+5 minutes'));
+        $view = $this->compute(true);
 
         assertFalse($view->isEditable($firstUser));
         assertTrue($view->isEditable($secondUser));
@@ -74,13 +87,11 @@ final class MessageEditViewTest extends Unit
     public function testUnansweredLatestQuestionOffersRetryAndBlocksComposer(): void
     {
         $userId = $this->messages->add(NewMessage::user(self::CONVERSATION, 'Q'), $this->now);
-        // No active answer (or a superseded one) → unanswered.
 
-        $view = $this->compute(true, $this->now->modify('+5 minutes'));
+        $view = $this->compute(true);
 
         assertTrue($view->isRetry($userId));
         assertTrue($view->hasBlockedComposer());
-        // A within-window question can be both editable and retryable.
         assertTrue($view->isEditable($userId));
     }
 
@@ -88,7 +99,7 @@ final class MessageEditViewTest extends Unit
     {
         $userId = $this->messages->add(NewMessage::user(self::CONVERSATION, 'Q'), $this->now);
 
-        $view = $this->compute(false, $this->now->modify('+1 minute'));
+        $view = $this->compute(false);
 
         assertNull($view->editableMessageId);
         assertNull($view->retryMessageId);
@@ -98,21 +109,18 @@ final class MessageEditViewTest extends Unit
 
     public function testEmptyThreadOffersNothing(): void
     {
-        $view = $this->compute(true, $this->now);
+        $view = $this->compute(true);
 
         assertNull($view->editableMessageId);
         assertNull($view->retryMessageId);
     }
 
-    private function compute(bool $chatReady, DateTimeImmutable $now): MessageEditView
+    private function compute(bool $chatReady): MessageEditView
     {
         return MessageEditView::compute(
             $this->messages,
             self::CONVERSATION,
-            $this->messages->findRecentByConversation(self::CONVERSATION, 40),
             $chatReady,
-            $now,
-            self::WINDOW,
         );
     }
 

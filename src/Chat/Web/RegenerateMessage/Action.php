@@ -21,8 +21,7 @@ use Yiisoft\Session\SessionInterface;
  * (POST /knowledge-bases/{slug}/chat/{conversationId}/messages/{messageId}/regenerate).
  *
  * Idempotent: if the question already has an active answer the service no-ops. Ownership is resolved
- * server-side; a forged id is a 404. Allowed past the edit window — recovering an unanswered turn is not an
- * edit.
+ * server-side; a forged id is a 404.
  */
 final readonly class Action
 {
