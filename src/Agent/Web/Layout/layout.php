@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Agent\Application\CurrentAgent;
 use App\Shared\Web\Flash\FlashMessages;
+use App\Shared\Web\Support\AlphabetIndex;
 use App\Web\Shared\Layout\Admin\AdminAsset;
 use Yiisoft\Aliases\Aliases;
 use Yiisoft\Html\Html;
@@ -32,6 +33,16 @@ $this->addJsFiles($assetManager->getJsFiles());
 $agent = $currentAgent->getOrNull();
 $activeRoute = $currentRoute->getName() ?? '';
 
+// The active A–Z letter for the Stores sidebar (from the ?letter= query on the agent store list). Derived
+// here rather than in the sidebar so the partial stays a pure renderer, matching the admin layout.
+$activeLetter = AlphabetIndex::ALL;
+$currentUri = $currentRoute->getUri();
+if ($currentUri !== null) {
+    parse_str($currentUri->getQuery(), $queryParams);
+    $letterParam = $queryParams['letter'] ?? null;
+    $activeLetter = AlphabetIndex::normalize(is_string($letterParam) ? $letterParam : null);
+}
+
 /** @var list<array{level: string, message: string}> $flashMessages */
 $flashMessages = $flash->consume();
 
@@ -51,6 +62,7 @@ $this->beginPage();
 <div class="app">
     <?= $this->render(__DIR__ . '/_sidebar', [
         'activeRoute' => $activeRoute,
+        'activeLetter' => $activeLetter,
         'agent' => $agent,
         'urlGenerator' => $urlGenerator,
         'csrf' => $csrf,
