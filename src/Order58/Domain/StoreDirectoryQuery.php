@@ -18,10 +18,10 @@ final readonly class StoreDirectoryQuery
         public int $page = 1,
         public int $perPage = 24,
         /**
-         * Restrict to stores that are actually chat-eligible by the canonical policy (source active, KB ready,
-         * a usable indexed document). Used by the admin "Store chat" picker; the full directory leaves it false.
+         * Independent chat-availability axis: restrict to stores that can (or cannot) open chat right now by the
+         * canonical eligibility policy. {@see StoreChatAvailabilityFilter::All} applies no restriction.
          */
-        public bool $chatReadyOnly = false,
+        public StoreChatAvailabilityFilter $chatAvailability = StoreChatAvailabilityFilter::All,
         /** Independent Order58 source-active axis (separate from the knowledge-pipeline {@see $filter}). */
         public StoreSourceStatusFilter $sourceStatus = StoreSourceStatusFilter::All,
         /** Independent admin agent-access axis. */

@@ -7,6 +7,7 @@ namespace App\Order58\Infrastructure;
 use App\KnowledgeBase\Domain\VectorStoreStatus;
 use App\KnowledgeBase\Infrastructure\KnowledgeBaseChatEligibilitySql;
 use App\Order58\Domain\StoreAgentAvailabilityFilter;
+use App\Order58\Domain\StoreChatAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryQuery;
@@ -142,10 +143,13 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
             StoreAgentAvailabilityFilter::Disabled => $q->andWhere(['kb.agent_enabled' => 0]),
         };
 
-        // The store-chat picker shows only stores that are chat-eligible by the canonical policy.
-        if ($query->chatReadyOnly) {
-            $q->andWhere(new Expression(KnowledgeBaseChatEligibilitySql::isEligible()));
-        }
+        // Independent chat-availability axis, applied in SQL straight from the canonical eligibility rule so the
+        // filter, its total and its letter counts all agree with the chat button each card shows.
+        match ($query->chatAvailability) {
+            StoreChatAvailabilityFilter::All => null,
+            StoreChatAvailabilityFilter::Available => $q->andWhere(new Expression(KnowledgeBaseChatEligibilitySql::isEligible())),
+            StoreChatAvailabilityFilter::Unavailable => $q->andWhere(new Expression('NOT (' . KnowledgeBaseChatEligibilitySql::isEligible() . ')')),
+        };
 
         return $q;
     }

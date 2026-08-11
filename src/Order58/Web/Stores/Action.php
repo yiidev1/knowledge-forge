@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Web\Stores;
 
 use App\Order58\Domain\StoreAgentAvailabilityFilter;
+use App\Order58\Domain\StoreChatAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
@@ -45,6 +46,7 @@ final readonly class Action
         $filter = StoreDirectoryFilter::fromRequest(is_string($rawFilter) ? $rawFilter : null);
         $sourceStatus = StoreSourceStatusFilter::fromRequest(is_string($params['status'] ?? null) ? (string) $params['status'] : null);
         $agent = StoreAgentAvailabilityFilter::fromRequest(is_string($params['agent'] ?? null) ? (string) $params['agent'] : null);
+        $chatAvailability = StoreChatAvailabilityFilter::fromRequest(is_string($params['chat'] ?? null) ? (string) $params['chat'] : null);
         $letter = AlphabetIndex::normalize(is_string($rawLetter) ? $rawLetter : null);
         $page = is_string($rawPage) ? max(1, (int) $rawPage) : 1;
 
@@ -54,7 +56,7 @@ final readonly class Action
             $letter,
             $p,
             self::PER_PAGE,
-            false,
+            $chatAvailability,
             $sourceStatus,
             $agent,
         );
@@ -73,6 +75,7 @@ final readonly class Action
                 'filter' => $filter,
                 'sourceStatus' => $sourceStatus,
                 'agent' => $agent,
+                'chatAvailability' => $chatAvailability,
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
             ]);

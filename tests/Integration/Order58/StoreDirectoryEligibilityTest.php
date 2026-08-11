@@ -8,6 +8,7 @@ use App\Chat\Application\ChatAvailabilityPolicy;
 use App\KnowledgeBase\Infrastructure\DbKnowledgeBaseRepository;
 use App\KnowledgeBase\Infrastructure\DbKnowledgeBaseSourceRepository;
 use App\Order58\Domain\StoreAgentAvailabilityFilter;
+use App\Order58\Domain\StoreChatAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryQuery;
@@ -25,7 +26,9 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use function array_map;
 use function bin2hex;
 use function random_bytes;
+use function PHPUnit\Framework\assertContains;
 use function PHPUnit\Framework\assertFalse;
+use function PHPUnit\Framework\assertNotContains;
 use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertTrue;
@@ -173,11 +176,26 @@ final class StoreDirectoryEligibilityTest extends Unit
 
     public function testSourceAndAgentFiltersAreIndependentAndSql(): void
     {
-        $inactive = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, false, StoreSourceStatusFilter::Inactive));
+        $inactive = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, StoreChatAvailabilityFilter::All, StoreSourceStatusFilter::Inactive));
         assertSame(['zzelig-inactive'], $inactive);
 
-        $agentOff = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, false, StoreSourceStatusFilter::All, StoreAgentAvailabilityFilter::Disabled));
+        $agentOff = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, StoreChatAvailabilityFilter::All, StoreSourceStatusFilter::All, StoreAgentAvailabilityFilter::Disabled));
         assertSame(['zzelig-agentoff'], $agentOff);
+    }
+
+    public function testChatAvailabilityFilterIsIndependentAndSql(): void
+    {
+        // "Chat available" keeps only stores the canonical policy says can open chat; "Chat unavailable" is its
+        // exact complement. Both applied in SQL, so the counts always match the button each card shows.
+        $available = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, StoreChatAvailabilityFilter::Available));
+        assertContains('zzelig-eligible', $available);
+        assertNotContains('zzelig-inactive', $available);
+        assertNotContains('zzelig-rulesonly', $available, 'a rule-only store cannot open chat');
+
+        $unavailable = $this->slugs(new StoreDirectoryQuery('zzelig', StoreDirectoryFilter::All, 'all', 1, 50, StoreChatAvailabilityFilter::Unavailable));
+        assertNotContains('zzelig-eligible', $unavailable);
+        assertContains('zzelig-inactive', $unavailable);
+        assertContains('zzelig-rulesonly', $unavailable);
     }
 
     /**

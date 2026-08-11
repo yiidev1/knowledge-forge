@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Order58\Domain\StoreAgentAvailabilityFilter;
+use App\Order58\Domain\StoreChatAvailabilityFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
@@ -19,6 +20,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var StoreDirectoryFilter $filter
  * @var StoreSourceStatusFilter $sourceStatus
  * @var StoreAgentAvailabilityFilter $agent
+ * @var StoreChatAvailabilityFilter $chatAvailability
  * @var string $letter
  * @var int $page
  */
@@ -41,12 +43,13 @@ $chatReasonLabel = static fn(?string $code): string => match ($code) {
 /**
  * @param array<string, string|int> $overrides
  */
-$dirUrl = static function (array $overrides) use ($base, $search, $filter, $sourceStatus, $agent, $letter, $page): string {
+$dirUrl = static function (array $overrides) use ($base, $search, $filter, $sourceStatus, $agent, $chatAvailability, $letter, $page): string {
     $state = [
         'q' => $search,
         'filter' => $filter->value,
         'status' => $sourceStatus->value,
         'agent' => $agent->value,
+        'chat' => $chatAvailability->value,
         'letter' => $letter,
         'page' => $page,
     ];
@@ -65,6 +68,9 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $sour
     }
     if ($state['agent'] !== StoreAgentAvailabilityFilter::All->value) {
         $params['agent'] = $state['agent'];
+    }
+    if ($state['chat'] !== StoreChatAvailabilityFilter::All->value) {
+        $params['chat'] = $state['chat'];
     }
     if ($state['letter'] !== AlphabetIndex::ALL) {
         $params['letter'] = $state['letter'];
@@ -101,6 +107,11 @@ $dirUrl = static function (array $overrides) use ($base, $search, $filter, $sour
     <span class="filter-bar__sep" aria-hidden="true"></span>
     <?php foreach (StoreSourceStatusFilter::cases() as $option): ?>
         <a class="filter-chip<?= $option === $sourceStatus ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['status' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
+    <?php endforeach; ?>
+    <span class="filter-bar__sep" aria-hidden="true"></span>
+    <?php foreach (StoreChatAvailabilityFilter::cases() as $option): ?>
+        <?php if ($option === StoreChatAvailabilityFilter::Unavailable): continue; endif; // the picker is for opening chat, so a "Chat unavailable" filter is not useful here?>
+        <a class="filter-chip<?= $option === $chatAvailability ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['chat' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
     <?php endforeach; ?>
 </div>
 
