@@ -10,9 +10,12 @@ use App\Order58\Contract\Dto\Order58AuthResult;
 use App\Order58\Contract\Dto\Order58ErrorDetails;
 use App\Order58\Contract\Exception\Order58TransportFailed;
 use App\Tests\Support\Fake\Agent\InMemoryAgentIdentityStore;
+use App\Tests\Support\Fake\Agent\InMemoryAgentLoginActivityRepository;
 use App\Tests\Support\Fake\Auth\InMemoryLoginThrottle;
 use App\Tests\Support\Fake\Order58\FakeOrder58Client;
+use App\Tests\Support\MutableClock;
 use Codeception\Test\Unit;
+use Psr\Log\NullLogger;
 
 use function PHPUnit\Framework\assertArrayNotHasKey;
 use function PHPUnit\Framework\assertFalse;
@@ -29,6 +32,7 @@ final class AgentLoginServiceTest extends Unit
     private FakeOrder58Client $client;
     private InMemoryAgentIdentityStore $identityStore;
     private InMemoryLoginThrottle $throttle;
+    private InMemoryAgentLoginActivityRepository $loginActivity;
     private AgentLoginService $service;
 
     protected function _before(): void
@@ -36,7 +40,14 @@ final class AgentLoginServiceTest extends Unit
         $this->client = new FakeOrder58Client();
         $this->identityStore = new InMemoryAgentIdentityStore();
         $this->throttle = new InMemoryLoginThrottle();
-        $this->service = new AgentLoginService($this->client, $this->identityStore, $this->throttle);
+        $this->loginActivity = new InMemoryAgentLoginActivityRepository(new MutableClock());
+        $this->service = new AgentLoginService(
+            $this->client,
+            $this->identityStore,
+            $this->throttle,
+            $this->loginActivity,
+            new NullLogger(),
+        );
     }
 
     private function agent(string $userType = 'agent', string $status = 'active'): Order58Agent
