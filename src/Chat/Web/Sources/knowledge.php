@@ -35,8 +35,8 @@ $total = count($items);
 </div>
 
 <section class="card">
-    <div class="util-row" style="justify-content: space-between; align-items: baseline;">
-        <h2 class="card__title" style="margin: 0;">
+    <div class="util-row util-row--between">
+        <h2 class="card__title">
             <?= $total ?> document<?= $total === 1 ? '' : 's' ?>
         </h2>
         <?php if ($total > 0): ?>

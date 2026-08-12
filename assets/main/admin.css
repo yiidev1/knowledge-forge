@@ -370,6 +370,12 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 .util-mono { font-family: var(--mono); }
 .util-mt { margin-top: 1.5rem; }
 .util-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+/* Heading on the left, a secondary figure pushed to the right edge. A real class rather than an inline
+   style because the CSP is `style-src 'self'`: a `style` attribute is blocked outright, which silently
+   left rows like "380 indexed rules / Page 1 of 16" bunched at the left. */
+.util-row--between { justify-content: space-between; align-items: baseline; margin-bottom: 1.15rem; }
+/* The row owns the gap to whatever follows it, so the title does not add a second one on top. */
+.util-row--between .card__title { margin-bottom: 0; }
 
 /* ---- Responsive ----------------------------------------------------------- */
 

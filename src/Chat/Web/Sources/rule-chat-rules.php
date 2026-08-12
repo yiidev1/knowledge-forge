@@ -41,8 +41,8 @@ $pageUrl = static fn(int $target): string => $urlGenerator->generate($pageRoute,
 </div>
 
 <section class="card">
-    <div class="util-row" style="justify-content: space-between; align-items: baseline;">
-        <h2 class="card__title" style="margin: 0;">
+    <div class="util-row util-row--between">
+        <h2 class="card__title">
             <?= $result->total ?> indexed rule<?= $result->total === 1 ? '' : 's' ?>
         </h2>
         <?php if ($result->pageCount() > 1): ?>
