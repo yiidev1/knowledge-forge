@@ -9,8 +9,10 @@ use App\Chat\Domain\ChatSourceItem;
 use App\Document\Application\ServeCanonicalDocumentService;
 use App\Document\Domain\DocumentListItem;
 use App\Document\Domain\DocumentRepositoryInterface;
+use App\Document\Domain\DocumentSourceType;
 use App\Document\Domain\TextDocumentRepositoryInterface;
 use App\KnowledgeBase\Domain\KnowledgeBase;
+use App\Order58\Application\Order58DisplayParams;
 use Throwable;
 
 use function in_array;
@@ -43,6 +45,7 @@ final readonly class ChatKnowledgeSourcesService
         private TextDocumentRepositoryInterface $documents,
         private DocumentRepositoryInterface $repository,
         private ServeCanonicalDocumentService $canonical,
+        private Order58DisplayParams $order58Display,
     ) {}
 
     /**
@@ -61,6 +64,14 @@ final readonly class ChatKnowledgeSourcesService
             // it is omitted rather than listed as unavailable, so Store Chat's page never advertises a rule
             // projection and Rule Chat's never advertises store knowledge.
             if (!$scope->allows($document->sourceType)) {
+                continue;
+            }
+
+            // The same operator switch the knowledge-base management page honours
+            // ({@see \App\KnowledgeBase\Web\Show\Action}). Filtering here rather than in the template is what
+            // keeps the counts truthful: both the total and the "available" tally are derived from this list.
+            if (!$this->order58Display->showStoreProfileDocuments
+                && $document->sourceType === DocumentSourceType::Order58StoreProfile) {
                 continue;
             }
 
