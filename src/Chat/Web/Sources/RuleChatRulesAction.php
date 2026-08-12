@@ -54,7 +54,6 @@ final readonly class RuleChatRulesAction
                 'result' => $result,
                 'page' => $result->currentPage(),
                 'chatReady' => $this->availability->isAvailable(),
-                'showDetailColumns' => true,
                 'pageRoute' => 'admin.rule-chat.sources.rules',
                 'backUrl' => $this->urlGenerator->generate('admin.rule-chat.index'),
                 'backLabel' => 'Back to chat',

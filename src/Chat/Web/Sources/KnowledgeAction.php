@@ -39,8 +39,6 @@ final readonly class KnowledgeAction
                 'contextName' => $knowledgeBase->name(),
                 'items' => $items,
                 'retrievableCount' => $this->sources->retrievableCount($items),
-                // Operator surface: the pipeline columns are the point of this page for an admin.
-                'showDetailColumns' => true,
                 'backUrl' => $this->urlGenerator->generate('chat.index', ['slug' => $slug]),
                 'backLabel' => 'Back to chat',
             ]);

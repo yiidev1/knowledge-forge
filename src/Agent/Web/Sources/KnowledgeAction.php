@@ -40,8 +40,6 @@ final readonly class KnowledgeAction
                 'contextName' => $knowledgeBase->name(),
                 'items' => $items,
                 'retrievableCount' => $this->sources->retrievableCount($items),
-                // Agents read the documents, not the pipeline; an unreachable one is flagged inline instead.
-                'showDetailColumns' => false,
                 'backUrl' => $this->urlGenerator->generate('agent.chat.index', ['slug' => $slug]),
                 'backLabel' => 'Back to chat',
             ]);

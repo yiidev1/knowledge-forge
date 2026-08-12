@@ -17,8 +17,6 @@ use Yiisoft\Html\Html;
  * @var int $retrievableCount
  * @var string $backUrl
  * @var string $backLabel
- * @var bool $showDetailColumns Operator columns (type, status, availability, date). The agent surface reads
- *                              the documents themselves; an unreachable one is flagged inline instead.
  */
 
 $this->setTitle($title);
@@ -56,12 +54,6 @@ $total = count($items);
                 <thead>
                     <tr>
                         <th>Document</th>
-                        <?php if ($showDetailColumns): ?>
-                            <th>Type</th>
-                            <th>Status</th>
-                            <th>Available to this chat</th>
-                            <th>Added</th>
-                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -80,26 +72,12 @@ $total = count($items);
                                     <?= Html::encode($item->title) ?>
                                     <div class="src-detail__note">No readable text for this document.</div>
                                 <?php endif; ?>
-                                <?php if (!$showDetailColumns && !$item->retrievable): ?>
+                                <?php if (!$item->retrievable): ?>
                                     <div class="src-detail__note">
                                         Not available to this chat — <?= Html::encode((string) $item->unavailableReason()) ?>.
                                     </div>
                                 <?php endif; ?>
                             </td>
-                            <?php if ($showDetailColumns): ?>
-                                <td class="util-muted"><?= Html::encode($item->typeLabel()) ?></td>
-                                <td>
-                                    <span class="badge badge--<?= Html::encode($item->displayStatus->badge()) ?>"><?= Html::encode($item->displayStatus->label()) ?></span>
-                                </td>
-                                <td>
-                                    <?php if ($item->retrievable): ?>
-                                        <span class="badge badge--success">Available</span>
-                                    <?php else: ?>
-                                        <span class="util-muted">No — <?= Html::encode((string) $item->unavailableReason()) ?></span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="util-muted"><?= Html::encode($item->createdAt->format('Y-m-d H:i')) ?></td>
-                            <?php endif; ?>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

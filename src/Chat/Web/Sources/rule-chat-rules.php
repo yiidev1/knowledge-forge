@@ -22,8 +22,6 @@ use Yiisoft\Html\Html;
  * @var string $pageRoute
  * @var string $backUrl
  * @var string $backLabel
- * @var bool $showDetailColumns Operator columns (ids, scope, status, dates). The agent surface reads the
- *                              rules themselves and does not need pipeline diagnostics.
  * @var Yiisoft\Router\UrlGeneratorInterface $urlGenerator
  */
 
@@ -63,14 +61,6 @@ $pageUrl = static fn(int $target): string => $urlGenerator->generate($pageRoute,
                 <thead>
                     <tr>
                         <th>Rule</th>
-                        <?php if ($showDetailColumns): ?>
-                            <th>Source id</th>
-                            <th>Canonical id</th>
-                            <th>Type</th>
-                            <th>Scope</th>
-                            <th>Status</th>
-                            <th>Updated</th>
-                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -87,14 +77,6 @@ $pageUrl = static fn(int $target): string => $urlGenerator->generate($pageRoute,
                                     <?= Html::encode($item->title) ?>
                                 <?php endif; ?>
                             </td>
-                            <?php if ($showDetailColumns): ?>
-                                <td class="util-muted">#<?= $item->sourceId ?></td>
-                                <td class="util-muted"><?= $item->canonicalId === null ? '—' : '#' . $item->canonicalId ?></td>
-                                <td class="util-muted"><?= Html::encode($item->typeLabel()) ?></td>
-                                <td class="util-muted"><?= $item->isStoreSpecific() ? Html::encode((string) $item->storeName) : 'Global' ?></td>
-                                <td><span class="badge badge--<?= Html::encode($item->status->badge()) ?>"><?= Html::encode($item->status->label()) ?></span></td>
-                                <td class="util-muted"><?= Html::encode($item->updatedAt) ?></td>
-                            <?php endif; ?>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
