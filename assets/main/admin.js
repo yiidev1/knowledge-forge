@@ -188,8 +188,70 @@
         if (cancel) {
             event.preventDefault();
             toggleEdit(cancel.closest('.chat-msg'), false);
+            return;
+        }
+
+        // Answer feedback. "Yes", "Change" and "Rate this answer" all just reveal the slider — nothing is
+        // recorded until "Save score" posts the form, so moving the slider never writes a score.
+        var scoreOpen = target.closest('[data-score-open]');
+        if (scoreOpen) {
+            event.preventDefault();
+            toggleScoring(scoreOpen.closest('.chat-msg'), true);
+            return;
+        }
+
+        var scoreCancel = target.closest('[data-score-cancel]');
+        if (scoreCancel) {
+            event.preventDefault();
+            toggleScoring(scoreCancel.closest('.chat-msg'), false);
         }
     });
+
+    // Score bands. Mirrors the $band() closure in src/Chat/Web/_partial/score-panel.php, which renders the
+    // same words server-side for a saved score — keep the two in step.
+    function scoreBand(value) {
+        if (value <= 3) { return { slug: 'poor', label: 'Poor' }; }
+        if (value <= 6) { return { slug: 'fair', label: 'Fair' }; }
+        if (value <= 8) { return { slug: 'good', label: 'Good' }; }
+        return { slug: 'excellent', label: 'Excellent' };
+    }
+
+    // Live "8/10 · Good" readout beside the slider, plus the band attribute that recolours the track.
+    // Display only — the value the server trusts is the posted one, which it re-validates.
+    document.addEventListener('input', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element) || !target.hasAttribute('data-score-range')) {
+            return;
+        }
+
+        var band = scoreBand(Number(target.value));
+        var panel = target.closest('[data-score-panel]');
+        if (panel) {
+            // Band picks the colour; value positions the track fill. Both are plain attribute swaps, because
+            // the CSP forbids inline styles — the CSS holds the fraction for each of the ten stops.
+            panel.setAttribute('data-score-band', band.slug);
+            panel.setAttribute('data-score-value', target.value);
+        }
+
+        var row = target.closest('.chat-msg__score-slider');
+        var output = row ? row.querySelector('.chat-msg__score-output') : null;
+        if (output) {
+            output.textContent = target.value + '/10 · ' + band.label;
+        }
+    });
+
+    function toggleScoring(article, open) {
+        if (!article) {
+            return;
+        }
+        article.classList.toggle('chat-msg--scoring', open);
+        if (open) {
+            var range = article.querySelector('[data-score-range]');
+            if (range) {
+                range.focus();
+            }
+        }
+    }
 
     function toggleEdit(article, open) {
         if (!article) {
@@ -460,6 +522,17 @@
                 var ung = el('div', 'chat-msg__citations util-muted');
                 ung.appendChild(document.createTextNode('No cited source for this answer.'));
                 article.appendChild(ung);
+            }
+
+            // Older answers show a score they already carry, but not the rating control: building the form
+            // here would mean templating the action URL and copying the CSRF token into JS. Rating stays on
+            // the server-rendered thread, where the form arrives with its own token.
+            if (msg.score) {
+                var scoreBox = el('div', 'chat-msg__score');
+                var saved = el('div', 'chat-msg__score-saved');
+                saved.appendChild(el('span', 'chat-msg__score-badge', '✓ Score saved: ' + msg.score + '/10'));
+                scoreBox.appendChild(saved);
+                article.appendChild(scoreBox);
             }
         }
 

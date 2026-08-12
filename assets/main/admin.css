@@ -27,6 +27,12 @@
     --error-bg: #fef2f2;   --error-border: #fecaca;   --error-text: #991b1b;
     --warning-bg: #fffbeb; --warning-border: #fde68a; --warning-text: #92400e;
     --info-bg: #eff6ff;    --info-border: #bfdbfe;    --info-text: #1e40af;
+    /* Answer-score bands. Chosen to stay legible on both the light and dark surfaces above, so they need no
+       per-theme override; the matching words are always rendered alongside. */
+    --score-poor: #ef4444;
+    --score-fair: #f59e0b;
+    --score-good: #10b981;
+    --score-excellent: #22c55e;
     --radius: 10px;
     --radius-sm: 6px;
     --shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 1px 2px rgba(15, 23, 42, .04);
@@ -600,6 +606,120 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     background: var(--surface); border: 1px solid var(--border-strong);
     font-size: .8rem; color: var(--text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Answer feedback: deliberately quieter than the answer itself — a dashed rule and muted text, so it reads
+   as a footnote rather than a card competing with the response. */
+.chat-msg__score {
+    margin-top: .55rem; padding-top: .5rem;
+    border-top: 1px dashed var(--border);
+    font-size: .82rem; color: var(--text-muted);
+}
+/* Semantic score bands. The word is always rendered beside the number, so colour is reinforcement, never the
+   only signal — the control stays readable without colour perception. Mirrored in admin.js (scoreBand). */
+.chat-msg__score[data-score-band="poor"]      { --score-color: var(--score-poor); }
+.chat-msg__score[data-score-band="fair"]      { --score-color: var(--score-fair); }
+.chat-msg__score[data-score-band="good"]      { --score-color: var(--score-good); }
+.chat-msg__score[data-score-band="excellent"] { --score-color: var(--score-excellent); }
+
+/* Track fill position, as a 0–1 fraction of the ten stops. Expressed as discrete rules rather than an
+   inline style because the CSP is `style-src 'self'` — a style attribute would be blocked, and CSS cannot
+   read a numeric value out of a data attribute. JS swaps the same attribute the server renders. */
+.chat-msg__score[data-score-value="1"]  { --score-pos: 0; }
+.chat-msg__score[data-score-value="2"]  { --score-pos: .1111; }
+.chat-msg__score[data-score-value="3"]  { --score-pos: .2222; }
+.chat-msg__score[data-score-value="4"]  { --score-pos: .3333; }
+.chat-msg__score[data-score-value="5"]  { --score-pos: .4444; }
+.chat-msg__score[data-score-value="6"]  { --score-pos: .5556; }
+.chat-msg__score[data-score-value="7"]  { --score-pos: .6667; }
+.chat-msg__score[data-score-value="8"]  { --score-pos: .7778; }
+.chat-msg__score[data-score-value="9"]  { --score-pos: .8889; }
+.chat-msg__score[data-score-value="10"] { --score-pos: 1; }
+/* The thumb centre travels between half-thumb insets, so the fill is offset to end under the thumb rather
+   than at a naive percentage of the full width. */
+.chat-msg__score { --score-fill: calc(var(--score-pos, .4444) * (100% - 15px) + 7.5px); }
+
+.chat-msg__score-ask, .chat-msg__score-saved { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.chat-msg__score-dismiss { display: inline; }
+.chat-msg__score-badge { color: var(--score-color, var(--text)); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chat-msg__score-link {
+    background: none; border: none; padding: 0; font: inherit; font-weight: 600;
+    color: var(--primary); cursor: pointer; text-decoration: underline;
+}
+.chat-msg__score-link:hover { color: var(--primary-hover); }
+.chat-msg__score-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
+
+/* Inline pencil beside a saved score — same affordance as the question edit icon, sized to sit in a line of
+   text rather than float beside the message. */
+.chat-msg__score-edit {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; margin-left: .1rem;
+    background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--text-faint); cursor: pointer;
+}
+.chat-msg__score-edit svg { width: 13px; height: 13px; display: block; pointer-events: none; }
+.chat-msg__score-edit:hover,
+.chat-msg__score-edit:focus-visible { color: var(--primary); border-color: var(--primary); background: var(--surface-2); }
+
+/* The slider panel is always in the DOM; a state class on the article reveals it, exactly like the inline
+   edit form. That keeps the whole interaction CSS-driven and needs no markup building in JS. */
+.chat-msg__score-form { display: none; flex-direction: column; gap: .5rem; margin-top: .25rem; }
+.chat-msg--scoring .chat-msg__score-form { display: flex; }
+.chat-msg--scoring .chat-msg__score-ask,
+.chat-msg--scoring .chat-msg__score-saved { display: none; }
+.chat-msg__score-label { font-weight: 600; color: var(--text); margin-bottom: -.1rem; }
+.chat-msg__score-slider { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+.chat-msg__score-bound { color: var(--text-faint); font-variant-numeric: tabular-nums; font-size: .78rem; }
+.chat-msg__score-output {
+    font-weight: 600; color: var(--score-color, var(--text));
+    font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: .15rem;
+}
+.chat-msg__score-scale { display: flex; gap: .8rem; flex-wrap: wrap; color: var(--text-faint); font-size: .72rem; }
+.chat-msg__score-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .1rem; }
+/* Sized down from the page-level button scale: these belong to the rating row, not to the page. */
+.chat-msg__score-save { padding: .3rem .7rem; font-size: .8rem; }
+
+/* Compact range input. accent-color alone cannot size a track, so both vendor track/thumb pairs are set
+   explicitly; accent-color stays as the fallback for engines that ignore them. */
+.chat-msg__score-slider input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; max-width: 220px; height: 15px;
+    background: transparent; cursor: pointer;
+    accent-color: var(--score-color, var(--primary));
+}
+/* WebKit has no ::-moz-range-progress equivalent, so the filled part is a hard-stop gradient on the track:
+   semantic colour up to the thumb, neutral after it. One colour at a time — never a red→green ramp. */
+.chat-msg__score-slider input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px; border-radius: 999px;
+    background: linear-gradient(
+        to right,
+        var(--score-color, var(--primary)) var(--score-fill),
+        var(--border-strong) var(--score-fill)
+    );
+}
+.chat-msg__score-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 15px; height: 15px; margin-top: -4.5px;
+    border-radius: 50%; border: 2px solid var(--surface);
+    background: var(--score-color, var(--primary));
+}
+.chat-msg__score-slider input[type="range"]::-moz-range-track {
+    height: 6px; border-radius: 999px; background: var(--border-strong);
+}
+.chat-msg__score-slider input[type="range"]::-moz-range-progress {
+    height: 6px; border-radius: 999px; background: var(--score-color, var(--primary));
+}
+.chat-msg__score-slider input[type="range"]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid var(--surface); background: var(--score-color, var(--primary));
+}
+.chat-msg__score-slider input[type="range"]:focus-visible { outline: 2px solid var(--score-color, var(--primary)); outline-offset: 4px; }
+
+@media (max-width: 480px) {
+    /* Let the track take the row and push the value onto its own line rather than truncating it. */
+    .chat-msg__score-slider input[type="range"] { max-width: none; flex: 1 1 100%; order: 3; }
+    .chat-msg__score-bound { order: 1; }
+    .chat-msg__score-output { order: 2; margin-left: auto; }
 }
 
 /* Screen-reader-only helper for labels that are visually implied. */

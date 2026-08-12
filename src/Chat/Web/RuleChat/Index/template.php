@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use App\Chat\Domain\Conversation;
 use App\Chat\Domain\Message;
+use App\Chat\Web\ChatPartials;
 use App\Chat\Web\MessageEditView;
+use App\Chat\Web\MessageScoreView;
 use App\KnowledgeBase\Domain\KnowledgeBase;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Yiisoft\Html\Html;
@@ -23,6 +25,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string|null $unavailableMessage
  * @var MarkdownRenderer $markdown
  * @var MessageEditView $editView
+ * @var MessageScoreView $scoreView
  * @var int $maxQuestionLength
  */
 
@@ -124,6 +127,15 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                             <?php elseif (!$message->isGrounded): ?>
                                 <div class="chat-msg__citations util-muted">No cited source for this answer.</div>
                             <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($message->isAssistant() && $conversation !== null): ?>
+                            <?= $this->render(ChatPartials::scorePanel(), [
+                                'messageId' => $message->id,
+                                'state' => $scoreView->stateFor($message->id),
+                                'scoreUrl' => $urlGenerator->generate('admin.rule-chat.message.score', ['conversationId' => $conversation->id, 'messageId' => $message->id]),
+                                'dismissUrl' => $urlGenerator->generate('admin.rule-chat.message.score.dismiss', ['conversationId' => $conversation->id, 'messageId' => $message->id]),
+                                'csrfField' => $csrfField,
+                            ]) ?>
                         <?php endif; ?>
                     </article>
                 <?php endforeach; ?>

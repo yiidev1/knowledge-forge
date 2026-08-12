@@ -9,9 +9,11 @@ use App\Chat\Application\ChatAvailabilityPolicy;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\FindOrCreateThreadService;
 use App\Chat\Domain\ChatParticipant;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
+use App\Chat\Web\MessageScoreView;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -28,6 +30,7 @@ final readonly class IndexAction
         private AgentStoreResolver $resolver,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
+        private ChatAnswerScoreRepositoryInterface $scores,
         private ChatAvailabilityPolicy $availability,
         private CurrentAgent $currentAgent,
         private MarkdownRenderer $markdown,
@@ -44,6 +47,7 @@ final readonly class IndexAction
         $messages = [];
         $hasOlder = false;
         $editView = MessageEditView::none();
+        $scoreView = MessageScoreView::none();
 
         if ($conversation !== null) {
             $messages = $this->messages->findRecentByConversation(
@@ -56,6 +60,7 @@ final readonly class IndexAction
                 $conversation->id,
                 $chatReady,
             );
+            $scoreView = MessageScoreView::compute($this->scores, $messages, $participant);
         }
 
         return $this->viewRenderer
@@ -69,6 +74,7 @@ final readonly class IndexAction
                 'unavailableMessage' => $reason->message(),
                 'markdown' => $this->markdown,
                 'editView' => $editView,
+                'scoreView' => $scoreView,
                 'maxQuestionLength' => $this->params->maxQuestionLength,
             ]);
     }

@@ -10,8 +10,10 @@ use App\Chat\Application\RuleChatKnowledgeBaseResolver;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\Exception\ConversationNotFound;
 use App\Chat\Domain\Message;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
+use App\Chat\Web\MessageScoreView;
 use App\Shared\Domain\Exception\NotFoundException;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -29,6 +31,7 @@ final readonly class Action
         private RuleChatKnowledgeBaseResolver $resolver,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
+        private ChatAnswerScoreRepositoryInterface $scores,
         private MarkdownRenderer $markdown,
         private ResponseFactoryInterface $responseFactory,
         private CurrentAdmin $currentAdmin,
@@ -67,9 +70,12 @@ final readonly class Action
             $hasOlder = $more !== null && $more !== [];
         }
 
+        // One lookup for the whole page — the same read model the server-rendered thread uses.
+        $scoreStates = MessageScoreView::compute($this->scores, $older, $participant);
+
         $payload = [
             'has_older' => $hasOlder,
-            'messages' => array_map($this->serialize(...), $older),
+            'messages' => array_map(fn(Message $m): array => $this->serialize($m, $scoreStates), $older),
         ];
 
         $response = $this->responseFactory->createResponse(200)
@@ -82,8 +88,10 @@ final readonly class Action
     /**
      * @return array<string, mixed>
      */
-    private function serialize(Message $message): array
+    private function serialize(Message $message, MessageScoreView $scores): array
     {
+        $state = $scores->stateFor($message->id);
+
         $citations = [];
         foreach ($message->citations as $citation) {
             $citations[] = ['filename' => $citation->filename];
@@ -97,6 +105,8 @@ final readonly class Action
             'is_grounded' => $message->isGrounded,
             'citations' => $citations,
             'created_at' => $message->createdAt->format('Y-m-d H:i'),
+            // Read-only on this path: an older answer shows a score it already has, but not the control.
+            'score' => $state !== null && $state->isRated() ? $state->score : null,
         ];
     }
 }

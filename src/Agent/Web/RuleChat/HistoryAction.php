@@ -10,8 +10,10 @@ use App\Chat\Application\RuleChatKnowledgeBaseResolver;
 use App\Chat\Domain\ChatParticipant;
 use App\Chat\Domain\Exception\ConversationNotFound;
 use App\Chat\Domain\Message;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
+use App\Chat\Web\MessageScoreView;
 use App\Shared\Domain\Exception\NotFoundException;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -29,6 +31,7 @@ final readonly class HistoryAction
         private RuleChatKnowledgeBaseResolver $resolver,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
+        private ChatAnswerScoreRepositoryInterface $scores,
         private CurrentAgent $currentAgent,
         private MarkdownRenderer $markdown,
         private ResponseFactoryInterface $responseFactory,
@@ -67,6 +70,9 @@ final readonly class HistoryAction
             $hasOlder = $more !== null && $more !== [];
         }
 
+        // One lookup for the whole page — the same read model the server-rendered thread uses.
+        $scoreStates = MessageScoreView::compute($this->scores, $older, $participant);
+
         $payload = [
             'has_older' => $hasOlder,
             'messages' => array_map(
@@ -81,6 +87,10 @@ final readonly class HistoryAction
                         $m->citations,
                     ),
                     'created_at' => $m->createdAt->format('Y-m-d H:i'),
+                    // Read-only on this path: an older answer shows a score it already has, not the control.
+                    'score' => $scoreStates->stateFor($m->id)?->isRated() === true
+                        ? $scoreStates->stateFor($m->id)?->score
+                        : null,
                 ],
                 $older,
             ),

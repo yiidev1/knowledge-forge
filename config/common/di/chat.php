@@ -5,9 +5,11 @@ declare(strict_types=1);
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\History\ConversationHistoryPolicyInterface;
 use App\Chat\Application\History\RecentMessagesHistoryPolicy;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\ConversationRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Domain\MessageRevisionRepositoryInterface;
+use App\Chat\Infrastructure\DbChatAnswerScoreRepository;
 use App\Chat\Infrastructure\DbConversationRepository;
 use App\Chat\Infrastructure\DbMessageRepository;
 use App\Chat\Infrastructure\DbMessageRevisionRepository;
@@ -20,6 +22,7 @@ return [
     ConversationRepositoryInterface::class => DbConversationRepository::class,
     MessageRepositoryInterface::class => DbMessageRepository::class,
     MessageRevisionRepositoryInterface::class => DbMessageRevisionRepository::class,
+    ChatAnswerScoreRepositoryInterface::class => DbChatAnswerScoreRepository::class,
 
     ConversationHistoryPolicyInterface::class => [
         'class' => RecentMessagesHistoryPolicy::class,

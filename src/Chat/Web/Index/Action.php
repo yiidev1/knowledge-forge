@@ -9,9 +9,11 @@ use App\Chat\Application\ChatAvailabilityPolicy;
 use App\Chat\Application\ChatParams;
 use App\Chat\Application\FindOrCreateThreadService;
 use App\Chat\Domain\ChatParticipant;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
+use App\Chat\Web\MessageScoreView;
 use App\KnowledgeBase\Domain\KnowledgeBaseSourceRepositoryInterface;
 use App\KnowledgeBase\Web\KnowledgeBaseFinder;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
@@ -37,6 +39,7 @@ final readonly class Action
         private KnowledgeBaseFinder $finder,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
+        private ChatAnswerScoreRepositoryInterface $scores,
         private ChatAvailabilityPolicy $availability,
         private MarkdownRenderer $markdown,
         private CurrentAdmin $currentAdmin,
@@ -63,6 +66,7 @@ final readonly class Action
         $messages = [];
         $hasOlder = false;
         $editView = MessageEditView::none();
+        $scoreView = MessageScoreView::none();
 
         if ($conversation !== null) {
             $messages = $this->messages->findRecentByConversation(
@@ -76,6 +80,7 @@ final readonly class Action
                 $conversation->id,
                 $chatReady,
             );
+            $scoreView = MessageScoreView::compute($this->scores, $messages, $participant);
         }
 
         return $this->viewRenderer
@@ -90,6 +95,7 @@ final readonly class Action
                 'unavailableMessage' => $reason->message(),
                 'markdown' => $this->markdown,
                 'editView' => $editView,
+                'scoreView' => $scoreView,
                 'maxQuestionLength' => $this->params->maxQuestionLength,
             ]);
     }

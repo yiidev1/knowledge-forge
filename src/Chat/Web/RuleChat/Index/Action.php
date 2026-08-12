@@ -9,9 +9,11 @@ use App\Chat\Application\ChatParams;
 use App\Chat\Application\FindOrCreateThreadService;
 use App\Chat\Application\RuleChatKnowledgeBaseResolver;
 use App\Chat\Domain\ChatParticipant;
+use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageEditView;
+use App\Chat\Web\MessageScoreView;
 use App\Shared\Infrastructure\Markdown\MarkdownRenderer;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
@@ -27,6 +29,7 @@ final readonly class Action
         private RuleChatKnowledgeBaseResolver $resolver,
         private FindOrCreateThreadService $threads,
         private MessageRepositoryInterface $messages,
+        private ChatAnswerScoreRepositoryInterface $scores,
         private MarkdownRenderer $markdown,
         private CurrentAdmin $currentAdmin,
         private ChatParams $params,
@@ -41,6 +44,7 @@ final readonly class Action
         $messages = [];
         $hasOlder = false;
         $editView = MessageEditView::none();
+        $scoreView = MessageScoreView::none();
 
         if ($knowledgeBase !== null) {
             $participant = ChatParticipant::admin($this->currentAdmin->get()->id());
@@ -57,6 +61,7 @@ final readonly class Action
                     $conversation->id,
                     $chatReady,
                 );
+                $scoreView = MessageScoreView::compute($this->scores, $messages, $participant);
             }
         }
 
@@ -71,6 +76,7 @@ final readonly class Action
                 'unavailableMessage' => $unavailableMessage,
                 'markdown' => $this->markdown,
                 'editView' => $editView,
+                'scoreView' => $scoreView,
                 'maxQuestionLength' => $this->params->maxQuestionLength,
             ]);
     }

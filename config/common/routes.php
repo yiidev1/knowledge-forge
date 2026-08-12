@@ -186,6 +186,13 @@ return [
             Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
                 ->action(Chat\RegenerateMessage\Action::class)
                 ->name('chat.message.regenerate'),
+            // 1-10 feedback on an answer. Pure feedback: no provider call, and the answer is never altered.
+            Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/score')
+                ->action(Chat\ScoreMessage\Action::class)
+                ->name('chat.message.score'),
+            Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
+                ->action(Chat\ScoreMessage\DismissAction::class)
+                ->name('chat.message.score.dismiss'),
 
             // OpenAI usage and vector-store inventory. Read-only, and deliberately absent from the
             // sidebar and every other page — it is an operator diagnostic reached by direct URL, not a
@@ -284,6 +291,12 @@ return [
             Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
                 ->action(AdminRuleChat\RegenerateMessage\Action::class)
                 ->name('admin.rule-chat.message.regenerate'),
+            Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/score')
+                ->action(AdminRuleChat\ScoreMessage\Action::class)
+                ->name('admin.rule-chat.message.score'),
+            Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
+                ->action(AdminRuleChat\ScoreMessage\DismissAction::class)
+                ->name('admin.rule-chat.message.score.dismiss'),
         ),
 
     // Order58 agents: a separate authenticated realm behind RequireAgentMiddleware. Agents can select any
@@ -322,6 +335,12 @@ return [
             Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
                 ->action(AgentRuleChat\RegenerateMessageAction::class)
                 ->name('agent.rule-chat.message.regenerate'),
+            Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/score')
+                ->action(AgentRuleChat\ScoreMessageAction::class)
+                ->name('agent.rule-chat.message.score'),
+            Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
+                ->action(AgentRuleChat\DismissScoreAction::class)
+                ->name('agent.rule-chat.message.score.dismiss'),
             Route::get('/agent/stores/{slug}/chat')
                 ->action(AgentChat\IndexAction::class)
                 ->name('agent.chat.index'),
@@ -350,5 +369,11 @@ return [
             Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
                 ->action(AgentChat\RegenerateMessageAction::class)
                 ->name('agent.chat.message.regenerate'),
+            Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/score')
+                ->action(AgentChat\ScoreMessageAction::class)
+                ->name('agent.chat.message.score'),
+            Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
+                ->action(AgentChat\DismissScoreAction::class)
+                ->name('agent.chat.message.score.dismiss'),
         ),
 ];

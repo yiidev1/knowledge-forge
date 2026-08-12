@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Chat;
 
+use App\Chat\Web\ChatPartials;
 use App\Chat\Web\Sources\SourceViews;
 use PHPUnit\Framework\TestCase;
 
@@ -14,7 +15,8 @@ use PHPUnit\Framework\TestCase;
  *
  * The renderer treats a view name as already-resolved only when it is an absolute path, so every shared
  * template path must be absolute AND point at a file that exists. Both realms now read these from one place,
- * which is what this test pins.
+ * which is what this test pins. The score panel is here for the same reason: it regressed the chat page the
+ * one time it was referenced by alias.
  */
 final class SourceViewsTest extends TestCase
 {
@@ -27,6 +29,7 @@ final class SourceViewsTest extends TestCase
             'knowledge' => [SourceViews::knowledge()],
             'store rules' => [SourceViews::storeRules()],
             'rule chat rules' => [SourceViews::ruleChatRules()],
+            'score panel' => [ChatPartials::scorePanel()],
         ];
     }
 
