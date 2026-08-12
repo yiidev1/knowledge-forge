@@ -40,7 +40,7 @@ Core promises the whole design protects:
 | **KnowledgeBase** | The KB entity + repositories, provisioning bookkeeping, the canonical chat‑eligibility SQL, the KB "answering rules". |
 | **Document** | Documents + index files + processing events; upload validation/storage; the generated‑document repository; source‑type enum. |
 | **Rules** | The rule catalog, classification, admin review, projection into vector stores, readiness reporting, the hidden global‑rules KB. |
-| **Chat** | Conversations, messages, revisions; the grounded ask service; grounding verifier; citation resolver; instruction builder; edit/regenerate. |
+| **Chat** | Conversations, messages, revisions; the grounded ask service; grounding verifier; citation resolver; instruction builder; edit/regenerate; the read‑only source‑transparency pages; 1–10 answer scoring. |
 | **Ai** | OpenAI client + adapters (vector store, file upload/attach, Responses/File Search), the reliability ledger (`ai_operations`). |
 | **Worker** | The background runner (`kf:worker:run`) and its drainers (provision → process → cleanup), recovery/reconcile commands. |
 | **Shared** | Clock, timezone seam (`AppTimeZone`), DB helpers, logging/redaction, pagination/alphabet helpers, correlation id. |
@@ -96,7 +96,7 @@ Entry: admin `GET/POST /knowledge-bases/{slug}/chat*`, agent `GET/POST /agent/st
 1. **Availability gate** (`ChatAvailabilityPolicy`, the one canonical rule): the KB must be active, its vector store `ready` with a non‑null id, and it must have a **usable qualifying document** (enabled, not deleted, with a completed index file, source type is *genuine content* — not the store profile and **not a rule projection**). Order58‑linked KBs also require `source_active=1` and a usable store‑profile snapshot; the agent realm additionally requires `agent_enabled=1`. Enforced on GET (hard block/redirect for admin; 404 via the agent resolver) **and** on POST.
 2. **Find‑or‑create thread:** GET only *finds*; the first POST find‑or‑creates the participant's canonical conversation (`conversations`, unique per `(knowledge_base_id, participant_type, participant_id)`). The user question is persisted **before** the provider call.
 3. **Instructions:** immutable security block + the KB's own **answering rules** (`knowledge_base_rules`) + fallback text + an exhaustive‑intent directive when the question asks for "all/every".
-4. **Single‑stage retrieval (Phase 1):** one forced **File Search** call against **this KB's own vector store only** (`OpenAiChatCompletionProvider`). Store chat **never** consults the global/common rules base — rule content is served exclusively by the (upcoming) dedicated Rule Chat.
+4. **Single‑stage retrieval (Phase 1):** one forced **File Search** call against **this KB's own vector store only** (`OpenAiChatCompletionProvider`). Store chat **never** consults the global/common rules base — rule content is served exclusively by the dedicated Rule Chat (§5.9).
 5. **Citations → grounding:** raw `file_citation` annotations are resolved by `openai_file_id → document_index_files → documents` (scoped to this KB, so a citation can't leak across bases). `GroundingVerifier` requires retrieval completed + ≥1 result + (config `CHAT_REQUIRE_CITATIONS=true`) ≥1 resolved citation; otherwise the text is discarded and the **fallback** is stored.
 6. **Persist one answer:** exactly one active assistant message (`messages`, guarded by the `active_answer_key` unique index), tagging `answer_source` (`store_knowledge` / `store_rule` / `fallback`), `is_grounded`, `retrieval_status`, `openai_response_id`, citations.
 7. **History:** OpenAI receives only the bounded `RecentMessagesHistoryPolicy` window (message + char limits); `store:false`, so the DB is the sole history source.
@@ -118,11 +118,35 @@ Entry: admin `GET/POST /knowledge-bases/{slug}/chat*`, agent `GET/POST /agent/st
 - OpenAI vector‑store creation and file removal are done by the worker drainers, never in a web request.
 - **`ai_operations`** is a reliability ledger: OpenAI creates are wrapped so they are idempotent (`operation_key`, `request_fingerprint`, `idempotency_key`) and reconcilable (`needs_reconcile`) after a crash.
 
+### 5.9 Rule Chat (dedicated surface)
+- Admin `GET/POST /admin/rule-chat*`, agent `GET/POST /agent/rule-chat*`. Same `AskKnowledgeBaseService`, but with `ChatRetrievalScope::RuleOnly` and the hidden Global Rules base resolved by `RuleChatKnowledgeBaseResolver`.
+- Availability is `RuleChatAvailability` → `CommonRulesReadiness`, deliberately **separate** from the store `ChatAvailabilityPolicy`: the rules base must be provisioned **and** hold at least one usable Ready `order58_rule_global` document. A synced‑but‑unmaterialized rule never enables it.
+- The thread is still private per participant — the base is shared, the conversation is not.
+
+### 5.10 Source transparency (read‑only)
+Every chat surface can show what it is allowed to answer from. Strictly read‑only: these pages render no upload, edit, delete, retry or sync control in either realm.
+
+- **Knowledge** — `chat.sources.knowledge` / `agent.chat.sources.knowledge`. `ChatKnowledgeSourcesService` joins the knowledge base's own document list with the canonical usable‑snapshot set (`DocumentRepositoryInterface::findUsableDocumentIds`) and filters by the surface's `ChatRetrievalScope`, so "available to this chat" means exactly what retrieval can reach. Selecting a title discloses the document's own text via `ServeCanonicalDocumentService::textBody()` — the artifact retrieval reads — capped at 4 000 characters.
+- **Rules** — `admin.rule-chat.sources.rules` / `agent.rule-chat.sources.rules` list the indexed global rules Rule Chat can search, using `RuleReadinessReaderInterface` in `Ready` + `hiddenBaseOnly` scope (the same derivation §5.9 gates on). A store‑scoped variant exists at `chat.sources.rules` / `agent.chat.sources.rules`; it states plainly that **store chat cannot answer from catalog rules** and lists them for reference only, alongside the `knowledge_base_rules` that really do shape the reply. Those two routes are reachable by URL but deliberately **not linked** from the store‑chat header.
+- Store scoping is structural: admin pages resolve through `KnowledgeBaseFinder`, agent pages through `AgentStoreResolver` (an unavailable store is a 404), and the catalog query keys on that store's own Order58 `source_id`.
+- Shared template paths come from `SourceViews` / `ChatPartials` and must stay **absolute** — the view renderer does not expand an `@src/...` alias in a view name, and an action that sets only a layout then dies with "The view path is not set." (`tests/Unit/Chat/SourceViewsTest.php` pins this.)
+
+### 5.11 Answer scoring (1–10)
+Post‑hoc feedback on an assistant answer, on all four chat surfaces. **No OpenAI call**; retrieval, grounding, citation verification and availability are untouched.
+
+1. **States** — no row = unrated (`Would you like to rate this answer?` Yes/No); `score` set = rated (`8/10 · Good` + a pencil that reopens the slider on the saved value); `dismissed_at` set with no score = declined, leaving a quiet `Rate this answer` link so an accidental "No" is recoverable. Rating a dismissed answer clears `dismissed_at`.
+2. **Writes happen twice only** — "Save score" and "No". Yes / Change / Rate‑this‑answer are client‑side toggles, so dragging the slider never records anything.
+3. **A dismissal is not a zero.** `score` stays NULL, so declining can never drag an average down.
+4. **Authorization** reuses the edit kernel: `findOwnedThreadById(conversationId, kbId, participant)` → `findByIdInConversation(messageId, conversationId)` → must be an assistant message → must not be superseded. Participant always from the session; a forged id is a 404. `admin(1)` ≠ `agent(1)`.
+5. **Validation is strict** — only an integer 1–10. `8abc`, `8.5`, `""`, `0` and `11` are rejected, never coerced; the DB repeats the range as a CHECK.
+6. **A dismissal aimed at an already‑rated answer is refused** (`AnswerScoreInvalid::alreadyRated`), so a stale page cannot discard a score.
+7. **Rendering** — `MessageScoreView::compute()` loads every displayed answer's state in one `IN (…)` query (no N+1), mirroring `MessageEditView`. Older messages fetched by the load‑older AJAX path show a saved score **read‑only**; the rating control lives only on the server‑rendered thread, where the form carries its own CSRF token.
+
 ---
 
 ## 6. Database reference — every table (when, where, why)
 
-23 application tables (+ Yiisoft's `migration` bookkeeping). Grouped by domain. "Since" = the migration that introduced it.
+23 application tables (+ Yiisoft's `migration` bookkeeping), verified against the schema. Grouped by domain. "Since" = the migration that introduced it.
 
 ### 6.1 Identity & auth
 | Table | Since | Why / where used | Key columns |
@@ -151,6 +175,7 @@ Entry: admin `GET/POST /knowledge-bases/{slug}/chat*`, agent `GET/POST /agent/st
 | **conversations** | `M260727100000` (+ agent `M260728130000`, typed participants `M260804120000`) | One canonical thread per participant per KB. | `knowledge_base_id`, `participant_type` (admin/agent) + `participant_id` (**unique** `ux_conversations_kb_participant_typed`), `agent_admin_id` (legacy), `last_message_at`. |
 | **messages** | `M260727100000` (+ answer_source `M260805130000`, editing `M260804130000`) | The turns. | `conversation_id`, `role`, `content`, `citations_json`, `is_grounded`, `retrieval_status`, `openai_response_id`, `answer_source`, `reply_to_message_id`, `superseded_at`, `edit_count`, `active_answer_key` (**unique** → one active answer/question). |
 | **message_revisions** | `M260804130000` | Audit of edited questions (prior text + who/when). | `message_id`, `revision_number` (unique w/ message), `content`, `edited_by_type`/`edited_by_id`. |
+| **chat_answer_scores** | `M260812100000` | Per‑participant 1–10 feedback on an assistant answer (§5.11). Kept off `messages` so an answer stays immutable and an admin and an agent can rate the same answer independently. | `message_id` (FK → `messages`, CASCADE), `participant_type`/`participant_id`, `score` (NULL or 1–10), `dismissed_at`, unique `(message_id, participant_type, participant_id)`. |
 
 ### 6.5 Order58 mirrors & sync
 | Table | Since | Why / where used | Key columns |
@@ -201,11 +226,13 @@ Entry: admin `GET/POST /knowledge-bases/{slug}/chat*`, agent `GET/POST /agent/st
 **Admin group** (`RequireAdminMiddleware`):
 - Store directory `GET /admin/order58/stores` → `order58.stores`; Store‑chat picker `GET /admin/order58/store-chat`; Data management + sync `POST /admin/order58/sync`.
 - Rules: readiness `GET /admin/order58/rules/readiness`, list `…/rules/list`, hidden global `…/rules/global`.
-- KB manage `GET /knowledge-bases/{slug}`; chat `GET|POST /knowledge-bases/{slug}/chat`, history/show/ask, `…/messages/{id}/edit|regenerate`.
+- KB manage `GET /knowledge-bases/{slug}`; chat `GET|POST /knowledge-bases/{slug}/chat`, history/show/ask, `…/messages/{id}/edit|regenerate|score|dismiss-score`.
+- Rule Chat `GET|POST /admin/rule-chat`, history/show/ask, `…/messages/{id}/edit|regenerate|score|dismiss-score`.
+- Source transparency (GET, read‑only): `…/chat/knowledge`, `…/chat/rules`, `/admin/rule-chat/rules`.
 
-**Agent group** (`RequireAgentMiddleware`): `GET /agent/stores` (home), and `/agent/stores/{slug}/chat*` mirroring the admin chat routes (`agent.chat.*`). Login routes sit outside both groups.
+**Agent group** (`RequireAgentMiddleware`): `GET /agent/stores` (home), `/agent/stores/{slug}/chat*` and `/agent/rule-chat*` mirroring the admin chat routes (`agent.chat.*`, `agent.rule-chat.*`) — including the `score` / `dismiss-score` pair and the same read‑only source pages. Login routes sit outside both groups.
 
-Nav is declared as PHP arrays in the sidebars (`src/Web/Shared/Layout/Admin/_sidebar.php`, `src/Agent/Web/Layout/_sidebar.php`); a route that isn't registered is silently skipped.
+Nav is declared as PHP arrays in the sidebars (`src/Web/Shared/Layout/Admin/_sidebar.php`, `src/Agent/Web/Layout/_sidebar.php`); a route that isn't registered is silently skipped. Both sidebars carry an A–Z index built from `AlphabetIndex`, linking into the listing's own `?letter=` filter rather than duplicating it — admin's browses stores, the agent's browses the stores that agent may chat with.
 
 ---
 
@@ -228,6 +255,8 @@ Nav is declared as PHP arrays in the sidebars (`src/Web/Shared/Layout/Admin/_sid
 7. **Idempotent sync** on `sync_hash`; mark‑and‑sweep only after a completed final page; no duplicate KBs/mirror rows/documents.
 8. **Store chat answers only from genuine store knowledge** — no rule documents, no global/common rules base (Phase 1 boundary).
 9. **Migrations reversible & prod‑safe**; add an index only when `EXPLAIN` shows the need.
+10. **Scoring is feedback, never content** — it makes no provider call, cannot alter an answer, and a dismissal stores no score (never a zero). A superseded or user‑role message is not scorable.
+11. **Shared view paths are absolute** (`SourceViews`, `ChatPartials`) — a `@src/...` alias in a view name is not expanded and takes the page down with "The view path is not set.".
 
 ---
 
@@ -241,7 +270,9 @@ Nav is declared as PHP arrays in the sidebars (`src/Web/Shared/Layout/Admin/_sid
 - **Grounding** — the check that an answer is supported by ≥1 valid citation resolving to a live document in the same KB.
 - **Fallback** — the safe "not enough information" reply stored when grounding fails.
 - **Realm** — the admin surface vs the agent surface, each with its own middleware, layout, and authorisation.
+- **Answer score** — a participant's 1–10 rating of one assistant answer (`chat_answer_scores`); a *dismissal* is the explicit decision not to rate, and carries no score.
+- **Retrievable** — a document with a completed index snapshot that is also inside the surface's `ChatRetrievalScope`; what the source‑transparency pages label "available to this chat".
 
 ---
 
-*Generated as a single reference for the current codebase (through the Phase‑1 store/rule chat separation). When code and this doc disagree, the code wins — update this file.*
+*Generated as a single reference for the current codebase (through source transparency and 1–10 answer scoring, 2026‑08‑12). When code and this doc disagree, the code wins — update this file.*

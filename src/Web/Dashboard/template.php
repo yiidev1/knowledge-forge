@@ -10,6 +10,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var UrlGeneratorInterface $urlGenerator
  * @var string $username
  * @var int $knowledgeBaseCount
+ * @var int $ruleCount
+ * @var int $ruleReadyCount
  */
 
 $this->setTitle('Dashboard');
@@ -18,6 +20,7 @@ $this->setParameter('breadcrumbs', [['label' => 'Dashboard']]);
 $kbUrl = $urlGenerator->generate('kb.index');
 $storesUrl = $urlGenerator->generate('order58.stores');
 $createUrl = $urlGenerator->generate('kb.create');
+$rulesUrl = $urlGenerator->generate('order58.rules.readiness');
 ?>
 <div class="page-header">
     <div>
@@ -33,6 +36,20 @@ $createUrl = $urlGenerator->generate('kb.create');
         <div class="stat__label">Active knowledge bases</div>
         <div class="stat__value"><?= $knowledgeBaseCount ?></div>
         <div class="stat__hint">Browse Order58 stores →</div>
+    </a>
+
+    <a class="stat stat--link" href="<?= Html::encode($rulesUrl) ?>">
+        <div class="stat__icon" aria-hidden="true">📋</div>
+        <div class="stat__label">Order58 rules</div>
+        <div class="stat__value"><?= $ruleCount ?></div>
+        <div class="stat__hint">
+            <?php if ($ruleCount === 0): ?>
+                No rules synced yet →
+            <?php else: ?>
+                <!-- Synced is not answerable: only an indexed rule can be retrieved, so both numbers show. -->
+                <?= $ruleReadyCount ?> indexed · Open rule list →
+            <?php endif; ?>
+        </div>
     </a>
 </div>
 
