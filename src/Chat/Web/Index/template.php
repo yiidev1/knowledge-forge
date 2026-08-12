@@ -37,6 +37,7 @@ $this->setParameter('breadcrumbs', [
 $slug = $knowledgeBase->slug();
 $postUrl = $urlGenerator->generate('chat.start', ['slug' => $slug]);
 $historyUrl = $urlGenerator->generate('chat.history', ['slug' => $slug]);
+$knowledgeUrl = $urlGenerator->generate('chat.sources.knowledge', ['slug' => $slug]);
 $csrfField = (string) $csrf->hiddenInput();
 $vs = $knowledgeBase->vectorStoreStatus();
 $oldestId = $messages !== [] ? $messages[0]->id : null;
@@ -51,7 +52,10 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                 <span class="badge badge--<?= Html::encode($vs->badge()) ?>"><span class="badge__dot"></span><?= Html::encode($vs->label()) ?></span>
             </p>
         </div>
-        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($urlGenerator->generate('order58.store-chat')) ?>">← Store chat</a>
+        <div class="chat__header-actions">
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($knowledgeUrl) ?>">View Knowledge</a>
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($urlGenerator->generate('order58.store-chat')) ?>">← Store chat</a>
+        </div>
     </header>
 
     <div class="chat__messages" role="log" aria-live="polite" aria-label="Conversation messages" tabindex="0" data-chat-messages>
@@ -122,7 +126,7 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                         <?php if ($message->isAssistant()): ?>
                             <?php if ($message->citations !== []): ?>
                                 <div class="chat-msg__citations">
-                                    <span class="chat-msg__citations-label">Sources</span>
+                                    <span class="chat-msg__citations-label">Sources (<?= count($message->citations) ?>)</span>
                                     <?php foreach ($message->citations as $citation): ?>
                                         <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
                                     <?php endforeach; ?>

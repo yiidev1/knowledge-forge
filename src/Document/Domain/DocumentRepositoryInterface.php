@@ -64,6 +64,18 @@ interface DocumentRepositoryInterface
     public function hasUsableGlobalRuleDocument(int $knowledgeBaseId): bool;
 
     /**
+     * The ids of every document in this knowledge base that currently has a usable vector-store snapshot —
+     * enabled, not deleted, with a completed `document_index_files` row carrying an `openai_file_id`. This is
+     * the exact same "usable" predicate {@see self::hasUsableQualifyingDocument()} counts on, exposed as a set
+     * so a read-only page can mark which documents retrieval can actually reach without re-deriving the rule.
+     * Source type is deliberately NOT filtered here — the caller applies its own
+     * {@see \App\Chat\Domain\ChatRetrievalScope}. Scoped strictly to $knowledgeBaseId.
+     *
+     * @return list<int>
+     */
+    public function findUsableDocumentIds(int $knowledgeBaseId): array;
+
+    /**
      * The `source_type` of a document by id, or null if it does not exist. Used to label a chat answer's
      * source (store_rule vs store_knowledge) from its winning citation.
      */

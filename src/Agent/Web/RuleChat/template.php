@@ -31,6 +31,7 @@ $this->setTitle('Rule Chat');
 $postUrl = $urlGenerator->generate('agent.rule-chat.start');
 $historyUrl = $urlGenerator->generate('agent.rule-chat.history');
 $homeUrl = $urlGenerator->generate('agent.home');
+$viewRulesUrl = $urlGenerator->generate('agent.rule-chat.sources.rules');
 $csrfField = (string) $csrf->hiddenInput();
 $oldestId = $messages !== [] ? $messages[0]->id : null;
 ?>
@@ -40,7 +41,10 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
             <h1 class="chat__title">Rule Chat</h1>
             <p class="chat__subtitle">Ask questions about Order58 rules. Answers are grounded only in indexed rules.</p>
         </div>
-        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($homeUrl) ?>">← Stores</a>
+        <div class="chat__header-actions">
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($viewRulesUrl) ?>">View Rules</a>
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($homeUrl) ?>">← Stores</a>
+        </div>
     </header>
 
     <div class="chat__messages" role="log" aria-live="polite" aria-label="Conversation messages" tabindex="0" data-chat-messages>
@@ -111,7 +115,7 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                         <?php if ($message->isAssistant()): ?>
                             <?php if ($message->citations !== []): ?>
                                 <div class="chat-msg__citations">
-                                    <span class="chat-msg__citations-label">Sources</span>
+                                    <span class="chat-msg__citations-label">Sources (<?= count($message->citations) ?>)</span>
                                     <?php foreach ($message->citations as $citation): ?>
                                         <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
                                     <?php endforeach; ?>

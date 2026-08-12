@@ -60,7 +60,7 @@ $csrfField = (string) $csrf->hiddenInput();
                         <?php if ($message->isAssistant()): ?>
                             <?php if ($message->citations !== []): ?>
                                 <div class="chat-msg__citations">
-                                    <span class="chat-msg__citations-label">Sources</span>
+                                    <span class="chat-msg__citations-label">Sources (<?= count($message->citations) ?>)</span>
                                     <?php foreach ($message->citations as $citation): ?>
                                         <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
                                     <?php endforeach; ?>

@@ -50,6 +50,7 @@ $this->beginPage();
 ?>
 <!DOCTYPE html>
 <html lang="<?= Html::encode($applicationParams->locale) ?>">
+
 <head>
     <meta charset="<?= Html::encode($applicationParams->charset) ?>">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -57,25 +58,27 @@ $this->beginPage();
     <title><?= Html::encode($this->getTitle()) ?></title>
     <?php $this->head() ?>
 </head>
-<body>
-<?php $this->beginBody() ?>
-<div class="app">
-    <?= $this->render(__DIR__ . '/_sidebar', [
-        'activeRoute' => $activeRoute,
-        'activeLetter' => $activeLetter,
-        'agent' => $agent,
-        'urlGenerator' => $urlGenerator,
-        'csrf' => $csrf,
-    ]) ?>
 
-    <div class="main">
-        <div class="content">
-            <?= $this->render($aliases->get('@src') . '/Web/Shared/Layout/Admin/_flash', ['messages' => $flashMessages]) ?>
-            <?= $content ?>
+<body>
+    <?php $this->beginBody() ?>
+    <div class="app">
+        <?= $this->render(__DIR__ . '/_sidebar', [
+            'activeRoute' => $activeRoute,
+            'activeLetter' => $activeLetter,
+            'agent' => $agent,
+            'urlGenerator' => $urlGenerator,
+            'csrf' => $csrf,
+        ]) ?>
+
+        <div class="main">
+            <div class="content">
+                <?= $this->render($aliases->get('@src') . '/Web/Shared/Layout/Admin/_flash', ['messages' => $flashMessages]) ?>
+                <?= $content ?>
+            </div>
         </div>
     </div>
-</div>
-<?php $this->endBody() ?>
+    <?php $this->endBody() ?>
 </body>
+
 </html>
 <?php $this->endPage();

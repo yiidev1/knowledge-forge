@@ -35,4 +35,21 @@ enum ClassificationStatus: string
             self::ManuallyMatched, self::ConfirmedCommon, self::Ignored => false,
         };
     }
+
+    /**
+     * The admin-facing wording for this status. Lives on the enum so every rule surface — the readiness table,
+     * the per-store source page — labels a status identically.
+     */
+    public function label(): string
+    {
+        return match ($this) {
+            self::ConfirmedCommon => 'Common',
+            self::AutoMatched, self::ManuallyMatched => 'Store-specific',
+            self::SuggestedCommon => 'Suggested common',
+            self::Ambiguous => 'Ambiguous',
+            self::Unmatched => 'Unmatched',
+            self::Ignored => 'Ignored',
+            self::Pending => 'Pending review',
+        };
+    }
 }

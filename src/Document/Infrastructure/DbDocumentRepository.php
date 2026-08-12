@@ -166,6 +166,24 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
         return (int) $query->count() > 0;
     }
 
+    public function findUsableDocumentIds(int $knowledgeBaseId): array
+    {
+        $rows = $this->connection->createQuery()
+            ->select('d.id')
+            ->from(['d' => self::TABLE])
+            ->where(['d.knowledge_base_id' => $knowledgeBaseId, 'd.is_enabled' => 1])
+            ->andWhere(['<>', 'd.status', DocumentStatus::Deleted->value])
+            ->andWhere(self::completedIndexExists())
+            ->column();
+
+        $ids = [];
+        foreach ($rows as $row) {
+            $ids[] = (int) $row;
+        }
+
+        return $ids;
+    }
+
     public function sourceTypeOfDocument(int $documentId): ?string
     {
         $value = $this->connection->createQuery()
@@ -200,14 +218,23 @@ final readonly class DbDocumentRepository implements DocumentRepositoryInterface
             ->where(['d.knowledge_base_id' => $knowledgeBaseId, 'd.is_enabled' => 1])
             ->andWhere(['<>', 'd.status', DocumentStatus::Deleted->value])
             ->andWhere($sourceTypeCondition)
-            ->andWhere(new Expression(
-                'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
-                . ' WHERE f.[[document_id]] = d.[[id]]'
-                . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL)',
-                [':completed' => IndexStatus::Completed->value],
-            ));
+            ->andWhere(self::completedIndexExists());
 
         return (int) $query->count() > 0;
+    }
+
+    /**
+     * The one "has a usable vector-store snapshot" predicate, shared by every caller so the definition of
+     * usable lives in a single place.
+     */
+    private static function completedIndexExists(): Expression
+    {
+        return new Expression(
+            'EXISTS (SELECT 1 FROM {{%document_index_files}} f'
+            . ' WHERE f.[[document_id]] = d.[[id]]'
+            . ' AND f.[[index_status]] = :completed AND f.[[openai_file_id]] IS NOT NULL)',
+            [':completed' => IndexStatus::Completed->value],
+        );
     }
 
     public function liveChecksumExists(string $checksum, int $knowledgeBaseId, ?int $exceptDocumentId = null): bool

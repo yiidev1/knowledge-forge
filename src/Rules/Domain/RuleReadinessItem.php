@@ -6,6 +6,7 @@ namespace App\Rules\Domain;
 
 use function mb_strlen;
 use function mb_substr;
+use function trim;
 
 /**
  * One synced Order58 source rule on the readiness page: its source id, optional canonical/document refs,
@@ -24,7 +25,17 @@ final readonly class RuleReadinessItem
         public ?string $openaiFileId,
         public string $updatedAt,
         public ?string $error,
+        /**
+         * The rule's own text. Optional so the readiness table, which does not render it, is unaffected;
+         * the source pages ask for it so a reader can see what the rule actually says.
+         */
+        public ?string $content = null,
     ) {}
+
+    public function hasContent(): bool
+    {
+        return $this->content !== null && trim($this->content) !== '';
+    }
 
     public function typeLabel(): string
     {

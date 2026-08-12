@@ -32,6 +32,7 @@ $slug = $knowledgeBase->slug();
 $postUrl = $urlGenerator->generate('agent.chat.start', ['slug' => $slug]);
 $historyUrl = $urlGenerator->generate('agent.chat.history', ['slug' => $slug]);
 $homeUrl = $urlGenerator->generate('agent.home');
+$knowledgeUrl = $urlGenerator->generate('agent.chat.sources.knowledge', ['slug' => $slug]);
 $csrfField = (string) $csrf->hiddenInput();
 $oldestId = $messages !== [] ? $messages[0]->id : null;
 ?>
@@ -41,7 +42,10 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
             <h1 class="chat__title"><?= Html::encode($knowledgeBase->name()) ?></h1>
             <p class="chat__subtitle">Answers come only from this store's indexed documents, with sources.</p>
         </div>
-        <a class="btn btn--secondary btn--sm" href="<?= Html::encode($homeUrl) ?>">← Stores</a>
+        <div class="chat__header-actions">
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($knowledgeUrl) ?>">View Knowledge</a>
+            <a class="btn btn--secondary btn--sm" href="<?= Html::encode($homeUrl) ?>">← Stores</a>
+        </div>
     </header>
 
     <div class="chat__messages" role="log" aria-live="polite" aria-label="Conversation messages" tabindex="0" data-chat-messages>

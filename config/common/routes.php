@@ -8,6 +8,7 @@ use App\Agent\Web\Login as AgentLogin;
 use App\Agent\Web\Logout as AgentLogout;
 use App\Agent\Web\Middleware\RequireAgentMiddleware;
 use App\Agent\Web\RuleChat as AgentRuleChat;
+use App\Agent\Web\Sources as AgentSources;
 use App\Ai\Web\Usage;
 use App\Auth\Web\Login;
 use App\Auth\Web\Logout;
@@ -165,6 +166,14 @@ return [
             Route::get('/knowledge-bases/{slug}/chat/history')
                 ->action(Chat\History\Action::class)
                 ->name('chat.history'),
+            // Read-only source transparency for this store chat: what knowledge / which rules it may use.
+            // Declared before the {conversationId} routes; the digit constraint means there is no overlap.
+            Route::get('/knowledge-bases/{slug}/chat/knowledge')
+                ->action(Chat\Sources\KnowledgeAction::class)
+                ->name('chat.sources.knowledge'),
+            Route::get('/knowledge-bases/{slug}/chat/rules')
+                ->action(Chat\Sources\StoreRulesAction::class)
+                ->name('chat.sources.rules'),
             Route::get('/knowledge-bases/{slug}/chat/{conversationId:\d+}')
                 ->action(Chat\Show\Action::class)
                 ->name('chat.show'),
@@ -259,6 +268,10 @@ return [
             Route::get('/admin/rule-chat/history')
                 ->action(AdminRuleChat\History\Action::class)
                 ->name('admin.rule-chat.history'),
+            // Read-only: the indexed global rules this Rule Chat can actually search.
+            Route::get('/admin/rule-chat/rules')
+                ->action(Chat\Sources\RuleChatRulesAction::class)
+                ->name('admin.rule-chat.sources.rules'),
             Route::get('/admin/rule-chat/{conversationId:\d+}')
                 ->action(AdminRuleChat\Show\Action::class)
                 ->name('admin.rule-chat.show'),
@@ -294,6 +307,9 @@ return [
             Route::get('/agent/rule-chat/history')
                 ->action(AgentRuleChat\HistoryAction::class)
                 ->name('agent.rule-chat.history'),
+            Route::get('/agent/rule-chat/rules')
+                ->action(AgentSources\RuleChatRulesAction::class)
+                ->name('agent.rule-chat.sources.rules'),
             Route::get('/agent/rule-chat/{conversationId:\d+}')
                 ->action(AgentRuleChat\ShowAction::class)
                 ->name('agent.rule-chat.show'),
@@ -315,6 +331,13 @@ return [
             Route::get('/agent/stores/{slug}/chat/history')
                 ->action(AgentChat\HistoryAction::class)
                 ->name('agent.chat.history'),
+            // Same read-only source transparency as the admin store chat, behind the agent store resolver.
+            Route::get('/agent/stores/{slug}/chat/knowledge')
+                ->action(AgentSources\KnowledgeAction::class)
+                ->name('agent.chat.sources.knowledge'),
+            Route::get('/agent/stores/{slug}/chat/rules')
+                ->action(AgentSources\StoreRulesAction::class)
+                ->name('agent.chat.sources.rules'),
             Route::get('/agent/stores/{slug}/chat/{conversationId:\d+}')
                 ->action(AgentChat\ShowAction::class)
                 ->name('agent.chat.show'),

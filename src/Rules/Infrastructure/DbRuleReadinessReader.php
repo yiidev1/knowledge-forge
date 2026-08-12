@@ -6,6 +6,7 @@ namespace App\Rules\Infrastructure;
 
 use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Rules\Contract\RuleReadinessReaderInterface;
+use App\Rules\Domain\ClassificationStatus;
 use App\Rules\Domain\RuleReadinessBaseInfo;
 use App\Rules\Domain\RuleReadinessItem;
 use App\Rules\Domain\RuleReadinessQuery;
@@ -104,6 +105,7 @@ final readonly class DbRuleReadinessReader implements RuleReadinessReaderInterfa
                 error: $status === RuleReadinessStatus::Failed && $row['error_message'] !== null
                     ? (string) $row['error_message']
                     : null,
+                content: $row['rule_content'] === null ? null : (string) $row['rule_content'],
             );
         }
 
@@ -143,6 +145,9 @@ final readonly class DbRuleReadinessReader implements RuleReadinessReaderInterfa
             . ' SELECT [[base]].* FROM ('
             . ' SELECT [[r]].[[source_id]] [[source_id]], [[r]].[[title]] [[title]],'
             . ' [[c]].[[id]] [[canonical_id]], [[c]].[[classification_status]] [[classification_status]],'
+            // The canonical text, falling back to the raw mirrored description when a rule has no catalog row
+            // yet, so a source page can always show what the rule says.
+            . ' COALESCE([[c]].[[content]], [[r]].[[description]]) [[rule_content]],'
             . ' [[d]].[[id]] [[doc_id]],'
             . ' COALESCE([[d]].[[updated_at]], [[r]].[[synced_at]], [[r]].[[updated_at]]) [[updated_at]],'
             . ' (SELECT [[st]].[[name]] FROM {{%rule_store_links}} [[l]]'
@@ -205,18 +210,16 @@ final readonly class DbRuleReadinessReader implements RuleReadinessReaderInterfa
         ];
     }
 
+    /**
+     * A rule with no catalog row at all reads as "Unlinked"; every known status is worded by the enum, so this
+     * page and the per-store source page cannot drift apart. An unrecognised value passes through as-is.
+     */
     private function classificationLabel(?string $status): string
     {
-        return match ($status) {
-            'confirmed_common' => 'Common',
-            'auto_matched', 'manually_matched' => 'Store-specific',
-            'suggested_common' => 'Suggested common',
-            'ambiguous' => 'Ambiguous',
-            'unmatched' => 'Unmatched',
-            'ignored' => 'Ignored',
-            'pending' => 'Pending review',
-            null, '' => 'Unlinked',
-            default => $status,
-        };
+        if ($status === null || $status === '') {
+            return 'Unlinked';
+        }
+
+        return ClassificationStatus::tryFrom($status)?->label() ?? $status;
     }
 }

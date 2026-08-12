@@ -283,6 +283,28 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 .table tbody tr:hover, .table tr:hover td { background: var(--surface-2); }
 .table__actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 
+/* Source-transparency tables: a row can expand to the document/rule text, so cells align to the top and the
+   first column is allowed to be wide enough to read. */
+.table--sources td { vertical-align: top; }
+.src-detail > summary {
+    cursor: pointer; list-style: none; font-weight: 600;
+    display: inline-flex; align-items: baseline; gap: .4rem;
+}
+.src-detail > summary::-webkit-details-marker { display: none; }
+.src-detail > summary::before {
+    content: "▸"; font-size: .7rem; color: var(--text-muted); transition: transform .12s; display: inline-block;
+}
+.src-detail[open] > summary::before { transform: rotate(90deg); }
+.src-detail > summary:hover { color: var(--primary); }
+.src-detail > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+.src-detail__body {
+    margin-top: .55rem; max-width: 70ch; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: .88rem; line-height: 1.55; color: var(--text-muted);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: .7rem .85rem;
+}
+.src-detail__note { margin: .4rem 0 0; font-size: .78rem; color: var(--text-muted); }
+
 /* ---- Badges --------------------------------------------------------------- */
 
 .badge {
@@ -513,6 +535,9 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     border-bottom: 1px solid var(--border);
     background: var(--surface);
 }
+/* Source-transparency actions (View Knowledge / View Rules) beside the existing back link. Wraps rather
+   than overflowing once a header carries three buttons on a narrow viewport. */
+.chat__header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .chat__title { margin: 0; font-size: 1.15rem; }
 .chat__subtitle { margin: .2rem 0 0; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; color: var(--text-muted); font-size: .85rem; }
 .chat__dot { color: var(--text-faint); }

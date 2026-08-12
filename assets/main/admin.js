@@ -449,7 +449,7 @@
             var citations = msg.citations || [];
             if (citations.length > 0) {
                 var box = el('div', 'chat-msg__citations');
-                box.appendChild(el('span', 'chat-msg__citations-label', 'Sources'));
+                box.appendChild(el('span', 'chat-msg__citations-label', 'Sources (' + citations.length + ')'));
                 for (var c = 0; c < citations.length; c++) {
                     var chip = el('span', 'chat-chip');
                     chip.appendChild(document.createTextNode(String(citations[c].filename || '')));

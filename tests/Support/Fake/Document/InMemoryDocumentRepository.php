@@ -16,6 +16,7 @@ use DateTimeZone;
 
 use function array_reverse;
 use function array_values;
+use function in_array;
 use function str_repeat;
 
 /**
@@ -40,6 +41,9 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
 
     /** @var list<int> */
     public array $clearedOverrides = [];
+
+    /** @var list<int> Document ids the test declares to have a completed index snapshot. */
+    private array $usableDocumentIds = [];
 
     /** @var array<int, bool> Per-KB "has a usable Order58 store-profile snapshot" (test-controlled). */
     private array $usableProfile = [];
@@ -129,6 +133,33 @@ final class InMemoryDocumentRepository implements DocumentRepositoryInterface
     public function setUsableGlobalRuleDocument(int $knowledgeBaseId, bool $usable): void
     {
         $this->usableGlobalRule[$knowledgeBaseId] = $usable;
+    }
+
+    /**
+     * Mirrors the real query's shape: the ids explicitly seeded as usable, restricted to documents that live
+     * in this knowledge base and are not deleted. Seeding is explicit because "has a completed index file" is
+     * index-file state the in-memory document store does not model.
+     *
+     * @return list<int>
+     */
+    public function findUsableDocumentIds(int $knowledgeBaseId): array
+    {
+        $ids = [];
+        foreach ($this->items as $doc) {
+            if ($doc->knowledgeBaseId() !== $knowledgeBaseId || $doc->status() === DocumentStatus::Deleted) {
+                continue;
+            }
+            if (in_array($doc->id(), $this->usableDocumentIds, true)) {
+                $ids[] = $doc->id();
+            }
+        }
+
+        return $ids;
+    }
+
+    public function setUsableDocumentIds(int ...$documentIds): void
+    {
+        $this->usableDocumentIds = array_values($documentIds);
     }
 
     public function sourceTypeOfDocument(int $documentId): ?string
