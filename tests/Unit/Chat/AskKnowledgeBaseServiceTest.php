@@ -306,6 +306,44 @@ final class AskKnowledgeBaseServiceTest extends Unit
         assertSame(AnswerSource::StoreKnowledge, $assistant->answerSource);
     }
 
+    /**
+     * The answer-shape rules must reach the model, not merely exist in a builder. Asserted on the request
+     * the provider actually received, for both retrieval scopes — Store Chat and Rule Chat use different
+     * builder methods, so each needs its own proof.
+     *
+     * Both admin and agent surfaces call these same service methods with only the scope differing, so a
+     * pass here covers all four chat surfaces.
+     */
+    public function testStoreChatSendsTheAnswerShapeRulesToTheProvider(): void
+    {
+        $this->service()->startConversation($this->knowledgeBase(), 'Question?', ChatParticipant::admin(1));
+
+        $instructions = (string) $this->provider->lastRequest?->instructions;
+        assertStringContainsString('Answer the question, then stop.', $instructions);
+        assertStringContainsString('Use quotation marks only for wording that appears verbatim', $instructions);
+        assertStringContainsString('ordinary answers continue to summarise retrieved content normally', $instructions);
+    }
+
+    public function testRuleChatSendsTheAnswerShapeRulesToTheProvider(): void
+    {
+        $this->documents->setSourceType(self::DOC, 'order58_rule_global');
+        $this->documents->setUsableGlobalRuleDocument(self::KB, true);
+        $this->seedRulesKnowledgeBase();
+
+        $this->service()->startConversation(
+            $this->knowledgeBase('vs_rules'),
+            'What is the rule?',
+            ChatParticipant::admin(1),
+            \App\Chat\Domain\ChatRetrievalScope::RuleOnly,
+        );
+
+        $instructions = (string) $this->provider->lastRequest?->instructions;
+        assertStringContainsString('Answer the question, then stop.', $instructions);
+        assertStringContainsString('Use quotation marks only for wording that appears verbatim', $instructions);
+        // Rule Chat keeps its own scope directive — the addition did not displace it.
+        assertStringContainsString('[rule chat]', $instructions);
+    }
+
     public function testRuleChatGroundsOnGlobalRuleCitation(): void
     {
         $this->documents->setSourceType(self::DOC, 'order58_rule_global');
