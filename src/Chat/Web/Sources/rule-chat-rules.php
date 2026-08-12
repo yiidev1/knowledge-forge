@@ -95,15 +95,12 @@ $pageUrl = static fn(int $target): string => $urlGenerator->generate($pageRoute,
             </table>
         </div>
 
-        <?php if ($result->pageCount() > 1): ?>
-            <div class="util-row" style="gap: .5rem; margin-top: 1rem;">
-                <?php if ($page > 1): ?>
-                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page - 1)) ?>">← Previous</a>
-                <?php endif; ?>
-                <?php if ($page < $result->pageCount()): ?>
-                    <a class="btn btn--secondary btn--sm" href="<?= Html::encode($pageUrl($page + 1)) ?>">Next →</a>
-                <?php endif; ?>
-            </div>
-        <?php endif; ?>
+        <?php /* The shared numbered pager, as used by the store directory and the store-chat picker — the
+                 same component, so this page paginates identically to every other list screen. */ ?>
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $page,
+            'pageCount' => $result->pageCount(),
+            'pageUrl' => $pageUrl,
+        ]) ?>
     <?php endif; ?>
 </section>
