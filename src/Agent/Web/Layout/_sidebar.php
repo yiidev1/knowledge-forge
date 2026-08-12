@@ -20,7 +20,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 // The agent realm is intentionally small: a single "Store List" entry (its chat lives under it). Kept as a
 // list so it reads like the admin sidebar and can grow if the agent gains more pages.
 $items = [
-    ['label' => 'Store Knowledge', 'icon' => '🏬', 'route' => 'agent.home', 'match' => ['agent.home', 'agent.chat.']],
+    ['label' => 'Store Chat', 'icon' => '🏬', 'route' => 'agent.home', 'match' => ['agent.home', 'agent.chat.']],
     ['label' => 'Rule Chat', 'icon' => '📜', 'route' => 'agent.rule-chat.index', 'match' => ['agent.rule-chat.']],
 ];
 
@@ -81,7 +81,7 @@ try {
         <details class="sidebar__kb" <?= $storesActive ? ' open' : '' ?>>
             <summary class="sidebar__link sidebar__kb-summary<?= $storesActive ? ' sidebar__link--active' : '' ?>">
                 <span class="sidebar__link-icon" aria-hidden="true">🗂</span>
-                <span>Stores</span>
+                <span>Stores Knowledge</span>
                 <span class="sidebar__kb-caret" aria-hidden="true">▾</span>
             </summary>
             <div class="sidebar__az" role="group" aria-label="Browse stores A to Z">
