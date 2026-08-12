@@ -17,11 +17,28 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var Yiisoft\View\WebView $this
  */
 
-// The agent realm is intentionally small: a single "Store List" entry (its chat lives under it). Kept as a
-// list so it reads like the admin sidebar and can grow if the agent gains more pages.
+// The agent realm is intentionally small. Kept as a list so it reads like the admin sidebar and can grow if
+// the agent gains more pages.
+//
+// `match` is a prefix list; `except` narrows it. Rule list lives *under* the rule-chat route namespace
+// (`agent.rule-chat.sources.rules`), so without the exception it would light up Rule Chat as well as itself.
+// Excluding the namespace rather than enumerating every rule-chat route keeps a future rule-chat route
+// highlighting correctly without another edit here.
 $items = [
     ['label' => 'Store Chat', 'icon' => '🏬', 'route' => 'agent.home', 'match' => ['agent.home', 'agent.chat.']],
-    ['label' => 'Rule Chat', 'icon' => '📜', 'route' => 'agent.rule-chat.index', 'match' => ['agent.rule-chat.']],
+    [
+        'label' => 'Rule Chat',
+        'icon' => '📜',
+        'route' => 'agent.rule-chat.index',
+        'match' => ['agent.rule-chat.'],
+        'except' => ['agent.rule-chat.sources.'],
+    ],
+    [
+        'label' => 'Rule list',
+        'icon' => '📋',
+        'route' => 'agent.rule-chat.sources.rules',
+        'match' => ['agent.rule-chat.sources.'],
+    ],
 ];
 
 $navItems = [];
@@ -36,6 +53,13 @@ foreach ($items as $item) {
     foreach ($item['match'] as $prefix) {
         if ($activeRoute === $prefix || str_starts_with($activeRoute, $prefix)) {
             $active = true;
+            break;
+        }
+    }
+
+    foreach ($item['except'] ?? [] as $prefix) {
+        if (str_starts_with($activeRoute, $prefix)) {
+            $active = false;
             break;
         }
     }
