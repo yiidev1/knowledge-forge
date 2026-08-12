@@ -304,7 +304,10 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 .src-detail > summary:hover { color: var(--primary); }
 .src-detail > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
 .src-detail__body {
-    margin-top: .55rem; max-width: 70ch; white-space: pre-wrap; overflow-wrap: anywhere;
+    /* Full width of its cell. The 70ch reading measure that used to cap this made sense when the table
+       carried five columns and the text shared the row; now that the title is the only column, the cap just
+       left most of the card empty. */
+    margin-top: .55rem; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere;
     font-size: .88rem; line-height: 1.55; color: var(--text-muted);
     background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
     padding: .7rem .85rem;
