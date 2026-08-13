@@ -121,7 +121,16 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
                                 <div class="chat-msg__citations">
                                     <span class="chat-msg__citations-label">Sources (<?= count($message->citations) ?>)</span>
                                     <?php foreach ($message->citations as $citation): ?>
-                                        <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
+                                        <?php /* The URL is built here, with the conversation and message already
+                                                 bound to it; the browser never composes a source address. It is
+                                                 a convenience only — the server re-checks every id. */ ?>
+                                        <?php if ($conversation !== null): ?>
+                                            <button type="button" class="chat-chip chat-chip--source"
+                                                    data-source-url="<?= Html::encode($urlGenerator->generate('admin.rule-chat.message.source', ['conversationId' => $conversation->id, 'messageId' => $message->id, 'documentId' => $citation->documentId])) ?>"
+                                                    title="View this source"><?= Html::encode($citation->filename) ?></button>
+                                        <?php else: ?>
+                                            <span class="chat-chip"><?= Html::encode($citation->filename) ?></span>
+                                        <?php endif; ?>
                                     <?php endforeach; ?>
                                 </div>
                             <?php elseif (!$message->isGrounded): ?>
@@ -155,10 +164,10 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
             <form method="post" action="<?= Html::encode($postUrl) ?>" class="chat__form">
                 <?= $csrfField ?>
                 <label class="util-visually-hidden" for="chat-question">Your question</label>
-                <textarea class="field__control chat__input" id="chat-question" name="question" rows="1" maxlength="<?= $maxQuestionLength ?>"
-                          placeholder="Ask a question about Order58 rules…" required></textarea>
+                <input class="field__control chat__input" type="text" id="chat-question" name="question"
+                       maxlength="<?= $maxQuestionLength ?>" placeholder="Ask a question about Order58 rules…"
+                       autocomplete="off" required>
                 <div class="chat__composer-actions">
-                    <span class="chat__hint" aria-hidden="true">Enter to send · Shift+Enter for a new line</span>
                     <button class="btn btn--primary" type="submit">Send</button>
                 </div>
             </form>
@@ -170,3 +179,6 @@ $oldestId = $messages !== [] ? $messages[0]->id : null;
         <?php endif; ?>
     </div>
 </div>
+
+<?php /* One dialog per page, filled in on demand by whichever source chip is clicked. */ ?>
+<?= $this->render(ChatPartials::sourceModal()) ?>

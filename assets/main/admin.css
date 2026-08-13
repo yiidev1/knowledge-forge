@@ -500,11 +500,40 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 .chat-msg--user .chat-msg__body a { color: #fff; text-decoration: underline; }
 
 .chat-msg__citations {
-    margin-top: .7rem; padding-top: .6rem;
+    margin-top: .5rem; padding-top: .45rem;
     border-top: 1px dashed var(--border);
-    display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; font-size: .82rem;
+    display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; font-size: .82rem;
 }
 .chat-msg--user .chat-msg__citations { border-top-color: rgba(255, 255, 255, .3); }
+
+/* The source-detail dialog a chip opens. Styled as a plain panel: it is a reading surface, not a form.
+   `::backdrop` is the native dim layer, so no extra element and no inline style are involved. */
+.source-modal {
+    width: min(46rem, calc(100vw - 2rem)); max-height: min(80vh, 44rem);
+    padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius);
+    background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg);
+}
+.source-modal::backdrop { background: rgba(0, 0, 0, .45); }
+.source-modal__head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+    padding: .85rem 1.1rem .7rem; border-bottom: 1px solid var(--border);
+}
+.source-modal__title { margin: 0; font-size: 1rem; font-weight: 650; overflow-wrap: anywhere; }
+.source-modal__meta { margin: .15rem 0 0; font-size: .8rem; color: var(--text-muted); }
+.source-modal__close {
+    flex: 0 0 auto; background: none; border: none; padding: 0 .2rem; line-height: 1;
+    font-size: 1.5rem; color: var(--text-muted); cursor: pointer;
+}
+.source-modal__close:hover { color: var(--text); }
+.source-modal__close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.source-modal__body { padding: .9rem 1.1rem 1.1rem; overflow-y: auto; max-height: calc(min(80vh, 44rem) - 4.5rem); }
+.source-modal__status { margin: 0; color: var(--text-muted); font-size: .88rem; }
+/* The document's own text, shown as stored: wrapped, never reflowed into markup. */
+.source-modal__content {
+    margin: 0; font: inherit; font-size: .87rem; line-height: 1.55;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.source-modal__truncated { margin: .7rem 0 0; font-size: .78rem; color: var(--text-faint); }
 
 /* Thinking indicator — three bouncing dots + label. */
 .chat-typing { display: inline-flex; align-items: center; gap: .3rem; vertical-align: middle; }
@@ -579,14 +608,14 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 
 .chat__composer {
     flex: 0 0 auto;
-    padding: .9rem 1.35rem 1.1rem;
+    padding: .7rem 1.35rem .8rem;
     border-top: 1px solid var(--border);
     background: var(--surface);
 }
-.chat__form { display: flex; flex-direction: column; gap: .6rem; }
-.chat__input { min-height: 46px; max-height: 200px; border-radius: 12px; padding: .65rem .85rem; resize: vertical; }
-.chat__composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.chat__hint { color: var(--text-faint); font-size: .8rem; }
+/* One row: the question box and Send sit side by side, so the composer costs a single line of height. */
+.chat__form { display: flex; align-items: center; gap: .6rem; }
+.chat__input { flex: 1 1 auto; min-width: 0; height: 42px; border-radius: 12px; padding: .5rem .85rem; }
+.chat__composer-actions { display: flex; align-items: center; gap: .6rem; flex: 0 0 auto; }
 
 /* Floating "jump to latest" pill, toggled by JS when the user scrolls up. */
 .chat__jump {
@@ -613,14 +642,19 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     display: inline-flex; align-items: center; max-width: 100%;
     padding: .18rem .6rem; border-radius: 999px;
     background: var(--surface); border: 1px solid var(--border-strong);
-    font-size: .8rem; color: var(--text);
+    font: inherit; font-size: .8rem; color: var(--text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Clickable variant. The affordance is the pointer and the hover lift; the chip must still read as a chip,
+   not as a button competing with Send. */
+.chat-chip--source { cursor: pointer; }
+.chat-chip--source:hover { border-color: var(--primary); color: var(--primary); }
+.chat-chip--source:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 /* Answer feedback: deliberately quieter than the answer itself — a dashed rule and muted text, so it reads
    as a footnote rather than a card competing with the response. */
 .chat-msg__score {
-    margin-top: .55rem; padding-top: .5rem;
+    margin-top: .5rem; padding-top: .45rem;
     border-top: 1px dashed var(--border);
     font-size: .82rem; color: var(--text-muted);
 }
@@ -672,7 +706,7 @@ textarea.field__control { min-height: 110px; resize: vertical; }
 
 /* The slider panel is always in the DOM; a state class on the article reveals it, exactly like the inline
    edit form. That keeps the whole interaction CSS-driven and needs no markup building in JS. */
-.chat-msg__score-form { display: none; flex-direction: column; gap: .5rem; margin-top: .25rem; }
+.chat-msg__score-form { display: none; flex-direction: column; gap: .4rem; margin-top: .2rem; }
 .chat-msg--scoring .chat-msg__score-form { display: flex; }
 .chat-msg--scoring .chat-msg__score-ask,
 .chat-msg--scoring .chat-msg__score-saved { display: none; }
@@ -683,8 +717,16 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     font-weight: 600; color: var(--score-color, var(--text));
     font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: .15rem;
 }
-.chat-msg__score-scale { display: flex; gap: .8rem; flex-wrap: wrap; color: var(--text-faint); font-size: .72rem; }
-.chat-msg__score-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .1rem; }
+.chat-msg__score-scale { display: flex; gap: .7rem; flex-wrap: wrap; color: var(--text-faint); font-size: .72rem; }
+/* The optional note explaining a low score. Hidden by default and revealed only for the red band, driven by
+   the same data-score-band attribute that colours the track — one source of truth for "is this a low score". */
+.chat-msg__score-comment { display: none; flex-direction: column; gap: .2rem; }
+.chat-msg__score[data-score-band="poor"] .chat-msg__score-comment { display: flex; }
+.chat-msg__score-comment-label { font-size: .78rem; color: var(--text-muted); }
+.chat-msg__score-comment-input { max-width: 34rem; font-size: .85rem; padding: .3rem .55rem; height: auto; }
+/* A marker beside a saved low score — the note itself lives in the editor, not in the answer card. */
+.chat-msg__score-note-flag { color: var(--text-faint); font-size: .78rem; }
+.chat-msg__score-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 /* Sized down from the page-level button scale: these belong to the rating row, not to the page. */
 .chat-msg__score-save { padding: .3rem .7rem; font-size: .8rem; }
 
@@ -813,9 +855,7 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     .chat__messages { padding: 1.1rem 1rem; }
     .chat__header, .chat__composer { padding-left: 1rem; padding-right: 1rem; }
     .chat-msg { max-width: 94%; }
-    .chat__composer-actions { flex-direction: column-reverse; align-items: stretch; gap: .5rem; }
-    .chat__composer-actions .btn { width: 100%; }
-    .chat__hint { text-align: center; }
+    .chat__composer-actions { flex: 0 0 auto; }
     .chat__jump { bottom: 7rem; }
 }
 @media (max-width: 520px) {

@@ -32,6 +32,7 @@ $isDismissed = $state !== null && $state->isDismissed();
 // A new rating opens mid-scale; changing one opens on the score already given.
 $initialValue = $isRated ? (int) $state->score : 5;
 $outputId = 'score-value-' . $messageId;
+$commentId = 'score-comment-' . $messageId;
 $inputId = 'score-input-' . $messageId;
 
 /**
@@ -55,6 +56,10 @@ $band = static fn(int $score): array => match (true) {
     <?php if ($isRated): ?>
         <div class="chat-msg__score-saved" data-score-saved>
             <span class="chat-msg__score-badge"><?= (int) $state->score ?>/10 · <?= Html::encode($initialLabel) ?></span>
+            <?php if ($state->hasComment()): ?>
+                <?php /* A marker only — the note itself belongs in the editor, not printed into the thread. */ ?>
+                <span class="chat-msg__score-note-flag">· Comment added</span>
+            <?php endif; ?>
             <button type="button" class="chat-msg__score-edit" data-score-open
                     title="Change score" aria-label="Change score">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
@@ -103,6 +108,21 @@ $band = static fn(int $score): array => match (true) {
             <span>4–6 Fair</span>
             <span>7–8 Good</span>
             <span>9–10 Excellent</span>
+        </div>
+
+        <?php /* Shown only for the red band. `admin.js` toggles the same attribute the server renders, so a
+                 saved 2/10 opens with its note already visible and a slide up to 4 hides it again. */ ?>
+        <div class="chat-msg__score-comment">
+            <label class="chat-msg__score-comment-label" for="<?= Html::encode($commentId) ?>">
+                What was wrong? (optional)
+            </label>
+            <input class="field__control chat-msg__score-comment-input"
+                   type="text"
+                   id="<?= Html::encode($commentId) ?>"
+                   name="feedback_comment"
+                   maxlength="500"
+                   placeholder="Add a short comment…"
+                   value="<?= Html::encode((string) $state?->feedbackComment) ?>">
         </div>
 
         <div class="chat-msg__score-actions">

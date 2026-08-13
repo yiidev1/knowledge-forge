@@ -53,6 +53,7 @@ final readonly class ScoreMessageAction
                 $conversationId,
                 $messageId,
                 FormData::fromRequest($request)->rawValue('score'),
+                FormData::fromRequest($request)->rawValue('feedback_comment'),
             );
         } catch (AnswerScoreInvalid $e) {
             $this->flash->error($e->getMessage());

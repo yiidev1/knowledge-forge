@@ -6,6 +6,8 @@ namespace App\Chat\Domain\Exception;
 
 use App\Shared\Domain\Exception\DomainException;
 
+use function sprintf;
+
 /**
  * The submitted score is not an integer 1–10, or a dismissal was posted for an answer that already carries
  * a score.
@@ -37,5 +39,14 @@ final class AnswerScoreInvalid extends DomainException
     public static function alreadyRated(): self
     {
         return new self('This answer already has a score. Use Change to update it.');
+    }
+
+    /**
+     * The note explaining a low score is optional, but it is stored in a bounded column and the length is
+     * enforced here rather than trusted from the browser's `maxlength`.
+     */
+    public static function commentTooLong(int $max): self
+    {
+        return new self(sprintf('Keep the comment under %d characters.', $max));
     }
 }

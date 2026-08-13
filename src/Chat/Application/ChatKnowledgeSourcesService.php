@@ -60,18 +60,7 @@ final readonly class ChatKnowledgeSourcesService
 
         $items = [];
         foreach ($this->documents->findListForKnowledgeBase($knowledgeBaseId) as $document) {
-            // A document outside the surface's retrieval scope is not "knowledge this chat may use" at all —
-            // it is omitted rather than listed as unavailable, so Store Chat's page never advertises a rule
-            // projection and Rule Chat's never advertises store knowledge.
-            if (!$scope->allows($document->sourceType)) {
-                continue;
-            }
-
-            // The same operator switch the knowledge-base management page honours
-            // ({@see \App\KnowledgeBase\Web\Show\Action}). Filtering here rather than in the template is what
-            // keeps the counts truthful: both the total and the "available" tally are derived from this list.
-            if (!$this->order58Display->showStoreProfileDocuments
-                && $document->sourceType === DocumentSourceType::Order58StoreProfile) {
+            if (!$this->isVisible($document, $scope)) {
                 continue;
             }
 
@@ -79,6 +68,56 @@ final readonly class ChatKnowledgeSourcesService
         }
 
         return $items;
+    }
+
+    /**
+     * One document from that same list, or null when this chat may not see it.
+     *
+     * Deliberately built on {@see forKnowledgeBase()}'s own primitives rather than a direct document lookup:
+     * the listing is already scoped by `knowledge_base_id`, and {@see isVisible()} is the very filter the
+     * transparency page applies — so a document hidden from the page can never be reachable here. Only the
+     * matched row is previewed, so this costs one text read rather than one per document.
+     */
+    public function detailFor(
+        KnowledgeBase $knowledgeBase,
+        int $documentId,
+        ChatRetrievalScope $scope = ChatRetrievalScope::StoreKnowledge,
+    ): ?ChatSourceItem {
+        $knowledgeBaseId = $knowledgeBase->id();
+
+        foreach ($this->documents->findListForKnowledgeBase($knowledgeBaseId) as $document) {
+            if ($document->id !== $documentId || !$this->isVisible($document, $scope)) {
+                continue;
+            }
+
+            $usable = in_array($document->id, $this->repository->findUsableDocumentIds($knowledgeBaseId), true);
+
+            return $this->toItem($document, $usable, $knowledgeBaseId);
+        }
+
+        return null;
+    }
+
+    /**
+     * May this chat surface show this document at all?
+     *
+     * Two rules, both pre-existing:
+     *
+     *  - A document outside the surface's retrieval scope is not "knowledge this chat may use" at all — it is
+     *    omitted rather than listed as unavailable, so Store Chat never advertises a rule projection and Rule
+     *    Chat never advertises store knowledge.
+     *  - The same Store Profile operator switch the knowledge-base management page honours
+     *    ({@see \App\KnowledgeBase\Web\Show\Action}). Filtering here rather than in the template is what keeps
+     *    the counts truthful: both the total and the "available" tally are derived from this list.
+     */
+    private function isVisible(DocumentListItem $document, ChatRetrievalScope $scope): bool
+    {
+        if (!$scope->allows($document->sourceType)) {
+            return false;
+        }
+
+        return $this->order58Display->showStoreProfileDocuments
+            || $document->sourceType !== DocumentSourceType::Order58StoreProfile;
     }
 
     /**

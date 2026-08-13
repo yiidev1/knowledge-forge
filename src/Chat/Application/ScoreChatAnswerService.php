@@ -18,6 +18,7 @@ use App\Shared\Domain\Clock\ClockInterface;
 
 use function is_int;
 use function is_string;
+use function mb_strlen;
 use function preg_match;
 use function trim;
 
@@ -36,6 +37,15 @@ final readonly class ScoreChatAnswerService
 {
     private const MIN_SCORE = 1;
     private const MAX_SCORE = 10;
+
+    /**
+     * The top of the red band. Only a score at or below this may carry a note explaining it — above it the
+     * note is dropped, so a rating that no longer criticises the answer cannot keep criticism attached.
+     */
+    private const MAX_COMMENTABLE_SCORE = 3;
+
+    /** Matches the column width; a note is a sentence or two, not an essay. */
+    private const MAX_COMMENT_LENGTH = 500;
 
     public function __construct(
         private ConversationRepositoryInterface $conversations,
@@ -56,11 +66,43 @@ final readonly class ScoreChatAnswerService
         int $conversationId,
         int $messageId,
         mixed $rawScore,
+        mixed $rawComment = null,
     ): void {
         $answer = $this->resolveScorableAnswer($knowledgeBase, $participant, $conversationId, $messageId);
         $score = $this->parseScore($rawScore);
 
-        $this->scores->saveScore($answer->id, $participant, $score, $this->clock->now());
+        $this->scores->saveScore($answer->id, $participant, $score, $this->parseComment($score, $rawComment), $this->clock->now());
+    }
+
+    /**
+     * A note is optional, kept only for a red-band score, and never trusted from the browser.
+     *
+     * Above the red band it is discarded rather than rejected: the user may have typed a complaint, moved
+     * the slider up, and saved — the higher score is what they meant, and keeping the complaint would
+     * attach criticism to a rating that no longer makes it. The database CHECK enforces the same rule.
+     *
+     * @throws AnswerScoreInvalid when the note is longer than the column allows.
+     */
+    private function parseComment(int $score, mixed $rawComment): ?string
+    {
+        if ($score > self::MAX_COMMENTABLE_SCORE) {
+            return null;
+        }
+
+        if (!is_string($rawComment)) {
+            return null;
+        }
+
+        $comment = trim($rawComment);
+        if ($comment === '') {
+            return null;
+        }
+
+        if (mb_strlen($comment) > self::MAX_COMMENT_LENGTH) {
+            throw AnswerScoreInvalid::commentTooLong(self::MAX_COMMENT_LENGTH);
+        }
+
+        return $comment;
     }
 
     /**

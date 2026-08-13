@@ -183,6 +183,11 @@ return [
             Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
                 ->action(Chat\EditMessage\Action::class)
                 ->name('chat.message.edit'),
+            // One cited source of an answer, as JSON for the source modal. Read-only; the document id is
+            // checked against that answer's own citations, never trusted on its own.
+            Route::get('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/source/{documentId:\d+}')
+                ->action(Chat\ShowSource\Action::class)
+                ->name('chat.message.source'),
             Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/regenerate')
                 ->action(Chat\RegenerateMessage\Action::class)
                 ->name('chat.message.regenerate'),
@@ -285,6 +290,9 @@ return [
             Route::post('/admin/rule-chat/{conversationId:\d+}')
                 ->action(AdminRuleChat\Ask\Action::class)
                 ->name('admin.rule-chat.ask'),
+            Route::get('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/source/{documentId:\d+}')
+                ->action(AdminRuleChat\ShowSource\Action::class)
+                ->name('admin.rule-chat.message.source'),
             Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
                 ->action(AdminRuleChat\EditMessage\Action::class)
                 ->name('admin.rule-chat.message.edit'),
@@ -329,6 +337,9 @@ return [
             Route::post('/agent/rule-chat/{conversationId:\d+}')
                 ->action(AgentRuleChat\AskAction::class)
                 ->name('agent.rule-chat.ask'),
+            Route::get('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/source/{documentId:\d+}')
+                ->action(AgentRuleChat\ShowSourceAction::class)
+                ->name('agent.rule-chat.message.source'),
             Route::post('/agent/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
                 ->action(AgentRuleChat\EditMessageAction::class)
                 ->name('agent.rule-chat.message.edit'),
@@ -363,6 +374,9 @@ return [
             Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}')
                 ->action(AgentChat\AskAction::class)
                 ->name('agent.chat.ask'),
+            Route::get('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/source/{documentId:\d+}')
+                ->action(AgentChat\ShowSourceAction::class)
+                ->name('agent.chat.message.source'),
             Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/edit')
                 ->action(AgentChat\EditMessageAction::class)
                 ->name('agent.chat.message.edit'),

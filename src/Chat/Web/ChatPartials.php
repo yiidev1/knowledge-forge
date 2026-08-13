@@ -22,4 +22,10 @@ final class ChatPartials
     {
         return __DIR__ . '/_partial/score-panel';
     }
+
+    /** The dialog a source chip opens. Rendered once per chat page; filled in by `admin.js`. */
+    public static function sourceModal(): string
+    {
+        return __DIR__ . '/_partial/source-modal';
+    }
 }

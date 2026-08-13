@@ -98,14 +98,14 @@ final class ChatAvailabilityCest
         $I->amOnPage('/knowledge-bases/' . self::PROFILE_SLUG . '/chat');
         $I->seeInCurrentUrl('/admin/order58/store-chat');
         $I->dontSee('A seeded past question');
-        $I->dontSeeElement('textarea[name=question]');
+        $I->dontSeeElement('input[name=question]');
     }
 
     public function questionPostIsRejectedWhenReadinessBecomesFalseAfterRender(WebTester $I): void
     {
         // The ready store renders a working composer (with CSRF).
         $I->amOnPage('/knowledge-bases/' . self::READY_SLUG . '/chat');
-        $I->seeElement('textarea[name=question]');
+        $I->seeElement('input[name=question]');
 
         // Readiness becomes false: its qualifying document's vector-store file is removed.
         $this->connection->createCommand()->delete('{{%document_index_files}}', [

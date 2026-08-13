@@ -20,7 +20,17 @@ final readonly class ChatAnswerScore
         public int $messageId,
         public ?int $score,
         public ?DateTimeImmutable $dismissedAt,
+        /**
+         * An optional short note explaining a low score. Only a red-band score (1-3) may carry one; a score
+         * raised above that band clears it rather than keeping stale criticism attached to a good rating.
+         */
+        public ?string $feedbackComment = null,
     ) {}
+
+    public function hasComment(): bool
+    {
+        return $this->feedbackComment !== null && $this->feedbackComment !== '';
+    }
 
     public function isRated(): bool
     {

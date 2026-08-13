@@ -26,10 +26,17 @@ final class InMemoryChatAnswerScoreRepository implements ChatAnswerScoreReposito
     /** @var list<string> Every write, in order — lets a test prove an update did not insert a second row. */
     public array $writes = [];
 
-    public function saveScore(int $messageId, ChatParticipant $participant, int $score, DateTimeImmutable $now): void
-    {
+    public function saveScore(
+        int $messageId,
+        ChatParticipant $participant,
+        int $score,
+        ?string $comment,
+        DateTimeImmutable $now,
+    ): void {
         // Scoring clears a prior dismissal, exactly like the ON DUPLICATE KEY UPDATE in the real repository.
-        $this->rows[$this->key($messageId, $participant)] = new ChatAnswerScore($messageId, $score, null);
+        // Overwrites the note as well, mirroring the real statement: a score above the red band arrives
+        // with a null comment and must clear whatever was there.
+        $this->rows[$this->key($messageId, $participant)] = new ChatAnswerScore($messageId, $score, null, $comment);
         $this->writes[] = 'score:' . $this->key($messageId, $participant);
     }
 
@@ -39,7 +46,7 @@ final class InMemoryChatAnswerScoreRepository implements ChatAnswerScoreReposito
         $existing = $this->rows[$key] ?? null;
 
         // Never touches an existing score — the real statement only updates dismissed_at.
-        $this->rows[$key] = new ChatAnswerScore($messageId, $existing?->score, $now);
+        $this->rows[$key] = new ChatAnswerScore($messageId, $existing?->score, $now, $existing?->feedbackComment);
         $this->writes[] = 'dismiss:' . $key;
     }
 

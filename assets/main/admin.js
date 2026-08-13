@@ -6,8 +6,8 @@
  * form, and chat still works as a normal POST. This script only adds nicer feedback on top:
  *   1. confirmation prompts on destructive actions (data-confirm),
  *   2. a ChatGPT-style "you asked … / assistant is thinking …" state while an answer is generated,
- *   3. Enter-to-send (Shift+Enter for a newline) in the chat box,
- *   4. auto-scroll of the message list to the newest message, with a "jump to latest" affordance.
+ *   3. auto-scroll of the message list to the newest message, with a "jump to latest" affordance,
+ *   4. a dialog showing one cited source, fetched on demand — the server decides what may be shown.
  * Handlers attach by event delegation, not inline attributes, which keeps the CSP free of 'unsafe-inline'.
  */
 (function () {
@@ -73,12 +73,12 @@
     });
 
     function showChatPending(form) {
-        var textarea = form.querySelector('textarea[name="question"]');
-        if (!textarea) {
+        var input = form.querySelector('[name="question"]');
+        if (!input) {
             return; // not a chat form
         }
 
-        var text = textarea.value.replace(/\s+$/, '');
+        var text = input.value.replace(/\s+$/, '');
         if (text.trim() === '') {
             return; // empty — let the field's native "required" handling take over
         }
@@ -238,6 +238,15 @@
         if (output) {
             output.textContent = target.value + '/10 · ' + band.label;
         }
+
+        // Leaving the red band clears the note as well as hiding it, so a complaint typed at 2/10 cannot be
+        // submitted alongside an 8/10. The server clears it regardless; this just keeps the form honest.
+        if (panel && band.slug !== 'poor') {
+            var comment = panel.querySelector('[name="feedback_comment"]');
+            if (comment) {
+                comment.value = '';
+            }
+        }
     });
 
     function toggleScoring(article, open) {
@@ -346,24 +355,134 @@
         done('Press Ctrl+C');
     });
 
-    // ---- Enter to send (Shift+Enter = newline) --------------------------------
-    document.addEventListener('keydown', function (event) {
-        if (event.key !== 'Enter' || event.shiftKey) {
+    // ---- Source detail dialog -------------------------------------------------
+    // A source chip carries a URL the SERVER built, with its conversation, message and document already
+    // bound into it. This code only fetches that URL and prints the reply; it never composes an address and
+    // never decides what may be shown — the endpoint re-checks every id and answers 404 when the reader may
+    // not see the source. Text is written with textContent, never innerHTML, so a document can never inject
+    // markup into the page.
+    var sourceRequestId = 0;
+
+    function sourceModal() {
+        return document.querySelector('[data-source-modal]');
+    }
+
+    function showSourceState(modal, message) {
+        var status = modal.querySelector('[data-source-status]');
+        var content = modal.querySelector('[data-source-content]');
+        var truncated = modal.querySelector('[data-source-truncated]');
+        if (status) {
+            status.textContent = message;
+            status.hidden = false;
+        }
+        if (content) {
+            content.hidden = true;
+            content.textContent = '';
+        }
+        if (truncated) {
+            truncated.hidden = true;
+        }
+    }
+
+    function openSourceModal(modal) {
+        if (modal.open) {
             return;
         }
-        var target = event.target;
-        if (!(target instanceof HTMLTextAreaElement) || target.name !== 'question') {
-            return;
-        }
-        var form = target.form;
-        if (!form) {
-            return;
-        }
-        event.preventDefault();
-        if (typeof form.requestSubmit === 'function') {
-            form.requestSubmit(); // triggers native validation + our submit handler
+        if (typeof modal.showModal === 'function') {
+            modal.showModal();
         } else {
-            form.submit();
+            modal.setAttribute('open', 'open'); // very old browsers: still readable, just not modal
+        }
+    }
+
+    document.addEventListener('click', function (event) {
+        var trigger = event.target.closest ? event.target.closest('[data-source-url]') : null;
+        if (!trigger) {
+            return;
+        }
+        var modal = sourceModal();
+        if (!modal) {
+            return; // no dialog on this page — leave the chip inert rather than half-working
+        }
+
+        event.preventDefault();
+
+        var title = modal.querySelector('[data-source-title]');
+        var meta = modal.querySelector('[data-source-meta]');
+        if (title) {
+            title.textContent = trigger.textContent.trim() || 'Source';
+        }
+        if (meta) {
+            meta.textContent = '';
+        }
+        showSourceState(modal, 'Loading…');
+        openSourceModal(modal);
+
+        // Only the newest request may paint: clicking two chips quickly must not let the slower reply win.
+        sourceRequestId += 1;
+        var requestId = sourceRequestId;
+
+        fetch(trigger.getAttribute('data-source-url'), {
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        }).then(function (response) {
+            if (!response.ok) {
+                throw new Error('unavailable');
+            }
+            return response.json();
+        }).then(function (data) {
+            if (requestId !== sourceRequestId) {
+                return;
+            }
+            if (title) {
+                title.textContent = String(data.title || 'Source');
+            }
+            if (meta) {
+                var parts = [];
+                if (data.type) {
+                    parts.push(String(data.type));
+                }
+                if (data.unavailable_reason) {
+                    parts.push(String(data.unavailable_reason));
+                }
+                meta.textContent = parts.join(' · ');
+            }
+
+            var status = modal.querySelector('[data-source-status]');
+            var content = modal.querySelector('[data-source-content]');
+            var truncated = modal.querySelector('[data-source-truncated]');
+
+            if (data.content) {
+                if (content) {
+                    content.textContent = String(data.content);
+                    content.hidden = false;
+                }
+                if (status) {
+                    status.hidden = true;
+                }
+            } else {
+                // Never invent text: a source with no readable body says so.
+                showSourceState(modal, 'This source has no readable text to show.');
+            }
+            if (truncated) {
+                truncated.hidden = !data.truncated;
+            }
+        }).catch(function () {
+            if (requestId === sourceRequestId) {
+                showSourceState(modal, 'This source is not available.');
+            }
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        var modal = sourceModal();
+        if (!modal || !modal.open) {
+            return;
+        }
+        // The close button, or the backdrop — a click landing on the dialog element itself is outside its
+        // content box, which is how a native <dialog> reports a backdrop hit.
+        if ((event.target.closest && event.target.closest('[data-source-close]')) || event.target === modal) {
+            modal.close();
         }
     });
 
@@ -513,7 +632,16 @@
                 var box = el('div', 'chat-msg__citations');
                 box.appendChild(el('span', 'chat-msg__citations-label', 'Sources (' + citations.length + ')'));
                 for (var c = 0; c < citations.length; c++) {
-                    var chip = el('span', 'chat-chip');
+                    var url = citations[c].source_url;
+                    var chip;
+                    if (url) {
+                        chip = el('button', 'chat-chip chat-chip--source');
+                        chip.type = 'button';
+                        chip.title = 'View this source';
+                        chip.setAttribute('data-source-url', String(url));
+                    } else {
+                        chip = el('span', 'chat-chip');
+                    }
                     chip.appendChild(document.createTextNode(String(citations[c].filename || '')));
                     box.appendChild(chip);
                 }

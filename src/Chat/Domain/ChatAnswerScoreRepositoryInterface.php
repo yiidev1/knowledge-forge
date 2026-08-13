@@ -23,9 +23,17 @@ interface ChatAnswerScoreRepositoryInterface
      * Idempotent by the (message_id, participant_type, participant_id) unique key, so a double submit
      * updates one row rather than inserting a second.
      *
-     * @param int $score Already validated as an integer 1–10 by the caller.
+     * @param int         $score   Already validated as an integer 1–10 by the caller.
+     * @param string|null $comment Already trimmed, length-checked, and nulled for any score above the red
+     *                             band by the caller — the implementation stores what it is given.
      */
-    public function saveScore(int $messageId, ChatParticipant $participant, int $score, DateTimeImmutable $now): void;
+    public function saveScore(
+        int $messageId,
+        ChatParticipant $participant,
+        int $score,
+        ?string $comment,
+        DateTimeImmutable $now,
+    ): void;
 
     /**
      * Records that this participant declined to rate this answer. Never writes a score — a dismissal has

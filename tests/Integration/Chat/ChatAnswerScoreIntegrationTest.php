@@ -62,8 +62,8 @@ final class ChatAnswerScoreIntegrationTest extends Unit
         $participant = ChatParticipant::admin(90001);
         $answerId = $this->seedAnswer($participant);
 
-        $this->scores->saveScore($answerId, $participant, 4, $this->now);
-        $this->scores->saveScore($answerId, $participant, 9, $this->now->modify('+1 minute'));
+        $this->scores->saveScore($answerId, $participant, 4, null, $this->now);
+        $this->scores->saveScore($answerId, $participant, 9, null, $this->now->modify('+1 minute'));
 
         assertSame(9, $this->scores->findForMessage($answerId, $participant)?->score);
         assertSame(1, $this->countRows($answerId));
@@ -80,7 +80,7 @@ final class ChatAnswerScoreIntegrationTest extends Unit
         assertNull($dismissed->score);
         assertTrue($dismissed->isDismissed());
 
-        $this->scores->saveScore($answerId, $participant, 7, $this->now->modify('+2 minutes'));
+        $this->scores->saveScore($answerId, $participant, 7, null, $this->now->modify('+2 minutes'));
         $rated = $this->scores->findForMessage($answerId, $participant);
         assertNotNull($rated);
         assertSame(7, $rated->score);
@@ -97,7 +97,7 @@ final class ChatAnswerScoreIntegrationTest extends Unit
         $participant = ChatParticipant::admin(90003);
         $answerId = $this->seedAnswer($participant);
 
-        $this->scores->saveScore($answerId, $participant, 6, $this->now);
+        $this->scores->saveScore($answerId, $participant, 6, null, $this->now);
         $this->scores->saveDismissal($answerId, $participant, $this->now->modify('+1 minute'));
 
         assertSame(6, $this->scores->findForMessage($answerId, $participant)?->score);
@@ -110,8 +110,8 @@ final class ChatAnswerScoreIntegrationTest extends Unit
         // Same numeric id, different realm — the discriminator keeps the rows apart.
         $agent = ChatParticipant::agent(90004);
 
-        $this->scores->saveScore($answerId, $admin, 2, $this->now);
-        $this->scores->saveScore($answerId, $agent, 10, $this->now);
+        $this->scores->saveScore($answerId, $admin, 2, null, $this->now);
+        $this->scores->saveScore($answerId, $agent, 10, null, $this->now);
 
         assertSame(2, $this->scores->findForMessage($answerId, $admin)?->score);
         assertSame(10, $this->scores->findForMessage($answerId, $agent)?->score);
@@ -173,7 +173,7 @@ final class ChatAnswerScoreIntegrationTest extends Unit
     {
         $participant = ChatParticipant::admin(90007);
         $answerId = $this->seedAnswer($participant);
-        $this->scores->saveScore($answerId, $participant, 5, $this->now);
+        $this->scores->saveScore($answerId, $participant, 5, null, $this->now);
 
         $this->connection->createCommand()->delete('{{%messages}}', ['id' => $answerId])->execute();
 
@@ -186,7 +186,7 @@ final class ChatAnswerScoreIntegrationTest extends Unit
         $first = $this->seedAnswer($participant);
         $second = $this->seedAnswer($participant, 'Second question?');
 
-        $this->scores->saveScore($first, $participant, 3, $this->now);
+        $this->scores->saveScore($first, $participant, 3, null, $this->now);
         $this->scores->saveDismissal($second, $participant, $this->now);
 
         $states = $this->scores->findForMessages([$first, $second, 987654321], $participant);
@@ -200,9 +200,58 @@ final class ChatAnswerScoreIntegrationTest extends Unit
     {
         $owner = ChatParticipant::admin(90009);
         $answerId = $this->seedAnswer($owner);
-        $this->scores->saveScore($answerId, $owner, 8, $this->now);
+        $this->scores->saveScore($answerId, $owner, 8, null, $this->now);
 
         assertSame([], $this->scores->findForMessages([$answerId], ChatParticipant::admin(90010)));
+    }
+
+    /**
+     * `chk_chat_answer_scores_comment_low_only`: a note may only accompany a red-band score. The service
+     * already drops one above 3, so reaching this needs the service to be bypassed — which is exactly what
+     * the constraint is for.
+     */
+    public function testDatabaseRefusesACommentOnAScoreAboveThree(): void
+    {
+        $participant = ChatParticipant::admin(90011);
+        $answerId = $this->seedAnswer($participant);
+
+        $rejected = false;
+        try {
+            $this->connection->createCommand()->insert('{{%chat_answer_scores}}', [
+                'message_id' => $answerId,
+                'participant_type' => 'admin',
+                'participant_id' => 90011,
+                'score' => 7,
+                'feedback_comment' => 'Should not be storable.',
+                'dismissed_at' => null,
+                'created_at' => DbDateTime::format($this->now),
+                'updated_at' => DbDateTime::format($this->now),
+            ])->execute();
+        } catch (Throwable) {
+            $rejected = true;
+        }
+
+        assertTrue($rejected);
+    }
+
+    public function testACommentSurvivesARoundTripAndIsClearedByRaisingTheScore(): void
+    {
+        $participant = ChatParticipant::admin(90012);
+        $answerId = $this->seedAnswer($participant);
+
+        $this->scores->saveScore($answerId, $participant, 2, 'It used the wrong store hours.', $this->now);
+        $low = $this->scores->findForMessage($answerId, $participant);
+        assertNotNull($low);
+        assertSame('It used the wrong store hours.', $low->feedbackComment);
+        assertTrue($low->hasComment());
+
+        // The upsert overwrites rather than merges, so the note goes when the rating stops being a complaint.
+        $this->scores->saveScore($answerId, $participant, 9, null, $this->now->modify('+1 minute'));
+        $raised = $this->scores->findForMessage($answerId, $participant);
+        assertNotNull($raised);
+        assertSame(9, $raised->score);
+        assertNull($raised->feedbackComment);
+        assertSame(1, $this->countRows($answerId));
     }
 
     // ---------------------------------------------------------------- helpers

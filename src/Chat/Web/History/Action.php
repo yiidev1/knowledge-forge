@@ -20,6 +20,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
+use Yiisoft\Router\UrlGeneratorInterface;
 
 use function json_encode;
 
@@ -38,6 +39,7 @@ final readonly class Action
         private MarkdownRenderer $markdown,
         private ResponseFactoryInterface $responseFactory,
         private CurrentAdmin $currentAdmin,
+        private UrlGeneratorInterface $urlGenerator,
     ) {}
 
     public function __invoke(
@@ -79,7 +81,7 @@ final readonly class Action
         $payload = [
             'has_older' => $hasOlder,
             'messages' => array_map(
-                fn(Message $m): array => $this->serialize($m, $scoreStates),
+                fn(Message $m): array => $this->serialize($m, $scoreStates, $slug, $conversation->id),
                 $older,
             ),
         ];
@@ -94,13 +96,21 @@ final readonly class Action
     /**
      * @return array<string, mixed>
      */
-    private function serialize(Message $message, MessageScoreView $scores): array
+    private function serialize(Message $message, MessageScoreView $scores, string $slug, int $conversationId): array
     {
         $state = $scores->stateFor($message->id);
 
+        // Each citation carries a server-built URL rather than a raw document id, so the client never
+        // composes a source address. The endpoint re-checks it regardless.
         $citations = [];
         foreach ($message->citations as $citation) {
-            $citations[] = ['filename' => $citation->filename];
+            $citations[] = [
+                'filename' => $citation->filename,
+                'source_url' => $this->urlGenerator->generate('chat.message.source', [
+                    'slug' => $slug, 'conversationId' => $conversationId, 'messageId' => $message->id,
+                    'documentId' => $citation->documentId,
+                ]),
+            ];
         }
 
         return [

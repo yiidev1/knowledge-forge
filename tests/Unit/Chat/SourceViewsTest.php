@@ -30,6 +30,7 @@ final class SourceViewsTest extends TestCase
             'store rules' => [SourceViews::storeRules()],
             'rule chat rules' => [SourceViews::ruleChatRules()],
             'score panel' => [ChatPartials::scorePanel()],
+            'source modal' => [ChatPartials::sourceModal()],
         ];
     }
 

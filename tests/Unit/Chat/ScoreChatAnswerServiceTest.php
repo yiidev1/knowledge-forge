@@ -25,6 +25,8 @@ use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertTrue;
+use function mb_strlen;
+use function str_repeat;
 
 /**
  * The rules of rating an answer, minus HTTP and the database.
@@ -197,6 +199,189 @@ final class ScoreChatAnswerServiceTest extends Unit
 
         $this->expectException(NotFoundException::class);
         $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '8');
+    }
+
+    // ---------------------------------------------------------------- the optional low-score note
+
+    /**
+     * A note explains a bad rating, so it is accepted exactly across the red band (1–3) and nowhere else.
+     */
+    public function testLowScoresCanCarryAnOptionalComment(): void
+    {
+        foreach ([1, 2, 3] as $index => $score) {
+            $participant = ChatParticipant::admin(100 + $index);
+            [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+            $this->service()->score(
+                $this->knowledgeBase(),
+                $participant,
+                $conversationId,
+                $answerId,
+                (string) $score,
+                '  It quoted the wrong store.  ',
+            );
+
+            $state = $this->scores->findForMessage($answerId, $participant);
+            assertNotNull($state);
+            assertSame($score, $state->score);
+            // Trimmed on the way in, so trailing whitespace never becomes part of the note.
+            assertSame('It quoted the wrong store.', $state->feedbackComment);
+            assertTrue($state->hasComment());
+        }
+    }
+
+    public function testALowScoreSavesFineWithNoComment(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '2');
+
+        $state = $this->scores->findForMessage($answerId, $participant);
+        assertNotNull($state);
+        assertSame(2, $state->score);
+        assertNull($state->feedbackComment);
+        assertTrue($state->isRated());
+    }
+
+    public function testBlankAndWhitespaceOnlyCommentsAreStoredAsNull(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '1', "   \n  ");
+
+        assertNull($this->scores->findForMessage($answerId, $participant)?->feedbackComment);
+    }
+
+    /**
+     * Above the red band the note is dropped rather than rejected. The browser hides the field, but a stale
+     * page or a crafted post can still send one, and criticism must never stay attached to a rating that no
+     * longer makes it.
+     */
+    public function testScoresAboveThreeNeverStoreAComment(): void
+    {
+        foreach ([4, 6, 8, 10] as $index => $score) {
+            $participant = ChatParticipant::admin(200 + $index);
+            [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+            $this->service()->score(
+                $this->knowledgeBase(),
+                $participant,
+                $conversationId,
+                $answerId,
+                (string) $score,
+                'This should not be kept.',
+            );
+
+            $state = $this->scores->findForMessage($answerId, $participant);
+            assertNotNull($state);
+            assertSame($score, $state->score);
+            assertNull($state->feedbackComment);
+        }
+    }
+
+    public function testRaisingALowScoreClearsItsComment(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '2', 'Wrong price.');
+        assertSame('Wrong price.', $this->scores->findForMessage($answerId, $participant)?->feedbackComment);
+
+        // Re-rated as good, with no note this time: the old complaint must not survive.
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '8');
+
+        $state = $this->scores->findForMessage($answerId, $participant);
+        assertNotNull($state);
+        assertSame(8, $state->score);
+        assertNull($state->feedbackComment);
+        assertSame(1, $this->scores->count());
+    }
+
+    public function testLoweringAGoodScoreAcceptsANewComment(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '8');
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '2', 'Missed the rule.');
+
+        $state = $this->scores->findForMessage($answerId, $participant);
+        assertNotNull($state);
+        assertSame(2, $state->score);
+        assertSame('Missed the rule.', $state->feedbackComment);
+        assertSame(1, $this->scores->count());
+    }
+
+    public function testACommentAtTheLengthLimitIsAcceptedAndOneCharacterMoreIsRejected(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score(
+            $this->knowledgeBase(),
+            $participant,
+            $conversationId,
+            $answerId,
+            '1',
+            str_repeat('a', 500),
+        );
+        assertSame(500, mb_strlen((string) $this->scores->findForMessage($answerId, $participant)?->feedbackComment));
+
+        $this->expectException(AnswerScoreInvalid::class);
+        $this->service()->score(
+            $this->knowledgeBase(),
+            $participant,
+            $conversationId,
+            $answerId,
+            '1',
+            str_repeat('a', 501),
+        );
+    }
+
+    /**
+     * Length is counted in characters, not bytes, so a multi-byte note is not rejected early.
+     */
+    public function testCommentLengthIsCountedInCharacters(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score(
+            $this->knowledgeBase(),
+            $participant,
+            $conversationId,
+            $answerId,
+            '3',
+            str_repeat('é', 500),
+        );
+
+        assertSame(500, mb_strlen((string) $this->scores->findForMessage($answerId, $participant)?->feedbackComment));
+    }
+
+    public function testANonStringCommentIsIgnoredRatherThanCoerced(): void
+    {
+        $participant = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($participant);
+
+        $this->service()->score($this->knowledgeBase(), $participant, $conversationId, $answerId, '2', ['array']);
+
+        assertNull($this->scores->findForMessage($answerId, $participant)?->feedbackComment);
+    }
+
+    /**
+     * A note belongs to the rating that carries it, and ratings are per participant.
+     */
+    public function testACommentIsStoredOnlyOnTheRatersOwnRow(): void
+    {
+        $owner = ChatParticipant::admin(1);
+        [$conversationId, $answerId] = $this->seedAnsweredThread($owner);
+
+        $this->service()->score($this->knowledgeBase(), $owner, $conversationId, $answerId, '2', 'Not accurate.');
+
+        assertNull($this->scores->findForMessage($answerId, ChatParticipant::admin(2)));
+        assertNull($this->scores->findForMessage($answerId, ChatParticipant::agent(1)));
     }
 
     // ---------------------------------------------------------------- dismissal

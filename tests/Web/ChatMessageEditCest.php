@@ -113,7 +113,7 @@ final class ChatMessageEditCest
         // Only the latest user message is editable — one toggle, none on the assistant answer.
         $I->seeNumberOfElements('[data-edit-toggle]', 1);
         // The composer is available because the latest question is answered.
-        $I->seeElement('textarea[name=question]');
+        $I->seeElement('input[name=question]');
         $I->dontSeeElement('[data-composer-blocked]');
     }
 
@@ -126,7 +126,7 @@ final class ChatMessageEditCest
         $I->seeElement('form[data-retry-form]');
         $I->seeElement('[data-composer-blocked]');
         // The composer question box is withheld until the pending answer is resolved.
-        $I->dontSeeElement('textarea[name=question]');
+        $I->dontSeeElement('input[name=question]');
     }
 
     public function unchangedEditIsRejectedServerSideWithoutRegenerating(WebTester $I): void

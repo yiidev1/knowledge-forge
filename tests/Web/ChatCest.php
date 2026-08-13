@@ -50,7 +50,7 @@ final class ChatCest
         $I->amOnPage('/knowledge-bases/' . self::KB_SLUG . '/chat');
         $I->see(self::KB_NAME);
         $I->see('still being provisioned');
-        $I->dontSeeElement('textarea[name=question]');
+        $I->dontSeeElement('input[name=question]');
         $I->dontSee('Start conversation');
         $I->dontSee('Conversations');
     }

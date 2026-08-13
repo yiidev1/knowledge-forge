@@ -11,6 +11,7 @@ use App\Chat\Domain\Exception\ConversationNotFound;
 use App\Chat\Domain\Message;
 use App\Chat\Domain\ChatAnswerScoreRepositoryInterface;
 use App\Chat\Domain\MessageRepositoryInterface;
+use App\Chat\Domain\ResolvedCitation;
 use App\Chat\Web\ChatThreadParams;
 use App\Chat\Web\MessageScoreView;
 use App\Shared\Domain\Exception\NotFoundException;
@@ -19,6 +20,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
+use Yiisoft\Router\UrlGeneratorInterface;
 
 use function json_encode;
 
@@ -37,6 +39,7 @@ final readonly class HistoryAction
         private CurrentAgent $currentAgent,
         private MarkdownRenderer $markdown,
         private ResponseFactoryInterface $responseFactory,
+        private UrlGeneratorInterface $urlGenerator,
     ) {}
 
     public function __invoke(
@@ -83,8 +86,16 @@ final readonly class HistoryAction
                     'content' => $m->content,
                     'html' => $m->isAssistant() ? $this->markdown->toHtml($m->content) : null,
                     'is_grounded' => $m->isGrounded,
+                    // Each citation carries a server-built URL rather than a raw document id, so the
+                    // client never composes a source address. The endpoint re-checks it regardless.
                     'citations' => array_map(
-                        static fn($c): array => ['filename' => $c->filename],
+                        fn(ResolvedCitation $c): array => [
+                            'filename' => $c->filename,
+                            'source_url' => $this->urlGenerator->generate('agent.chat.message.source', [
+                                'slug' => $slug, 'conversationId' => $conversation->id, 'messageId' => $m->id,
+                                'documentId' => $c->documentId,
+                            ]),
+                        ],
                         $m->citations,
                     ),
                     'created_at' => $m->createdAt->format('Y-m-d H:i'),

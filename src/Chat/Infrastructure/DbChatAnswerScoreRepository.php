@@ -29,24 +29,34 @@ final readonly class DbChatAnswerScoreRepository implements ChatAnswerScoreRepos
         private ConnectionInterface $connection,
     ) {}
 
-    public function saveScore(int $messageId, ChatParticipant $participant, int $score, DateTimeImmutable $now): void
-    {
+    public function saveScore(
+        int $messageId,
+        ChatParticipant $participant,
+        int $score,
+        ?string $comment,
+        DateTimeImmutable $now,
+    ): void {
         $timestamp = DbDateTime::format($now);
 
         // Scoring an answer that was previously dismissed clears the dismissal — the participant changed
         // their mind, and leaving it set would leave the row in two states at once.
         $this->connection->createCommand(
             'INSERT INTO ' . self::TABLE
-            . ' ([[message_id]], [[participant_type]], [[participant_id]], [[score]], [[dismissed_at]],'
-            . ' [[created_at]], [[updated_at]])'
-            . ' VALUES (:messageId, :type, :participantId, :score, NULL, :now, :now)'
+            . ' ([[message_id]], [[participant_type]], [[participant_id]], [[score]], [[feedback_comment]],'
+            . ' [[dismissed_at]], [[created_at]], [[updated_at]])'
+            . ' VALUES (:messageId, :type, :participantId, :score, :comment, NULL, :now, :now)'
             . ' ON DUPLICATE KEY UPDATE'
-            . ' [[score]] = VALUES([[score]]), [[dismissed_at]] = NULL, [[updated_at]] = VALUES([[updated_at]])',
+            . ' [[score]] = VALUES([[score]]),'
+            // Overwritten, never merged: raising a score past the red band must clear the old note rather
+            // than leave criticism attached to a rating that no longer says it.
+            . ' [[feedback_comment]] = VALUES([[feedback_comment]]),'
+            . ' [[dismissed_at]] = NULL, [[updated_at]] = VALUES([[updated_at]])',
             [
                 ':messageId' => $messageId,
                 ':type' => $participant->type->value,
                 ':participantId' => $participant->id,
                 ':score' => $score,
+                ':comment' => $comment,
                 ':now' => $timestamp,
             ],
         )->execute();
@@ -121,6 +131,7 @@ final readonly class DbChatAnswerScoreRepository implements ChatAnswerScoreRepos
         return new ChatAnswerScore(
             messageId: (int) $row['message_id'],
             score: $row['score'] === null ? null : (int) $row['score'],
+            feedbackComment: $row['feedback_comment'] === null ? null : (string) $row['feedback_comment'],
             dismissedAt: DbDateTime::parseNullable(
                 $row['dismissed_at'] === null ? null : (string) $row['dismissed_at'],
             ),
