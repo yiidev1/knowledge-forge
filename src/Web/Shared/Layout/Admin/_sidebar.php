@@ -31,6 +31,9 @@ $items = [
     ['label' => 'Store chat', 'icon' => '💬', 'route' => 'order58.store-chat', 'match' => ['order58.store-chat']],
     ['label' => 'Rule Chat', 'icon' => '📜', 'route' => 'admin.rule-chat.index', 'match' => ['admin.rule-chat.']],
     ['label' => 'Rule list', 'icon' => '📋', 'route' => 'order58.rules.readiness', 'match' => ['order58.rules.readiness']],
+    // Prefix is the whole `admin.reports.` namespace, so a future second report lights the same entry and
+    // no sibling route lights this one.
+    ['label' => 'Chat Reports', 'icon' => '📊', 'route' => 'admin.reports.chat', 'match' => ['admin.reports.']],
 ];
 
 $navItems = [];

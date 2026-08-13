@@ -21,6 +21,7 @@ use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
+use App\Reports\Web as Reports;
 use App\Rules\Web\Detail as RulesDetail;
 use App\Rules\Web\GlobalBase as RulesGlobalBase;
 use App\Rules\Web\Readiness as RulesReadiness;
@@ -198,6 +199,13 @@ return [
             Route::post('/knowledge-bases/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
                 ->action(Chat\ScoreMessage\DismissAction::class)
                 ->name('chat.message.score.dismiss'),
+
+            // Admin chat report: agent usage, answer quality and ratings across every agent conversation.
+            // Read-only — it renders aggregates and offers no action. Its cross-agent read path is separate
+            // from the participant-owned chat services by design; those are not weakened to serve it.
+            Route::get('/admin/reports/chat')
+                ->action(Reports\Chat\Action::class)
+                ->name('admin.reports.chat'),
 
             // OpenAI usage and vector-store inventory. Read-only, and deliberately absent from the
             // sidebar and every other page — it is an operator diagnostic reached by direct URL, not a
