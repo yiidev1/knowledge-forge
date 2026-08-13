@@ -6,8 +6,6 @@ namespace App\Reports\Domain;
 
 use DateTimeImmutable;
 
-use function round;
-
 /**
  * One agent's activity across the selected range.
  *
@@ -31,6 +29,11 @@ final readonly class AgentUsageRow
         public int $comments,
         public int $sessions,
         public int $chatSeconds,
+        /**
+         * Mean seconds from an agent's question to the answer that currently stands for it. Distinct from
+         * {@see $chatSeconds}: that is a derived activity span, this is how long the assistant took.
+         */
+        public ?float $averageResponseSeconds,
         public ?DateTimeImmutable $lastActivityAt,
         public ?DateTimeImmutable $lastLoginAt,
     ) {}
@@ -48,8 +51,4 @@ final readonly class AgentUsageRow
         return 'Agent #' . $this->agentAdminId;
     }
 
-    public function averageSessionSeconds(): int
-    {
-        return $this->sessions === 0 ? 0 : (int) round($this->chatSeconds / $this->sessions);
-    }
 }

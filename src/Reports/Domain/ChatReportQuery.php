@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Reports\Domain;
 
-use function max;
-
 /**
  * Everything the report reader needs: the resolved UTC window plus every validated filter.
  *
@@ -39,20 +37,16 @@ final readonly class ChatReportQuery
         public ?int $knowledgeBaseId = null,
         /** Detail-table-only free text over question and answer content. */
         public string $search = '',
-        public int $page = 1,
-        public int $perPage = 25,
+        /** Each table pages independently, so one pager can never move another table. */
+        public ReportPage $agentPage = new ReportPage(),
+        public ReportPage $storePage = new ReportPage(),
+        public ReportPage $qaPage = new ReportPage(),
         public AgentUsageSort $agentSort = new AgentUsageSort(),
+        public StoreUsageSort $storeSort = new StoreUsageSort(),
     ) {}
 
-    public function offset(): int
-    {
-        return (max(1, $this->page) - 1) * max(1, $this->perPage);
-    }
-
-    /**
-     * The same filters with paging moved to another page — used by the action's out-of-range clamp.
-     */
-    public function withPage(int $page): self
+    /** @param 'agent'|'store'|'qa' $table */
+    public function withPageFor(string $table, int $number): self
     {
         return new self(
             $this->range,
@@ -63,9 +57,11 @@ final readonly class ChatReportQuery
             $this->agentAdminId,
             $this->knowledgeBaseId,
             $this->search,
-            $page,
-            $this->perPage,
+            $table === 'agent' ? $this->agentPage->withNumber($number) : $this->agentPage,
+            $table === 'store' ? $this->storePage->withNumber($number) : $this->storePage,
+            $table === 'qa' ? $this->qaPage->withNumber($number) : $this->qaPage,
             $this->agentSort,
+            $this->storeSort,
         );
     }
 

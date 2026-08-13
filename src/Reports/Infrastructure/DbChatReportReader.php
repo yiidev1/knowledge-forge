@@ -15,6 +15,7 @@ use App\Reports\Domain\ChatTypeFilter;
 use App\Reports\Domain\FeedbackFilter;
 use App\Reports\Domain\RatingFilter;
 use App\Reports\Domain\StoreUsageRow;
+use App\Reports\Domain\UsageResult;
 use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -71,7 +72,8 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             . ' SUM([[is_rule_chat]] = 1) [[rule_questions]],'
             . ' SUM([[answer_id]] IS NOT NULL AND [[is_grounded]] = 1) [[grounded]],'
             . ' SUM([[answer_id]] IS NOT NULL AND [[is_grounded]] = 0) [[fallback]],'
-            . ' AVG([[response_seconds]]) [[avg_response]]'
+            // Same guard as the per-agent figure, so the headline and the table cannot disagree.
+            . ' AVG(CASE WHEN [[response_seconds]] >= 0 THEN [[response_seconds]] END) [[avg_response]]'
             . ' FROM [[pairs]]';
 
         $row = $this->connection->createCommand($sql, $params)->queryOne();
@@ -99,9 +101,20 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
         );
     }
 
-    public function agentUsage(ChatReportQuery $query): array
+    /** @return UsageResult<AgentUsageRow> */
+    public function agentUsage(ChatReportQuery $query): UsageResult
     {
         [$where, $params] = $this->baseWhere($query);
+
+        // Counting distinct agents, not rows: the page total must be "how many agents match", which is what
+        // the pager divides into pages.
+        $total = (int) $this->connection->createCommand(
+            $this->pairsCte($where) . ' SELECT COUNT(DISTINCT [[agent_admin_id]]) FROM [[pairs]]',
+            $params,
+        )->queryScalar();
+
+        $limit = max(1, $query->agentPage->perPage);
+        $offset = max(0, $query->agentPage->offset());
 
         $sql = $this->pairsCte($where) . ', ' . $this->sessionSpansCte($query, $params)
             . ' SELECT [[p]].[[agent_admin_id]] [[agent_admin_id]],'
@@ -115,6 +128,9 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             . ' AVG([[p]].[[score]]) [[avg_rating]],'
             . ' SUM([[p]].[[score]] BETWEEN 1 AND 3) [[low_ratings]],'
             . ' SUM([[p]].[[comment]] IS NOT NULL) [[comments]],'
+            // Only answered questions contribute, and a negative span from malformed legacy rows is ignored
+            // rather than dragging the mean below zero.
+            . ' AVG(CASE WHEN [[p]].[[response_seconds]] >= 0 THEN [[p]].[[response_seconds]] END) [[avg_response]],'
             . ' MAX([[p]].[[asked_at]]) [[last_activity]],'
             . ' MAX([[l]].[[last_login_at]]) [[last_login]],'
             . ' COALESCE(MAX([[s]].[[sessions]]), 0) [[sessions]],'
@@ -126,7 +142,8 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             . ' LEFT JOIN {{%agent_login_activity}} [[l]] ON [[l]].[[agent_admin_id]] = [[p]].[[agent_admin_id]]'
             . ' LEFT JOIN [[spans]] [[s]] ON [[s]].[[agent_admin_id]] = [[p]].[[agent_admin_id]]'
             . ' GROUP BY [[p]].[[agent_admin_id]]'
-            . ' ORDER BY ' . $query->agentSort->orderBy();
+            . ' ORDER BY ' . $query->agentSort->orderBy()
+            . " LIMIT $limit OFFSET $offset";
 
         $rows = [];
         foreach ($this->connection->createCommand($sql, $params)->queryAll() as $row) {
@@ -144,18 +161,27 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
                 comments: (int) $row['comments'],
                 sessions: (int) $row['sessions'],
                 chatSeconds: (int) $row['chat_seconds'],
+                averageResponseSeconds: $this->nullableFloat($row['avg_response'] ?? null),
                 lastActivityAt: DbDateTime::parseNullable($this->nullableString($row['last_activity'] ?? null)),
                 lastLoginAt: DbDateTime::parseNullable($this->nullableString($row['last_login'] ?? null)),
             );
         }
 
-        return $rows;
+        return new UsageResult($rows, $total, $query->agentPage->number, $limit);
     }
 
-    public function storeUsage(ChatReportQuery $query, int $limit = 50): array
+    /** @return UsageResult<StoreUsageRow> */
+    public function storeUsage(ChatReportQuery $query): UsageResult
     {
         [$where, $params] = $this->baseWhere($query);
-        $limit = max(1, $limit);
+
+        $total = (int) $this->connection->createCommand(
+            $this->pairsCte($where) . ' SELECT COUNT(DISTINCT [[knowledge_base_id]]) FROM [[pairs]]',
+            $params,
+        )->queryScalar();
+
+        $limit = max(1, $query->storePage->perPage);
+        $offset = max(0, $query->storePage->offset());
 
         $sql = $this->pairsCte($where)
             . ' SELECT [[knowledge_base_id]], MAX([[store_name]]) [[store_name]],'
@@ -169,7 +195,8 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             . ' MAX([[asked_at]]) [[last_activity]]'
             . ' FROM [[pairs]]'
             . ' GROUP BY [[knowledge_base_id]]'
-            . " ORDER BY [[questions]] DESC, [[knowledge_base_id]] ASC LIMIT $limit";
+            . ' ORDER BY ' . $query->storeSort->orderBy()
+            . " LIMIT $limit OFFSET $offset";
 
         $rows = [];
         foreach ($this->connection->createCommand($sql, $params)->queryAll() as $row) {
@@ -187,7 +214,7 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             );
         }
 
-        return $rows;
+        return new UsageResult($rows, $total, $query->storePage->number, $limit);
     }
 
     public function list(ChatReportQuery $query): ChatReportResult
@@ -208,8 +235,8 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
             ->createCommand($cte . ' SELECT COUNT(*) FROM [[pairs]]' . $filter, $params)
             ->queryScalar();
 
-        $limit = max(1, $query->perPage);
-        $offset = max(0, $query->offset());
+        $limit = max(1, $query->qaPage->perPage);
+        $offset = max(0, $query->qaPage->offset());
 
         $sql = $cte
             . ' SELECT [[p]].*, [[a]].[[first_name]] [[first_name]], [[a]].[[last_name]] [[last_name]],'
@@ -221,30 +248,30 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
 
         $items = [];
         foreach ($this->connection->createCommand($sql, $params)->queryAll() as $row) {
-            $answerId = $row['answer_id'] === null ? null : (int) $row['answer_id'];
-
-            $items[] = new ChatReportRow(
-                questionId: (int) $row['question_id'],
-                askedAt: DbDateTime::parse((string) $row['asked_at']),
-                agentAdminId: (int) $row['agent_admin_id'],
-                agentName: $this->displayName($row['first_name'] ?? null, $row['last_name'] ?? null),
-                agentUsername: $this->nullableString($row['username'] ?? null),
-                chatType: ((int) $row['is_rule_chat']) === 1 ? ChatTypeFilter::Rule : ChatTypeFilter::Store,
-                storeName: $this->nullableString($row['store_name'] ?? null),
-                question: (string) $row['question'],
-                answerId: $answerId,
-                answer: $this->nullableString($row['answer'] ?? null),
-                isGrounded: ((int) ($row['is_grounded'] ?? 0)) === 1,
-                score: $row['score'] === null ? null : (int) $row['score'],
-                dismissed: $this->nullableString($row['dismissed_at'] ?? null) !== null,
-                comment: $this->nullableString($row['comment'] ?? null),
-                responseSeconds: $row['response_seconds'] === null ? null : (int) $row['response_seconds'],
-                citationCount: $this->citationCount($row['citations_json'] ?? null),
-                questionEdited: ((int) ($row['edit_count'] ?? 0)) > 0,
-            );
+            $items[] = $this->hydrateRow($row);
         }
 
-        return new ChatReportResult($items, $total, $query->page, $query->perPage);
+        return new ChatReportResult($items, $total, $query->qaPage->number, $limit);
+    }
+
+    public function findDetail(int $questionId, ChatReportQuery $query): ?ChatReportRow
+    {
+        [$where, $params] = $this->baseWhere($query);
+
+        // Scoped by the same predicates as every other view, plus the id. A question outside the active
+        // filters is simply not found — the modal can never reach a record the report itself excludes.
+        $params[':question'] = (string) $questionId;
+
+        $sql = $this->pairsCte($where . ' AND [[q]].[[id]] = :question')
+            . ' SELECT [[p]].*, [[a]].[[first_name]] [[first_name]], [[a]].[[last_name]] [[last_name]],'
+            . ' [[a]].[[username]] [[username]]'
+            . ' FROM [[pairs]] [[p]]'
+            . ' LEFT JOIN {{%order58_agents}} [[a]] ON [[a]].[[admin_id]] = [[p]].[[agent_admin_id]]'
+            . ' LIMIT 1';
+
+        $row = $this->connection->createCommand($sql, $params)->queryOne();
+
+        return is_array($row) ? $this->hydrateRow($row) : null;
     }
 
     public function agentOptions(): array
@@ -368,6 +395,7 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
 
         match ($query->status) {
             AnswerStatusFilter::All => null,
+            AnswerStatusFilter::Answered => $conditions[] = '[[ans]].[[id]] IS NOT NULL',
             AnswerStatusFilter::Grounded => $conditions[] = '[[ans]].[[id]] IS NOT NULL AND [[ans]].[[is_grounded]] = 1',
             AnswerStatusFilter::Fallback => $conditions[] = '[[ans]].[[id]] IS NOT NULL AND [[ans]].[[is_grounded]] = 0',
             AnswerStatusFilter::Unanswered => $conditions[] = '[[ans]].[[id]] IS NULL',
@@ -474,6 +502,35 @@ final readonly class DbChatReportReader implements ChatReportReaderInterface
     }
 
     // ------------------------------------------------------------------ hydration helpers
+
+    /**
+     * One report row. Shared by the table and the detail modal so a record can never read differently in
+     * the two places.
+     *
+     * @param array<array-key, mixed> $row
+     */
+    private function hydrateRow(array $row): ChatReportRow
+    {
+        return new ChatReportRow(
+            questionId: (int) $row['question_id'],
+            askedAt: DbDateTime::parse((string) $row['asked_at']),
+            agentAdminId: (int) $row['agent_admin_id'],
+            agentName: $this->displayName($row['first_name'] ?? null, $row['last_name'] ?? null),
+            agentUsername: $this->nullableString($row['username'] ?? null),
+            chatType: ((int) $row['is_rule_chat']) === 1 ? ChatTypeFilter::Rule : ChatTypeFilter::Store,
+            storeName: $this->nullableString($row['store_name'] ?? null),
+            question: (string) $row['question'],
+            answerId: $row['answer_id'] === null ? null : (int) $row['answer_id'],
+            answer: $this->nullableString($row['answer'] ?? null),
+            isGrounded: ((int) ($row['is_grounded'] ?? 0)) === 1,
+            score: $row['score'] === null ? null : (int) $row['score'],
+            dismissed: $this->nullableString($row['dismissed_at'] ?? null) !== null,
+            comment: $this->nullableString($row['comment'] ?? null),
+            responseSeconds: $row['response_seconds'] === null ? null : (int) $row['response_seconds'],
+            citationCount: $this->citationCount($row['citations_json'] ?? null),
+            questionEdited: ((int) ($row['edit_count'] ?? 0)) > 0,
+        );
+    }
 
     private function displayName(mixed $first, mixed $last): ?string
     {

@@ -486,6 +486,243 @@
         }
     });
 
+    // ---- Admin chat report: drill-down + detail dialog -------------------------
+    // Every trigger is a real <a href> pointing at the report page with the metric's filters applied, so
+    // with JavaScript off a click still lands on a usable, correctly filtered read-only view. Here we
+    // intercept it and fetch the same filters as JSON instead, which is why the dialog's rows can never
+    // disagree with the number that opened it. All text is written with textContent.
+    var reportRequestId = 0;
+    var reportListUrl = null;
+
+    function reportModal() {
+        return document.querySelector('[data-report-modal]');
+    }
+
+    function reportEl(modal, name) {
+        return modal.querySelector('[data-report-' + name + ']');
+    }
+
+    function reportShowStatus(modal, message) {
+        var status = reportEl(modal, 'status');
+        if (status) {
+            status.textContent = message;
+            status.hidden = false;
+        }
+        var list = reportEl(modal, 'list');
+        var detail = reportEl(modal, 'detail');
+        if (list) { list.hidden = true; }
+        if (detail) { detail.hidden = true; }
+    }
+
+    function reportOpen(modal) {
+        if (modal.open) { return; }
+        if (typeof modal.showModal === 'function') {
+            modal.showModal();
+        } else {
+            modal.setAttribute('open', 'open');
+        }
+    }
+
+    function reportDetailUrl(base, extra) {
+        var join = base.indexOf('?') === -1 ? '?' : '&';
+        return base + join + extra;
+    }
+
+    function reportFetch(url, onData, modal) {
+        reportRequestId += 1;
+        var requestId = reportRequestId;
+
+        fetch(url, {
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        }).then(function (response) {
+            if (!response.ok) { throw new Error('unavailable'); }
+            return response.json();
+        }).then(function (data) {
+            if (requestId === reportRequestId) { onData(data); }
+        }).catch(function () {
+            if (requestId === reportRequestId) {
+                reportShowStatus(modal, 'These records could not be loaded.');
+            }
+        });
+    }
+
+    function reportRenderList(modal, data) {
+        var body = reportEl(modal, 'rows');
+        if (!body) { return; }
+        body.textContent = '';
+
+        var rows = data.rows || [];
+        if (rows.length === 0) {
+            reportShowStatus(modal, 'No records match this metric.');
+            return;
+        }
+
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var tr = document.createElement('tr');
+            body.appendChild(tr);
+            var cells = [row.asked_at, row.agent, row.chat_type, row.store, row.rating, row.status, row.response];
+            for (var c = 0; c < cells.length; c++) {
+                var td = document.createElement('td');
+                td.appendChild(document.createTextNode(String(cells[c] === null ? '—' : cells[c])));
+                tr.appendChild(td);
+            }
+            var actionCell = document.createElement('td');
+            var view = document.createElement('button');
+            view.type = 'button';
+            view.className = 'chat-msg__score-link';
+            view.setAttribute('data-report-view', String(row.question_id));
+            view.appendChild(document.createTextNode('View'));
+            actionCell.appendChild(view);
+            tr.appendChild(actionCell);
+        }
+
+        var status = reportEl(modal, 'status');
+        if (status) { status.hidden = true; }
+        var list = reportEl(modal, 'list');
+        if (list) { list.hidden = false; }
+        var detail = reportEl(modal, 'detail');
+        if (detail) { detail.hidden = true; }
+
+        var pager = reportEl(modal, 'pager');
+        var info = reportEl(modal, 'pageinfo');
+        if (pager && info) {
+            var pageCount = Number(data.page_count || 1);
+            var page = Number(data.page || 1);
+            info.textContent = 'Page ' + page + ' of ' + pageCount + ' · ' + Number(data.total || 0) + ' records';
+            pager.hidden = pageCount <= 1;
+            var prev = reportEl(modal, 'prev');
+            var next = reportEl(modal, 'next');
+            if (prev) { prev.disabled = page <= 1; prev.setAttribute('data-page', String(page - 1)); }
+            if (next) { next.disabled = page >= pageCount; next.setAttribute('data-page', String(page + 1)); }
+        }
+    }
+
+    function reportRenderDetail(modal, detail) {
+        // Deliberately only the rating: everything else about the record is already in the row that opened
+        // this, and repeating it here buries the two things worth reading.
+        var facts = reportEl(modal, 'facts');
+        if (facts) {
+            facts.textContent = '';
+            var dt = document.createElement('dt');
+            dt.appendChild(document.createTextNode('Rating'));
+            var dd = document.createElement('dd');
+            dd.appendChild(document.createTextNode(String(detail.rating === null ? '—' : detail.rating)));
+            facts.appendChild(dt);
+            facts.appendChild(dd);
+        }
+
+        var question = reportEl(modal, 'question');
+        if (question) { question.textContent = String(detail.question || ''); }
+
+        var answer = reportEl(modal, 'answer');
+        if (answer) {
+            // Never invent an answer: an unanswered question says so in words.
+            answer.textContent = detail.answer === null || detail.answer === undefined
+                ? 'No active answer for this question.'
+                : String(detail.answer);
+        }
+
+        var wrap = reportEl(modal, 'comment-wrap');
+        var comment = reportEl(modal, 'comment');
+        if (wrap && comment) {
+            if (detail.comment) {
+                comment.textContent = String(detail.comment);
+                wrap.hidden = false;
+            } else {
+                wrap.hidden = true;
+            }
+        }
+
+        var back = reportEl(modal, 'back');
+        if (back) { back.hidden = reportListUrl === null; }
+
+        var status = reportEl(modal, 'status');
+        if (status) { status.hidden = true; }
+        var list = reportEl(modal, 'list');
+        if (list) { list.hidden = true; }
+        var pane = reportEl(modal, 'detail');
+        if (pane) { pane.hidden = false; }
+    }
+
+    function reportLoadList(modal, url, page) {
+        reportListUrl = url;
+        reportShowStatus(modal, 'Loading…');
+        reportFetch(reportDetailUrl(url, 'dpage=' + Number(page || 1)), function (data) {
+            reportRenderList(modal, data);
+        }, modal);
+    }
+
+    function reportLoadDetail(modal, url, questionId) {
+        reportShowStatus(modal, 'Loading…');
+        reportFetch(reportDetailUrl(url, 'question=' + Number(questionId)), function (data) {
+            if (data.detail) {
+                reportRenderDetail(modal, data.detail);
+            } else {
+                reportShowStatus(modal, 'This record is not available.');
+            }
+        }, modal);
+    }
+
+    document.addEventListener('click', function (event) {
+        if (!event.target.closest) { return; }
+        var modal = reportModal();
+        if (!modal) { return; }
+
+        // A metric cell: open the records behind that number.
+        var drill = event.target.closest('[data-report-drill]');
+        if (drill) {
+            event.preventDefault();
+            var title = reportEl(modal, 'title');
+            var meta = reportEl(modal, 'meta');
+            if (title) { title.textContent = drill.getAttribute('data-report-label') || 'Records'; }
+            if (meta) { meta.textContent = drill.getAttribute('data-report-context') || ''; }
+            reportOpen(modal);
+            reportLoadList(modal, drill.getAttribute('data-report-drill'), 1);
+            return;
+        }
+
+        // A single Q&A row: open that record in full.
+        var single = event.target.closest('[data-report-single]');
+        if (single) {
+            event.preventDefault();
+            reportListUrl = null;
+            var t = reportEl(modal, 'title');
+            var m = reportEl(modal, 'meta');
+            if (t) { t.textContent = 'Question detail'; }
+            if (m) { m.textContent = ''; }
+            reportOpen(modal);
+            reportLoadDetail(modal, single.getAttribute('data-report-single'),
+                single.getAttribute('data-report-question'));
+            return;
+        }
+
+        if (!modal.open) { return; }
+
+        var view = event.target.closest('[data-report-view]');
+        if (view && reportListUrl) {
+            reportLoadDetail(modal, reportListUrl, view.getAttribute('data-report-view'));
+            return;
+        }
+
+        var back = event.target.closest('[data-report-back]');
+        if (back && reportListUrl) {
+            reportLoadList(modal, reportListUrl, 1);
+            return;
+        }
+
+        var pageBtn = event.target.closest('[data-report-prev], [data-report-next]');
+        if (pageBtn && reportListUrl && !pageBtn.disabled) {
+            reportLoadList(modal, reportListUrl, pageBtn.getAttribute('data-page'));
+            return;
+        }
+
+        if (event.target.closest('[data-report-close]') || event.target === modal) {
+            modal.close();
+        }
+    });
+
     // ---- Scroll behaviour: open at newest, toggle "jump to latest" ------------
     window.addEventListener('DOMContentLoaded', function () {
         var container = messageContainer();

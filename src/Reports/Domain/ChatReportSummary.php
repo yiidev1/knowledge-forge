@@ -52,8 +52,4 @@ final readonly class ChatReportSummary
             : round($this->fallbackAnswers / max(1, $this->answers) * 100, 1);
     }
 
-    public function averageSessionSeconds(): int
-    {
-        return $this->sessions === 0 ? 0 : (int) round($this->chatSeconds / $this->sessions);
-    }
 }

@@ -15,6 +15,8 @@ namespace App\Reports\Domain;
 enum AnswerStatusFilter: string
 {
     case All = 'all';
+    /** A current answer exists, whatever its grounding — i.e. grounded + fallback, the complement of unanswered. */
+    case Answered = 'answered';
     case Grounded = 'grounded';
     case Fallback = 'fallback';
     case Unanswered = 'unanswered';
@@ -28,6 +30,7 @@ enum AnswerStatusFilter: string
     {
         return match ($this) {
             self::All => 'All answers',
+            self::Answered => 'Answered',
             self::Grounded => 'Grounded',
             self::Fallback => 'Fallback',
             self::Unanswered => 'Unanswered',

@@ -5,13 +5,7 @@ declare(strict_types=1);
 namespace App\Reports\Web\Chat;
 
 use App\Reports\Contract\ChatReportReaderInterface;
-use App\Reports\Domain\AgentUsageSort;
-use App\Reports\Domain\AnswerStatusFilter;
-use App\Reports\Domain\ChatReportQuery;
-use App\Reports\Domain\ChatTypeFilter;
 use App\Reports\Domain\ReportDatePreset;
-use App\Reports\Domain\FeedbackFilter;
-use App\Reports\Domain\RatingFilter;
 use App\Reports\Domain\ReportDateRange;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
@@ -19,10 +13,6 @@ use DateTimeImmutable;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
-
-use function is_string;
-use function max;
-use function trim;
 
 /**
  * Admin chat report (GET /admin/reports/chat).
@@ -38,11 +28,10 @@ use function trim;
  */
 final readonly class Action
 {
-    private const PER_PAGE = 25;
-
     public function __construct(
         private WebViewRenderer $viewRenderer,
         private ChatReportReaderInterface $reader,
+        private ChatReportRequest $request,
         private AppTimeZone $appTimeZone,
         private ClockInterface $clock,
     ) {}
@@ -52,43 +41,42 @@ final readonly class Action
         $params = $request->getQueryParams();
         $now = $this->clock->now();
 
-        $range = ReportDateRange::fromRequest(
-            $this->string($params, 'from'),
-            $this->string($params, 'to'),
-            $this->appTimeZone,
-            $now,
-        );
+        $query = $this->request->build($params, $now);
+        $range = $query->range;
 
-        $query = new ChatReportQuery(
-            range: $range,
-            chatType: ChatTypeFilter::fromRequest($this->string($params, 'type')),
-            rating: RatingFilter::fromRequest($this->string($params, 'rating')),
-            feedback: FeedbackFilter::fromRequest($this->string($params, 'feedback')),
-            status: AnswerStatusFilter::fromRequest($this->string($params, 'status')),
-            agentAdminId: $this->positiveInt($params, 'agent'),
-            knowledgeBaseId: $this->positiveInt($params, 'store'),
-            search: trim($this->string($params, 'q') ?? ''),
-            page: $this->page($params),
-            perPage: self::PER_PAGE,
-            agentSort: AgentUsageSort::fromRequest($params['sort'] ?? null, $params['dir'] ?? null),
-        );
+        // Each table clamps its own out-of-range page independently, so paging one never disturbs another.
+        $agents = $this->reader->agentUsage($query);
+        if ($query->agentPage->number > $agents->pageCount()) {
+            $agents = $this->reader->agentUsage($query->withPageFor('agent', $agents->pageCount()));
+        }
+
+        $stores = $this->reader->storeUsage($query);
+        if ($query->storePage->number > $stores->pageCount()) {
+            $stores = $this->reader->storeUsage($query->withPageFor('store', $stores->pageCount()));
+        }
 
         $result = $this->reader->list($query);
-        // A filter change can leave the page number past the end; land on the last page instead of empty.
-        if ($query->page > $result->pageCount()) {
-            $result = $this->reader->list($query->withPage($result->pageCount()));
+        if ($query->qaPage->number > $result->pageCount()) {
+            $result = $this->reader->list($query->withPageFor('qa', $result->pageCount()));
         }
+
+        // Where a "View" click lands without JavaScript: the same record the dialog would have shown,
+        // rendered into the page. It goes through the same filtered reader, so a question outside the
+        // current period or filters is simply not found rather than quietly escaping them.
+        $questionId = isset($params['question']) && is_scalar($params['question']) ? (int) $params['question'] : 0;
+        $detail = $questionId > 0 ? $this->reader->findDetail($questionId, $query) : null;
 
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
                 'query' => $query,
                 'range' => $range,
+                // The summary always covers the whole filtered range — paging a table must never move it.
                 'summary' => $this->reader->summary($query),
-                'agents' => $this->reader->agentUsage($query),
-                'stores' => $this->reader->storeUsage($query),
+                'agents' => $agents,
+                'stores' => $stores,
                 'result' => $result,
-                'page' => $result->currentPage(),
+                'detail' => $detail,
                 'agentOptions' => $this->reader->agentOptions(),
                 'storeOptions' => $this->reader->storeOptions(),
                 'presets' => $this->presets($range, $now),
@@ -116,40 +104,5 @@ final readonly class Action
         }
 
         return $presets;
-    }
-
-    /**
-     * @param array<array-key, mixed> $params
-     */
-    private function string(array $params, string $key): ?string
-    {
-        $value = $params[$key] ?? null;
-
-        return is_string($value) ? $value : null;
-    }
-
-    /**
-     * @param array<array-key, mixed> $params
-     */
-    private function positiveInt(array $params, string $key): ?int
-    {
-        $value = $this->string($params, $key);
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $int = (int) $value;
-
-        return $int > 0 ? $int : null;
-    }
-
-    /**
-     * @param array<array-key, mixed> $params
-     */
-    private function page(array $params): int
-    {
-        $value = $this->string($params, 'page');
-
-        return $value === null ? 1 : max(1, (int) $value);
     }
 }

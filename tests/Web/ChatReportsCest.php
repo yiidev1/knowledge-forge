@@ -109,13 +109,113 @@ final class ChatReportsCest
     {
         $this->login($I);
 
-        $I->amOnPage(self::URL . '?type=rule&rating=low&status=fallback&feedback=with_comment&page=1');
+        $I->amOnPage(self::URL . '?type=rule&rating=low&status=fallback&feedback=with_comment&qa_page=1');
         $I->seeResponseCodeIs(200);
         $I->see('Chat Reports');
 
         // Paging links carry the active filters forward rather than resetting them.
         $I->amOnPage(self::URL . '?type=store&from=2026-01-01&to=2026-01-31');
         $I->seeResponseCodeIs(200);
+    }
+
+    public function agentUsageShowsResponseTimeInsteadOfSessionColumns(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL);
+
+        $I->see('Avg response');
+        // Sessions and Avg session were removed; response time replaced them.
+        $I->dontSee('Avg session');
+        $I->dontSeeElement("//th[normalize-space(text())='Sessions']");
+    }
+
+    public function eachTableHasItsOwnPageParameter(WebTester $I): void
+    {
+        $this->login($I);
+
+        // All three move independently and all three clamp rather than erroring on an impossible page.
+        foreach (['agent_page', 'store_page', 'qa_page'] as $param) {
+            $I->amOnPage(self::URL . '?' . $param . '=999');
+            $I->seeResponseCodeIs(200);
+            $I->see('Chat Reports');
+        }
+
+        $I->amOnPage(self::URL . '?agent_page=0&store_page=-3&qa_page=abc');
+        $I->seeResponseCodeIs(200);
+        $I->dontSee('abc');
+    }
+
+    public function metricCellsDrillDownButHeadersStillSort(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL);
+
+        // A sortable header is a link to the report page and is never a drill-down trigger.
+        $I->dontSeeElement('th a[data-report-drill]');
+        $I->seeElement('th[aria-sort] a');
+        // The dialog shell is rendered once, ready for any metric.
+        $I->seeElement('dialog[data-report-modal]');
+    }
+
+    public function questionsTableOffersAViewActionInsteadOfInlineText(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL);
+
+        // The full text moved into the dialog; the table itself is now scannable.
+        $I->dontSeeElement("//th[normalize-space(text())='Question']");
+        $I->dontSeeElement("//th[normalize-space(text())='Answer']");
+        $I->see('Response');
+    }
+
+    /**
+     * Everything the dialog does must also work without it: each trigger is a real link the server can
+     * answer on its own.
+     */
+    public function drillDownAndViewLinksWorkWithoutJavaScript(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL);
+
+        // Drill-down triggers point at the report page with the metric's filters applied.
+        $I->seeElement('a[data-report-drill][href]');
+        $I->seeElement('a[data-report-label]');
+
+        // An unknown question id simply renders the report, with no detail section and no error.
+        $I->amOnPage(self::URL . '?question=99999999');
+        $I->seeResponseCodeIs(200);
+        $I->dontSee('Question detail');
+    }
+
+    public function guestCannotReachTheDrillDownEndpoint(WebTester $I): void
+    {
+        $I->amOnPage(self::URL . '/detail');
+
+        $I->seeCurrentUrlEquals('/login');
+        $I->dontSee('"rows"');
+    }
+
+    public function drillDownEndpointReturnsJsonForAnAdmin(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL . '/detail');
+
+        $I->seeResponseCodeIs(200);
+        // Shape only — the dev database's contents are not this test's business.
+        $I->see('"total"');
+        $I->see('"page_count"');
+        $I->see('"rows"');
+        $I->dontSee('sync_hash');
+        $I->dontSee('vector_store');
+    }
+
+    public function drillDownEndpointReportsAnUnknownQuestionAsNotFound(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage(self::URL . '/detail?question=99999999');
+
+        $I->seeResponseCodeIs(404);
+        $I->see('not_found');
     }
 
     public function malformedInputIsRejectedSafely(WebTester $I): void

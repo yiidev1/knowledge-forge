@@ -206,6 +206,12 @@ return [
             Route::get('/admin/reports/chat')
                 ->action(Reports\Chat\Action::class)
                 ->name('admin.reports.chat'),
+            // The same report, as JSON, for the drill-down dialog. It takes the ordinary report filters, so a
+            // drill-down link doubles as a plain page URL when JavaScript is off and the dialog's rows can
+            // never disagree with the count that opened it.
+            Route::get('/admin/reports/chat/detail')
+                ->action(Reports\Chat\DetailAction::class)
+                ->name('admin.reports.chat.detail'),
 
             // OpenAI usage and vector-store inventory. Read-only, and deliberately absent from the
             // sidebar and every other page — it is an operator diagnostic reached by direct URL, not a

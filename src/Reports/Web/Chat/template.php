@@ -14,6 +14,8 @@ use App\Reports\Domain\RatingFilter;
 use App\Reports\Domain\ReportDateRange;
 use App\Reports\Domain\ScoreDisplay;
 use App\Reports\Domain\StoreUsageRow;
+use App\Reports\Domain\UsageResult;
+use App\Reports\Web\Chat\ReportViews;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -24,10 +26,10 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var ChatReportQuery $query
  * @var ReportDateRange $range
  * @var ChatReportSummary $summary
- * @var list<AgentUsageRow> $agents
- * @var list<StoreUsageRow> $stores
+ * @var UsageResult<AgentUsageRow> $agents
+ * @var UsageResult<StoreUsageRow> $stores
  * @var ChatReportResult $result
- * @var int $page
+ * @var ChatReportRow|null $detail
  * @var list<array{id: int, label: string}> $agentOptions
  * @var list<array{id: int, label: string}> $storeOptions
  * @var list<array{label: string, from: string, to: string, active: bool}> $presets
@@ -40,9 +42,25 @@ $this->setParameter('breadcrumbs', [
 ]);
 
 $base = $urlGenerator->generate('admin.reports.chat');
+$detailBase = $urlGenerator->generate('admin.reports.chat.detail');
 
-/** Rebuilds the URL with some state replaced, dropping anything at its default so links stay readable. */
-$reportUrl = static function (array $overrides) use ($base, $query, $range, $page): string {
+$agentPage = $agents->currentPage();
+$storePage = $stores->currentPage();
+$qaPage = $result->currentPage();
+
+/**
+ * Rebuilds a report URL with some state replaced, dropping anything at its default so links stay readable.
+ * The three page numbers are independent keys, so moving one table never carries another with it.
+ */
+$stateUrl = static function (array $overrides, string $target) use (
+    $base,
+    $detailBase,
+    $query,
+    $range,
+    $agentPage,
+    $storePage,
+    $qaPage
+): string {
     $state = [
         'from' => $range->from,
         'to' => $range->to,
@@ -55,69 +73,117 @@ $reportUrl = static function (array $overrides) use ($base, $query, $range, $pag
         'q' => $query->search,
         'sort' => $query->agentSort->field,
         'dir' => $query->agentSort->direction(),
-        'page' => (string) $page,
+        'ssort' => $query->storeSort->field,
+        'sdir' => $query->storeSort->direction(),
+        'agent_page' => (string) $agentPage,
+        'store_page' => (string) $storePage,
+        'qa_page' => (string) $qaPage,
     ];
     foreach ($overrides as $key => $value) {
         $state[$key] = (string) $value;
     }
 
     $params = ['from' => $state['from'], 'to' => $state['to']];
-    if ($state['type'] !== ChatTypeFilter::All->value) {
-        $params['type'] = $state['type'];
+    foreach (
+        [
+            'type' => ChatTypeFilter::All->value,
+            'rating' => RatingFilter::All->value,
+            'feedback' => FeedbackFilter::All->value,
+            'status' => AnswerStatusFilter::All->value,
+        ] as $key => $default
+    ) {
+        if ($state[$key] !== $default) {
+            $params[$key] = $state[$key];
+        }
     }
-    if ($state['rating'] !== RatingFilter::All->value) {
-        $params['rating'] = $state['rating'];
-    }
-    if ($state['feedback'] !== FeedbackFilter::All->value) {
-        $params['feedback'] = $state['feedback'];
-    }
-    if ($state['status'] !== AnswerStatusFilter::All->value) {
-        $params['status'] = $state['status'];
-    }
-    if ($state['agent'] !== '') {
-        $params['agent'] = $state['agent'];
-    }
-    if ($state['store'] !== '') {
-        $params['store'] = $state['store'];
-    }
-    if ($state['q'] !== '') {
-        $params['q'] = $state['q'];
+    foreach (['agent', 'store', 'q'] as $key) {
+        if ($state[$key] !== '') {
+            $params[$key] = $state[$key];
+        }
     }
     if ($state['sort'] !== 'questions' || $state['dir'] !== 'desc') {
         $params['sort'] = $state['sort'];
         $params['dir'] = $state['dir'];
     }
-    if ((int) $state['page'] > 1) {
-        $params['page'] = $state['page'];
+    if ($state['ssort'] !== 'questions' || $state['sdir'] !== 'desc') {
+        $params['ssort'] = $state['ssort'];
+        $params['sdir'] = $state['sdir'];
+    }
+    foreach (['agent_page', 'store_page', 'qa_page'] as $key) {
+        if ((int) $state[$key] > 1) {
+            $params[$key] = $state[$key];
+        }
+    }
+    // Deliberately not part of the carried state: a single record is opened explicitly and left behind by
+    // every other link, so paging or refiltering returns to the report rather than pinning one question.
+    if (($state['question'] ?? '') !== '') {
+        $params['question'] = $state['question'];
     }
 
-    return $base . '?' . http_build_query($params);
+    return ($target === 'detail' ? $detailBase : $base) . '?' . http_build_query($params);
+};
+
+$reportUrl = static fn(array $overrides): string => $stateUrl($overrides, 'page');
+
+/**
+ * A drill-down target. The href is the report page with the metric's own filters applied — a genuinely
+ * usable view without JavaScript — and the data attribute is the same filters against the JSON endpoint,
+ * which is what makes the dialog's rows and the number that opened it impossible to disagree.
+ */
+$drill = static function (array $filters, string $label, string $context) use ($stateUrl): array {
+    $filters['agent_page'] = 1;
+    $filters['store_page'] = 1;
+    $filters['qa_page'] = 1;
+
+    return [
+        'href' => $stateUrl($filters, 'page'),
+        'json' => $stateUrl($filters, 'detail'),
+        'label' => $label,
+        'context' => $context,
+    ];
+};
+
+/** Renders a metric cell as a keyboard-reachable link; a zero is plain text, since there is nothing behind it. */
+$metric = static function (int|string $value, array $filters, string $label, string $context) use ($drill): string {
+    if ((string) $value === '0' || (string) $value === '—') {
+        return '<span class="util-muted">' . Html::encode((string) $value) . '</span>';
+    }
+
+    $target = $drill($filters, $label, $context);
+
+    return '<a class="report__metric" href="' . Html::encode($target['href']) . '"'
+        . ' data-report-drill="' . Html::encode($target['json']) . '"'
+        . ' data-report-label="' . Html::encode($target['label']) . '"'
+        . ' data-report-context="' . Html::encode($target['context']) . '">'
+        . Html::encode((string) $value) . '</a>';
 };
 
 $dash = static fn(?string $v): string => $v === null || $v === '' ? '—' : Html::encode($v);
 $localTime = static fn(?DateTimeImmutable $d): string => $d === null ? '—' : $appTimeZone->format($d, 'M j, Y g:i A');
 $rating = static fn(?float $v): string => $v === null ? '—' : sprintf('%.1f', $v);
 
-/** Long free text: a short preview that expands in place. Everything is escaped — never innerHTML. */
-$longText = static function (?string $text, int $preview = 70): string {
-    if ($text === null || trim($text) === '') {
-        return '<span class="util-muted">—</span>';
-    }
-    $clean = trim($text);
-    if (mb_strlen($clean) <= $preview) {
-        return Html::encode($clean);
-    }
-
-    return '<details><summary>' . Html::encode(mb_substr($clean, 0, $preview)) . '…</summary>'
-        . '<div class="report__full">' . Html::encode($clean) . '</div></details>';
-};
-
-$sortableHeader = static function (string $field, string $label) use ($query, $reportUrl): string {
-    $href = $reportUrl(['sort' => $field, 'dir' => $query->agentSort->nextDirectionFor($field), 'page' => 1]);
+$agentHeader = static function (string $field, string $label) use ($query, $reportUrl): string {
+    $href = $reportUrl([
+        'sort' => $field,
+        'dir' => $query->agentSort->nextDirectionFor($field),
+        'agent_page' => 1,
+    ]);
 
     return '<th aria-sort="' . Html::encode($query->agentSort->ariaFor($field)) . '">'
         . '<a href="' . Html::encode($href) . '">'
         . Html::encode($label . $query->agentSort->markerFor($field)) . '</a></th>';
+};
+
+$storeHeader = static function (string $field, string $label) use ($query, $reportUrl): string {
+    $href = $reportUrl([
+        'ssort' => $field,
+        'sdir' => $query->storeSort->nextDirectionFor($field),
+        'store_page' => 1,
+    ]);
+
+    return '<th aria-sort="' . Html::encode($query->storeSort->ariaFor($field)) . '">'
+        . '<a href="' . Html::encode($href) . '">'
+        . Html::encode($label . $query->storeSort->markerFor($field)) . '</a></th>';
 };
 ?>
 <div class="page-header">
@@ -138,85 +204,124 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
     </div>
 <?php endif; ?>
 
+<?php if ($detail !== null): ?>
+    <?php /* Reached by opening a "View" link without JavaScript; with it, this same record is a dialog. */ ?>
+    <section class="card report__card" id="report-detail">
+        <div class="report__section-head">
+            <h2 class="card__title">Question detail</h2>
+            <a class="btn btn--ghost btn--sm" href="<?= Html::encode($reportUrl([])) ?>">← Back to report</a>
+        </div>
+        <?php /* Only the rating: the rest of the record is on the row this was opened from. */ ?>
+        <dl class="report-modal__facts">
+            <dt>Rating</dt>
+            <dd>
+                <?php if ($detail->score !== null): ?><?= Html::encode(ScoreDisplay::label($detail->score)) ?>
+                <?php elseif ($detail->dismissed): ?>Declined
+                <?php elseif ($detail->isAnswered()): ?>Unrated
+                <?php else: ?>—<?php endif; ?>
+            </dd>
+        </dl>
+
+        <h3 class="report-modal__section">Question</h3>
+        <pre class="source-modal__content"><?= Html::encode($detail->question) ?></pre>
+
+        <h3 class="report-modal__section">Answer</h3>
+        <pre class="source-modal__content"><?= $detail->answer === null
+            ? 'No active answer for this question.'
+            : Html::encode($detail->answer) ?></pre>
+
+        <?php if ($detail->comment !== null): ?>
+            <h3 class="report-modal__section">Feedback comment</h3>
+            <pre class="source-modal__content"><?= Html::encode($detail->comment) ?></pre>
+        <?php endif; ?>
+    </section>
+<?php endif; ?>
+
 <div class="card report__filters">
     <nav class="filter-bar report__presets" aria-label="Quick date ranges">
         <?php foreach ($presets as $preset): ?>
             <a class="filter-chip<?= $preset['active'] ? ' filter-chip--active' : '' ?>"
-               href="<?= Html::encode($reportUrl(['from' => $preset['from'], 'to' => $preset['to'], 'page' => 1])) ?>"
+               href="<?= Html::encode($reportUrl([
+                   'from' => $preset['from'],
+                   'to' => $preset['to'],
+                   'agent_page' => 1,
+                   'store_page' => 1,
+                   'qa_page' => 1,
+               ])) ?>"
                title="<?= Html::encode($preset['from'] . ' to ' . $preset['to']) ?>"
                <?= $preset['active'] ? 'aria-current="true"' : '' ?>><?= Html::encode($preset['label']) ?></a>
         <?php endforeach; ?>
     </nav>
 
     <form method="get" action="<?= Html::encode($base) ?>">
-    <div class="report__filter-grid">
-        <div class="field">
-            <label class="field__label" for="rf-from">From</label>
-            <input class="field__control" type="date" id="rf-from" name="from" value="<?= Html::encode($range->from) ?>">
+        <div class="report__filter-grid">
+            <div class="field">
+                <label class="field__label" for="rf-from">From</label>
+                <input class="field__control" type="date" id="rf-from" name="from" value="<?= Html::encode($range->from) ?>">
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-to">To</label>
+                <input class="field__control" type="date" id="rf-to" name="to" value="<?= Html::encode($range->to) ?>">
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-agent">Agent</label>
+                <select class="field__control" id="rf-agent" name="agent">
+                    <option value="">All agents</option>
+                    <?php foreach ($agentOptions as $option): ?>
+                        <option value="<?= $option['id'] ?>"<?= $query->agentAdminId === $option['id'] ? ' selected' : '' ?>>
+                            <?= Html::encode($option['label']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-store">Store</label>
+                <select class="field__control" id="rf-store" name="store">
+                    <option value="">All stores</option>
+                    <?php foreach ($storeOptions as $option): ?>
+                        <option value="<?= $option['id'] ?>"<?= $query->knowledgeBaseId === $option['id'] ? ' selected' : '' ?>>
+                            <?= Html::encode($option['label']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-type">Chat type</label>
+                <select class="field__control" id="rf-type" name="type">
+                    <?php foreach (ChatTypeFilter::cases() as $case): ?>
+                        <option value="<?= Html::encode($case->value) ?>"<?= $query->chatType === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-rating">Rating</label>
+                <select class="field__control" id="rf-rating" name="rating">
+                    <?php foreach (RatingFilter::cases() as $case): ?>
+                        <option value="<?= Html::encode($case->value) ?>"<?= $query->rating === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-feedback">Feedback</label>
+                <select class="field__control" id="rf-feedback" name="feedback">
+                    <?php foreach (FeedbackFilter::cases() as $case): ?>
+                        <option value="<?= Html::encode($case->value) ?>"<?= $query->feedback === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field">
+                <label class="field__label" for="rf-status">Answer status</label>
+                <select class="field__control" id="rf-status" name="status">
+                    <?php foreach (AnswerStatusFilter::cases() as $case): ?>
+                        <option value="<?= Html::encode($case->value) ?>"<?= $query->status === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="field report__actions">
+                <button class="btn btn--primary" type="submit">Apply filters</button>
+                <a class="btn btn--ghost" href="<?= Html::encode($base) ?>">Reset filters</a>
+            </div>
         </div>
-        <div class="field">
-            <label class="field__label" for="rf-to">To</label>
-            <input class="field__control" type="date" id="rf-to" name="to" value="<?= Html::encode($range->to) ?>">
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-agent">Agent</label>
-            <select class="field__control" id="rf-agent" name="agent">
-                <option value="">All agents</option>
-                <?php foreach ($agentOptions as $option): ?>
-                    <option value="<?= $option['id'] ?>"<?= $query->agentAdminId === $option['id'] ? ' selected' : '' ?>>
-                        <?= Html::encode($option['label']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-store">Store</label>
-            <select class="field__control" id="rf-store" name="store">
-                <option value="">All stores</option>
-                <?php foreach ($storeOptions as $option): ?>
-                    <option value="<?= $option['id'] ?>"<?= $query->knowledgeBaseId === $option['id'] ? ' selected' : '' ?>>
-                        <?= Html::encode($option['label']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-type">Chat type</label>
-            <select class="field__control" id="rf-type" name="type">
-                <?php foreach (ChatTypeFilter::cases() as $case): ?>
-                    <option value="<?= Html::encode($case->value) ?>"<?= $query->chatType === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-rating">Rating</label>
-            <select class="field__control" id="rf-rating" name="rating">
-                <?php foreach (RatingFilter::cases() as $case): ?>
-                    <option value="<?= Html::encode($case->value) ?>"<?= $query->rating === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-feedback">Feedback</label>
-            <select class="field__control" id="rf-feedback" name="feedback">
-                <?php foreach (FeedbackFilter::cases() as $case): ?>
-                    <option value="<?= Html::encode($case->value) ?>"<?= $query->feedback === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field">
-            <label class="field__label" for="rf-status">Answer status</label>
-            <select class="field__control" id="rf-status" name="status">
-                <?php foreach (AnswerStatusFilter::cases() as $case): ?>
-                    <option value="<?= Html::encode($case->value) ?>"<?= $query->status === $case ? ' selected' : '' ?>><?= Html::encode($case->label()) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div class="field report__actions">
-            <button class="btn btn--primary" type="submit">Apply filters</button>
-            <a class="btn btn--ghost" href="<?= Html::encode($base) ?>">Reset filters</a>
-        </div>
-    </div>
     </form>
 </div>
 
@@ -242,8 +347,8 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
         <div class="stat__label">Average rating</div>
         <div class="stat__hint">Scores only · dismissals are not zeros</div>
     </div>
+    <?php $coverage = $summary->ratingCoveragePercent(); ?>
     <div class="stat">
-        <?php $coverage = $summary->ratingCoveragePercent(); ?>
         <div class="stat__value"><?= $coverage === null ? '—' : $coverage . '%' ?></div>
         <div class="stat__label">Rating coverage</div>
         <div class="stat__hint"><?= $summary->ratedAnswers ?> rated · <?= $summary->unratedAnswers ?> unrated</div>
@@ -263,10 +368,10 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
         <div class="stat__value"><?= $summary->ruleQuestions ?></div>
         <div class="stat__label">Rule chat questions</div>
     </div>
+    <?php $fallbackShare = $summary->fallbackPercent(); ?>
     <div class="stat">
         <div class="stat__value"><?= $summary->fallbackAnswers ?></div>
         <div class="stat__label">Fallback answers</div>
-        <?php $fallbackShare = $summary->fallbackPercent(); ?>
         <?php if ($fallbackShare !== null): ?>
             <div class="stat__hint"><?= $fallbackShare ?>% of answers</div>
         <?php endif; ?>
@@ -282,37 +387,44 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
     Chat time is estimated from message activity. A new session is assumed after
     <?= ChatReportQuery::SESSION_GAP_MINUTES ?> minutes of inactivity, and a session is measured from its
     first message to its last — time spent reading before or after that is not observable from the data and
-    is not counted. This is activity span, not time on page.
+    is not counted. This is activity span, not time on page. Every number below is a link: select one to see
+    the records behind it.
 </p>
 
 <section class="card report__card">
-    <h2 class="card__title">Agent usage</h2>
+    <div class="report__section-head">
+        <h2 class="card__title">Agent usage <span class="util-muted">(<?= $agents->total ?>)</span></h2>
+        <span class="util-muted">Page <?= $agentPage ?> of <?= $agents->pageCount() ?></span>
+    </div>
 
-    <?php if ($agents === []): ?>
+    <?php if ($agents->items === []): ?>
         <p class="util-muted">No agent asked a question in this period.</p>
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
                 <thead>
                     <tr>
-                        <?= $sortableHeader('agent', 'Agent') ?>
-                        <?= $sortableHeader('questions', 'Questions') ?>
+                        <?= $agentHeader('agent', 'Agent') ?>
+                        <?= $agentHeader('questions', 'Questions') ?>
                         <th>Knowledge</th>
                         <th>Rules</th>
                         <th>Answers</th>
                         <th>Rated</th>
-                        <?= $sortableHeader('avg_rating', 'Avg rating') ?>
-                        <?= $sortableHeader('low_ratings', 'Low') ?>
+                        <?= $agentHeader('avg_rating', 'Avg rating') ?>
+                        <?= $agentHeader('low_ratings', 'Low') ?>
                         <th>Comments</th>
-                        <th>Sessions</th>
-                        <?= $sortableHeader('chat_time', 'Est. time') ?>
-                        <th>Avg session</th>
-                        <?= $sortableHeader('last_activity', 'Last activity') ?>
+                        <?= $agentHeader('chat_time', 'Est. time') ?>
+                        <th>Avg response</th>
+                        <?= $agentHeader('last_activity', 'Last activity') ?>
                         <th>Last login</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($agents as $agent): ?>
+                    <?php foreach ($agents->items as $agent): ?>
+                        <?php
+                        $who = ['agent' => $agent->agentAdminId];
+                        $context = $agent->agentLabel() . ' · ' . $range->from . ' to ' . $range->to;
+                        ?>
                         <tr>
                             <td>
                                 <strong><?= Html::encode($agent->agentLabel()) ?></strong>
@@ -320,17 +432,16 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                                     <div class="util-muted"><?= Html::encode($agent->agentUsername) ?></div>
                                 <?php endif; ?>
                             </td>
-                            <td><?= $agent->questions ?></td>
-                            <td><?= $agent->storeQuestions ?></td>
-                            <td><?= $agent->ruleQuestions ?></td>
-                            <td><?= $agent->answers ?></td>
-                            <td><?= $agent->ratedAnswers ?></td>
-                            <td><?= $rating($agent->averageRating) ?></td>
-                            <td><?= $agent->lowRatings ?></td>
-                            <td><?= $agent->comments ?></td>
-                            <td><?= $agent->sessions ?></td>
+                            <td><?= $metric($agent->questions, $who, 'Questions', $context) ?></td>
+                            <td><?= $metric($agent->storeQuestions, $who + ['type' => ChatTypeFilter::Store->value], 'Store knowledge questions', $context) ?></td>
+                            <td><?= $metric($agent->ruleQuestions, $who + ['type' => ChatTypeFilter::Rule->value], 'Rule chat questions', $context) ?></td>
+                            <td><?= $metric($agent->answers, $who + ['status' => AnswerStatusFilter::Answered->value], 'Answered questions', $context) ?></td>
+                            <td><?= $metric($agent->ratedAnswers, $who + ['rating' => RatingFilter::Rated->value], 'Rated answers', $context) ?></td>
+                            <td><?= $metric($rating($agent->averageRating), $who + ['rating' => RatingFilter::Rated->value], 'Answers behind this average', $context) ?></td>
+                            <td><?= $metric($agent->lowRatings, $who + ['rating' => RatingFilter::Low->value], 'Low ratings (1–3)', $context) ?></td>
+                            <td><?= $metric($agent->comments, $who + ['feedback' => FeedbackFilter::WithComment->value], 'Answers with a comment', $context) ?></td>
                             <td><?= Html::encode(ScoreDisplay::duration($agent->chatSeconds)) ?></td>
-                            <td><?= Html::encode(ScoreDisplay::duration($agent->averageSessionSeconds())) ?></td>
+                            <td><?= Html::encode(ScoreDisplay::responseTime($agent->averageResponseSeconds)) ?></td>
                             <td class="util-muted"><?= Html::encode($localTime($agent->lastActivityAt)) ?></td>
                             <td class="util-muted"><?= Html::encode($localTime($agent->lastLoginAt)) ?></td>
                         </tr>
@@ -338,50 +449,70 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                 </tbody>
             </table>
         </div>
+
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $agentPage,
+            'pageCount' => $agents->pageCount(),
+            'pageUrl' => static fn(int $p): string => $reportUrl(['agent_page' => $p]),
+        ]) ?>
     <?php endif; ?>
 </section>
 
 <section class="card report__card">
-    <h2 class="card__title">Store usage</h2>
+    <div class="report__section-head">
+        <h2 class="card__title">Store usage <span class="util-muted">(<?= $stores->total ?>)</span></h2>
+        <span class="util-muted">Page <?= $storePage ?> of <?= $stores->pageCount() ?></span>
+    </div>
     <p class="util-muted">
         A store with many fallback answers and a low average rating is one whose knowledge needs work.
     </p>
 
-    <?php if ($stores === []): ?>
+    <?php if ($stores->items === []): ?>
         <p class="util-muted">No questions were asked in this period.</p>
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
                 <thead>
                     <tr>
-                        <th>Store</th>
+                        <?= $storeHeader('store', 'Store') ?>
                         <th>Type</th>
-                        <th>Questions</th>
-                        <th>Agents</th>
+                        <?= $storeHeader('questions', 'Questions') ?>
+                        <?= $storeHeader('agents', 'Agents') ?>
                         <th>Rated</th>
-                        <th>Avg rating</th>
-                        <th>Low</th>
-                        <th>Fallback</th>
-                        <th>Last activity</th>
+                        <?= $storeHeader('avg_rating', 'Avg rating') ?>
+                        <?= $storeHeader('low_ratings', 'Low') ?>
+                        <?= $storeHeader('fallback', 'Fallback') ?>
+                        <?= $storeHeader('last_activity', 'Last activity') ?>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($stores as $store): ?>
+                    <?php foreach ($stores->items as $store): ?>
+                        <?php
+                        $where = ['store' => $store->knowledgeBaseId];
+                        $label = $store->isRuleChat() ? 'Global Rules' : $store->storeName;
+                        $context = $label . ' · ' . $range->from . ' to ' . $range->to;
+                        ?>
                         <tr>
-                            <td><?= $store->isRuleChat() ? 'Global Rules' : Html::encode($store->storeName) ?></td>
+                            <td><?= Html::encode($label) ?></td>
                             <td><span class="badge badge--<?= $store->isRuleChat() ? 'info' : 'muted' ?>"><?= $store->isRuleChat() ? 'Rule Chat' : 'Knowledge' ?></span></td>
-                            <td><?= $store->questions ?></td>
-                            <td><?= $store->uniqueAgents ?></td>
-                            <td><?= $store->ratedAnswers ?></td>
-                            <td><?= $rating($store->averageRating) ?></td>
-                            <td><?= $store->lowRatings ?></td>
-                            <td><?= $store->fallbackAnswers ?></td>
+                            <td><?= $metric($store->questions, $where, 'Questions', $context) ?></td>
+                            <td><?= $metric($store->uniqueAgents, $where, 'Agents who asked here', $context) ?></td>
+                            <td><?= $metric($store->ratedAnswers, $where + ['rating' => RatingFilter::Rated->value], 'Rated answers', $context) ?></td>
+                            <td><?= $metric($rating($store->averageRating), $where + ['rating' => RatingFilter::Rated->value], 'Answers behind this average', $context) ?></td>
+                            <td><?= $metric($store->lowRatings, $where + ['rating' => RatingFilter::Low->value], 'Low ratings (1–3)', $context) ?></td>
+                            <td><?= $metric($store->fallbackAnswers, $where + ['status' => AnswerStatusFilter::Fallback->value], 'Fallback answers', $context) ?></td>
                             <td class="util-muted"><?= Html::encode($localTime($store->lastActivityAt)) ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
         </div>
+
+        <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
+            'page' => $storePage,
+            'pageCount' => $stores->pageCount(),
+            'pageUrl' => static fn(int $p): string => $reportUrl(['store_page' => $p]),
+        ]) ?>
     <?php endif; ?>
 </section>
 
@@ -390,7 +521,7 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
         <h2 class="card__title">
             Questions &amp; answers <span class="util-muted">(<?= $result->total ?>)</span>
         </h2>
-        <span class="util-muted">Page <?= $page ?> of <?= $result->pageCount() ?></span>
+        <span class="util-muted">Page <?= $qaPage ?> of <?= $result->pageCount() ?></span>
     </div>
 
     <form class="report__search" method="get" action="<?= Html::encode($base) ?>" role="search">
@@ -407,12 +538,12 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                placeholder="Search question or answer text…">
         <button class="btn btn--secondary" type="submit">Search</button>
         <?php if ($query->search !== ''): ?>
-            <a class="btn btn--ghost" href="<?= Html::encode($reportUrl(['q' => '', 'page' => 1])) ?>">Clear</a>
+            <a class="btn btn--ghost" href="<?= Html::encode($reportUrl(['q' => '', 'qa_page' => 1])) ?>">Clear</a>
         <?php endif; ?>
     </form>
     <p class="util-muted report__note report__note--tight">
-        This search filters the table below only. The summary cards and the usage tables above always cover
-        the whole selected period.
+        Searches the full question and answer text, which the View dialog shows in full. This filters the
+        table below only — the summary cards and the usage tables always cover the whole selected period.
     </p>
 
     <?php if ($result->items === []): ?>
@@ -430,11 +561,11 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                         <th>Agent</th>
                         <th>Type</th>
                         <th>Store</th>
-                        <th>Question</th>
-                        <th>Answer</th>
                         <th>Rating</th>
+                        <th>Comment</th>
                         <th>Status</th>
                         <th>Response</th>
+                        <th><span class="util-visually-hidden">Detail</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -446,25 +577,10 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                             <td><?= $row->chatType === ChatTypeFilter::Rule ? 'Rule Chat' : 'Knowledge' ?></td>
                             <td><?= $row->chatType === ChatTypeFilter::Rule ? '—' : $dash($row->storeName) ?></td>
                             <td>
-                                <?= $longText($row->question) ?>
-                                <?php if ($row->questionEdited): ?>
-                                    <div class="util-muted">· Edited</div>
-                                <?php endif; ?>
-                            </td>
-                            <td>
-                                <?= $longText($row->answer) ?>
-                                <?php if ($row->citationCount > 0): ?>
-                                    <div class="util-muted"><?= $row->citationCount ?> source<?= $row->citationCount === 1 ? '' : 's' ?></div>
-                                <?php endif; ?>
-                            </td>
-                            <td>
                                 <?php if ($row->score !== null): ?>
                                     <span class="report__score" data-score-band="<?= Html::encode(ScoreDisplay::bandSlug($row->score)) ?>">
                                         <?= Html::encode(ScoreDisplay::label($row->score)) ?>
                                     </span>
-                                    <?php if ($row->comment !== null): ?>
-                                        <div><?= $longText($row->comment, 50) ?></div>
-                                    <?php endif; ?>
                                 <?php elseif ($row->dismissed): ?>
                                     <span class="util-muted">Declined</span>
                                 <?php elseif ($row->isAnswered()): ?>
@@ -473,6 +589,7 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                                     <span class="util-muted">—</span>
                                 <?php endif; ?>
                             </td>
+                            <td><?= $row->comment !== null ? 'Yes' : '<span class="util-muted">—</span>' ?></td>
                             <td>
                                 <?php if (!$row->isAnswered()): ?>
                                     <span class="badge badge--warning">No active answer</span>
@@ -483,6 +600,12 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
                                 <?php endif; ?>
                             </td>
                             <td class="util-muted"><?= $row->responseSeconds === null ? '—' : Html::encode(ScoreDisplay::duration($row->responseSeconds)) ?></td>
+                            <td>
+                                <a class="report__metric"
+                                   href="<?= Html::encode($reportUrl(['question' => $row->questionId])) ?>"
+                                   data-report-single="<?= Html::encode($stateUrl([], 'detail')) ?>"
+                                   data-report-question="<?= $row->questionId ?>">View</a>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -490,9 +613,11 @@ $sortableHeader = static function (string $field, string $label) use ($query, $r
         </div>
 
         <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
-            'page' => $page,
+            'page' => $qaPage,
             'pageCount' => $result->pageCount(),
-            'pageUrl' => static fn(int $p): string => $reportUrl(['page' => $p]),
+            'pageUrl' => static fn(int $p): string => $reportUrl(['qa_page' => $p]),
         ]) ?>
     <?php endif; ?>
 </section>
+
+<?= $this->render(ReportViews::modal()) ?>

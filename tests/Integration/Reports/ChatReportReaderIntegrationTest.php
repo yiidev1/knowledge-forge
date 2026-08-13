@@ -10,6 +10,7 @@ use App\Reports\Domain\ChatTypeFilter;
 use App\Reports\Domain\FeedbackFilter;
 use App\Reports\Domain\RatingFilter;
 use App\Reports\Domain\ReportDateRange;
+use App\Reports\Domain\ReportPage;
 use App\Reports\Infrastructure\DbChatReportReader;
 use App\Rules\Application\EnsureCommonRulesKnowledgeBaseService;
 use App\Shared\Application\Time\AppTimeZone;
@@ -287,7 +288,7 @@ final class ChatReportReaderIntegrationTest extends Unit
         $conversation = $this->conversation($this->storeKb, self::AGENT_A);
         $this->answeredQuestion($conversation, 'Question', '2026-05-10 14:00:00');
 
-        $usage = $this->reader->agentUsage($this->query());
+        $usage = $this->reader->agentUsage($this->query())->items;
         assertCount(1, $usage);
         assertSame(self::AGENT_A, $usage[0]->agentAdminId);
         assertSame('Anna Smith', $usage[0]->agentName);
@@ -300,7 +301,7 @@ final class ChatReportReaderIntegrationTest extends Unit
         $conversation = $this->conversation($this->storeKb, self::AGENT_B);
         $this->answeredQuestion($conversation, 'Question', '2026-05-10 14:00:00');
 
-        $usage = $this->reader->agentUsage($this->query());
+        $usage = $this->reader->agentUsage($this->query())->items;
         assertCount(1, $usage);
         assertSame(self::AGENT_B, $usage[0]->agentAdminId);
         assertNull($usage[0]->agentName);
@@ -389,7 +390,7 @@ final class ChatReportReaderIntegrationTest extends Unit
         $this->answeredQuestion($b, 'Q2', '2026-05-10 14:05:00', grounded: true);
         $this->score($answer, self::AGENT_A, 2);
 
-        $rows = $this->reader->storeUsage($this->query());
+        $rows = $this->reader->storeUsage($this->query())->items;
         assertCount(1, $rows);
         assertSame('Report Store A', $rows[0]->storeName);
         assertSame(2, $rows[0]->questions);
@@ -410,6 +411,283 @@ final class ChatReportReaderIntegrationTest extends Unit
         assertSame(2, $this->reader->summary($query)->questions);
     }
 
+    // ---------------------------------------------------------------- average response time
+
+    public function testAverageResponseTimeIsTheMeanOfCurrentAnswerSpans(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->pair($conversation, 'Fast', '2026-05-10 14:00:00', 4);
+        $this->pair($conversation, 'Slow', '2026-05-10 14:05:00', 16);
+
+        $usage = $this->reader->agentUsage($this->query())->items;
+        assertCount(1, $usage);
+        assertNotNull($usage[0]->averageResponseSeconds);
+        assertSame(10.0, round($usage[0]->averageResponseSeconds, 4));
+    }
+
+    public function testAverageResponseTimeIgnoresUnansweredQuestions(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->pair($conversation, 'Answered', '2026-05-10 14:00:00', 8);
+        $this->question($conversation, 'Never answered', '2026-05-10 14:05:00');
+
+        // Averaging over three questions with one null would still be 8; averaging a null as zero gives 4.
+        $usage = $this->reader->agentUsage($this->query())->items;
+        assertNotNull($usage[0]->averageResponseSeconds);
+        assertSame(8.0, round($usage[0]->averageResponseSeconds, 4));
+    }
+
+    /** The span is measured to the answer that currently stands, never to the one an edit replaced. */
+    public function testAverageResponseTimeUsesTheCurrentAnswerNotTheSupersededOne(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $question = $this->question($conversation, 'Edited', '2026-05-10 14:00:00');
+        $this->answer($conversation, $question, 'Old', '2026-05-10 14:00:02', superseded: true);
+        $this->answer($conversation, $question, 'Current', '2026-05-10 14:00:30');
+
+        $usage = $this->reader->agentUsage($this->query())->items;
+        assertSame(30.0, round((float) $usage[0]->averageResponseSeconds, 4));
+    }
+
+    public function testAverageResponseTimeIsNotSharedBetweenAgents(): void
+    {
+        $this->pair($this->conversation($this->storeKb, self::AGENT_A), 'A', '2026-05-10 14:00:00', 2);
+        $this->pair($this->conversation($this->storeKb, self::AGENT_B), 'B', '2026-05-10 14:05:00', 60);
+
+        $usage = $this->reader->agentUsage($this->query())->items;
+        $byAgent = [];
+        foreach ($usage as $row) {
+            $byAgent[$row->agentAdminId] = round((float) $row->averageResponseSeconds, 4);
+        }
+        assertSame(2.0, $byAgent[self::AGENT_A]);
+        assertSame(60.0, $byAgent[self::AGENT_B]);
+    }
+
+    public function testAverageResponseTimeExcludesQuestionsOutsideThePeriod(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->pair($conversation, 'In range', '2026-05-10 14:00:00', 6);
+        $this->pair($conversation, 'Out of range', '2026-05-20 14:00:00', 600);
+
+        $usage = $this->reader->agentUsage($this->query('2026-05-10', '2026-05-10'))->items;
+        assertSame(6.0, round((float) $usage[0]->averageResponseSeconds, 4));
+    }
+
+    public function testBothChatTypesContributeToAverageResponseTime(): void
+    {
+        $store = $this->conversation($this->storeKb, self::AGENT_A);
+        $rules = $this->conversation($this->rulesKb, self::AGENT_A);
+        $this->pair($store, 'Store', '2026-05-10 14:00:00', 4);
+        $this->pair($rules, 'Rule', '2026-05-10 14:05:00', 8);
+
+        $usage = $this->reader->agentUsage($this->query())->items;
+        assertSame(6.0, round((float) $usage[0]->averageResponseSeconds, 4));
+    }
+
+    /** A legacy row whose answer predates its question must not drag the mean below zero. */
+    public function testNegativeResponseSpansAreIgnored(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->pair($conversation, 'Sane', '2026-05-10 14:00:00', 10);
+        $skewed = $this->question($conversation, 'Skewed', '2026-05-10 14:05:00');
+        $this->answer($conversation, $skewed, 'Answered before asked', '2026-05-10 14:04:00');
+
+        $usage = $this->reader->agentUsage($this->query())->items;
+        assertSame(10.0, round((float) $usage[0]->averageResponseSeconds, 4));
+        assertSame(10.0, round((float) $this->reader->summary($this->query())->averageResponseSeconds, 4));
+    }
+
+    public function testAverageResponseTimeIsNullWhenNothingWasAnswered(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->question($conversation, 'Never answered', '2026-05-10 14:00:00');
+
+        assertNull($this->reader->agentUsage($this->query())->items[0]->averageResponseSeconds);
+    }
+
+    // ---------------------------------------------------------------- pagination
+
+    public function testAgentUsagePagesIndependentlyAndReportsTheFullTotal(): void
+    {
+        foreach ([self::AGENT_A, self::AGENT_B] as $index => $agent) {
+            $conversation = $this->conversation($this->storeKb, $agent);
+            // Different question counts so the default "questions desc" order is deterministic.
+            for ($i = 0; $i <= $index; $i++) {
+                $this->answeredQuestion($conversation, "Q$agent-$i", '2026-05-10 14:0' . $i . ':00');
+            }
+        }
+
+        $first = $this->reader->agentUsage($this->query(agentPerPage: 1));
+        assertSame(2, $first->total);
+        assertSame(2, $first->pageCount());
+        assertCount(1, $first->items);
+
+        $second = $this->reader->agentUsage($this->query(agentPerPage: 1, agentPageNumber: 2));
+        assertSame(2, $second->total);
+        assertCount(1, $second->items);
+        // The two pages must not show the same agent.
+        assertTrue($first->items[0]->agentAdminId !== $second->items[0]->agentAdminId);
+    }
+
+    public function testStoreUsagePagesOverDistinctKnowledgeBases(): void
+    {
+        // One conversation per store and agent — the unique index allows only one, which is also the shape
+        // real chat produces.
+        $storeA = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->answeredQuestion($storeA, 'A1', '2026-05-10 14:00:00');
+        $this->answeredQuestion($storeA, 'A2', '2026-05-10 14:01:00');
+        $this->answeredQuestion($this->conversation($this->otherKb, self::AGENT_A), 'B1', '2026-05-10 14:02:00');
+
+        $page = $this->reader->storeUsage($this->query(storePerPage: 1));
+        assertSame(2, $page->total, 'total counts stores, not questions');
+        assertSame(2, $page->pageCount());
+        assertCount(1, $page->items);
+
+        $next = $this->reader->storeUsage($this->query(storePerPage: 1, storePageNumber: 2));
+        assertTrue($page->items[0]->knowledgeBaseId !== $next->items[0]->knowledgeBaseId);
+    }
+
+    public function testQuestionListPagesWithoutChangingTheSummary(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        for ($i = 0; $i < 5; $i++) {
+            $this->answeredQuestion($conversation, "Q$i", '2026-05-10 14:0' . $i . ':00');
+        }
+
+        $page1 = $this->reader->list($this->query(qaPerPage: 2));
+        $page3 = $this->reader->list($this->query(qaPerPage: 2, qaPageNumber: 3));
+
+        assertSame(5, $page1->total);
+        assertSame(3, $page1->pageCount());
+        assertCount(2, $page1->items);
+        assertCount(1, $page3->items, 'the last page holds the remainder');
+
+        // Paging the detail table must never move the headline figures.
+        assertSame(
+            $this->reader->summary($this->query(qaPerPage: 2))->questions,
+            $this->reader->summary($this->query(qaPerPage: 2, qaPageNumber: 3))->questions,
+        );
+    }
+
+    public function testPagingOneTableLeavesTheOthersOnTheirOwnPage(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        for ($i = 0; $i < 3; $i++) {
+            $this->answeredQuestion($conversation, "Q$i", '2026-05-10 14:0' . $i . ':00');
+        }
+
+        // Move only the Q&A page; the agent page number stays 1 and its rows are unchanged.
+        $base = $this->reader->agentUsage($this->query())->items;
+        $moved = $this->reader->agentUsage($this->query(qaPerPage: 1, qaPageNumber: 3))->items;
+
+        assertSame($base[0]->agentAdminId, $moved[0]->agentAdminId);
+        assertSame($base[0]->questions, $moved[0]->questions);
+    }
+
+    // ---------------------------------------------------------------- drill-down and detail
+
+    public function testAnsweredStatusFilterSelectsOnlyQuestionsWithACurrentAnswer(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->answeredQuestion($conversation, 'Answered', '2026-05-10 14:00:00');
+        $this->question($conversation, 'Unanswered', '2026-05-10 14:05:00');
+        $edited = $this->question($conversation, 'Superseded only', '2026-05-10 14:10:00');
+        $this->answer($conversation, $edited, 'Gone', '2026-05-10 14:10:05', superseded: true);
+
+        $rows = $this->reader->list($this->query(status: AnswerStatusFilter::Answered))->items;
+        assertCount(1, $rows);
+        assertSame('Answered', $rows[0]->question);
+        // The drill-down number and its records come from the same filter, so they must agree.
+        assertSame(1, $this->reader->list($this->query(status: AnswerStatusFilter::Answered))->total);
+    }
+
+    /**
+     * The Answers metric on an agent row and the records behind it are produced by different queries;
+     * this is the assertion that keeps them honest.
+     */
+    public function testAgentAnswersMetricMatchesItsDrillDownRecordCount(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $this->answeredQuestion($conversation, 'One', '2026-05-10 14:00:00');
+        $this->answeredQuestion($conversation, 'Two', '2026-05-10 14:05:00');
+        $this->question($conversation, 'Unanswered', '2026-05-10 14:10:00');
+        // Another agent's traffic must not leak into either figure.
+        $this->answeredQuestion($this->conversation($this->storeKb, self::AGENT_B), 'Other', '2026-05-10 14:15:00');
+
+        $usage = $this->reader->agentUsage($this->query(agent: self::AGENT_A))->items;
+        assertSame(2, $usage[0]->answers);
+        assertSame(
+            $usage[0]->answers,
+            $this->reader->list($this->query(agent: self::AGENT_A, status: AnswerStatusFilter::Answered))->total,
+        );
+    }
+
+    public function testStoreQuestionsMetricMatchesItsDrillDownRecordCount(): void
+    {
+        $this->answeredQuestion($this->conversation($this->storeKb, self::AGENT_A), 'A1', '2026-05-10 14:00:00');
+        $this->answeredQuestion($this->conversation($this->storeKb, self::AGENT_B), 'A2', '2026-05-10 14:01:00');
+        $this->answeredQuestion($this->conversation($this->otherKb, self::AGENT_A), 'B1', '2026-05-10 14:02:00');
+
+        $stores = $this->reader->storeUsage($this->query())->items;
+        foreach ($stores as $store) {
+            assertSame(
+                $store->questions,
+                $this->reader->list($this->query(store: $store->knowledgeBaseId))->total,
+            );
+        }
+    }
+
+    public function testFindDetailReturnsTheQuestionWithItsCurrentAnswer(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $question = $this->question($conversation, 'What are the hours?', '2026-05-10 14:00:00');
+        $this->answer($conversation, $question, 'Superseded', '2026-05-10 14:00:05', superseded: true);
+        $current = $this->answer($conversation, $question, 'We open at nine.', '2026-05-10 14:00:20');
+
+        $detail = $this->reader->findDetail($question, $this->query());
+        assertNotNull($detail);
+        assertSame($question, $detail->questionId);
+        assertSame('What are the hours?', $detail->question);
+        assertSame($current, $detail->answerId);
+        assertSame('We open at nine.', $detail->answer);
+        assertSame(20, $detail->responseSeconds);
+    }
+
+    /** The detail view must not reach past the filters the report itself is showing. */
+    public function testFindDetailRespectsTheActiveFiltersAndRange(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $question = $this->question($conversation, 'Out of window', '2026-05-20 14:00:00');
+        $this->answer($conversation, $question, 'Answer', '2026-05-20 14:00:05');
+
+        assertNotNull($this->reader->findDetail($question, $this->query()));
+        assertNull($this->reader->findDetail($question, $this->query('2026-05-01', '2026-05-10')));
+        assertNull($this->reader->findDetail($question, $this->query(agent: self::AGENT_B)));
+        assertNull($this->reader->findDetail($question, $this->query(type: ChatTypeFilter::Rule)));
+    }
+
+    public function testFindDetailReturnsNullForAnUnknownOrAdminQuestion(): void
+    {
+        assertNull($this->reader->findDetail(0, $this->query()));
+
+        $adminConversation = $this->conversation($this->otherKb, 5001, participantType: 'admin');
+        $adminQuestion = $this->question($adminConversation, 'Admin question', '2026-05-10 14:00:00');
+        assertNull($this->reader->findDetail($adminQuestion, $this->query()));
+    }
+
+    /** An answer is never invented: a question awaiting one reports null rather than an empty string. */
+    public function testFindDetailOnAnUnansweredQuestionHasNoAnswer(): void
+    {
+        $conversation = $this->conversation($this->storeKb, self::AGENT_A);
+        $question = $this->question($conversation, 'Waiting', '2026-05-10 14:00:00');
+
+        $detail = $this->reader->findDetail($question, $this->query());
+        assertNotNull($detail);
+        assertNull($detail->answerId);
+        assertNull($detail->answer);
+        assertNull($detail->responseSeconds);
+    }
+
     // ---------------------------------------------------------------- fixture helpers
 
     private function query(
@@ -420,6 +698,14 @@ final class ChatReportReaderIntegrationTest extends Unit
         FeedbackFilter $feedback = FeedbackFilter::All,
         AnswerStatusFilter $status = AnswerStatusFilter::All,
         string $search = '',
+        ?int $agent = null,
+        ?int $store = null,
+        int $agentPerPage = 100,
+        int $agentPageNumber = 1,
+        int $storePerPage = 100,
+        int $storePageNumber = 1,
+        int $qaPerPage = 100,
+        int $qaPageNumber = 1,
     ): ChatReportQuery {
         return new ChatReportQuery(
             range: ReportDateRange::fromRequest($from, $to, $this->timeZone, $this->now),
@@ -427,8 +713,12 @@ final class ChatReportReaderIntegrationTest extends Unit
             rating: $rating,
             feedback: $feedback,
             status: $status,
+            agentAdminId: $agent,
+            knowledgeBaseId: $store,
             search: $search,
-            perPage: 100,
+            agentPage: new ReportPage($agentPageNumber, $agentPerPage),
+            storePage: new ReportPage($storePageNumber, $storePerPage),
+            qaPage: new ReportPage($qaPageNumber, $qaPerPage),
         );
     }
 
@@ -514,6 +804,15 @@ final class ChatReportReaderIntegrationTest extends Unit
             DbDateTime::format($answerAt),
             grounded: $grounded,
         );
+    }
+
+    /** A question answered exactly `$seconds` later, for measuring response time precisely. */
+    private function pair(int $conversationId, string $content, string $utc, int $seconds): int
+    {
+        $questionId = $this->question($conversationId, $content, $utc);
+        $answerAt = (new DateTimeImmutable($utc, new DateTimeZone('UTC')))->modify("+$seconds seconds");
+
+        return $this->answer($conversationId, $questionId, 'Answer to ' . $content, DbDateTime::format($answerAt));
     }
 
     private function score(int $answerId, int $agentAdminId, int $score, ?string $comment = null): void

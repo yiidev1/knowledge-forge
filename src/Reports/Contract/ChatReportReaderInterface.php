@@ -7,8 +7,10 @@ namespace App\Reports\Contract;
 use App\Reports\Domain\AgentUsageRow;
 use App\Reports\Domain\ChatReportQuery;
 use App\Reports\Domain\ChatReportResult;
+use App\Reports\Domain\ChatReportRow;
 use App\Reports\Domain\ChatReportSummary;
 use App\Reports\Domain\StoreUsageRow;
+use App\Reports\Domain\UsageResult;
 
 /**
  * Admin-only read model over agent chat activity.
@@ -29,20 +31,27 @@ interface ChatReportReaderInterface
     public function summary(ChatReportQuery $query): ChatReportSummary;
 
     /**
-     * One row per agent with at least one question in range, ordered by the query's sort.
-     * Ignores {@see ChatReportQuery::$search}.
+     * One page of agent rows, ordered by the query's agent sort and paged by its own page number — the three
+     * tables page independently. Ignores {@see ChatReportQuery::$search}.
      *
-     * @return list<AgentUsageRow>
+     * @return UsageResult<AgentUsageRow>
      */
-    public function agentUsage(ChatReportQuery $query): array;
+    public function agentUsage(ChatReportQuery $query): UsageResult;
 
     /**
-     * One row per knowledge base with at least one question in range, busiest first.
+     * One page of knowledge-base rows, ordered and paged by the query's own store sort/page.
      * Ignores {@see ChatReportQuery::$search}.
      *
-     * @return list<StoreUsageRow>
+     * @return UsageResult<StoreUsageRow>
      */
-    public function storeUsage(ChatReportQuery $query, int $limit = 50): array;
+    public function storeUsage(ChatReportQuery $query): UsageResult;
+
+    /**
+     * One question and its current answer, in full, resolved under the same filters as every other view — a
+     * record the active filters exclude is simply not found, so the detail view can never reach further than
+     * the report itself.
+     */
+    public function findDetail(int $questionId, ChatReportQuery $query): ?ChatReportRow;
 
     /**
      * A page of question/answer detail rows, newest question first. This is the only method that applies
