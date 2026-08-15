@@ -18,6 +18,13 @@ final readonly class AgentAuthenticationResult
         public bool $unavailable,
         public ?int $retryAfterSeconds,
         public ?AgentIdentity $agent,
+        /**
+         * An already-sanitized message to show instead of the generic "temporarily unavailable" wording.
+         * Only ever set alongside `unavailable`, and only when an upstream service supplied something worth
+         * showing. A credential verdict never carries one — a wrong password always uses the application's
+         * own generic message, so provider wording can never leak into that path.
+         */
+        public ?string $message = null,
     ) {}
 
     public static function success(AgentIdentity $agent): self
@@ -38,5 +45,13 @@ final readonly class AgentAuthenticationResult
     public static function unavailable(): self
     {
         return new self(false, false, true, null, null);
+    }
+
+    /** As {@see self::unavailable()}, but shows the supplied message in place of the generic wording. */
+    public static function unavailableWithMessage(?string $message): self
+    {
+        return $message === null || $message === ''
+            ? self::unavailable()
+            : new self(false, false, true, null, null, $message);
     }
 }

@@ -165,14 +165,41 @@ final class HttpOrder58ClientTest extends Unit
         assertSame('POST', $this->http->lastRequest()?->getMethod());
     }
 
-    public function testAuthenticateRejectsWrongPassword(): void
+    /**
+     * The live API answers a wrong password with **401**, not 200 — verified against
+     * `https://order58.seawolf.io/api/integration/v1/authenticate`. This fixture used to queue a 200, which
+     * is why the client's mapping of that 401 to a service-token failure went unnoticed: every wrong agent
+     * password surfaced as "temporarily unavailable" and was never charged to the login throttle.
+     */
+    public function testAuthenticateRejectsWrongPasswordSentAsA401(): void
     {
-        $this->http->queueResponse(200, '{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"Invalid username or password."}}');
+        $this->http->queueResponse(401, '{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"Invalid username or password."}}');
 
         $result = $this->client()->authenticate('agent', 'wrong');
 
         assertFalse($result->authenticated);
         assertNull($result->agent);
+    }
+
+    /** Kept in case the upstream ever moves to the 200-with-success:false shape the docs once implied. */
+    public function testAuthenticateStillRejectsWrongPasswordSentAs200(): void
+    {
+        $this->http->queueResponse(200, '{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"Invalid username or password."}}');
+
+        assertFalse($this->client()->authenticate('agent', 'wrong')->authenticated);
+    }
+
+    /**
+     * The other 401 on the same endpoint: our own Bearer token refused. This must stay an exception — if it
+     * degraded to "wrong password" an expired token would blame every agent for it and, with the fallback
+     * wired in, would silently move every login onto the weaker path.
+     */
+    public function testAuthenticateStillThrowsWhenOurOwnTokenIsRefused(): void
+    {
+        $this->http->queueResponse(401, '{"success":false,"error":{"code":"UNAUTHORIZED","message":"Authentication is required."}}');
+
+        $this->expectException(Order58AuthenticationFailed::class);
+        $this->client()->authenticate('agent', 'secret');
     }
 
     public function testAuthenticatePasswordNeverAppearsInLogs(): void

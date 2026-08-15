@@ -25,6 +25,13 @@ final readonly class Order58ErrorDetails
         public bool $transient,
         public bool $sideEffectPossible = false,
         public ?int $retryAfterSeconds = null,
+        /**
+         * The provider's own `error.code`, when the body carried one — e.g. `UNAUTHORIZED` for a rejected
+         * service token versus `INVALID_CREDENTIALS` for a rejected user password. Both arrive as HTTP 401
+         * on `/authenticate`, so this is the only thing that tells them apart. A short upstream enum value,
+         * never free text and never a credential.
+         */
+        public ?string $providerCode = null,
     ) {}
 
     public static function of(
@@ -34,8 +41,17 @@ final readonly class Order58ErrorDetails
         bool $transient = false,
         bool $sideEffectPossible = false,
         ?int $retryAfterSeconds = null,
+        ?string $providerCode = null,
     ): self {
-        return new self($code, $safeMessage, $httpStatus, $transient, $sideEffectPossible, $retryAfterSeconds);
+        return new self(
+            $code,
+            $safeMessage,
+            $httpStatus,
+            $transient,
+            $sideEffectPossible,
+            $retryAfterSeconds,
+            $providerCode,
+        );
     }
 
     /**

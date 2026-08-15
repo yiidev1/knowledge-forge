@@ -132,6 +132,20 @@ final class Environment
         // documents list. Set true to show them again without code changes.
         'ORDER58_SHOW_STORE_PROFILE_DOCUMENTS' => ['type' => 'bool', 'default' => false],
 
+        // Order58 fallback credential validation — a DIFFERENT host and API from the Integration API above,
+        // reached only when that API explicitly rejects an agent's username/password. One URL and one static
+        // Bearer token, declared once here, so changing the token is a single edit. Both default to empty:
+        // an unconfigured install simply never uses the fallback.
+        'ORDER58_VALIDATE_API_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_VALIDATE_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        // Short on purpose: this call happens AFTER a failed primary call, so its latency is additive on the
+        // slowest login path.
+        'ORDER58_VALIDATE_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 60],
+        'ORDER58_VALIDATE_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 60],
+        // How stale an `order58_agents` row may be and still be trusted to authorize a fallback login.
+        // 72h tolerates two missed daily agent syncs (scheduled 01:00 America/New_York).
+        'ORDER58_VALIDATE_MAX_MIRROR_AGE_HOURS' => ['type' => 'int', 'default' => 72, 'min' => 1, 'max' => 720],
+
         // Storage and upload limits.
         'KNOWLEDGE_STORAGE_PATH' => ['type' => 'string', 'default' => '@runtime/storage'],
         'MAX_UPLOAD_SIZE_MB' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 512],

@@ -8,6 +8,7 @@ use App\Ai\OpenAi\OpenAiHttpProfile;
 use App\Order58\Application\Order58DisplayParams;
 use App\Order58\Application\Order58SyncParams;
 use App\Order58\Client\Order58Credentials;
+use App\Order58\Client\Order58ValidateCredentials;
 use App\Order58\Client\Order58HttpProfile;
 use App\Shared\Application\Correlation\CorrelationId;
 use App\Shared\Application\Health\HealthChecker;
@@ -117,6 +118,15 @@ return [
         ],
     ],
 
+    // The fallback validate API: a different host, a different token, its own object. Rotating one API's
+    // credential must never silently change the other's.
+    Order58ValidateCredentials::class => [
+        '__construct()' => [
+            'token' => $params['app/order58']['validateToken'],
+            'url' => $params['app/order58']['validateUrl'],
+        ],
+    ],
+
     // A single HTTP profile: all Order58 traffic runs in the cron worker, so it can be patient.
     'order58.profile' => [
         'class' => Order58HttpProfile::class,
@@ -157,6 +167,8 @@ return [
                 // The Order58 Integration API Bearer token, so an echoed request or a transport error
                 // that quotes the Authorization header can never carry it into a log.
                 $params['app/order58']['token'],
+                // The fallback validate API token, for the same reason.
+                $params['app/order58']['validateToken'],
             ],
         ],
     ],

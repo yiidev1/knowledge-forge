@@ -13,6 +13,7 @@ return [
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,
+    'kf:order58:schedule-agents' => App\Order58\Console\ScheduleAgentsSyncCommand::class,
     'kf:order58:schedule-knowledge' => App\Order58\Console\ScheduleKnowledgeSyncCommand::class,
     'kf:order58:schedule-rules' => App\Order58\Console\ScheduleRulesSyncCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,

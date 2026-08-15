@@ -36,12 +36,16 @@ final readonly class Order58ErrorMapper
     {
         $status = $response->getStatusCode();
         $providerMessage = $this->extractProviderMessage($bodyText);
+        $providerCode = $this->extractProviderCode($bodyText);
 
         return match (true) {
             $status === 401, $status === 403 => new Order58AuthenticationFailed(Order58ErrorDetails::of(
                 code: 'auth_failed',
                 safeMessage: 'The Order58 Integration API rejected the credentials. Check ORDER58_API_TOKEN.',
                 httpStatus: $status,
+                // `/authenticate` answers a wrong *user* password with 401 too, so the caller needs the
+                // provider's own code to tell that apart from our service token being refused.
+                providerCode: $providerCode,
             )),
             $status === 429 => new Order58RateLimited(Order58ErrorDetails::of(
                 code: 'rate_limited',
@@ -95,6 +99,32 @@ final readonly class Order58ErrorMapper
         $value = $response->getHeaderLine('retry-after');
 
         return is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * The provider's `error.code`, e.g. `UNAUTHORIZED` or `INVALID_CREDENTIALS`. A short upstream enum, not
+     * free text — it is never shown to a user, only used to classify.
+     */
+    private function extractProviderCode(string $bodyText): ?string
+    {
+        if ($bodyText === '') {
+            return null;
+        }
+
+        /** @var mixed $decoded */
+        $decoded = json_decode($bodyText, true);
+        if (!is_array($decoded) || !isset($decoded['error'])) {
+            return null;
+        }
+
+        $error = $decoded['error'];
+        if (!is_array($error) || !isset($error['code'])) {
+            return null;
+        }
+
+        $code = $error['code'];
+
+        return is_string($code) ? $code : null;
     }
 
     private function extractProviderMessage(string $bodyText): ?string

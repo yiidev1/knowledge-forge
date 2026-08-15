@@ -59,7 +59,9 @@ final readonly class AuthenticateAction
         }
 
         if ($result->unavailable) {
-            $this->flash->error('Sign-in is temporarily unavailable. Please try again in a moment.');
+            // A message is present only when an upstream service supplied one worth showing; it arrives
+            // already sanitized and is escaped again by the flash partial. Otherwise the generic wording.
+            $this->flash->error($result->message ?? 'Sign-in is temporarily unavailable. Please try again in a moment.');
 
             return $this->redirect->afterPost('agent.login.show');
         }

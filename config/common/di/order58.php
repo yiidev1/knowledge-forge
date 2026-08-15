@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use App\Order58\Client\HttpOrder58Client;
+use App\Order58\Client\HttpOrder58CredentialValidator;
 use App\Order58\Client\Order58RetryPolicy;
 use App\Order58\Contract\Order58ClientInterface;
+use App\Order58\Contract\Order58CredentialValidatorInterface;
 use App\Order58\Domain\Order58AgentRepositoryInterface;
 use App\Order58\Domain\Order58KnowledgeRepositoryInterface;
 use App\Order58\Domain\Order58RuleRepositoryInterface;
@@ -58,6 +60,22 @@ return [
             'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
             'profile' => Reference::to('order58.profile'),
             'retryPolicy' => Reference::to(Order58RetryPolicy::class),
+        ],
+    ],
+
+    // The fallback credential validator gets its own Guzzle instance: it runs inside a web request, after a
+    // primary call has already failed, so it uses far shorter timeouts than the patient sync client above.
+    // No retry policy — a login form is waiting, and a resubmitted password is not ours to multiply.
+    Order58CredentialValidatorInterface::class => [
+        'class' => HttpOrder58CredentialValidator::class,
+        '__construct()' => [
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => $params['app/order58']['validateConnectTimeoutSeconds'],
+                'timeout' => $params['app/order58']['validateTimeoutSeconds'],
+                'http_errors' => false,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
         ],
     ],
 ];

@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Agent;
 
 use App\Agent\Application\AgentLoginService;
+use App\Agent\Application\FallbackAgentAuthenticator;
 use App\Order58\Contract\Dto\Order58Agent;
 use App\Order58\Contract\Dto\Order58AuthResult;
 use App\Order58\Contract\Dto\Order58ErrorDetails;
 use App\Order58\Contract\Exception\Order58TransportFailed;
 use App\Tests\Support\Fake\Agent\InMemoryAgentIdentityStore;
+use App\Tests\Support\Fake\Agent\InMemoryTrustedAgentDirectory;
 use App\Tests\Support\Fake\Agent\InMemoryAgentLoginActivityRepository;
 use App\Tests\Support\Fake\Auth\InMemoryLoginThrottle;
 use App\Tests\Support\Fake\Order58\FakeOrder58Client;
+use App\Tests\Support\Fake\Order58\FakeOrder58CredentialValidator;
 use App\Tests\Support\MutableClock;
 use Codeception\Test\Unit;
 use Psr\Log\NullLogger;
@@ -33,6 +36,8 @@ final class AgentLoginServiceTest extends Unit
     private InMemoryAgentIdentityStore $identityStore;
     private InMemoryLoginThrottle $throttle;
     private InMemoryAgentLoginActivityRepository $loginActivity;
+    private FakeOrder58CredentialValidator $fallbackValidator;
+    private InMemoryTrustedAgentDirectory $trustedAgents;
     private AgentLoginService $service;
 
     protected function _before(): void
@@ -41,12 +46,30 @@ final class AgentLoginServiceTest extends Unit
         $this->identityStore = new InMemoryAgentIdentityStore();
         $this->throttle = new InMemoryLoginThrottle();
         $this->loginActivity = new InMemoryAgentLoginActivityRepository(new MutableClock());
+        $this->fallbackValidator = new FakeOrder58CredentialValidator();
+        $this->trustedAgents = new InMemoryTrustedAgentDirectory();
         $this->service = new AgentLoginService(
             $this->client,
             $this->identityStore,
             $this->throttle,
             $this->loginActivity,
             new NullLogger(),
+            $this->fallbackAuthenticator(),
+        );
+    }
+
+    /**
+     * The fallback collaborator, wired to reject by default so every pre-existing assertion in this file
+     * still describes the primary path alone. The fallback's own matrix lives in AgentLoginFallbackTest.
+     */
+    private function fallbackAuthenticator(): FallbackAgentAuthenticator
+    {
+        return new FallbackAgentAuthenticator(
+            $this->fallbackValidator,
+            $this->trustedAgents,
+            new MutableClock(),
+            new NullLogger(),
+            72,
         );
     }
 

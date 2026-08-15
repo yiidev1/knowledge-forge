@@ -135,6 +135,12 @@ return [
         'syncMaxAttempts' => Environment::int('ORDER58_SYNC_MAX_ATTEMPTS'),
         'pagesPerRun' => Environment::int('ORDER58_SYNC_PAGES_PER_RUN'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
+        // Fallback credential validation (a separate Order58 API; see Order58ValidateCredentials).
+        'validateUrl' => Environment::string('ORDER58_VALIDATE_API_URL'),
+        'validateToken' => Environment::string('ORDER58_VALIDATE_API_TOKEN'),
+        'validateConnectTimeoutSeconds' => Environment::int('ORDER58_VALIDATE_CONNECT_TIMEOUT_SECONDS'),
+        'validateTimeoutSeconds' => Environment::int('ORDER58_VALIDATE_TIMEOUT_SECONDS'),
+        'validateMaxMirrorAgeHours' => Environment::int('ORDER58_VALIDATE_MAX_MIRROR_AGE_HOURS'),
     ],
 
     'app/usage' => [

@@ -12,6 +12,7 @@ use App\Order58\Contract\Dto\Order58KnowledgeRecord;
 use App\Order58\Contract\Dto\Order58Page;
 use App\Order58\Contract\Dto\Order58RuleRecord;
 use App\Order58\Contract\Order58ClientInterface;
+use App\Order58\Contract\Exception\Order58AuthenticationFailed;
 use App\Order58\Contract\Exception\Order58Exception;
 use App\Shared\Infrastructure\Log\SafeLogContext;
 use Psr\Http\Client\ClientExceptionInterface;
@@ -41,6 +42,9 @@ use const JSON_THROW_ON_ERROR;
  */
 final readonly class HttpOrder58Client implements Order58ClientInterface
 {
+    /** The provider's `error.code` for a rejected end-user password, as distinct from a rejected service token. */
+    private const INVALID_CREDENTIALS_CODE = 'INVALID_CREDENTIALS';
+
     public function __construct(
         private ClientInterface $httpClient,
         private RequestFactoryInterface $requestFactory,
@@ -122,7 +126,26 @@ final readonly class HttpOrder58Client implements Order58ClientInterface
         // written anywhere. A wrong password comes back as an unauthenticated result, not an exception.
         $request = $this->jsonPost('/authenticate', ['username' => $username, 'password' => $password]);
 
-        return $this->parser->parseAuthenticate($this->send($request, 'authenticate'));
+        try {
+            $envelope = $this->send($request, 'authenticate');
+        } catch (Order58AuthenticationFailed $e) {
+            // This endpoint answers a wrong *user* password with HTTP 401, exactly like a rejected service
+            // token, so the generic mapper cannot tell them apart and classifies both as our problem. Only
+            // the provider's own code separates them:
+            //
+            //   INVALID_CREDENTIALS -> the agent typed the wrong password  (a value, and throttleable)
+            //   UNAUTHORIZED / …    -> ORDER58_API_TOKEN was refused       (an exception, not the agent's fault)
+            //
+            // Getting this wrong is not cosmetic: treating a wrong password as an outage means the login
+            // throttle is never charged, leaving agent password guessing unbounded on our side.
+            if ($e->details()->providerCode === self::INVALID_CREDENTIALS_CODE) {
+                return Order58AuthResult::invalid();
+            }
+
+            throw $e;
+        }
+
+        return $this->parser->parseAuthenticate($envelope);
     }
 
     /**
