@@ -904,3 +904,136 @@
         return article;
     }
 })();
+
+/* ------------------------------------------------------------------------------------------------
+ * Audio to Text — job status polling and list refresh.
+ *
+ * Behaviour lives here rather than in an inline <script> because the application's CSP is
+ * `script-src 'self'` with no unsafe-inline: an inline block would silently not run. The templates
+ * publish their intent through data attributes and this file reads them.
+ *
+ * Both behaviours are opt-in per page render. The attributes are emitted only while something can
+ * still change, so a completed job and a settled list stop polling permanently — a page left open
+ * overnight must not keep asking a question that has already been answered.
+ * ---------------------------------------------------------------------------------------------- */
+(function () {
+    'use strict';
+
+    // The status endpoint returns enum keys, never prose. Mapping them to English here keeps the
+    // endpoint incapable of leaking a string that was written for an operator rather than a user.
+    var STAGE_LABELS = {
+        QUEUED: 'Waiting for the worker',
+        CLAIMED: 'Starting',
+        CONVERTING: 'Converting audio',
+        TRANSCRIBING: 'Transcribing audio',
+        DIARIZING: 'Separating speakers',
+        MAPPING_SPEAKERS: 'Identifying agent and customer',
+        SAVING: 'Saving results',
+        COMPLETED: 'Done',
+        FAILED: 'Failed'
+    };
+
+    var STATUS_LABELS = {
+        QUEUED: 'Queued',
+        PROCESSING: 'Processing',
+        COMPLETED: 'Completed',
+        FAILED: 'Failed'
+    };
+
+    function startJobPolling(root) {
+        var url = root.getAttribute('data-a2t-poll');
+        if (!url) {
+            return;
+        }
+
+        // Re-applied here as well as in the template: two places is cheap, and a stray zero would turn
+        // this into a request loop against the application's own server.
+        var interval = Math.max(2000, parseInt(root.getAttribute('data-a2t-interval'), 10) || 2000);
+        var statusEl = root.querySelector('[data-a2t-field="status"]');
+        var stageEl = root.querySelector('[data-a2t-field="stage"]');
+        var timer = null;
+
+        function stop() {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+        }
+
+        function poll() {
+            fetch(url, {
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            })
+                .then(function (response) {
+                    // A 404, or a redirect to the sign-in page, means there is nothing further to learn
+                    // from this endpoint. Stop for good rather than retrying into a wall.
+                    if (!response.ok) {
+                        stop();
+                        return null;
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    if (!data) {
+                        return;
+                    }
+
+                    if (statusEl && STATUS_LABELS[data.status]) {
+                        statusEl.textContent = STATUS_LABELS[data.status];
+                        statusEl.className = 'a2t-badge a2t-badge--' + String(data.status).toLowerCase();
+                    }
+
+                    if (stageEl) {
+                        stageEl.textContent = STAGE_LABELS[data.stage] || '—';
+                    }
+
+                    // Terminal: reload once to render the transcript, then never poll again. The
+                    // transcript is fetched by that reload rather than sent on every tick.
+                    if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+                        stop();
+                        window.location.reload();
+                        return;
+                    }
+
+                    timer = setTimeout(poll, interval);
+                })
+                .catch(function () {
+                    // A transient network error is worth one more try; a permanent one will keep
+                    // failing harmlessly at this interval.
+                    timer = setTimeout(poll, interval);
+                });
+        }
+
+        timer = setTimeout(poll, interval);
+    }
+
+    function startListReload(root) {
+        // The list has no single status to watch, and a job submitted in another tab should appear
+        // here too, so this reloads the page rather than polling an endpoint.
+        var interval = Math.max(2000, parseInt(root.getAttribute('data-a2t-reload'), 10) || 2000);
+
+        setTimeout(function () {
+            window.location.reload();
+        }, interval);
+    }
+
+    function init() {
+        var job = document.querySelector('[data-a2t-poll]');
+        if (job) {
+            startJobPolling(job);
+        }
+
+        var list = document.querySelector('[data-a2t-reload]');
+        if (list) {
+            startListReload(list);
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();

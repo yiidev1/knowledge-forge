@@ -1,0 +1,48 @@
+# Fires the Audio-to-Text worker every 2 minutes.
+#
+# EXAMPLE ONLY — NOT INSTALLED. See docs/AUDIO_TO_TEXT.md.
+#
+# ------------------------------------------------------------------------------
+# TO CHANGE THE SCHEDULE, EDIT OnUnitActiveSec BELOW AND NOTHING ELSE.
+#   OnUnitActiveSec=2min    every 2 minutes   (current)
+#   OnUnitActiveSec=5min    every 5 minutes
+#   OnUnitActiveSec=30s     every 30 seconds
+# Then: sudo systemctl daemon-reload && sudo systemctl restart knowledge-forge-audio-worker.timer
+# No application code or configuration changes with the interval.
+# ------------------------------------------------------------------------------
+#
+# Why a timer plus a Type=oneshot service needs no outer lock file of its own: systemd will not start
+# a second run of a unit that is still active. A transcription takes roughly 90 seconds and can
+# occasionally outlast the 2-minute interval, and when it does the next tick is simply skipped rather
+# than queued behind it or run in parallel.
+#
+# `OnUnitActiveSec` measures from the last *activation*, so the effective cadence is
+# max(2 minutes, however long the job took) — which is the behaviour wanted for a queue drained one
+# item at a time. The application's own flock on runtime/audio-to-text/worker.lock remains the
+# authority on single-worker operation however the worker is started, including by hand.
+
+[Unit]
+Description=Run the Knowledge Forge Audio-to-Text worker every 2 minutes
+Documentation=file:///var/www/html/knowledge-forge/docs/AUDIO_TO_TEXT.md
+
+[Timer]
+Unit=knowledge-forge-audio-worker.service
+
+# First tick shortly after boot, then every 2 minutes from the previous activation.
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+# A 2-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
+AccuracySec=10s
+
+# This machine also runs telecom-billing's audio cron on the exact minute. Jittering means the two do
+# not routinely start whisper in the same second — a courtesy on top of the real coordination, which
+# is AUDIO_WORKER_FOREIGN_LOCKS.
+RandomizedDelaySec=15s
+
+# Missed ticks are not made up after downtime. Queued jobs are still there and the next ordinary tick
+# collects them, so replaying a backlog of timer events would only bunch up work for no benefit.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

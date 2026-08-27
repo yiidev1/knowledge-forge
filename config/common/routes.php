@@ -10,6 +10,8 @@ use App\Agent\Web\Middleware\RequireAgentMiddleware;
 use App\Agent\Web\RuleChat as AgentRuleChat;
 use App\Agent\Web\Sources as AgentSources;
 use App\Ai\Web\Usage;
+use App\AudioToText\Web as AudioToText;
+use App\AudioToText\Web\AudioToTextRoute;
 use App\Auth\Web\Login;
 use App\Auth\Web\Logout;
 use App\Auth\Web\Middleware\RequireAdminMiddleware;
@@ -30,6 +32,7 @@ use App\Rules\Web\Review as RulesReview;
 use App\Rules\Web\RulesList as RulesList;
 use App\Shared\Web\Middleware\DomainExceptionMiddleware;
 use App\Web\Dashboard;
+use Yiisoft\Http\Method;
 use Yiisoft\Router\Group;
 use Yiisoft\Router\Route;
 
@@ -319,6 +322,29 @@ return [
             Route::post('/admin/rule-chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
                 ->action(AdminRuleChat\ScoreMessage\DismissAction::class)
                 ->name('admin.rule-chat.message.score.dismiss'),
+
+            // Audio to Text. Behind the administrator gate like everything else in this group, and for a
+            // specific reason: transcription costs ~94 seconds of a CPU core and 834 MB, so an anonymous
+            // visitor must not be able to spend the machine. The upload request itself only validates and
+            // queues — ffmpeg, whisper.cpp and the diarizer all run in `kf:audio:worker`.
+            Route::methods([Method::GET, Method::POST], '/audio-to-text')
+                ->action(AudioToText\Action::class)
+                ->name(AudioToTextRoute::PAGE),
+            // Declared before the /job/{publicId} routes so the literal segment is unambiguous.
+            Route::get('/audio-to-text/jobs')
+                ->action(AudioToText\Job\Index\Action::class)
+                ->name(AudioToTextRoute::JOBS),
+            // The 32-hex constraint rejects a malformed id before any action runs, and keeps job URLs
+            // non-enumerable: the internal database id never appears in a URL.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}')
+                ->action(AudioToText\Job\Action::class)
+                ->name(AudioToTextRoute::JOB),
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/status')
+                ->action(AudioToText\Job\Status\Action::class)
+                ->name(AudioToTextRoute::JOB_STATUS),
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/download')
+                ->action(AudioToText\Job\Download\Action::class)
+                ->name(AudioToTextRoute::JOB_DOWNLOAD),
         ),
 
     // Order58 agents: a separate authenticated realm behind RequireAgentMiddleware. Agents can select any

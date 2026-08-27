@@ -1,0 +1,64 @@
+# Audio-to-Text queue worker for Knowledge Forge.
+#
+# Install to /etc/cron.d/knowledge-forge-audio-transcription (root:root 0644).
+# Nothing in this project installs it automatically; see docs/AUDIO_TO_TEXT.md.
+#
+# ------------------------------------------------------------------------------
+# TO CHANGE THE SCHEDULE, EDIT THE FIVE FIELDS BELOW AND NOTHING ELSE.
+#   */2 * * * *   every 2 minutes   (current)
+#   */5 * * * *   every 5 minutes
+#   * * * * *     every minute
+# No application code or configuration changes with the interval.
+# ------------------------------------------------------------------------------
+#
+# Every tick: claim at most ONE queued job, process it, exit. An empty queue exits in milliseconds
+# without starting ffmpeg or whisper. Only rows with status = 'QUEUED' are ever claimed, so a
+# COMPLETED or FAILED job is never touched again and nothing is retried automatically.
+#
+# THREE LOCKS, all different files, none replacing another:
+#
+#   1. runtime/audio-to-text/cron-worker.lock   the flock below. Stops a second *tick* starting while
+#                                               one is still running — a transcription takes about
+#                                               90 seconds and can outlast a 2-minute interval.
+#   2. runtime/audio-to-text/worker.lock        the application's own flock, and the actual authority
+#                                               on single-worker operation however the worker starts.
+#   3. telecom-billing's cron-worker.lock       taken by the app via AUDIO_WORKER_FOREIGN_LOCKS, so
+#                                               the two projects never run whisper at the same time.
+#
+# (1) and (2) MUST stay distinct files. Pointing the cron flock at the application's own worker.lock
+# would make every run skip: cron would take the lock, then PHP would fail to acquire it and exit.
+#
+# `flock -n` exits 1 with no output when the lock is held, so a skipped tick is silent.
+#
+# RUNS AS www-data, and this is not optional:
+#   * job directories are created mode 0700 by PHP-FPM, which runs as www-data;
+#   * telecom-billing's lock directory is 0750 www-data:www-data, and the foreign-lock check FAILS
+#     CLOSED — as any other user every tick would defer and the queue would silently never move.
+#
+# LOGGING: `-q` silences the routine startup banner, and everything else is piped to syslog under the
+# tag `kf-audio-worker`. Two consequences, both wanted: cron never sees output so it never sends mail,
+# and there is no unbounded logfile of its own — syslog is already rotated. Read it with:
+#   journalctl -t kf-audio-worker          (or: grep kf-audio-worker /var/log/syslog)
+# The application's own logger writes errors independently of console verbosity, so real failures are
+# still captured.
+#
+# /usr/bin/php8.2 is pinned rather than /usr/bin/php. The latter is an update-alternatives symlink
+# that a later PHP install could silently repoint at a different version; 8.2 is what php8.2-fpm
+# serves the site with, and what this feature was verified against.
+#
+# nice/ionice are priority hints, not limits: nginx, PHP-FPM and MySQL are always served first. For
+# hard CPU and memory ceilings use the systemd timer in docs/server/systemd/ instead — but run one
+# scheduler or the other, never both, and never alongside a permanent foreground worker.
+#
+# Detected on this machine:
+#   Project   /var/www/html/knowledge-forge
+#   PHP CLI   /usr/bin/php8.2 (8.2.28), matching the php8.2-fpm the site runs on
+#   flock     /usr/bin/flock      logger   /usr/bin/logger
+#   nice      /usr/bin/nice       ionice   /usr/bin/ionice   (class 3 usable unprivileged)
+#   Runtime   runtime/audio-to-text is dell:dell with an ACL granting www-data rwx, inherited by
+#             new files, so the cron lock is created with the right access on first tick.
+
+PATH=/usr/bin:/bin
+SHELL=/bin/sh
+
+*/2 * * * * www-data /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/audio-to-text/cron-worker.lock /usr/bin/nice -n 15 /usr/bin/ionice -c 3 /usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:audio:worker --once -q 2>&1 | /usr/bin/logger -t kf-audio-worker -p daemon.info

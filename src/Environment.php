@@ -195,6 +195,71 @@ final class Environment
             'default' => 'The answer was cut short before it could be completed. '
                 . 'Please ask for a narrower part of it — for example one section or one record at a time.',
         ],
+
+        // Audio to Text — local toolchain. Every transcription runs on this machine; no audio is ever
+        // sent to an external service. Paths are verified at worker start, not here, so a machine without
+        // whisper.cpp still boots the application and reports a friendly error on the page instead.
+        'FFMPEG_BINARY' => ['type' => 'string', 'default' => '/usr/bin/ffmpeg'],
+        'FFPROBE_BINARY' => ['type' => 'string', 'default' => '/usr/bin/ffprobe'],
+        'WHISPER_BINARY' => ['type' => 'string', 'default' => '/opt/whisper.cpp/build/bin/whisper-cli'],
+        // Multilingual, deliberately not `ggml-small.en.bin`: recordings mix English, Spanish, Gujarati
+        // and Hindi, and the `.en` model would transcribe all of it as though it were English.
+        'WHISPER_MODEL' => ['type' => 'string', 'default' => '/opt/whisper.cpp/models/ggml-small.bin'],
+        // Empty resolves to `@runtime/audio-to-text`, which is outside the web root and already writable
+        // by the web-server user. Never `public/`: a queued recording must not be reachable over HTTP.
+        'AUDIO_TRANSCRIPTION_TEMP_DIR' => ['type' => 'string', 'default' => ''],
+        'AUDIO_TRANSCRIPTION_MAX_SIZE' => ['type' => 'int', 'default' => 31457280, 'min' => 1024, 'max' => 1073741824],
+        'AUDIO_TRANSCRIPTION_MAX_DURATION' => ['type' => 'int', 'default' => 300, 'min' => 1, 'max' => 7200],
+        'AUDIO_TRANSCRIPTION_TIMEOUT' => ['type' => 'int', 'default' => 600, 'min' => 1, 'max' => 7200],
+        // One thread, measured: whisper `-t 1` uses 99% of exactly one core and 834 MB on this machine.
+        // Raising it lets one demo transcription saturate the box; see docs/AUDIO_TO_TEXT.md.
+        'AUDIO_TRANSCRIPTION_THREADS' => ['type' => 'int', 'default' => 1, 'min' => 1, 'max' => 64],
+        // Cap on QUEUED + PROCESSING jobs across the whole installation, NOT per administrator.
+        // 0 = unlimited, which is the default: an administrator should be able to hand the machine
+        // more work without waiting. Concurrency is the worker's job, not the upload form's.
+        'AUDIO_TRANSCRIPTION_MAX_QUEUE' => ['type' => 'int', 'default' => 0, 'min' => 0, 'max' => 100000],
+        // 0 = keep completed conversations indefinitely, which is this project's default: the
+        // transcripts are intended to be read back later, so nothing expires them on a timer. A
+        // positive value turns on automatic expiry after that many seconds (2592000 = 30 days).
+        'AUDIO_TRANSCRIPTION_RETENTION_SECONDS' => ['type' => 'int', 'default' => 0, 'min' => 0, 'max' => 315360000],
+        'AUDIO_TRANSCRIPTION_STALE_AFTER' => ['type' => 'int', 'default' => 1200, 'min' => 60, 'max' => 86400],
+        'AUDIO_TRANSCRIPTION_WORKER_SLEEP' => ['type' => 'int', 'default' => 2, 'min' => 1, 'max' => 300],
+
+        // Audio to Text — worker liveness and admission control.
+        'AUDIO_WORKER_HEARTBEAT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 300],
+        'AUDIO_WORKER_STALE_AFTER' => ['type' => 'int', 'default' => 30, 'min' => 5, 'max' => 3600],
+        // Three missed minute-ticks. Distinguishes "scheduled, between ticks" from "the schedule stopped".
+        'AUDIO_WORKER_TICK_STALE_AFTER' => ['type' => 'int', 'default' => 180, 'min' => 10, 'max' => 86400],
+        // Provisional: 1.8x the measured 834 MB whisper peak. Re-derive once diarization RSS is measured.
+        'AUDIO_WORKER_MIN_AVAILABLE_MB' => ['type' => 'int', 'default' => 1500, 'min' => 0, 'max' => 1048576],
+        'AUDIO_WORKER_MAX_LOAD_PER_CORE' => ['type' => 'float', 'default' => 1.5, 'min' => 0.0, 'max' => 1000.0],
+        // Comma-separated lock files belonging to OTHER projects that also run whisper on this machine.
+        // Taken with a non-blocking flock before a job is claimed, so two projects cannot start whisper
+        // in the same instant. A configured lock that is held, missing or unreadable defers the tick —
+        // blank this setting to opt out entirely. See docs/AUDIO_TO_TEXT.md.
+        'AUDIO_WORKER_FOREIGN_LOCKS' => ['type' => 'string', 'default' => ''],
+        // Best-effort only, and deliberately labelled so: a process scan cannot be race-free. It catches a
+        // foreign worker started by hand, which takes no cron lock. It is not an exclusivity guarantee.
+        'AUDIO_WORKER_YIELD_TO_OTHER_WHISPER' => ['type' => 'bool', 'default' => true],
+
+        // Audio to Text — speaker separation. Off until the local diarization toolchain is installed;
+        // transcription works fully either way and jobs report NOT_SUPPORTED rather than failing.
+        'AUDIO_DIARIZATION_ENABLED' => ['type' => 'bool', 'default' => false],
+        'AUDIO_DIARIZATION_BINARY' => ['type' => 'string', 'default' => '/opt/audio-diarization/venv/bin/python3'],
+        'AUDIO_DIARIZATION_SEGMENTATION_MODEL' => ['type' => 'string', 'default' => '/opt/audio-diarization/models/segmentation.onnx'],
+        'AUDIO_DIARIZATION_EMBEDDING_MODEL' => ['type' => 'string', 'default' => '/opt/audio-diarization/models/embedding.onnx'],
+        'AUDIO_DIARIZATION_TIMEOUT' => ['type' => 'int', 'default' => 300, 'min' => 1, 'max' => 7200],
+        'AUDIO_DIARIZATION_MIN_CONFIDENCE' => ['type' => 'float', 'default' => 0.55, 'min' => 0.0, 'max' => 1.0],
+        'AUDIO_DIARIZATION_MAX_SPEAKERS' => ['type' => 'int', 'default' => 2, 'min' => 0, 'max' => 20],
+        // How far a transcribed token may sit outside every detected speech region and still be
+        // attributed to the nearest speaker.
+        //
+        // Diarization marks *speech*, not the pauses between it, so it typically covers only half to
+        // two-thirds of a recording. Whisper's token timestamps run straight across those pauses. On the
+        // reference call the diarizer left 44% of the audio uncovered across 21 gaps (median 1.2s), and
+        // without this tolerance a third of all tokens were attributed to nobody. Measured attribution
+        // by token duration: 74% at 0ms, 95% at 1000ms, 99% at 1500ms, flat thereafter.
+        'AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS' => ['type' => 'int', 'default' => 1500, 'min' => 0, 'max' => 10000],
     ];
 
     /** @var array<string, bool|float|int|string> */

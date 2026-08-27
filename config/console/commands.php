@@ -10,6 +10,10 @@ return [
     'kf:admin:create' => App\Auth\Console\CreateAdminCommand::class,
     'kf:openai:ping' => App\Ai\OpenAi\Console\OpenAiPingCommand::class,
     'kf:worker:run' => App\Worker\Console\RunWorkerCommand::class,
+    // Deliberately NOT a drainer inside kf:worker:run: a transcription holds one core for ~94 seconds,
+    // and running it in that loop would stall document processing and Order58 sync behind it. Separate
+    // command, separate lock file, separate schedule.
+    'kf:audio:worker' => App\AudioToText\Console\AudioTranscriptionWorkerCommand::class,
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,

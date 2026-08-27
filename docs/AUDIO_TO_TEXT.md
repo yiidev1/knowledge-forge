@@ -1,0 +1,1135 @@
+# Audio to Text — setup, operation and rollback
+
+Local speech-to-text for Knowledge Forge, with optional customer/agent speaker separation. Every
+stage runs on this machine. **No audio, and nothing derived from it, leaves the server.**
+
+---
+
+## 1. What it does
+
+An authenticated administrator opens `/audio-to-text`, picks a recording and presses **Convert to
+Text**. The HTTP request validates the upload, writes it to a private directory, records its duration
+and inserts a `QUEUED` row — then redirects. It does not transcribe anything.
+
+A background console worker claims the job and does the work:
+
+```
+QUEUED → CLAIMED → CONVERTING → TRANSCRIBING → [DIARIZING → MAPPING_SPEAKERS] → SAVING → COMPLETED
+```
+
+The job page shows both the stable status and the current stage, polling every two seconds until the
+job is terminal. When it finishes it shows the complete transcript, the detected language, the
+duration, who uploaded it, and — when speaker separation succeeded — separate **Customer** and
+**Agent** sections with their own downloads.
+
+**This is a shared administrator demo.** Every authorized administrator sees every job.
+`uploaded_by_admin_id` is retained as audit metadata and surfaced as an "Uploaded by" column, but it
+is not an access-control key. Authorization is *authenticated administrator + the job exists*.
+
+---
+
+## 2. Why transcription never runs in the web request
+
+Measured on this machine, not estimated:
+
+| Stage | Wall | Peak RSS | CPU |
+|---|---|---|---|
+| ffmpeg `-threads 1` | 0.07 s | 49 MB | 97% of one core |
+| whisper-cli `-t 1` | 88–94 s | **833.9 MB** | 99% of one core |
+| whisper-cli `-t 4` | 26.9 s | — | ~380% |
+
+Real-time factor at one thread is **1.19–1.27**, so a recording at the 300-second cap takes about
+355 seconds (measured) against the 600-second timeout — roughly 1.7× headroom. See §6 for the full
+5-minute measurement.
+
+Inside PHP-FPM that is a worker process held for a minute and a half, a request the browser abandons
+long before it finishes, and no queue in front of any of it. A unit test
+(`tests/Unit/AudioToText/WebTierCannotRunWhisperTest.php`) walks every `src/*/Web/` directory and
+fails the build if the transcriber, the diarizer, `ProcessRunner` or `proc_open` are so much as named
+there. Its allow-list is empty, and should stay that way.
+
+---
+
+## 3. Requirements, and what is already here
+
+| Tool | Path on this machine | Status |
+|---|---|---|
+| ffmpeg | `/usr/bin/ffmpeg` | present |
+| ffprobe | `/usr/bin/ffprobe` | present |
+| whisper-cli | `/opt/whisper.cpp/build/bin/whisper-cli` (1.9.3-dev) | present |
+| model | `/opt/whisper.cpp/models/ggml-small.bin` (487 MB, multilingual) | present |
+| PHP CLI | 8.2.28 | ok |
+| PHP-FPM | `unix:/run/php/php8.2-fpm.sock`, runs as `www-data` | ok |
+| sherpa-onnx | `/opt/audio-diarization/venv` (1.13.6) | **installed** |
+| segmentation model | `/opt/audio-diarization/models/segmentation.onnx` (5,992,913 B) | **installed** |
+| embedding model | `/opt/audio-diarization/models/embedding.onnx` (28,281,164 B) | **installed** |
+| systemd timer | `knowledge-forge-audio-worker.timer`, every 2 min | **installed and active** |
+
+Speaker separation is installed, enabled (`AUDIO_DIARIZATION_ENABLED=true`) and running in
+production. §8 keeps the install procedure for a rebuild or a second machine.
+
+Verify the whole toolchain:
+
+```bash
+/usr/bin/ffmpeg -version | head -1
+/usr/bin/ffprobe -version | head -1
+/opt/whisper.cpp/build/bin/whisper-cli --version
+ls -l /opt/whisper.cpp/models/ggml-small.bin
+php -m | grep -E 'fileinfo|pdo_mysql|mbstring'
+
+# Diarization, and the models it loads.
+/opt/audio-diarization/venv/bin/python3 -c 'import sherpa_onnx; print(sherpa_onnx.__version__)'
+sha256sum /opt/audio-diarization/models/*.onnx
+
+# The application's own view — this is the authoritative check, because it validates every
+# setting together and is what the worker runs at startup.
+sudo -u www-data php yii kf:audio:worker --once
+```
+
+Installed model checksums, for confirming a machine matches this one (these are the **extracted**
+files; the download archives have their own checksums, recorded in §8):
+
+```
+220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079  segmentation.onnx
+aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2  embedding.onnx
+```
+
+The model is deliberately `ggml-small.bin`, **not** `ggml-small.en.bin`: recordings mix English,
+Spanish, Gujarati and Hindi, and the English-only model transcribes the rest as though it were
+English.
+
+### Web server — no change required
+
+Measured on this host and sufficient for the 30 MB limit:
+
+| Setting | Value | Note |
+|---|---|---|
+| nginx `client_max_body_size` | `32m` | **the binding ceiling** |
+| PHP `upload_max_filesize` | `40M` | |
+| PHP `post_max_size` | `40M` | |
+
+**nginx is the tightest of the three, so it — not PHP — is what caps
+`AUDIO_TRANSCRIPTION_MAX_SIZE`.** Above `client_max_body_size` the upload is refused with a 413 by
+the web server before PHP is reached, so the validator never runs and the administrator sees a bare
+error page rather than the feature's own message. Raising the setting past ~30 MB therefore means
+editing `/etc/nginx/sites-enabled/knowledge-forge.conf` first.
+
+That matters for one supported case: a 5-minute *stereo* 44.1 kHz WAV is about 50 MB and is rejected.
+Every mono format fits — see the size table in `.env` beside `AUDIO_TRANSCRIPTION_MAX_SIZE`. Phone
+recordings, which is what this feature processes, are 8 kHz mono at 4.6 MB.
+
+`fastcgi_read_timeout` is irrelevant to transcription — the upload request returns in well under a
+second. It only bounds the upload itself.
+
+---
+
+## 4. Running the worker
+
+**As `www-data`.** Job directories are mode 0700 and created by PHP-FPM; no other user can traverse
+them, let alone delete them.
+
+```bash
+# Continuous — a development terminal.
+sudo -u www-data php /var/www/html/knowledge-forge/yii kf:audio:worker
+
+# One job, then exit — what a timer or cron runs, and what tests use.
+sudo -u www-data php /var/www/html/knowledge-forge/yii kf:audio:worker --once
+```
+
+A second worker refuses the lock, says so, and exits **0** — a correctly-refused duplicate is not a
+failure and a supervisor should not restart it in a loop.
+
+### Two independent concurrency guarantees, both required
+
+1. **`flock` on `runtime/audio-to-text/worker.lock`**, non-blocking, held for the process lifetime.
+   This is what makes the limit global. `flock` rather than a database advisory lock because the
+   kernel releases it however the process dies — no stale lock to detect, no recovery code to get
+   subtly wrong. The trade-off is that it covers one machine, which is the deployment.
+2. **An atomic conditional claim**: `UPDATE … SET status='PROCESSING' WHERE id=? AND
+   status='QUEUED'`, claimed only when exactly one row changed.
+
+The claim alone is not enough: it would happily let worker A take job 1 while worker B takes job 2 —
+two whisper processes on one CPU. The lock is what prevents that.
+
+The lock file lives *beside* `jobs/`, never inside it, so the orphan sweep cannot delete the file
+that guarantees single-worker operation. It is never unlinked: removing it races with a process that
+has already opened the same path.
+
+---
+
+## 5. Cross-project coordination — read this
+
+**`/etc/cron.d/telecom-billing-audio-transcription` is installed and active on this machine.** It
+runs a separate audio worker every minute as `www-data`. Knowledge Forge's `worker.lock` cannot see
+telecom-billing's, so left alone both projects could run whisper in the same minute: 2 × 834 MB and
+2 of 4 physical cores on a 1.6 GHz laptop CPU already at load 2.48.
+
+Three mechanisms, ranked honestly:
+
+**1. Participate in the other project's lock — race-safe, and the real answer.**
+Its cron line already serialises itself with `flock -n <its lock file>`. Setting:
+
+```ini
+AUDIO_WORKER_FOREIGN_LOCKS=/var/www/html/telecom-billing/runtime/audio-to-text/cron-worker.lock
+```
+
+makes our worker take an exclusive non-blocking `flock` on *that same file* before claiming a job and
+hold it until the job finishes. Both workers are then in one kernel-arbitrated queue; the loser's
+`flock -n` exits 1 with no output. There is no window, because `flock(2)` has no window.
+
+Nothing is written to the other project: the file is opened read-only, so it is never created.
+
+*Cost, stated plainly:* while we transcribe, telecom-billing's queue stalls for up to a few minutes.
+On a shared demo box that is the right trade, but it is a real effect.
+
+*Fails closed:* a configured lock that is held, missing **or unreadable** defers the tick. That last
+case is not hypothetical — the other project's `runtime/audio-to-text/` is `0750 www-data:www-data`,
+so a worker started as any other user cannot read it and would defer every tick. The worker prints an
+explicit warning naming the path at startup rather than stalling silently. Run as `www-data`, or
+blank the setting.
+
+**2. `AUDIO_WORKER_YIELD_TO_OTHER_WHISPER` — best-effort only.** A process scan that catches a
+foreign worker started by hand, which takes no cron lock. **Racy by construction** and never the
+basis of an exclusivity claim.
+
+**3. The only complete guarantee — disable the other schedule while demoing:**
+
+```bash
+sudo mv /etc/cron.d/telecom-billing-audio-transcription /root/    # disable
+sudo mv /root/telecom-billing-audio-transcription /etc/cron.d/    # restore
+```
+
+**What is claimed, precisely.** *Within this feature*, exactly one transcription or diarization runs
+machine-wide — a guarantee, because both mechanisms are kernel- or InnoDB-arbitrated. *Across both
+projects*, mechanism 1 makes cron-driven overlap race-safe, mechanism 2 is best-effort, and only
+mechanism 3 is absolute.
+
+---
+
+## 6. Scheduling in production
+
+**The chosen scheduler is a systemd timer firing every 2 minutes.** Cron remains in the repository
+only as a fallback for a host without systemd. **Run one or the other, never both, and never
+alongside a permanent foreground worker.**
+
+```
+admins upload freely → jobs stay QUEUED
+timer every 2 minutes → kf:audio:worker --once → one oldest QUEUED job → exit
+```
+
+**Nothing is installed automatically. Nothing in this project writes to /etc.**
+
+### Why a timer rather than cron
+
+`nice` and `ionice` are *priority* controls, not limits — on an idle machine a niced job still takes a
+whole core. The unit's cgroup settings are ceilings the kernel enforces. This host runs systemd 249 on
+a cgroup v2 unified hierarchy with `cpu`, `memory`, `io` and `pids` delegated (verified).
+
+It also needs no outer lock file: **systemd will not start a second run of a unit that is still
+active.** A transcription takes roughly 90 seconds and can occasionally outlast the interval; when it
+does, the next tick is skipped rather than run in parallel.
+
+### Install
+
+```bash
+sudo install -o root -g root -m 0644 \
+  /var/www/html/knowledge-forge/docs/server/systemd/knowledge-forge-audio-worker.service \
+  /etc/systemd/system/
+sudo install -o root -g root -m 0644 \
+  /var/www/html/knowledge-forge/docs/server/systemd/knowledge-forge-audio-worker.timer \
+  /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now knowledge-forge-audio-worker.timer
+```
+
+### Verify
+
+```bash
+systemctl list-timers knowledge-forge-audio-worker.timer   # next/last fire time
+systemctl status knowledge-forge-audio-worker.service      # last run's outcome
+journalctl -u knowledge-forge-audio-worker -f              # watch ticks live
+systemd-cgtop -1 | grep knowledge-forge                    # confirm the quota applies
+```
+
+An idle tick logs `No queued jobs.` and exits 0. A working tick logs
+`Processing <id> (<file>)` then `completed in Ns — <lang>, N characters, speaker split: <status>`.
+
+### Change the interval
+
+Edit `OnUnitActiveSec` in the timer — nothing else, no code change:
+
+```bash
+sudoedit /etc/systemd/system/knowledge-forge-audio-worker.timer   # OnUnitActiveSec=2min
+sudo systemctl daemon-reload
+sudo systemctl restart knowledge-forge-audio-worker.timer
+```
+
+### Stop or remove
+
+```bash
+sudo systemctl disable --now knowledge-forge-audio-worker.timer   # stop scheduling
+sudo systemctl stop knowledge-forge-audio-worker.service          # stop a run in flight
+sudo rm /etc/systemd/system/knowledge-forge-audio-worker.{service,timer}
+sudo systemctl daemon-reload
+```
+
+Disabling the timer never loses work: queued jobs stay QUEUED until something runs the worker again.
+
+### Limits, all measured on this machine
+
+| Setting | Value | Derivation |
+|---|---|---|
+| `CPUQuota` | `100%` | exactly one core; whisper measured 99% at `-t 1` |
+| `MemoryHigh` | `1200M` | 1.45 × the 833.9 MB whisper peak — throttles rather than kills |
+| `MemoryMax` | `1600M` | 1.9 × peak, OOM backstop |
+| `TimeoutStartSec` | `1200` | must exceed 600s transcription + 300s diarization = 900s worst case |
+| `Nice` / `IOSchedulingClass` | `15` / `idle` | nginx, PHP-FPM and MySQL served first |
+
+Measured per stage, each pinned to one thread. Two recordings: the original 73.7-second reference,
+and 297 seconds of real two-party call audio at the 5-minute duration cap.
+
+| Stage | 73.7 s recording | 297 s recording | RTF | Peak RSS at 297 s |
+|---|---|---|---|---|
+| ffmpeg | 0.07 s | **0.10 s** | 0.0003× | 49.6 MB |
+| whisper-cli `-t 1` | 82–106 s | **354.6 s** | **1.19×** | **904.4 MB** |
+| sherpa-onnx diarization | 10.4 s | **48.9 s** | 0.16× | 368.1 MB |
+| alignment + role mapping | <20 ms | **15 ms** | — | in-process |
+| **end to end** | ~110 s | **403.6 s** | 1.36× | ~964 MB incl. PHP |
+
+Three things follow, and they are why the 5-minute cap needed more than one setting changed:
+
+* **Whisper takes 354.6 s at the cap, which is longer than the old 300 s timeout.** A five-minute
+  recording would have been killed mid-transcription. `AUDIO_TRANSCRIPTION_TIMEOUT` is now 600.
+* **Diarization needed nothing.** 48.9 s against a 300 s timeout is over 6× headroom, so
+  `AUDIO_DIARIZATION_TIMEOUT` stays at 300.
+* **Neither memory ceiling moved.** Whisper's footprint is dominated by the 487 MB model, so
+  quadrupling the audio took the peak from 833.9 MB to 904.4 MB — still under `MemoryHigh=1200M`.
+  Diarization grew more in relative terms (194 → 368 MB, it holds one embedding per segment) but
+  remains far below whisper, so the peak is still whisper's.
+
+The stages run sequentially inside one job, so the peak is `max(904, 368) + ~60 MB` for the PHP
+worker, not their sum. **Neither speaker separation nor the longer duration cap moved the
+ceilings.**
+
+An OOM kill at `MemoryMax` is survivable by design: the transcript is committed the moment Whisper
+succeeds, so recovery completes the job and only the speaker split is lost.
+
+### Logs
+
+journald, so there is no custom logfile to grow unbounded or rotate by hand:
+
+```bash
+journalctl -u knowledge-forge-audio-worker -f          # follow
+journalctl -t kf-audio-worker --since "1 hour ago"     # by identifier
+journalctl -u knowledge-forge-audio-worker -p err      # failures only
+```
+
+### Worker status under a timer
+
+Between ticks no worker process exists, so the admin page reads **"Scheduled — last ran N ago"**, not
+"Running". It says **"Not running"** only once ticks themselves have stopped for
+`AUDIO_WORKER_TICK_STALE_AFTER` (180 s ≈ three missed 2-minute ticks... set it to ~400 if you widen
+the interval beyond 2 minutes).
+
+### Cron fallback
+
+`docs/server/cron/knowledge-forge-audio-transcription` is kept for a host without systemd. It needs an
+**outer** `flock` on `cron-worker.lock` — a *different file* from the application's own `worker.lock`,
+because pointing it at the application's lock would make every run skip. Do not install it while the
+timer is enabled.
+
+## 7. Configuration — one place to change anything
+
+> ### To change Audio-to-Text configuration, change it in `.env`.
+
+That is the whole rule. Every setting — Whisper binary and model, thread count, upload size, max
+duration, timeouts, queue size, retention, heartbeat thresholds, resource thresholds, foreign lock
+paths, diarization on/off, diarization binary and models, confidence, speaker count — is one line in
+`.env`, and the entire feature picks it up.
+
+Typical changes look like exactly this and nothing else:
+
+```env
+AUDIO_DIARIZATION_ENABLED=true
+AUDIO_WORKER_FOREIGN_LOCKS=/var/www/html/telecom-billing/runtime/audio-to-text/cron-worker.lock
+AUDIO_TRANSCRIPTION_MAX_DURATION=300
+```
+
+Every variable is listed with its default and the reasoning behind it in `.env.example`, under
+**Audio to Text**.
+
+### Currently deployed
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `AUDIO_TRANSCRIPTION_MAX_DURATION` | `300` | 5 minutes |
+| `AUDIO_TRANSCRIPTION_MAX_SIZE` | `31457280` | 30 MB, under the nginx 32m ceiling (§3) |
+| `AUDIO_TRANSCRIPTION_TIMEOUT` | `600` | whisper child process |
+| `AUDIO_DIARIZATION_TIMEOUT` | `300` | sherpa child process |
+| `AUDIO_TRANSCRIPTION_STALE_AFTER` | `1200` | a job PROCESSING longer than this is presumed dead |
+| `AUDIO_TRANSCRIPTION_THREADS` | `1` | every stage pinned to one core |
+| `AUDIO_TRANSCRIPTION_MAX_QUEUE` | `0` | unlimited queueing |
+| `AUDIO_TRANSCRIPTION_RETENTION_SECONDS` | `0` | keep conversations and recordings indefinitely |
+| `AUDIO_DIARIZATION_ENABLED` | `true` | speaker separation on |
+| `AUDIO_DIARIZATION_MIN_CONFIDENCE` | `0.55` | role-mapping gate (gate 4, §8) |
+| `AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS` | `1500` | gap bridging in alignment |
+| `AUDIO_DIARIZATION_MAX_SPEAKERS` | `2` | two-party calls |
+| `AUDIO_WORKER_FOREIGN_LOCKS` | telecom-billing's lock | cross-project coordination (§5) |
+
+### One exception to "one line": the duration chain
+
+Raising `AUDIO_TRANSCRIPTION_MAX_DURATION` is the one change that is **not** self-contained, because
+three other limits have to stay above it. They form a chain, and the shortest link decides the longest
+recording the system can actually finish:
+
+```
+MAX_DURATION 300  ──(x1.19 measured real-time factor)──>  ~355s of whisper
+   TRANSCRIPTION_TIMEOUT 600   must exceed that, and startup validation enforces >= MAX_DURATION x 1.5
+   DIARIZATION_TIMEOUT   300   measured ~49s at 5 minutes, so 6x headroom
+   STALE_AFTER          1200   must exceed TRANSCRIPTION_TIMEOUT + DIARIZATION_TIMEOUT = 900
+   TimeoutStartSec      1200   systemd; must also exceed that 900s worst case  <- lives in /etc
+```
+
+The first is checked for you: `AudioToTextSettings::problems()` refuses to run the worker when
+`TRANSCRIPTION_TIMEOUT < MAX_DURATION x 1.5`, printing "the Audio-to-Text configuration is not usable"
+rather than letting every long recording die on the clock. The last one is a systemd unit, so it needs
+a re-install (§6) — the only part of this feature that cannot be changed from `.env` alone.
+
+### How that is guaranteed, for whoever maintains this next
+
+There is exactly one authoritative definition of each value, and four layers that carry it without
+adding opinions of their own:
+
+| Layer | File | What it may do |
+|---|---|---|
+| **Source of truth** | `src/Environment.php` (`SPEC`) | the default, the type, the valid range |
+| Deployment override | `.env` | override a default for this machine |
+| Transport | `config/common/params.php` | read the variable. Nothing else |
+| Assembly | `config/common/di/audio-to-text.php` | build the settings object. Defines no default |
+| Consumption | `App\AudioToText\Application\AudioToTextSettings` | the only settings type any service injects |
+
+Two rules keep it that way, and both are worth preserving:
+
+* **No class in `src/AudioToText/` reads an environment variable.** Not one. They receive
+  `AudioToTextSettings` and read `->transcription`, `->worker` or `->diarization`.
+* **No default is written twice.** `params.php` and the DI file copy values; they never supply a
+  fallback, because a fallback in a transport layer is a second source of truth that disagrees with the
+  first the moment someone edits one of them.
+
+Adding a setting is therefore three mechanical edits with no judgement calls:
+
+1. `src/Environment.php` — add the `SPEC` entry (default, type, range)
+2. `config/common/params.php` — read it
+3. `config/common/di/audio-to-text.php` — pass it into the settings object
+
+No constructor anywhere else changes, because every service already injects the one settings object.
+
+### The configuration is validated at startup
+
+`kf:audio:worker` checks the configuration before claiming any work and **refuses to start** on a
+problem, naming the variable to fix:
+
+```
+[ERROR] The Audio-to-Text configuration is not usable:
+          - WHISPER_BINARY: "/nope/whisper" is not an executable file.
+          - AUDIO_TRANSCRIPTION_TIMEOUT (10s) is too low for AUDIO_TRANSCRIPTION_MAX_DURATION (120s):
+            transcription runs at roughly 1.3x real time, so allow at least 180s.
+```
+
+It checks binaries and models exist, that the timeout can actually accommodate the duration cap, and
+that every configured foreign lock is readable — the last being the one misconfiguration that would
+otherwise stall the queue in total silence.
+
+**Diarization paths are only checked when `AUDIO_DIARIZATION_ENABLED=true`.** Requiring models nobody
+has installed would make the shipped default fail its own validation.
+
+Non-fatal observations are printed as notes rather than errors, so a worker with an empty
+`AUDIO_WORKER_FOREIGN_LOCKS` or with diarization off says so once and carries on.
+
+### CPU budget
+
+`AUDIO_TRANSCRIPTION_THREADS` is the single CPU budget for the whole pipeline. It sets ffmpeg's
+`-threads`, whisper's `-t`, the diarizer's `--num-threads`, and the `OMP_NUM_THREADS` /
+`OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` family in every child process — the last being what stops a
+numeric library sizing its own pool from the core count. That environment is built once, in
+`AudioToTextSettings::childProcessEnvironment()`, so there is no per-launcher copy to drift.
+
+Leave it at 1. The worker warns at startup if it is raised.
+
+## 8. Speaker separation — customer and agent
+
+### What the installed toolchain can and cannot do
+
+whisper.cpp 1.9.3 on this machine offers exactly two things that sound relevant, and neither is
+speaker diarization:
+
+* **`-di` / `--diarize`** splits *stereo channels*. The reference recording is 8 kHz **mono**, so
+  there are no channels to split. This does not work for phone audio.
+* **`-tdrz` / `--tinydiarize`** needs a `ggml-small.en-tdrz` model (not installed, English-only) and
+  marks *turn boundaries* — it never establishes that turn 1 and turn 3 were the same person.
+
+There is a second, subtler problem that only shows up with real data. Whisper's own segments are far
+too coarse to align against: on the 73.7-second reference recording it emitted **five segments**, one
+spanning 25.0 s → 39.2 s and containing roughly eight speaker turns. Aligning at segment level puts
+both sides of the conversation in one column. The implementation therefore uses `-ojf`, which emits
+**per-token millisecond timestamps in the same pass at no extra CPU cost**, and aligns at token level.
+
+### The pipeline
+
+```
+ffmpeg → 16 kHz mono WAV
+      → whisper-cli -otxt -oj -ojf     (transcript + language + token timestamps, one pass)
+      ══ transcript COMMITTED to the database here ══
+      → diarizer                        (neutral SPEAKER_00 / SPEAKER_01 intervals)
+      → align each token to the interval it overlaps most, coalesce into utterances
+      → map neutral clusters to AGENT / CUSTOMER, with a confidence
+      → store agent_text, customer_text, speaker_segments
+```
+
+Role mapping runs **only** on clusters the diarizer already separated by voice. It never infers
+speakers from words — "Yes." tells you nothing about who said it — and it never assumes the first
+voice is the agent, because calls open with the customer, an automated greeting, or mid-sentence.
+
+### How roles are decided: exchanges, not vocabulary
+
+Counting role-ish keywords per speaker does not work on order calls, and failed in a specific,
+instructive way. **The two sides use the same words.** "Cash" and "card" are substrings of the agent's
+own question; a competent agent repeats the address back to confirm it and recites the items during
+the recap. Every one of those is the agent doing the job, and every one scored as customer evidence
+against them. On a call whose roles are obvious to a human the margin came out at **0.077**.
+
+What actually separates the roles is *position in the exchange* — one side asks for the address, the
+other supplies it. So the mapper detects `DialogueAct`s and scores **adjacency pairs**:
+
+| evidence | weight | why |
+|---|---|---|
+| question + its answer, from two different speakers | 1.5 – 3.0 | takes two people to produce; an echo cannot fake it |
+| agent move with no answer found (quote a price, a delivery window, greet) | 0.75 – 1.5 | real but weaker — the answer may simply have been split badly |
+| customer move with no question in front of it | **0.0** | indistinguishable from the agent echoing; carries no orientation |
+| caller announcing intent ("I'd like to place an order") | 1.0 | the one customer move an order-taker never makes |
+
+Two further rules keep boundary noise in its place. An unpaired act is scaled by the length of the
+utterance it was found in, so a strong act on a two-word fragment cannot cancel a completed exchange.
+And confidence is `agreement × volume` — how one-sided the evidence is, times how much of it there
+is — so a single lucky pair in a short call scores a perfect ratio and still does not publish.
+
+Within one utterance the **most specific act wins**: "cash or card?" is a payment *question* and never
+also a payment *choice*. That single rule removes most of the old confusion.
+
+All of it is local, deterministic and offline. The tunable numbers live in one file,
+`Domain/Speaker/RoleScoreWeights.php`; the semantics live in `Domain/Speaker/DialogueAct.php` and the
+patterns in `Application/Speaker/DialogueActDetector.php`. They are algorithm coefficients, not
+operator settings, so they stay in code — `AUDIO_DIARIZATION_MIN_CONFIDENCE` remains the only dial,
+and it decides how much certainty is required to publish, not how certainty is reached.
+
+### Outcomes
+
+The gates are checked in this order, and the first one that fails decides the outcome. Order matters:
+each asks a question that only makes sense once the previous one has been answered.
+
+| # | Check | Fails as | `agent_text` / `customer_text` |
+|---|---|---|---|
+| — | diarization disabled, or toolchain not installed | `NOT_SUPPORTED` | NULL |
+| — | whisper produced no timestamped tokens | `FAILED` | NULL |
+| — | diarizer threw, timed out, or returned no segments | `FAILED` | NULL |
+| — | no token could be matched to any segment | `FAILED` | NULL |
+| 1 | **alignment** — under 75% of speech attributed by duration | `NEEDS_REVIEW` | NULL |
+| 2 | **separation balance** — the diarizer did not really find two speakers | `NEEDS_REVIEW` | NULL |
+| 3 | **role mapping** — one cluster, three or more, or no role signals | `NEEDS_REVIEW` | NULL |
+| 4 | **role confidence** — below `AUDIO_DIARIZATION_MIN_CONFIDENCE` | `NEEDS_REVIEW` | NULL |
+| 5 | one of the two roles ended up with no speech | `NEEDS_REVIEW` | NULL |
+| ✓ | all five pass | `COMPLETED` | populated |
+
+Gates 2 and 4 are the two that must **both** hold, and they answer different questions — *were there
+two speakers?* and *which one is the agent?*. Conflating them is not hypothetical: a 174-second call
+(`21911549.wav`) where diarization gave one cluster 98.4% of the speech and the other a single
+three-word turn was published as `COMPLETED` at role confidence **1.000**. The confidence was correct —
+with one side's dialogue acts entirely absent there was nothing to contradict — and the result was
+still unusable. Gate 2, `SeparationBalance`, is that missing question; its thresholds and their
+derivation from measured jobs are documented in the class.
+
+**In every row the full transcript is saved and the job's own status is `COMPLETED`.** A wrong
+confident split is worse than an honest "needs review", because nobody re-checks a column that looks
+finished. `speaker_segments` is always written when diarization ran, so any mapping can be audited.
+
+### Three different things, and only one of them is a claim
+
+`speaker_segments` stores a role on every utterance that reached role mapping at all, **whatever the
+outcome**, because the mapper assigns roles before the confidence gate is evaluated. A `NEEDS_REVIEW`
+row rejected at gate 4 and a `COMPLETED` row are therefore indistinguishable by their segments alone.
+(A row rejected at gate 1 or 2 never reaches the mapper, so its roles stay `UNKNOWN` and no role
+confidence is recorded — there was nothing worth mapping.) That is deliberate — an inconclusive mapping is worth
+keeping so it can be second-guessed — but it means the role in that column is *evidence, not a
+finding*, and nothing may read it as a conclusion:
+
+| | what it is | where it lives | may be shown as fact |
+|---|---|---|---|
+| neutral diarization speaker | which voice, not whose | `speaker` in `speaker_segments` | yes, as "Speaker 1", "Speaker 2" |
+| tentative role hypothesis | the mapper's guess, at any confidence | `role` in `speaker_segments` | **no** |
+| published role | a guess that cleared every gate | `agent_text` / `customer_text` | yes |
+
+**`speaker_separation_status` is the sole arbiter of which of the last two applies**, and
+`SpeakerSeparationStatus::isPublishable()` is the one place that decides. The invariant:
+
+```
+COMPLETED      → confidence ≥ threshold, agent_text and customer_text both populated,
+                 conversation labelled Agent / Customer
+anything else  → agent_text and customer_text NULL, conversation labelled Speaker 1 / Speaker 2,
+                 role names appearing only in an explicitly tentative block
+```
+
+`ConversationView` (in `Domain/Speaker/`) enforces it for the detail page, and requires *both* a
+publishable status and the aggregate text to actually be present before it will print a role name —
+so a self-contradictory row degrades to neutral labels rather than to a confident-looking lie. The
+list page needs no equivalent rule because it renders only the aggregate columns, which are NULL by
+construction unless the split was published.
+
+### Installing the diarization toolchain — system-level, run these yourself
+
+Everything below was verified against the live upstream sources on 2026-08-26. The URLs are real, the
+sizes and SHA-256 checksums were computed from the actual downloaded files, and the version is pinned.
+
+**Note the misspelling in the embedding-model URL.** The upstream release tag really is
+`speaker-recongition-models`; "correcting" it produces a 404.
+
+```bash
+sudo mkdir -p /opt/audio-diarization/models
+sudo python3 -m venv /opt/audio-diarization/venv
+sudo /opt/audio-diarization/venv/bin/pip install --upgrade pip
+
+# Pinned, not "latest": an unpinned install makes this machine unreproducible.
+sudo /opt/audio-diarization/venv/bin/pip install 'sherpa-onnx==1.13.6'
+
+cd /tmp
+
+# Segmentation model (pyannote 3.0, MIT) — 6,958,444 bytes
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+
+# Speaker embedding model (3D-Speaker CAM++, bilingual zh+en, Apache-2.0) — 28,281,164 bytes
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx
+
+# Verify BEFORE installing. If either line does not say "OK", stop.
+echo '24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488  sherpa-onnx-pyannote-segmentation-3-0.tar.bz2' | sha256sum -c
+echo 'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2  3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx' | sha256sum -c
+
+tar -xjf sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+sudo cp sherpa-onnx-pyannote-segmentation-3-0/model.onnx /opt/audio-diarization/models/segmentation.onnx
+sudo cp 3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx /opt/audio-diarization/models/embedding.onnx
+
+# World-readable so www-data can load them.
+sudo chmod -R a+rX /opt/audio-diarization
+```
+
+**Why sudo:** `/opt` is root-owned, and the models must be readable by the worker's user.
+
+**Why this embedding model.** CAM++ trained on Chinese *and* English, at 28 MB. Speaker embeddings
+model voice rather than words, so a bilingual model handles the code-switched English/Spanish in these
+recordings without the 220 MB of the largest ERes2Net variant.
+
+Total footprint: roughly 20 MB of Python packages plus 35 MB of models.
+
+### Then benchmark, before enabling
+
+Diarization RSS has **not** been measured on this hardware, so the memory limits derived from Whisper
+alone are provisional. Measure first:
+
+```bash
+# 1. Produce the same 16 kHz mono WAV the worker would.
+ffmpeg -nostdin -hide_banner -loglevel error -y -threads 1 \
+  -i /path/to/21896109.wav -ar 16000 -ac 1 -c:a pcm_s16le /tmp/a2t-bench.wav
+
+# 2. Diarization alone.
+/usr/bin/time -v /opt/audio-diarization/venv/bin/python3 \
+  /var/www/html/knowledge-forge/src/AudioToText/Infrastructure/Diarization/diarize.py \
+  --audio /tmp/a2t-bench.wav \
+  --segmentation-model /opt/audio-diarization/models/segmentation.onnx \
+  --embedding-model /opt/audio-diarization/models/embedding.onnx \
+  --max-speakers 2 --num-threads 1
+```
+
+Check three things in that output:
+
+* **"Percent of CPU this job got" is ≈100%, not ≈800%.** Above ~150% means the thread pinning is not
+  taking effect and diarization must not be enabled until it is.
+* **"Maximum resident set size"** — this is the number the limits are derived from.
+* **"Elapsed (wall clock) time"** — added to the ~90 s transcription, this is the new job duration, and
+  it must stay comfortably inside `AUDIO_DIARIZATION_TIMEOUT`.
+
+Then recalculate all three memory numbers together, from
+`P = max(whisperRSS, diarizationRSS) + ~60 MB` for the PHP worker:
+
+| Setting | Formula | Provisional value (Whisper's 834 MB only) |
+|---|---|---|
+| `AUDIO_WORKER_MIN_AVAILABLE_MB` | `1.8 P` | 1500 |
+| systemd `MemoryHigh` | `1.45 P` | 1200M |
+| systemd `MemoryMax` | `1.9 P` | 1600M |
+
+If diarization peaks below Whisper's 834 MB, the current values already hold and nothing changes. If
+it peaks higher, all three rise together.
+
+### Finally, enable it
+
+```bash
+# In .env — the single place this is switched on.
+AUDIO_DIARIZATION_ENABLED=true
+
+# Confirm the worker accepts the configuration before queueing anything.
+sudo -u www-data php /var/www/html/knowledge-forge/yii kf:audio:worker --once
+```
+
+The worker validates binaries, models and thresholds at startup and refuses to run with a message
+naming the variable to fix, so a mistake here surfaces immediately rather than as a failed job.
+
+### One CPU thread, at every stage
+
+Verified against the sherpa-onnx source rather than assumed: `num_threads` defaults to 1 on both the
+segmentation and embedding configs, and both feed `SetIntraOpNumThreads()` **and**
+`SetInterOpNumThreads()`. Defaults are not a contract, so `diarize.py` sets them explicitly, ffmpeg
+gets `-threads 1`, whisper gets `-t 1`, and `ProcessRunner` hands every child a minimal environment
+pinning `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` to 1. That environment is
+also a hardening win: nothing inherited from PHP-FPM reaches ffmpeg, whisper or Python.
+
+---
+
+## 9. Files
+
+### Created
+
+```
+src/AudioToText/
+  Domain/
+    JobStatus, ProcessingStage, SpeakerRole, SpeakerSeparationStatus, WorkerMode,
+    WorkerProcessState, WorkerSchedulerState                     enums
+    TranscriptionJob, TranscriptionJobListItem, QueueSummary,
+    WorkerHeartbeat, WorkerStatusView                            row objects / read models
+    AudioTranscriptionException                                  dual-message: user text + log detail
+    TranscriptionJobRepositoryInterface,
+    WorkerHeartbeatRepositoryInterface,
+    SystemResourceProbeInterface                                 ports
+
+  Domain/Speaker/
+    TranscriptToken, SpeakerSegment, SpeakerUtterance            pipeline value objects
+    SpeakerSeparatedTranscript                                   the stage's whole result
+    AlignmentQuality                                             duration-weighted attribution metrics
+    SeparationBalance          ── gate 1 ──                      were there two speakers at all?
+    DialogueAct, RoleScoreWeights                                role-mapping semantics / coefficients
+    ConversationView, ConversationTurn                           what the detail page may claim
+    SpeakerDiarizerInterface                                     port
+
+  Application/
+    AudioToTextSettings + Settings/{Transcription,Worker,Diarization}Settings   the one settings type
+    AudioUploadValidator, TranscriptionQueue, QueuedAudioStorage,
+    TranscriptFilename, TranscriptPreview                        upload path
+    WorkerAdmissionGuard, ForeignLockGuard, WorkerHealthService  worker admission and liveness
+
+  Application/Speaker/
+    SpeakerTranscriptAligner, AlignedTranscript                  tokens x intervals -> utterances
+    DialogueActDetector                                          utterance -> dialogue acts
+    SpeakerRoleMapper          ── gate 2 ──                      which cluster is the agent
+    SpeakerSeparationService                                     orchestrates, never throws
+
+  Infrastructure/
+    Process/{ProcessRunner,ProcessResult}                        argv-only, no shell, timeout
+    AudioTranscriber, AudioDurationProbe                         ffmpeg / whisper / ffprobe
+    Db{TranscriptionJob,WorkerHeartbeat}Repository, ProcSystemResourceProbe
+    Diarization/{SherpaOnnxSpeakerDiarizer,NullSpeakerDiarizer,diarize.py}
+
+  Web/               upload page, job page, global list, status endpoint, download, page guard
+  Console/           AudioTranscriptionWorkerCommand
+
+src/Migration/M260826120000CreateAudioTranscriptionJobs.php
+src/Migration/M260826120100AddSpeakerSeparationColumns.php
+src/Migration/M260826130000RetainSuccessfulRecordings.php
+src/Migration/M260826140000AllowMultipleQueuedJobsPerAdmin.php
+config/common/di/audio-to-text.php
+docs/server/systemd/knowledge-forge-audio-worker.{service,timer}
+docs/server/cron/knowledge-forge-audio-transcription
+tests/Support/AudioToTextSettingsFactory.php
+tests/Unit/AudioToText/*  tests/Integration/AudioToText/*  tests/Web/AudioToTextCest.php
+```
+
+**Two independent gates decide whether a split is published**, and keeping them apart is load-bearing.
+`SeparationBalance` asks whether the diarizer found two speakers; `SpeakerRoleMapper` asks which one is
+the agent. A confident answer to the second says nothing about the first — see §8.
+
+### Modified — all additive
+
+| File | Change |
+|---|---|
+| `src/Environment.php` | 24 `SPEC` entries |
+| `config/common/params.php` | three parameter blocks |
+| `config/common/routes.php` | five routes inside the existing admin group |
+| `config/console/commands.php` | `kf:audio:worker` |
+| `src/Web/Shared/Layout/Admin/_sidebar.php` | one nav entry |
+| `assets/main/admin.css` | `.a2t-*` styles |
+| `assets/main/admin.js` | polling and list refresh |
+| `.env.example` | documented settings |
+
+The DI file is *new* rather than an edit because `config/configuration.php` globs
+`common/di/*.php` — so adding the feature required no change to any config file that already existed.
+
+### Styles and scripts are not inline — deliberately
+
+The application's CSP is `script-src 'self'; style-src 'self'` with **no `unsafe-inline`**. An inline
+`<script>` would silently not run and a `style=""` attribute would be dropped. Templates publish
+intent through `data-a2t-*` attributes; behaviour lives in `assets/main/admin.js`. Both pages work
+with JavaScript disabled — they just need a manual refresh, which the copy says.
+
+---
+
+## 10. Database
+
+`audio_transcription_jobs` — one row per job. **No audio is stored in the database**;
+`stored_audio_path` holds a bare filename and only until the worker deletes the recording.
+
+Two details worth knowing:
+
+* **`active_uploader_admin_id` no longer exists.** The original schema carried a `STORED` generated
+  column equal to `uploaded_by_admin_id` while a job was QUEUED or PROCESSING and `NULL` otherwise,
+  with a unique index on it — a race-proof way to enforce one active job per administrator. That
+  restriction was removed in `M260826140000AllowMultipleQueuedJobsPerAdmin`, which drops the index and
+  then the column, because it enforced "one at a time" in the wrong place: it stopped people *queueing*
+  work, which is what a queue is for. Concurrency is the worker's business (§11), not the upload form's.
+  The migration is forward-only — the applied earlier migrations were not rewritten.
+* **The foreign key is `RESTRICT`, not `CASCADE`** — originally forced rather than preferred, because
+  MySQL refuses a foreign key with `CASCADE` on the base column of a stored generated column (error
+  1215). The generated column is gone, but `RESTRICT` stays: a job row is an audit record of who
+  uploaded what, and deleting an administrator should not silently take their conversations with it.
+
+`audio_worker_heartbeat` — a single row (`CHECK (id = 1)`) carrying two independent facts: `beat_at`
+/ `state` for process liveness, and `last_tick_at` / `mode` for whether anything is still invoking the
+worker. A table rather than a runtime file so the web tier can read it without access to the worker's
+private directory. It is purely informational — `worker.lock` remains the authority on concurrency,
+and every heartbeat write is wrapped so it can never take the worker down.
+
+```bash
+./yii migrate:up
+```
+
+---
+
+## 11. Queueing and ordering
+
+### Uploading and processing are separate concerns
+
+An administrator may queue as many recordings as they like, whatever else is in flight. The worker
+processes them one at a time. There is no per-administrator limit — an earlier design had one, and it
+enforced "one at a time" in the upload form, which stopped people queueing work rather than stopping
+the machine being overloaded.
+
+```
+Admin uploads A, B, C   →  all three QUEUED immediately
+Worker                  →  A processes → completes
+                        →  B processes → completes
+                        →  C processes → completes
+```
+
+### Enqueue ordering
+
+```
+upload present → upload error → empty → size → extension → real MIME sniff
+  → write the recording to its directory (ffprobe needs bytes on disk)
+  → ffprobe duration check               (outside any lock: a slow probe blocks nobody)
+  → [ if a queue cap is configured ] ┌ GET_LOCK → count active → INSERT → RELEASE_LOCK ┐
+  → [ otherwise ]                    └ INSERT ────────────────────────────────────────┘
+```
+
+With the cap disabled — the default — the named lock is skipped entirely. That is not only an
+optimisation: taking a lock with a five-second timeout on every upload would mean a busy moment could
+refuse an upload as "queue full" when no limit exists at all.
+
+When a cap *is* configured, the lock name is `CONCAT(DATABASE(), ':audio-to-text:enqueue')`. The
+prefix matters: **MySQL named locks are server-global, not per-schema**, so on a host running several
+applications an unprefixed name would let one project's uploads block another's.
+
+Everything after the file is written is wrapped so the job directory is deleted on any rejection.
+
+### FIFO, and why nothing jumps the queue
+
+`claimNextQueued()` scans `WHERE status = 'QUEUED' ORDER BY id ASC`, then claims a candidate with an
+atomic `UPDATE … SET status='PROCESSING' WHERE id = ? AND status = 'QUEUED'`. `id` is monotonic, so a
+recording uploaded later can never be taken before an earlier one. The queue position shown on a job
+page is computed with the same ordering, so it is the position the worker will actually take it in.
+
+### A finished job is terminal, permanently
+
+Both halves of the claim filter on `status = 'QUEUED'` — the candidate scan and the conditional
+`UPDATE`. A COMPLETED or FAILED row therefore cannot be selected, cannot be claimed, and is never
+reprocessed, however many times the worker ticks or how much is queued alongside it.
+
+Housekeeping cannot requeue anything either: it only ever moves jobs *out* of PROCESSING (into
+COMPLETED or FAILED), never back into QUEUED. There is no automatic retry anywhere. If retrying a
+recording is ever wanted, it must create a **new** job rather than reopening a terminal row —
+otherwise the original result would be silently overwritten and its audit trail lost.
+
+### One job at a time — enforced in the worker
+
+| Mechanism | Stops |
+|---|---|
+| `flock` on `worker.lock` | a second worker process, however started |
+| atomic conditional claim | two workers taking the same row |
+| foreign lock (`AUDIO_WORKER_FOREIGN_LOCKS`) | another project starting Whisper concurrently |
+| `AUDIO_TRANSCRIPTION_THREADS=1` | one job using more than one core |
+| one sequential pipeline per job | ffmpeg, Whisper and diarization overlapping |
+
+**Many QUEUED jobs: yes. Many PROCESSING jobs: no.**
+
+## 12. What is kept, and what is cleaned up
+
+### Successful conversations are kept — indefinitely, by default
+
+For every job that completes, all of this is retained and none of it expires unless you configure a
+window:
+
+| Retained | Where |
+|---|---|
+| the original uploaded recording | `runtime/audio-to-text/recordings/<publicId>/source.<ext>` |
+| complete transcript | `audio_transcription_jobs.transcript` |
+| customer-only text | `.customer_text` |
+| agent-only text | `.agent_text` |
+| speaker-labelled conversation | `.speaker_segments` (JSON) |
+| detected language, duration | `.detected_language`, `.duration_seconds` |
+| uploader and audit metadata | `.uploaded_by_admin_id`, `.created_at/.started_at/.completed_at` |
+| processing metadata | `.processing_stage`, `.speaker_separation_status/_method`, `.speaker_role_confidence` |
+
+### Two separate trees, and the separation is the safety property
+
+```
+runtime/audio-to-text/
+├── worker.lock                          the single-worker guarantee — outside both trees
+├── jobs/<publicId>/                     TEMPORARY workspace. Swept. Deleted when the job ends.
+│     source.<ext>  audio.wav  transcript.txt  transcript.json
+└── recordings/<publicId>/               PERMANENT. Never swept.
+      source.<ext>                       the retained original recording
+```
+
+On success the recording is **moved** — `rename()`, atomic within a filesystem — out of `jobs/` and
+into `recordings/` *before* the row is marked complete. A move rather than a copy means the file
+exists in exactly one place at any moment, so there is never a window where the sweeper could collect
+something the database already considers retained. The temporary workspace is then deleted.
+
+The orphan sweep only ever walks `jobs/`. Retained recordings are in a **sibling tree, not a
+subdirectory**, so "the sweeper cannot reach them" is a fact about the layout rather than a rule
+someone has to remember. Both trees are under `runtime/`, outside the web root, and no filesystem path
+is ever shown in the UI or returned by any endpoint — the job page says only "Retained on this
+server".
+
+### Retention: one setting
+
+```env
+AUDIO_TRANSCRIPTION_RETENTION_SECONDS=0
+```
+
+* **`0` = keep indefinitely.** The default, and what this deployment uses. A job created under it gets
+  `expires_at = NULL`, and the purge query filters `expires_at IS NOT NULL`, so nothing can match.
+* **A positive value** = expire that many seconds after creation. `2592000` is 30 days.
+
+Changing it later is that one line. No PHP class, no SQL, no migration: the worker reads it through
+`AudioToTextSettings` like every other setting.
+
+### What housekeeping may still delete
+
+Even with retention disabled, the worker still cleans up scaffolding:
+
+* **abandoned temporary workspaces** — `jobs/<publicId>/` directories older than the stale window whose
+  job is no longer active;
+* **the temporary workspace of every finished job**, success or failure;
+* **stale `PROCESSING` jobs** — recovered after 600 s. If a transcript was already committed the job is
+  *completed* with the speaker split marked failed; only a crash before transcription fails the job.
+
+**It never deletes a retained recording or a completed conversation while retention is disabled.**
+Retained recordings are removed in exactly one place: alongside their database row, when a configured
+retention window has passed. That path is unreachable at `RETENTION_SECONDS=0`.
+
+### Structured data for later use
+
+`speaker_segments` holds the conversation as JSON, so future work can consume it directly without
+parsing HTML or re-deriving anything:
+
+```json
+[
+  {"start_ms": 0,    "end_ms": 1617, "speaker": "SPEAKER_00", "role": "AGENT",    "text": "Hello?",  "confidence": 1.0},
+  {"start_ms": 2899, "end_ms": 3507, "speaker": "SPEAKER_01", "role": "CUSTOMER", "text": "Hello.",  "confidence": 1.0}
+]
+```
+
+Both the neutral acoustic cluster and the mapped business role are stored, so a customer utterance can
+be paired with the agent response that followed it, and any mapping can be audited after the fact.
+Nothing consumes this yet, and it is deliberately coupled to nothing.
+
+## 13. Security
+
+| Concern | How |
+|---|---|
+| Authentication | every route inside the existing `RequireAdminMiddleware` group |
+| Authorization | authenticated administrator + job exists; 404 (never 403) otherwise |
+| Enumeration | 32-hex random `public_id` in URLs; the database id never appears |
+| CSRF | the application-wide middleware; the upload form carries a token |
+| File type | `finfo` over the real leading bytes — the browser's declared type is ignored entirely |
+| Path safety | the client filename never becomes a path; the server names the file `source.<ext>` |
+| Private storage | `runtime/audio-to-text/`, outside the web root; 0750 / 0700, never 0777 |
+| Shell safety | `proc_open()` with an argv **array** — no shell, so quoting and `$(…)` are inert |
+| Process limits | wall-clock timeout, SIGTERM → 2 s → SIGKILL, 256 KB cap per output stream |
+| Output escaping | every rendered value through `Html::encode()`; raw JSON never shown |
+| Error separation | user-safe wording in `error_message`; exit codes, stderr and paths to the log only |
+| Downloads | body from the database, never from the request; filename rebuilt and folded to `[A-Za-z0-9._-]` |
+
+---
+
+## 14. Testing
+
+```bash
+composer test        # full Codeception suite — free port 8080 first
+composer psalm       # errorLevel 1
+composer cs-check
+composer quality
+
+# Just this feature, which is what you usually want:
+vendor/bin/codecept run Unit tests/Unit/AudioToText/
+vendor/bin/codecept run Integration tests/Integration/AudioToText/
+vendor/bin/codecept run Web tests/Web/AudioToTextCest.php
+```
+
+| Suite | Covers |
+|---|---|
+| `Unit/AudioToText/` | upload validation, filename and preview safety, settings and duration limits, worker health and admission, foreign locks, alignment, dialogue acts, role mapping, separation balance, conversation display, module isolation |
+| `Integration/AudioToText/` | the repository against real MySQL — atomic claim, FIFO, stale recovery, queue counts, heartbeat |
+| `Web/AudioToTextCest.php` | the served application — auth, validation, the global list, the job page, downloads, escaping |
+
+No automated test requires ffmpeg, whisper or a diarization model. The web suite uploads a real WAV
+but no worker runs, so jobs stop at `QUEUED` — which is the assertion.
+
+> **Do not run the integration or full suite while real uploads are pending.**
+> `TranscriptionJobRepositoryTest` exercises `claimNextQueued()` against the **live** database — one
+> case drains the queue in a loop — so it will claim a real administrator's queued jobs and leave them
+> `PROCESSING` when the test ends. The stale sweep then fails them after
+> `AUDIO_TRANSCRIPTION_STALE_AFTER`, and the recording has to be uploaded again. Check first:
+>
+> ```bash
+> mysql -e "SELECT id, original_filename, status FROM audio_transcription_jobs
+>           WHERE status IN ('QUEUED','PROCESSING')" knowledge_forge
+> ```
+>
+> If a run does claim one, put it back before the stale window expires — nothing is lost, because no
+> transcript was written yet:
+>
+> ```sql
+> UPDATE audio_transcription_jobs SET status='QUEUED', processing_stage='QUEUED', started_at=NULL
+> WHERE id IN (…) AND status='PROCESSING';
+> ```
+>
+> The real fix is to scope those tests to their own administrators the way `AudioToTextCest` already
+> does. Until then this is a known sharp edge, not a surprise.
+
+---
+
+## 15. Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| "Audio worker: Not running", jobs stay QUEUED | no worker; start it, or check `systemctl status knowledge-forge-audio-worker.timer` |
+| "Audio worker: Scheduled — last ran N ago" | normal for a timer between ticks |
+| "Deferring — a coordination lock is unavailable" | `AUDIO_WORKER_FOREIGN_LOCKS` points at a file this user cannot read; run as `www-data` or blank it (§5) |
+| "Deferring new jobs while the server is busy" | low memory or high load; check `free -m` and `/proc/loadavg` |
+| Every tick defers immediately | the worker is not running as `www-data` — see the startup warning it prints |
+| "Speech recognition is not available on this server" | `WHISPER_BINARY` is not executable |
+| "The speech recognition model has not been installed" | `WHISPER_MODEL` is not readable |
+| "You already have a transcription in progress" | one active job per administrator, by design |
+| Speaker split always "Not supported" | `AUDIO_DIARIZATION_ENABLED=false`, or the models are missing |
+| Job fails immediately with no detail | check `runtime/logs/` — technical detail never reaches the browser |
+
+---
+
+## 16. Rollback
+
+### Rolling back part of it
+
+The three migrations are a stack, applied in this order, so a partial rollback unwinds from the top:
+
+| Applied | Migration | Adds |
+|---|---|---|
+| 1st | `M260826120000CreateAudioTranscriptionJobs` | the two tables |
+| 2nd | `M260826120100AddSpeakerSeparationColumns` | agent/customer text, speaker segments |
+| 3rd | `M260826130000RetainSuccessfulRecordings` | `retained_audio_path`, nullable `expires_at` |
+
+**Retention behaviour only** — back to a required expiry date on every job:
+
+```bash
+./yii migrate:down 1        # M260826130000
+```
+
+Existing rows with no expiry are given a far-future date rather than "now", so reverting cannot
+schedule a mass deletion of conversations you have been keeping deliberately. Retained recordings on
+disk are left alone; remove `runtime/audio-to-text/recordings/` by hand if you want them gone.
+
+**Speaker separation as well** — note this unwinds retention too, because it is stacked on top:
+
+```bash
+./yii migrate:down 2        # M260826130000, then M260826120100
+rm -rf src/AudioToText/Domain/Speaker src/AudioToText/Application/Speaker \
+       src/AudioToText/Infrastructure/Diarization
+rm -f tests/Unit/AudioToText/Speaker*Test.php
+# Remove the AUDIO_DIARIZATION_* entries from src/Environment.php, config/common/params.php,
+# config/common/di/audio-to-text.php and .env.example.
+composer yii-config-rebuild && composer test
+```
+
+Transcripts, detected languages and every job survive untouched.
+
+### The whole feature
+
+```bash
+# 1. Stop the SCHEDULE first, then any running process.
+sudo systemctl disable --now knowledge-forge-audio-worker.timer
+sudo rm -f /etc/systemd/system/knowledge-forge-audio-worker.{service,timer}
+sudo systemctl daemon-reload
+sudo rm -f /etc/cron.d/knowledge-forge-audio-transcription
+pkill -f 'kf:audio:worker'
+
+# 2. Confirm nothing is mid-run.
+pgrep -a -f 'kf:audio:worker|whisper-cli'
+
+# 3. Drop the tables. migrate:down refuses while jobs still exist. Export first if you want to keep
+#    anything: transcripts, speaker splits and the retained recordings all go with them.
+#    Four migrations now, not three — see §9.
+./yii migrate:down 4
+
+# 4. Remove the feature.
+rm -rf src/AudioToText tests/Unit/AudioToText tests/Integration/AudioToText \
+       tests/Web/AudioToTextCest.php config/common/di/audio-to-text.php \
+       docs/AUDIO_TO_TEXT.md docs/server/systemd docs/server/cron \
+       runtime/audio-to-text
+rm -f src/Migration/M260826120000CreateAudioTranscriptionJobs.php \
+      src/Migration/M260826120100AddSpeakerSeparationColumns.php \
+      src/Migration/M260826130000RetainSuccessfulRecordings.php \
+      src/Migration/M260826140000AllowMultipleQueuedJobsPerAdmin.php
+rm -f tests/Support/AudioToTextSettingsFactory.php
+
+# 5. Revert the additive edits.
+git checkout -- src/Environment.php config/common/params.php config/common/routes.php \
+       config/console/commands.php src/Web/Shared/Layout/Admin/_sidebar.php \
+       assets/main/admin.css assets/main/admin.js .env.example
+
+# 6. Rebuild and confirm.
+composer yii-config-rebuild && composer test && git status --short
+```
+
+**Do not uninstall ffmpeg, `/opt/whisper.cpp` or `/opt/audio-diarization`** as part of an application
+rollback — telecom-billing on this machine uses the same toolchain.
+
+---
+
+## 17. Known limitations
+
+* `flock` covers **one machine**. Several hosts sharing one database would need a database lease.
+* Speaker separation is only as good as the diarizer. 8 kHz telephone audio upsampled to 16 kHz is
+  harder for speaker embeddings than clean wideband audio, which is exactly why the `NEEDS_REVIEW`
+  path exists rather than a forced two-way split.
+* The role mapper's signals are tuned for restaurant/order calls. A different domain needs different
+  signals; the neutral clusters and the alignment are domain-independent.
+* Cross-project exclusivity is race-safe only against schedules that take a lock file (§5).
+* **Diarization sometimes misses a speaker entirely** on difficult telephone audio — one cluster gets
+  the whole call and the other a few words. Gate 2 (§8) detects that and refuses to publish, but it
+  cannot repair it: the recording comes back as `NEEDS_REVIEW` with the full transcript intact and no
+  split. Better separation would mean a different embedding model, not a threshold change.
+* The integration suite operates on the live database and can claim real queued jobs — see §14.

@@ -77,6 +77,46 @@ return [
         'truncatedMessage' => Environment::string('CHAT_TRUNCATED_MESSAGE'),
     ],
 
+    // Audio to Text. Transport only: every default, type and range lives in Environment::SPEC, and
+    // nothing here interprets a value. An empty temporaryDirectory means "use @runtime/audio-to-text",
+    // which `config/common/di/audio-to-text.php` resolves because an alias needs the container.
+    'app/audio-to-text' => [
+        'ffmpegBinary' => Environment::string('FFMPEG_BINARY'),
+        'temporaryDirectory' => Environment::string('AUDIO_TRANSCRIPTION_TEMP_DIR'),
+        'ffprobeBinary' => Environment::string('FFPROBE_BINARY'),
+        'whisperBinary' => Environment::string('WHISPER_BINARY'),
+        'whisperModel' => Environment::string('WHISPER_MODEL'),
+        'maxUploadBytes' => Environment::int('AUDIO_TRANSCRIPTION_MAX_SIZE'),
+        'maxDurationSeconds' => Environment::int('AUDIO_TRANSCRIPTION_MAX_DURATION'),
+        'timeoutSeconds' => Environment::int('AUDIO_TRANSCRIPTION_TIMEOUT'),
+        'threads' => Environment::int('AUDIO_TRANSCRIPTION_THREADS'),
+        'maxQueue' => Environment::int('AUDIO_TRANSCRIPTION_MAX_QUEUE'),
+        'retentionSeconds' => Environment::int('AUDIO_TRANSCRIPTION_RETENTION_SECONDS'),
+        'staleAfterSeconds' => Environment::int('AUDIO_TRANSCRIPTION_STALE_AFTER'),
+        'workerSleepSeconds' => Environment::int('AUDIO_TRANSCRIPTION_WORKER_SLEEP'),
+    ],
+
+    'app/audio-worker' => [
+        'heartbeatSeconds' => Environment::int('AUDIO_WORKER_HEARTBEAT_SECONDS'),
+        'staleAfterSeconds' => Environment::int('AUDIO_WORKER_STALE_AFTER'),
+        'tickStaleAfterSeconds' => Environment::int('AUDIO_WORKER_TICK_STALE_AFTER'),
+        'minAvailableMegabytes' => Environment::int('AUDIO_WORKER_MIN_AVAILABLE_MB'),
+        'maxLoadPerCore' => Environment::float('AUDIO_WORKER_MAX_LOAD_PER_CORE'),
+        'foreignLocks' => Environment::string('AUDIO_WORKER_FOREIGN_LOCKS'),
+        'yieldToOtherWhisper' => Environment::bool('AUDIO_WORKER_YIELD_TO_OTHER_WHISPER'),
+    ],
+
+    'app/audio-diarization' => [
+        'enabled' => Environment::bool('AUDIO_DIARIZATION_ENABLED'),
+        'binary' => Environment::string('AUDIO_DIARIZATION_BINARY'),
+        'segmentationModel' => Environment::string('AUDIO_DIARIZATION_SEGMENTATION_MODEL'),
+        'embeddingModel' => Environment::string('AUDIO_DIARIZATION_EMBEDDING_MODEL'),
+        'timeoutSeconds' => Environment::int('AUDIO_DIARIZATION_TIMEOUT'),
+        'minConfidence' => Environment::float('AUDIO_DIARIZATION_MIN_CONFIDENCE'),
+        'maxSpeakers' => Environment::int('AUDIO_DIARIZATION_MAX_SPEAKERS'),
+        'boundaryToleranceMs' => Environment::int('AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS'),
+    ],
+
     'app/pdf' => [
         'minCharsPerPage' => Environment::int('PDF_MIN_TEXT_CHARS_PER_PAGE'),
         'probeMaxBytes' => Environment::int('PDF_TEXT_PROBE_MAX_BYTES'),

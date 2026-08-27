@@ -34,6 +34,8 @@ $items = [
     // Prefix is the whole `admin.reports.` namespace, so a future second report lights the same entry and
     // no sibling route lights this one.
     ['label' => 'Chat Reports', 'icon' => '📊', 'route' => 'admin.reports.chat', 'match' => ['admin.reports.']],
+    // Prefix matches the job, list, status and download routes too, so the entry stays lit throughout.
+    ['label' => 'Audio to Text', 'icon' => '🎙', 'route' => 'audio-to-text', 'match' => ['audio-to-text']],
 ];
 
 $navItems = [];

@@ -1108,3 +1108,221 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 /* Manage KB page: clearly separated sub-sections (Upload a document, Add a rule) with breathing room. */
 .kb-subsection { margin-top: 1.75rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
 .kb-subsection__title { margin: 0 0 .9rem; font-size: 1.02rem; font-weight: 700; }
+
+/* ------------------------------------------------------------------------------------------------
+ * Audio to Text
+ *
+ * Styles live here rather than inline in the templates: the CSP is `style-src 'self'` with no
+ * unsafe-inline, so a style="" attribute is dropped without warning.
+ *
+ * Every colour is a design token from :root, never a literal. The tokens flip under
+ * prefers-color-scheme, so a hard-coded light value — or a var() fallback naming a token that does
+ * not exist — renders light-on-light in dark mode. That is exactly the bug this block used to have.
+ * ---------------------------------------------------------------------------------------------- */
+
+.a2t-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    padding: .85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.a2t-status__counts { display: flex; flex-wrap: wrap; gap: 1.75rem; }
+
+.a2t-count { display: flex; flex-direction: column; }
+
+.a2t-count__label {
+    font-size: .72rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.a2t-count__value { font-size: 1.35rem; font-weight: 600; line-height: 1.2; color: var(--text); }
+
+.a2t-worker {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    padding: .5rem .8rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    border-left-width: 3px;
+    max-width: 46ch;
+}
+
+.a2t-worker--ok {
+    background: var(--success-bg);
+    border-color: var(--success-border);
+    color: var(--success-text);
+}
+
+.a2t-worker--warn {
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+}
+
+.a2t-worker__label { font-weight: 600; font-size: .9rem; }
+.a2t-worker__detail { font-size: .8rem; opacity: .85; }
+
+.a2t-job__header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: .9rem;
+}
+
+.a2t-job__stage { font-size: .9rem; color: var(--text-muted); }
+
+.a2t-badge {
+    display: inline-block;
+    padding: .2rem .6rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: .78rem;
+    font-weight: 600;
+    letter-spacing: .01em;
+}
+
+.a2t-badge--queued {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text-muted);
+}
+
+.a2t-badge--processing {
+    background: var(--info-bg);
+    border-color: var(--info-border);
+    color: var(--info-text);
+}
+
+.a2t-badge--completed {
+    background: var(--success-bg);
+    border-color: var(--success-border);
+    color: var(--success-text);
+}
+
+.a2t-badge--failed {
+    background: var(--error-bg);
+    border-color: var(--error-border);
+    color: var(--error-text);
+}
+
+.a2t-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 0 0 .9rem; }
+.a2t-meta div { display: flex; flex-direction: column; }
+
+.a2t-meta dt {
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-muted);
+}
+
+.a2t-meta dd { margin: 0; font-size: .92rem; color: var(--text); }
+
+.a2t-section__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: .6rem;
+}
+
+/* Long recordings produce long transcripts; a bounded, scrollable block keeps the page navigable
+   without truncating anything the reader may need. */
+.a2t-transcript {
+    margin: 0;
+    padding: .85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 420px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: .85rem;
+    line-height: 1.6;
+}
+
+.a2t-split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
+}
+
+.a2t-conversation summary { cursor: pointer; }
+
+.a2t-turn {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    gap: .75rem;
+    padding: .35rem 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.a2t-turn__who { font-weight: 600; font-size: .85rem; color: var(--text-muted); }
+.a2t-turn__text { overflow-wrap: anywhere; }
+
+/* The tentative role guess for an unpublished split. Set apart from the turns below it deliberately:
+   it is the one place on the page where a role name appears without being a claim. */
+.a2t-hypothesis {
+    margin: .5rem 0 1rem;
+    padding: .6rem .8rem;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: .85rem;
+}
+
+.a2t-hypothesis__lead { margin: 0 0 .35rem; }
+.a2t-hypothesis__list { margin: 0; padding-left: 1.1rem; }
+
+/* The conversions list is a wide table. Giving it more room than the standard 1240px column is what
+   lets it fit without a horizontal scrollbar; `:has()` keeps that scoped to this one page, and a
+   browser without `:has()` simply gets the normal width and the scroll container below. */
+.content:has(.a2t-wide) { max-width: 1600px; }
+
+/* Kept as a safety net for narrow viewports: the page body must never scroll sideways, so if the
+   table cannot fit, it scrolls inside its own box rather than pushing the layout wide. */
+.a2t-table-scroll { overflow-x: auto; }
+
+.a2t-table { width: 100%; table-layout: fixed; }
+.a2t-table th, .a2t-table td { vertical-align: top; }
+
+.a2t-cell-file { overflow-wrap: anywhere; }
+
+.a2t-cell-preview {
+    font-size: .82rem;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.a2t-cell-note { margin-top: .25rem; font-size: .78rem; color: var(--error-text); }
+
+.a2t-cell-actions { white-space: nowrap; }
+.a2t-cell-actions a + a { margin-left: .6rem; }
+
+/* Column widths: the three transcript previews share the slack, everything else is sized to content
+   so nothing wraps a two-word heading onto three lines. */
+.a2t-table col.a2t-col-when { width: 8.5rem; }
+.a2t-table col.a2t-col-status { width: 7.5rem; }
+.a2t-table col.a2t-col-stage { width: 7rem; }
+.a2t-table col.a2t-col-text { width: auto; }
+.a2t-table col.a2t-col-split { width: 7.5rem; }
+.a2t-table col.a2t-col-duration { width: 6rem; }
+.a2t-table col.a2t-col-actions { width: 8.5rem; }
+
+@media (max-width: 1100px) {
+    .a2t-table { table-layout: auto; min-width: 900px; }
+}

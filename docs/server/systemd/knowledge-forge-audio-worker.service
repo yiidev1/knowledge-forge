@@ -1,0 +1,112 @@
+# Audio-to-Text queue worker for Knowledge Forge.
+#
+# EXAMPLE ONLY — NOT INSTALLED. Nothing in this project writes to /etc/systemd. See
+# docs/AUDIO_TO_TEXT.md for the install commands and run them yourself.
+#
+# One tick = claim at most ONE queued job, process it, exit. Paired with the .timer beside this file,
+# which fires every 2 minutes. Deliberately Type=oneshot rather than a permanent worker: systemd will
+# not start a second run of a unit that is still active, so a job outlasting the interval simply
+# delays the next tick instead of racing it.
+#
+# Chosen over cron because `nice`/`ionice` are *priority* controls, not limits — on an otherwise idle
+# machine a niced job still takes a whole core. The cgroup settings below are ceilings the kernel
+# enforces. Requires cgroup v2, which this host has (systemd 249, unified hierarchy, cpu/memory/io
+# controllers delegated).
+#
+# Every limit here is derived from a measurement on this machine, not guessed:
+#
+#   whisper-cli -t 1, 73.7 s recording   82-106 s wall, 99% of one core, 833.9 MB peak RSS
+#   sherpa-onnx diarization, same audio   10.4 s wall, 99% of one core, 194.0 MB peak RSS
+#   ffmpeg -threads 1, same audio         0.07 s,       97% of one core,  49.0 MB peak RSS
+#
+# Re-measured at the 5-minute duration cap (297 s of real two-party call audio) — see
+# docs/AUDIO_TO_TEXT.md for the full table. Whisper's memory is dominated by the model, so quadrupling
+# the audio added far less than quadrupling the RSS.
+#
+# The stages run sequentially inside one job, so the peak is max(whisper, diarization) + ~60 MB for
+# the PHP worker itself, not their sum. Diarization remains the *lightest* neural stage, so enabling
+# speaker separation did not move the memory ceilings and neither did the longer duration cap.
+
+[Unit]
+Description=Knowledge Forge Audio-to-Text worker (one queued job, then exit)
+Documentation=file:///var/www/html/knowledge-forge/docs/AUDIO_TO_TEXT.md
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=oneshot
+
+# www-data, and this is not optional:
+#   * job directories are created mode 0700 by PHP-FPM, which runs as www-data;
+#   * telecom-billing's lock directory is 0750 www-data:www-data, and the foreign-lock check FAILS
+#     CLOSED — as any other user every tick would defer and the queue would silently never move.
+User=www-data
+Group=www-data
+
+WorkingDirectory=/var/www/html/knowledge-forge
+ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:audio:worker --once
+
+# /usr/bin/php8.2 is pinned rather than /usr/bin/php: the latter is an update-alternatives symlink a
+# later PHP install could silently repoint. 8.2 is what php8.2-fpm serves the site with.
+
+# MUST exceed the sum of the two child timeouts, or systemd kills a job that is merely slow before
+# either child gets the chance to give up on its own:
+#
+#   AUDIO_TRANSCRIPTION_TIMEOUT (600) + AUDIO_DIARIZATION_TIMEOUT (300) = 900s worst case
+#
+# 1200 leaves margin over that. Measured worst case is far lower — a recording at the 300s duration
+# cap takes about 400s to transcribe plus ~40s to diarize — so this ceiling is for a wedged process,
+# not a slow one. A killed process is better than one left holding the lock; the stale sweep then
+# completes or fails the job it was on, and a transcript already committed survives that.
+#
+# Raising AUDIO_TRANSCRIPTION_MAX_DURATION again means revisiting this number, the two child timeouts
+# and AUDIO_TRANSCRIPTION_STALE_AFTER together — they are one chain, and the weakest link truncates
+# the longest job the system can actually finish.
+TimeoutStartSec=1200
+
+# --- Hard resource ceilings (cgroup v2) -------------------------------------
+
+# Exactly one core. Whisper measured 99% at -t 1, and every stage of the pipeline — ffmpeg, whisper,
+# ONNX Runtime — is pinned to a single thread by AUDIO_TRANSCRIPTION_THREADS.
+CPUQuota=100%
+
+# MemoryHigh throttles by reclaiming; MemoryMax is the OOM backstop. An OOM kill mid-job is survivable
+# by design: the transcript is committed to the database the moment Whisper succeeds, so stale
+# recovery completes the job and only the speaker split is lost.
+MemoryHigh=1200M
+MemoryMax=1600M
+
+# Priority hints on top of the ceilings: nginx, PHP-FPM and MySQL are always served first.
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# --- Logging ----------------------------------------------------------------
+# journald, so there is no custom logfile to grow unbounded or rotate by hand. The application's own
+# logger writes to stdout independently of console verbosity, so real failures are captured here too.
+#   journalctl -u knowledge-forge-audio-worker -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kf-audio-worker
+
+# --- Hardening. The worker needs its own runtime directory and the read-only toolchain. -------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Writable: its own runtime tree only. Readable: whisper.cpp and the diarization models under /opt,
+# which ProtectSystem=full already leaves read-only.
+ReadWritePaths=/var/www/html/knowledge-forge/runtime
+
+[Install]
+WantedBy=multi-user.target
+
+# --- Not used here, but worth recording ---------------------------------------
+#
+# If this were ever converted to a long-running worker (Type=simple, Restart=on-failure), it would
+# need KillMode=mixed. The default control-group kill also sends SIGTERM to whisper-cli, which kills
+# the transcription and fails the in-flight job; `mixed` signals only the main process, letting the
+# worker's own handler finish the current job and exit cleanly.
