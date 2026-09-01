@@ -182,6 +182,78 @@ final class ConversationViewTest extends TestCase
      *
      * @return list<SpeakerUtterance>
      */
+    // ---------------------------------------------------------------- confirmation as a second route
+
+    /**
+     * The half of the amendment only the view can deliver.
+     *
+     * `speaker_separation_status` records what the machine concluded and is never rewritten, so without
+     * this a confirmation would write correct columns that no page could read.
+     */
+    public function testAnAdministratorsConfirmationPublishesRolesTheMachineWouldNot(): void
+    {
+        $view = ConversationView::from(
+            SpeakerSeparationStatus::NEEDS_REVIEW,
+            $this->mappedCall(),
+            0.08,
+            true,
+            true,
+        );
+
+        $this->assertTrue($view->rolesPublished);
+        $this->assertSame(['Agent', 'Customer', 'Agent'], $this->labels($view));
+    }
+
+    public function testWithoutConfirmationANeedsReviewCallStaysNeutral(): void
+    {
+        $view = ConversationView::from(SpeakerSeparationStatus::NEEDS_REVIEW, $this->mappedCall(), 0.08, true, false);
+
+        $this->assertFalse($view->rolesPublished);
+        $this->assertSame(['Speaker 1', 'Speaker 2', 'Speaker 1'], $this->labels($view));
+    }
+
+    /**
+     * Confirmation is a second route to publication, not a way around the aggregate-text invariant.
+     *
+     * The service will not confirm without text on both sides, so this state should be unreachable —
+     * which is exactly why the gate is asserted rather than assumed.
+     */
+    public function testConfirmationStillRequiresAggregateText(): void
+    {
+        $view = ConversationView::from(SpeakerSeparationStatus::NEEDS_REVIEW, $this->mappedCall(), 0.08, false, true);
+
+        $this->assertFalse($view->rolesPublished);
+    }
+
+    // ---------------------------------------------------------------- corrected-turn markers
+
+    public function testAnApproximateSpanIsMarkedAndPrintedOnce(): void
+    {
+        // Both halves of one split: the same span, inherited rather than observed.
+        $view = ConversationView::from(SpeakerSeparationStatus::COMPLETED, [
+            new SpeakerUtterance(0, 2000, 'SPEAKER_00', SpeakerRole::CUSTOMER, 'Yes.', 1.0, true),
+            new SpeakerUtterance(0, 2000, 'SPEAKER_00', SpeakerRole::CUSTOMER, 'For pickup', 1.0, true),
+            new SpeakerUtterance(2100, 3000, 'SPEAKER_01', SpeakerRole::AGENT, 'Or delivery?', 1.0),
+        ], 0.9);
+
+        $this->assertSame('~00:00–00:02', $view->turns[0]->timing->rangeLabel());
+        // Printing it twice would present one measurement as two.
+        $this->assertNull($view->turns[1]->timing->rangeLabel());
+        $this->assertSame('00:02–00:03', $view->turns[2]->timing->rangeLabel());
+        $this->assertFalse($view->turns[2]->timing->approximate);
+    }
+
+    public function testAnEditedTurnIsMarkedWhateverItsLabel(): void
+    {
+        $edited = new SpeakerUtterance(0, 1000, 'SPEAKER_00', SpeakerRole::AGENT, 'For pickup', 1.0, false, true);
+
+        $published = ConversationView::from(SpeakerSeparationStatus::COMPLETED, [$edited], 0.9);
+        $neutral = ConversationView::from(SpeakerSeparationStatus::NEEDS_REVIEW, [$edited], 0.08);
+
+        $this->assertTrue($published->turns[0]->edited);
+        $this->assertTrue($neutral->turns[0]->edited, 'A corrected turn is still corrected when unlabelled.');
+    }
+
     private function mappedCall(): array
     {
         return [

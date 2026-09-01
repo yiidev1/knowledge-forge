@@ -568,8 +568,10 @@ finding*, and nothing may read it as a conclusion:
 | tentative role hypothesis | the mapper's guess, at any confidence | `role` in `speaker_segments` | **no** |
 | published role | a guess that cleared every gate | `agent_text` / `customer_text` | yes |
 
-**`speaker_separation_status` is the sole arbiter of which of the last two applies**, and
-`SpeakerSeparationStatus::isPublishable()` is the one place that decides. The invariant:
+**`speaker_separation_status` is the machine's own verdict on which of the last two applies**, and
+`SpeakerSeparationStatus::isPublishable()` is the one place that decides it. Since speaker correction
+landed there is a *second*, independent route to publication — an administrator confirming the roles —
+and `ConversationView::from()` takes both. Nothing else may publish. The invariant:
 
 ```
 COMPLETED      → confidence ≥ threshold, agent_text and customer_text both populated,
@@ -583,6 +585,40 @@ publishable status and the aggregate text to actually be present before it will 
 so a self-contradictory row degrades to neutral labels rather than to a confident-looking lie. The
 list page needs no equivalent rule because it renders only the aggregate columns, which are NULL by
 construction unless the split was published.
+
+### Correcting a conversation by hand
+
+`/audio-to-text/job/{publicId}/review` lets an administrator reassign, split, join and reword turns,
+and confirm who was speaking. Six POST routes under it, one per operation.
+
+**Nothing the machine produced is ever overwritten.** `transcript`, `speaker_segments`, `agent_text`
+and `customer_text` are read-only from this point on; every correction lands in `reviewed_segments`
+plus `reviewed_agent_text` / `reviewed_customer_text`, and `EffectiveConversationReader` decides which
+layer a page reads. A recording heard as "pikup" still says that in `transcript` after the wording has
+been fixed for readers — which is what makes the correction auditable rather than a quiet rewrite.
+
+Four rules worth knowing before changing anything here:
+
+- **Correcting is not confirming.** Fixing a boundary says nothing about who was speaking, so a
+  `NEEDS_REVIEW` call keeps its Speaker 1 / Speaker 2 labels through any number of structural
+  corrections. Only `CONFIRM_ROLES` publishes, it is recorded as its own operation, and `roles_confirmed_at`
+  is the state — never inferred from `reviewed_segments` existing.
+- **Confirmation needs two sides.** `textFor()` returns `''`, not NULL, for a role with no turns, and
+  an empty string reads as "text is present" to the publish gate. `ReviewedConversationTurns::hasBothRoles()`
+  is checked in the service, so no caller can publish a one-sided split.
+- **Merging requires the same voice *and* the same role.** Two turns the diarizer heard as different
+  speakers never merge, even once an administrator has moved both to the same role. The control stays
+  on screen and explains itself rather than disappearing — after a move the difference between the two
+  turns is no longer visible, so a vanished button would read as a bug. `MergeRefusal` carries both the
+  rule and its wording, and `merge()` throws from the same predicate the page renders from.
+- **Split timestamps are inherited, never interpolated.** Token timings are not persisted, so both
+  halves keep the parent's span and are marked `approx`; the page prints the range once for the pair,
+  prefixed with `~`. Dividing the span by character position would produce a number that looks measured
+  and is not.
+
+Every operation runs in one transaction that writes the revision first and then a conditional
+`UPDATE ... WHERE id = ? AND review_count = ?`, so a lost race leaves no orphan audit row. `Revert`
+discards the layer, clears the confirmation, and is itself recorded.
 
 ### Installing the diarization toolchain — system-level, run these yourself
 

@@ -345,6 +345,43 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/download')
                 ->action(AudioToText\Job\Download\Action::class)
                 ->name(AudioToTextRoute::JOB_DOWNLOAD),
+            // The conversation on its own, and where every View link in the conversions list points.
+            // A job with nothing to read — still queued, failed, or never speaker-separated — is
+            // redirected to the detail page above rather than 404'd, because that page explains why.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/conversation')
+                ->action(AudioToText\Job\Conversation\Action::class)
+                ->name(AudioToTextRoute::JOB_CONVERSATION),
+
+            // Speaker correction. One route per operation rather than one endpoint dispatching on a
+            // field, so the route, the audited operation and the button pressed all say the same thing.
+            // Every POST carries the `review_count` its page was rendered from; the service compares it
+            // in the same statement that writes, so a stale tab loses rather than overwrites.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review')
+                ->action(AudioToText\Job\Review\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/move')
+                ->action(AudioToText\Job\Review\Move\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_MOVE),
+            // Whole turn or a selection inside one. Composed server-side from split/move/merge in a
+            // single transaction, so the browser never holds a turn index across a mutation.
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/move-text')
+                ->action(AudioToText\Job\Review\MoveText\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_MOVE_TEXT),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/split')
+                ->action(AudioToText\Job\Review\Split\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_SPLIT),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/merge')
+                ->action(AudioToText\Job\Review\Merge\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_MERGE),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/text')
+                ->action(AudioToText\Job\Review\Text\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_TEXT),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/confirm')
+                ->action(AudioToText\Job\Review\Confirm\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_CONFIRM),
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/revert')
+                ->action(AudioToText\Job\Review\Revert\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_REVERT),
         ),
 
     // Order58 agents: a separate authenticated realm behind RequireAgentMiddleware. Agents can select any

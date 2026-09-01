@@ -18,4 +18,14 @@ final class AudioToTextViews
     {
         return __DIR__ . '/_partial/worker-status';
     }
+
+    /**
+     * The conversation bubbles, shared by the job detail page and the conversation-only page.
+     *
+     * One rendering of a turn, so the two screens cannot describe the same speaker differently.
+     */
+    public static function thread(): string
+    {
+        return __DIR__ . '/_partial/thread';
+    }
 }

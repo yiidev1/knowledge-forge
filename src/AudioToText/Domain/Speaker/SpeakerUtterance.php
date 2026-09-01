@@ -27,9 +27,22 @@ final readonly class SpeakerUtterance
         public SpeakerRole $role,
         public string $text,
         public float $confidence,
+        /**
+         * Whether this turn's boundary was placed by a person rather than observed.
+         *
+         * Only ever true for a half of an administrator's split: token timestamps are not persisted, so
+         * both halves inherit the parent's span. Always false for anything the pipeline wrote, which is
+         * why it defaults that way and why no machine segment carries the key.
+         */
+        public bool $approx = false,
+        /** Whether an administrator corrected this turn's wording. */
+        public bool $edited = false,
     ) {}
 
     /**
+     * The six keys the pipeline writes. `approx` and `edited` are deliberately absent: this is the
+     * machine's own record, and a segment it produced is neither approximate nor edited.
+     *
      * @return array{start_ms: int, end_ms: int, speaker: string, role: string, text: string, confidence: float}
      */
     public function toArray(): array
@@ -46,6 +59,15 @@ final readonly class SpeakerUtterance
 
     public function withRole(SpeakerRole $role): self
     {
-        return new self($this->startMs, $this->endMs, $this->speaker, $role, $this->text, $this->confidence);
+        return new self(
+            $this->startMs,
+            $this->endMs,
+            $this->speaker,
+            $role,
+            $this->text,
+            $this->confidence,
+            $this->approx,
+            $this->edited,
+        );
     }
 }

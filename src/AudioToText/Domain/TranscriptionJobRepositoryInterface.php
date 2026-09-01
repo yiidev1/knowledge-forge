@@ -139,5 +139,46 @@ interface TranscriptionJobRepositoryInterface
      */
     public function findExpired(int $limit = 100): array;
 
+    /**
+     * Store a corrected conversation, guarded by the version the caller read.
+     *
+     * Writes reviewed columns only — the machine's `transcript`, `speaker_segments`, `agent_text` and
+     * `customer_text` are never touched by a correction.
+     *
+     * @return bool false when `review_count` had moved on, so a concurrent correction is reported as a
+     *              conflict rather than silently overwritten
+     */
+    public function saveReview(
+        int $id,
+        string $reviewedSegmentsJson,
+        ?string $reviewedAgentText,
+        ?string $reviewedCustomerText,
+        int $reviewedByAdminId,
+        int $expectedReviewCount,
+    ): bool;
+
+    /**
+     * Record an explicit human confirmation of the speaker roles, publishing the two role columns.
+     *
+     * Kept separate from {@see saveReview()} because correcting a conversation and confirming who was
+     * speaking are different acts — see `roles_confirmed_at`.
+     *
+     * The segments are written too, even when byte-identical to the machine's own. Confirming
+     * establishes a reviewed layer: without one `isReviewed()` stays false, the effective-conversation
+     * reader falls back to the raw columns, and the two role columns written here are never read — so
+     * confirming an otherwise uncorrected conversation would change nothing anybody could see.
+     */
+    public function confirmRoles(
+        int $id,
+        string $segmentsJson,
+        string $agentText,
+        string $customerText,
+        int $confirmedByAdminId,
+        int $expectedReviewCount,
+    ): bool;
+
+    /** Drop the reviewed layer, returning the job to the machine's result. Same version guard. */
+    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool;
+
     public function delete(int $id): void;
 }

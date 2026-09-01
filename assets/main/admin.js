@@ -1037,3 +1037,619 @@
         init();
     }
 })();
+
+/* ---------------------------------------------------------------------------
+   Audio to Text — speaker correction.
+
+   Progressive enhancement over the forms that are already on the page. Nothing here builds a request:
+   a move fills hidden inputs on a real <form> and submits it, so CSRF, the review_count check and the
+   Post/Redirect/Get that follows are identical to every other control in this feature. With the script
+   absent the page keeps the plain per-turn forms and stays fully usable.
+
+   Every DOM query is scoped to a data-a2t- attribute, which ModuleIsolationTest enforces.
+   --------------------------------------------------------------------------- */
+(function () {
+    var root = document.querySelector('[data-a2t-review]');
+    if (!root) {
+        return; // not the correction page — no listeners, no timers
+    }
+
+    var dialog = document.querySelector('[data-a2t-move-dialog]');
+    var form = document.querySelector('[data-a2t-move-form]');
+    if (!dialog || !form) {
+        return;
+    }
+
+    var mergeDialog = document.querySelector('[data-a2t-merge-dialog]');
+    var mergeForm = mergeDialog ? mergeDialog.querySelector('[data-a2t-merge-form]') : null;
+
+    var merge = mergeDialog && mergeForm ? {
+        direction: mergeForm.querySelector('[data-a2t-merge-direction]'),
+        first: mergeDialog.querySelector('[data-a2t-merge-first]'),
+        second: mergeDialog.querySelector('[data-a2t-merge-second]'),
+        result: mergeDialog.querySelector('[data-a2t-merge-result]')
+    } : null;
+
+    var fields = {
+        selection: form.querySelector('[data-a2t-move-selection]'),
+        hint: form.querySelector('[data-a2t-move-hint]'),
+        role: form.querySelector('[data-a2t-move-role]'),
+        preview: dialog.querySelector('[data-a2t-move-preview]'),
+        from: dialog.querySelector('[data-a2t-move-from]'),
+        to: dialog.querySelector('[data-a2t-move-to]'),
+        note: dialog.querySelector('[data-a2t-move-note]')
+    };
+
+    // Announce that the script is running: the icon tools appear and the plain forms step aside, so
+    // the two sets of controls are never both on screen.
+    root.classList.add('a2t-review--enhanced');
+    var tools = root.querySelectorAll('[data-a2t-tools]');
+    for (var i = 0; i < tools.length; i++) {
+        tools[i].hidden = false;
+    }
+
+    function turnOf(el) {
+        return el.closest ? el.closest('[data-a2t-turn]') : null;
+    }
+
+    /* ----------------------------------------------------------------- inline wording editor */
+
+    function openEditor(turn) {
+        var editor = turn.querySelector('[data-a2t-editor]');
+        if (!editor) {
+            return;
+        }
+        turn.classList.add('a2t-turn--editing');
+        editor.hidden = false;
+        var box = editor.querySelector('[data-a2t-editor-text]');
+        if (box) {
+            box.focus();
+            box.setSelectionRange(box.value.length, box.value.length);
+        }
+    }
+
+    function closeEditor(turn) {
+        var editor = turn.querySelector('[data-a2t-editor]');
+        if (!editor) {
+            return;
+        }
+        turn.classList.remove('a2t-turn--editing');
+        editor.hidden = true;
+        var box = editor.querySelector('[data-a2t-editor-text]');
+        var original = turn.querySelector('[data-a2t-text]');
+        if (box && original) {
+            box.value = original.textContent; // discard the draft, matching what Cancel promises
+        }
+    }
+
+    /* ----------------------------------------------------------------- confirmation */
+
+    // Fills the dialog for a whole-turn move and opens it. Nothing is written until Confirm submits
+    // the form, which is a real POST — same CSRF, same review_count check, same redirect.
+    function openConfirm(turn) {
+        var textEl = turn.querySelector('[data-a2t-text]');
+        if (!textEl) {
+            return;
+        }
+
+        var text = textEl.textContent;
+        if (text.replace(/\s+/g, '') === '') {
+            return;
+        }
+
+        fields.selection.value = text;
+        fields.hint.value = '';
+        fields.role.value = turn.getAttribute('data-a2t-target-role') || '';
+        form.setAttribute('action', turn.getAttribute('data-a2t-move-url') || '');
+
+        fields.preview.textContent = text;
+        fields.from.textContent = turn.getAttribute('data-a2t-label') || '';
+        fields.to.textContent = turn.getAttribute('data-a2t-target-label') || '';
+
+        var merges = turn.getAttribute('data-a2t-merges') === '1';
+        fields.note.hidden = !merges;
+        if (merges) {
+            fields.note.textContent = 'This turn will be joined with the neighbouring turn beside it, '
+                + 'because they will then be the same speaker and the same role.';
+        }
+
+        turn.classList.add('a2t-turn--moving');
+
+        if (typeof dialog.showModal === 'function') {
+            dialog.showModal();
+        } else {
+            dialog.setAttribute('open', 'open');
+        }
+    }
+
+    function endMove() {
+        var moving = root.querySelectorAll('[data-a2t-turn].a2t-turn--moving');
+        for (var i = 0; i < moving.length; i++) {
+            moving[i].classList.remove('a2t-turn--moving');
+        }
+        if (typeof dialog.close === 'function' && dialog.open) {
+            dialog.close();
+        } else {
+            dialog.removeAttribute('open');
+        }
+    }
+
+    /* ----------------------------------------------------------------- drag to the other role */
+
+    // Pointer events rather than HTML5 drag-and-drop: one path covers mouse, pen and touch, where
+    // dragstart/drop would simply never fire on a phone.
+    var drag = null;
+    var zone = null;
+
+    function dropZone() {
+        if (zone) {
+            return zone;
+        }
+        zone = document.createElement('div');
+        zone.className = 'a2t-dropzone';
+        zone.setAttribute('data-a2t-dropzone', '');
+        zone.hidden = true;
+        // The label is its own chip, pinned near the top: centred in the band it would sit on top of
+        // whatever message happens to be there.
+        zone.appendChild(document.createElement('span'));
+        zone.firstChild.className = 'a2t-dropzone__label';
+        document.body.appendChild(zone);
+
+        return zone;
+    }
+
+    // The drop target is a *side*, never another bubble: the conversation's order is fixed, so a turn
+    // can only change whose it is, not when it was said.
+    function placeZone(turn) {
+        var scroller = root.querySelector('[data-a2t-scroll]');
+        if (!scroller) {
+            return null;
+        }
+
+        var box = scroller.getBoundingClientRect();
+        var toAgent = turn.getAttribute('data-a2t-target-role') === 'AGENT';
+        var half = box.width / 2;
+        var el = dropZone();
+
+        el.style.top = box.top + 'px';
+        el.style.height = box.height + 'px';
+        el.style.left = (toAgent ? box.left + half : box.left) + 'px';
+        el.style.width = half + 'px';
+        el.firstChild.textContent = 'Move to ' + (turn.getAttribute('data-a2t-target-label') || '');
+        el.hidden = false;
+        el.classList.remove('a2t-dropzone--over');
+
+        return el;
+    }
+
+    /**
+     * The turns a drag may legitimately land on, and what each one would do.
+     *
+     * Only the two immediate neighbours are candidates, and only in the same lane: merging is the one
+     * same-lane operation the domain has, and it joins a turn to the turn *beside* it. Anything else
+     * in the same lane is marked not-allowed rather than left inert, so a refusal is visible instead
+     * of feeling like a dead drop.
+     */
+    function markTargets(turn) {
+        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
+        var role = turn.getAttribute('data-a2t-role');
+        var all = root.querySelectorAll('[data-a2t-turn]');
+
+        for (var i = 0; i < all.length; i++) {
+            var other = all[i];
+            if (other === turn) {
+                continue;
+            }
+
+            var otherIndex = parseInt(other.getAttribute('data-a2t-turn'), 10);
+
+            // The opposite lane is the move band's business, not a per-bubble target.
+            if (other.getAttribute('data-a2t-role') !== role) {
+                continue;
+            }
+
+            if (otherIndex === index - 1 || otherIndex === index + 1) {
+                var verdict = turn.getAttribute(
+                    otherIndex === index - 1 ? 'data-a2t-merge-prev' : 'data-a2t-merge-next',
+                );
+
+                if (verdict === 'ok') {
+                    other.classList.add('a2t-turn--droppable');
+                    other.setAttribute('data-a2t-drop-hint', 'Merge with this message');
+                } else if (verdict) {
+                    // Same lane, adjacent, but the diarizer heard two different voices.
+                    other.classList.add('a2t-turn--refused');
+                    other.setAttribute('data-a2t-drop-hint', verdict);
+                }
+
+                continue;
+            }
+
+            other.classList.add('a2t-turn--invalid');
+            other.setAttribute('data-a2t-drop-hint', 'Turns cannot be reordered — the conversation keeps the order it was spoken in.');
+        }
+    }
+
+    function clearTargets() {
+        var all = root.querySelectorAll('[data-a2t-turn]');
+        for (var i = 0; i < all.length; i++) {
+            all[i].classList.remove('a2t-turn--droppable', 'a2t-turn--refused', 'a2t-turn--invalid', 'a2t-turn--over');
+            all[i].removeAttribute('data-a2t-drop-hint');
+        }
+    }
+
+    // Which turn the pointer is over, if any. The band has pointer-events: none, so it never masks
+    // a bubble underneath it.
+    function turnUnder(event) {
+        var el = document.elementFromPoint(event.clientX, event.clientY);
+
+        return el && el.closest ? el.closest('[data-a2t-turn]') : null;
+    }
+
+    /**
+     * A same-lane turn the drag has something to say about — mergeable, refused, or simply not a
+     * destination. Only these pre-empt the move band; an opposite-lane bubble sitting inside the band
+     * is just scenery, and dropping on it means the same as dropping beside it.
+     */
+    function laneTargetUnder(event) {
+        var over = turnUnder(event);
+
+        if (!over || !drag || over === drag.turn) {
+            return null;
+        }
+
+        // A turn row spans the full width of the thread even though its bubble hugs one side, so
+        // elementFromPoint alone would report a left-hand turn for a pointer way over on the right.
+        // The bubble is the thing on screen, so the bubble is the thing that has to be under it.
+        var bubble = over.querySelector('.a2t-bubble');
+        if (!bubble) {
+            return null;
+        }
+
+        var box = bubble.getBoundingClientRect();
+        if (event.clientX < box.left || event.clientX > box.right
+            || event.clientY < box.top || event.clientY > box.bottom) {
+            return null;
+        }
+
+        return over.classList.contains('a2t-turn--droppable')
+            || over.classList.contains('a2t-turn--refused')
+            || over.classList.contains('a2t-turn--invalid')
+            ? over
+            : null;
+    }
+
+    function overZone(event) {
+        if (!zone || zone.hidden) {
+            return false;
+        }
+        var box = zone.getBoundingClientRect();
+
+        return event.clientX >= box.left && event.clientX <= box.right
+            && event.clientY >= box.top && event.clientY <= box.bottom;
+    }
+
+    function stopDrag() {
+        if (drag && drag.turn) {
+            drag.turn.classList.remove('a2t-turn--dragging');
+        }
+        root.classList.remove('a2t-review--dragging');
+        if (zone) {
+            zone.hidden = true;
+            zone.classList.remove('a2t-dropzone--over');
+        }
+        clearTargets();
+        drag = null;
+    }
+
+    function openMergeConfirm(turn, target) {
+        if (!merge) {
+            return;
+        }
+
+        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
+        var targetIndex = parseInt(target.getAttribute('data-a2t-turn'), 10);
+        var before = targetIndex < index;
+
+        var dragged = turn.getAttribute('data-a2t-text-value') || '';
+        var neighbour = target.getAttribute('data-a2t-text-value') || '';
+
+        merge.direction.value = before ? 'previous' : 'next';
+        mergeForm.setAttribute('action', turn.getAttribute('data-a2t-merge-url') || '');
+
+        // Shown in the order they will be joined, which is the order they were spoken.
+        merge.first.textContent = before ? neighbour : dragged;
+        merge.second.textContent = before ? dragged : neighbour;
+        merge.result.textContent = merge.first.textContent + ' ' + merge.second.textContent;
+
+        turn.classList.add('a2t-turn--moving');
+        target.classList.add('a2t-turn--moving');
+
+        if (typeof mergeDialog.showModal === 'function') {
+            mergeDialog.showModal();
+        } else {
+            mergeDialog.setAttribute('open', 'open');
+        }
+    }
+
+    document.addEventListener('pointerdown', function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        var grip = target.closest('[data-a2t-grip]');
+        if (!grip) {
+            return;
+        }
+
+        event.preventDefault();
+        drag = { turn: turnOf(grip), grip: grip, x: event.clientX, y: event.clientY, active: false };
+
+        if (grip.setPointerCapture) {
+            grip.setPointerCapture(event.pointerId);
+        }
+    });
+
+    document.addEventListener('pointermove', function (event) {
+        if (!drag) {
+            return;
+        }
+
+        // A few pixels of travel before anything happens, so a stray tap on the handle is not a drag.
+        if (!drag.active) {
+            if (Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) < 5) {
+                return;
+            }
+            drag.active = true;
+            drag.turn.classList.add('a2t-turn--dragging');
+            root.classList.add('a2t-review--dragging');
+            placeZone(drag.turn);
+            markTargets(drag.turn);
+        }
+
+        var lane = laneTargetUnder(event);
+        var all = root.querySelectorAll('[data-a2t-turn]');
+        for (var i = 0; i < all.length; i++) {
+            all[i].classList.toggle('a2t-turn--over', all[i] === lane);
+        }
+
+        if (zone) {
+            zone.classList.toggle('a2t-dropzone--over', !lane && overZone(event));
+        }
+    });
+
+    document.addEventListener('pointerup', function (event) {
+        if (!drag) {
+            return;
+        }
+
+        var turn = drag.turn;
+        var lane = drag.active ? laneTargetUnder(event) : null;
+        var mergeTarget = lane && lane.classList.contains('a2t-turn--droppable') ? lane : null;
+        var moved = drag.active && !lane && overZone(event);
+
+        stopDrag();
+
+        if (mergeTarget) {
+            openMergeConfirm(turn, mergeTarget);
+        } else if (moved) {
+            openConfirm(turn);
+        }
+        // Anything else — a refused neighbour, a non-adjacent turn, or empty space — does nothing,
+        // having already said so while the pointer was over it.
+    });
+
+    document.addEventListener('pointercancel', stopDrag);
+
+    /* ----------------------------------------------------------------- wiring */
+
+    document.addEventListener('click', function (event) {
+        var target = event.target;
+        // Element rather than HTMLElement: a click on the inline <svg> inside an icon button is an
+        // SVGElement and would otherwise be ignored, so the middle of the icon would not respond.
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        var edit = target.closest('[data-a2t-edit]');
+        if (edit) {
+            event.preventDefault();
+            openEditor(turnOf(edit));
+            return;
+        }
+
+        var cancelEdit = target.closest('[data-a2t-edit-cancel]');
+        if (cancelEdit) {
+            event.preventDefault();
+            closeEditor(turnOf(cancelEdit));
+            return;
+        }
+
+        if (target.closest('[data-a2t-move-cancel]')) {
+            event.preventDefault();
+            endMove();
+
+            return;
+        }
+
+        if (target.closest('[data-a2t-merge-cancel]')) {
+            event.preventDefault();
+            endMerge();
+        }
+    });
+
+    function endMerge() {
+        var moving = root.querySelectorAll('[data-a2t-turn].a2t-turn--moving');
+        for (var i = 0; i < moving.length; i++) {
+            moving[i].classList.remove('a2t-turn--moving');
+        }
+        if (mergeDialog) {
+            if (typeof mergeDialog.close === 'function' && mergeDialog.open) {
+                mergeDialog.close();
+            } else {
+                mergeDialog.removeAttribute('open');
+            }
+        }
+    }
+
+    if (mergeDialog) {
+        mergeDialog.addEventListener('cancel', endMerge);
+    }
+
+    if (mergeForm) {
+        mergeForm.addEventListener('submit', function () {
+            var confirm = mergeForm.querySelector('[data-a2t-merge-confirm]');
+            if (confirm) {
+                confirm.disabled = true;
+                confirm.textContent = 'Merging…';
+            }
+        });
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && drag) {
+            stopDrag();
+        }
+    });
+
+    // Escape closes the dialog the same way Cancel does, so the highlight is cleared either way.
+    dialog.addEventListener('cancel', function () {
+        endMove();
+    });
+
+    // One submission per confirmation. Without this a double click sends the move twice; the second
+    // would lose the version check and flash a conflict, which is correct but alarming.
+    form.addEventListener('submit', function () {
+        var confirm = form.querySelector('[data-a2t-move-confirm]');
+        if (confirm) {
+            confirm.disabled = true;
+            confirm.textContent = 'Moving…';
+        }
+    });
+
+    var editors = root.querySelectorAll('[data-a2t-editor]');
+    for (var e = 0; e < editors.length; e++) {
+        editors[e].addEventListener('submit', function (event) {
+            var save = event.currentTarget.querySelector('[data-a2t-edit-save]');
+            if (save) {
+                save.disabled = true;
+            }
+        });
+    }
+}());
+
+/* ---------------------------------------------------------------------------
+   Audio to Text — conversation scrolling.
+
+   Shared by the conversation page and the correction page, both of which render the same thread into
+   a .a2t-chat__scroll container. Two jobs: open at the newest turn with a "jump to latest" pill, and
+   hold back the older turns until they are asked for.
+
+   The hold-back is presentation only. Every turn is in the markup the server sent — a recording is
+   capped at five minutes, so a conversation is bounded and there is nothing to fetch — and hiding the
+   older ones simply spares the browser laying out several hundred bubbles nobody has scrolled to yet.
+   Without this script they are all visible, which is the correct fallback rather than a degraded one.
+   --------------------------------------------------------------------------- */
+(function () {
+    var WINDOW = 20; // turns shown initially, and revealed per click
+
+    var container = document.querySelector('[data-a2t-scroll]');
+    if (!container) {
+        return; // not one of the two chat pages
+    }
+
+    var thread = container.querySelector('.a2t-thread');
+    var jump = document.querySelector('[data-a2t-jump]');
+
+    function turns() {
+        return thread ? thread.querySelectorAll('.a2t-turn') : [];
+    }
+
+    function toBottom(smooth) {
+        container.scrollTo
+            ? container.scrollTo({ top: container.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+            : (container.scrollTop = container.scrollHeight);
+    }
+
+    function nearBottom() {
+        return container.scrollHeight - container.scrollTop - container.clientHeight < 60;
+    }
+
+    function updateJump() {
+        if (!jump) {
+            return;
+        }
+        if (nearBottom()) {
+            jump.setAttribute('hidden', '');
+        } else {
+            jump.removeAttribute('hidden');
+        }
+    }
+
+    /* ----------------------------------------------------------------- older turns */
+
+    var hiddenTurns = [];
+    var button = null;
+
+    function label() {
+        var count = hiddenTurns.length;
+        var next = count < WINDOW ? count : WINDOW;
+
+        return '↑ Show ' + next + ' earlier message' + (next === 1 ? '' : 's')
+            + ' (' + count + ' hidden)';
+    }
+
+    function reveal() {
+        // Keep the reader where they are: revealing above them would otherwise shove the turn they
+        // were reading down the page by however tall the new ones are.
+        var anchor = container.scrollHeight - container.scrollTop;
+
+        for (var i = 0; i < WINDOW && hiddenTurns.length > 0; i++) {
+            hiddenTurns.pop().hidden = false;
+        }
+
+        if (hiddenTurns.length === 0) {
+            if (button) {
+                button.parentNode.removeChild(button);
+                button = null;
+            }
+        } else if (button) {
+            button.textContent = label();
+        }
+
+        container.scrollTop = container.scrollHeight - anchor;
+    }
+
+    function holdBackOlder() {
+        var all = turns();
+        if (all.length <= WINDOW || !thread) {
+            return;
+        }
+
+        for (var i = 0; i < all.length - WINDOW; i++) {
+            all[i].hidden = true;
+            hiddenTurns.push(all[i]);
+        }
+
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'a2t-thread__earlier';
+        button.textContent = label();
+        button.addEventListener('click', reveal);
+        thread.insertBefore(button, thread.firstChild);
+    }
+
+    holdBackOlder();
+    toBottom(false);
+    updateJump();
+
+    container.addEventListener('scroll', updateJump, { passive: true });
+
+    if (jump) {
+        jump.addEventListener('click', function () {
+            toBottom(true);
+            jump.setAttribute('hidden', '');
+        });
+    }
+}());

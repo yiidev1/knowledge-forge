@@ -19,6 +19,7 @@ use function codecept_data_dir;
 use function dirname;
 use function file_put_contents;
 use function glob;
+use function gmdate;
 use function is_dir;
 use function is_file;
 use function json_encode;
@@ -276,9 +277,10 @@ final class AudioToTextCest
 
         Assert::assertSame(2, $this->jobCount());
 
+        // Each job's View link, which now opens the conversation page, is how a row is identified here.
         $I->amOnPage('/audio-to-text/jobs');
-        $I->seeElement('a[href="/audio-to-text/job/' . $fromA . '"]');
-        $I->seeElement('a[href="/audio-to-text/job/' . $fromB . '"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $fromA . '/conversation"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $fromB . '/conversation"]');
     }
 
     // ---------------------------------------------------------------- shared visibility
@@ -325,12 +327,12 @@ final class AudioToTextCest
         $I->amOnPage('/audio-to-text/jobs');
         $I->seeResponseCodeIs(200);
         $I->see('Audio conversions');
-        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
 
         $this->signIn($I, self::ADMIN_B);
         $I->amOnPage('/audio-to-text/jobs');
         $I->seeResponseCodeIs(200);
-        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
     }
 
     /** The uploader is still recorded, and still shown — on the job page. */
@@ -705,7 +707,11 @@ final class AudioToTextCest
                 'detected_language' => 'en',
                 'speaker_separation_status' => 'NOT_SUPPORTED',
                 'stored_audio_path' => null,
-                'completed_at' => '2026-08-26 12:00:00',
+                // Relative, not a fixed date. The completed counter covers a rolling 24 hours, so
+                // a hard-coded timestamp silently falls out of the window once the calendar moves
+                // past it and the counter assertions start failing for no reason. UTC, because
+                // that is what the column stores.
+                'completed_at' => gmdate('Y-m-d H:i:s'),
             ],
             ['public_id' => $publicId],
         )->execute();
@@ -736,7 +742,7 @@ final class AudioToTextCest
                 'speaker_segments' => $segmentsJson,
                 'agent_text' => $agentText,
                 'customer_text' => $customerText,
-                'speaker_separation_completed_at' => '2026-08-26 12:00:00',
+                'speaker_separation_completed_at' => gmdate('Y-m-d H:i:s'),
             ],
             ['public_id' => $publicId],
         )->execute();

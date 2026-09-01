@@ -1262,17 +1262,63 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 
 .a2t-conversation summary { cursor: pointer; }
 
-.a2t-turn {
-    display: grid;
-    grid-template-columns: 8.5rem 1fr;
-    gap: .75rem;
+/* The conversation reads as a conversation: customer on the left, agent on the right, the way any
+   messaging app arranges a two-party exchange. Where roles were never confirmed the sides still
+   alternate so the back-and-forth stays legible, but the label above each bubble stays neutral --
+   position is a reading aid, never a claim about who someone is. */
+.a2t-thread {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
     padding: .35rem 0;
-    border-bottom: 1px solid var(--border);
+}
+
+.a2t-turn { display: flex; }
+
+.a2t-turn--left { justify-content: flex-start; }
+.a2t-turn--right { justify-content: flex-end; }
+.a2t-turn--neutral { justify-content: center; }
+
+.a2t-bubble {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    max-width: min(72%, 40rem);
+    padding: .5rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
     color: var(--text);
 }
 
+/* A tail on the side the speaker sits, so a glance is enough to tell the two apart. */
+.a2t-turn--left .a2t-bubble { border-bottom-left-radius: 3px; }
+.a2t-turn--right .a2t-bubble { border-bottom-right-radius: 3px; }
+
+/* Unconfirmed speakers look provisional on purpose: a dashed edge and a muted label, so a reader
+   cannot mistake a legible layout for a settled attribution. */
+.a2t-turn--unconfirmed .a2t-bubble { border-style: dashed; }
+.a2t-turn--neutral .a2t-bubble { max-width: min(86%, 46rem); opacity: .85; }
+
 .a2t-turn__who { font-weight: 600; font-size: .85rem; color: var(--text-muted); }
 .a2t-turn__text { overflow-wrap: anywhere; }
+
+.a2t-turn__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    font-size: .75rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Shown only when the gap is long enough to be a real pause rather than a segmentation seam --
+   TurnTiming decides, and renders nothing otherwise. */
+.a2t-turn__delay::before { content: "\00b7"; margin-right: .5rem; }
+
+@media (max-width: 640px) {
+    .a2t-bubble { max-width: 88%; }
+}
 
 /* The tentative role guess for an unpublished split. Set apart from the turns below it deliberately:
    it is the one place on the page where a role name appears without being a claim. */
@@ -1326,3 +1372,360 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 @media (max-width: 1100px) {
     .a2t-table { table-layout: auto; min-width: 900px; }
 }
+
+/* Conversation-only page: a fixed-height chat screen inside the admin shell.
+   Every selector stays under the .a2t- prefix, which
+   `ModuleIsolationTest::testAudioToTextCssIsScopedToItsOwnPrefix` enforces. */
+.a2t-chat { display: flex; flex-direction: column; min-height: 0; }
+
+/* Outside the scrolling container, so the title and both buttons stay put while messages move. */
+.a2t-chat__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding-bottom: 1rem;
+    margin-bottom: .75rem;
+    border-bottom: 1px solid var(--border);
+}
+.a2t-chat__heading { min-width: 0; }
+.a2t-chat__title { margin: 0; font-size: 1.4rem; overflow-wrap: anywhere; }
+.a2t-chat__subtitle { margin: .3rem 0 0; color: var(--text-muted); font-size: .88rem; }
+.a2t-chat__actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+
+/* The only thing on the page that scrolls. `overflow-x: hidden` rather than auto: a long unbroken
+   word wraps inside its bubble (a2t-turn__text sets overflow-wrap), so a horizontal bar would only
+   ever appear by accident. */
+.a2t-chat__scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* Fallback for browsers without :has() — a conservative viewport-relative height, so the
+       conversation still scrolls inside itself rather than dragging the whole window. The @supports
+       block below replaces it with an exactly-measured height wherever :has() is available. */
+    max-height: calc(100vh - 16rem);
+    padding-right: .35rem;
+}
+
+/* A conversation column rather than bubbles thrown at opposite edges of a wide page. This width is
+   the difference between a chat and a staircase: at 1100px a short left bubble and a short right one
+   share no horizontal space at all, and the eye reads the emptiness between them as a vertical gap
+   even though the rows are touching. At 900px with bubbles up to 68% the two sides overlap, and the
+   exchange reads as one thread. */
+.a2t-chat__scroll .a2t-thread { gap: .3rem; padding: 0 5rem; }
+.a2t-chat__scroll .a2t-bubble {
+    max-width: min(68%, 34rem);
+    gap: .1rem;
+    padding: .4rem .65rem;
+    line-height: 1.35;
+}
+.a2t-chat__scroll .a2t-turn--neutral .a2t-bubble { max-width: min(82%, 40rem); }
+.a2t-chat__scroll .a2t-turn__who { font-size: .76rem; }
+.a2t-chat__scroll .a2t-turn__meta { font-size: .7rem; }
+
+/* Consecutive turns by the same speaker read as one run: tighten the gap and square the inner
+   corner, the way a messaging app groups them. */
+.a2t-chat__scroll .a2t-turn--left + .a2t-turn--left,
+.a2t-chat__scroll .a2t-turn--right + .a2t-turn--right { margin-top: -.15rem; }
+
+@supports selector(:has(*)) {
+    /* Pin the shell to the viewport so the grid row cannot grow past it, then let the flex chain
+       hand the leftover height to the scrolling container. `min-height: 0` at every level is the
+       load-bearing part: without it a flex item refuses to shrink below its content and the
+       scrollbar lands on the window instead. */
+    .app:has(.a2t-chat) { height: 100vh; }
+    /* `.main` is a grid item, and a grid item's `min-height` defaults to `auto` — it refuses to shrink
+       below its content, so the pinned row above it is ignored and the whole column grows instead.
+       This is the same trap as the flex children below, one level up, and it has to be released here
+       or nothing downstream is bounded. */
+    .app:has(.a2t-chat) > .main { min-height: 0; }
+    .content:has(.a2t-chat) {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        /* A chat panel rather than a page: header and messages share one column, so the buttons sit
+           over the conversation they act on instead of floating out to a far edge. */
+        max-width: 1120px;
+        padding-bottom: 1.25rem;
+    }
+    .content:has(.a2t-chat) .a2t-chat { flex: 1; min-height: 0; }
+    .content:has(.a2t-chat) .a2t-chat__scroll { flex: 1; min-height: 0; max-height: none; }
+}
+
+/* Below the sidebar's own breakpoint the shell stacks and scrolls normally again. Pinning the
+   viewport there would squeeze the messages into a letterbox under a full-width nav, so the page
+   goes back to ordinary document scrolling and the bubbles take the width instead. */
+@media (max-width: 900px) {
+    .a2t-chat__scroll { max-height: none; overflow-y: visible; }
+    .a2t-chat__scroll .a2t-bubble { max-width: 88%; }
+
+    /* Undo the pinning too, or the flex chain would still be sized to a viewport it no longer fills. */
+    .app:has(.a2t-chat) { height: auto; }
+    .content:has(.a2t-chat) { display: block; flex: none; min-height: 0; }
+    .content:has(.a2t-chat) .a2t-chat { flex: none; }
+    .content:has(.a2t-chat) .a2t-chat__scroll { flex: none; max-height: none; }
+}
+
+/* Speaker correction — the conversation page's chat layout, with per-message controls.
+   Both screens share .a2t-chat/.a2t-thread/.a2t-bubble so they read as one product; everything added
+   here stays under the .a2t- prefix, which ModuleIsolationTest enforces. */
+/* Deliberately short: this is standing context, and every line it takes is a line of conversation
+   the reader does not get. */
+.a2t-review__notice {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .6rem .85rem;
+    margin-bottom: .6rem;
+}
+.a2t-review__lede { margin: 0; color: var(--text-muted); line-height: 1.45; font-size: .82rem; }
+
+.a2t-review__status {
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: .45rem;
+}
+.a2t-review__status form { margin: 0; }
+/* Genuinely small: these are standing page actions, not the point of the screen. */
+.a2t-review__status .btn { padding: .28rem .65rem; font-size: .78rem; }
+.a2t-review__state { font-size: .82rem; color: var(--text-muted); line-height: 1.45; }
+.a2t-review__state--confirmed { color: var(--text); }
+.a2t-review__state--unconfirmed { color: var(--error-text); }
+.a2t-review__hint { font-size: .78rem; color: var(--text-muted); max-width: 32rem; line-height: 1.4; }
+
+/* Room for the controls that sit under a bubble, without the airy gaps of a form layout. */
+.a2t-review .a2t-turn { flex-direction: column; gap: .3rem; }
+.a2t-review .a2t-turn--left { align-items: flex-start; }
+.a2t-review .a2t-turn--right { align-items: flex-end; }
+.a2t-review .a2t-turn--neutral { align-items: center; }
+.a2t-review .a2t-bubble { position: relative; max-width: min(68%, 34rem); }
+
+/* Outside the bubble and always visible, matching the pencil beside a Store Chat question. Hidden
+   until hover looked tidy but left the controls undiscoverable — nothing on screen said the message
+   could be corrected at all. They sit in the margin so they never crowd the words. */
+.a2t-turn__tools {
+    display: flex;
+    gap: .3rem;
+    position: absolute;
+    top: 2px;
+}
+/* Both controls together on the message's own side — handle first, pencil behind it — so a Customer
+   finds them to the left of the bubble and an Agent to the right, never split across it. */
+.a2t-turn--left .a2t-turn__tools { right: 100%; margin-right: .5rem; }
+.a2t-turn--right .a2t-turn__tools { left: 100%; margin-left: .5rem; }
+.a2t-turn--neutral .a2t-turn__tools { right: 100%; margin-right: .5rem; }
+
+/* touch-action is the whole reason a touch drag works: without it the browser claims the gesture for
+   scrolling and the handle never sees a pointermove. */
+.a2t-iconbtn--grip { cursor: grab; touch-action: none; }
+.a2t-iconbtn--grip:active { cursor: grabbing; }
+.a2t-review--dragging { cursor: grabbing; user-select: none; }
+
+.a2t-turn--dragging .a2t-bubble { opacity: .45; outline: 2px dashed var(--primary); outline-offset: 2px; }
+
+/* The drop target is a side of the thread, not a bubble: a turn can change whose it is, never when it
+   was said, so there is nothing else it could be dropped onto. */
+.a2t-dropzone {
+    position: fixed;
+    z-index: 30;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 1rem;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: rgba(0, 0, 0, .18);
+    color: var(--text-muted);
+    font-size: .9rem;
+    font-weight: 600;
+    pointer-events: none;
+}
+.a2t-dropzone__label {
+    padding: .3rem .8rem;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+}
+.a2t-dropzone--over { border-color: var(--primary); color: var(--text); background: rgba(99, 102, 241, .16); }
+.a2t-dropzone--over .a2t-dropzone__label { border-color: var(--primary); color: var(--text); }
+.a2t-dropzone[hidden] { display: none; }
+
+.a2t-iconbtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.a2t-iconbtn:hover,
+.a2t-iconbtn:focus-visible { color: var(--primary); border-color: var(--primary); }
+.a2t-iconbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.a2t-icon { width: 15px; height: 15px; display: block; pointer-events: none; }
+
+/* No margin to sit in on a narrow screen, so they drop below the bubble instead of overlapping it. */
+@media (max-width: 760px) {
+    .a2t-turn__tools {
+        position: static;
+        justify-content: flex-end;
+        margin: .35rem 0 0;
+    }
+    .a2t-turn--left .a2t-turn__tools,
+    .a2t-turn--right .a2t-turn__tools,
+    .a2t-turn--neutral .a2t-turn__tools { margin-left: 0; margin-right: 0; }
+
+    /* No margin to sit in, so the pair drops below the message and stays draggable there. */
+    .a2t-chat__scroll .a2t-thread { padding: 0; }
+}
+
+/* Visible to a screen reader, not on screen: the icon buttons need a name, and a title alone is not
+   reliably announced. */
+.a2t-sr {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.a2t-turn__editor { width: min(100%, 34rem); }
+.a2t-turn__textarea { width: 100%; margin-bottom: .4rem; }
+.a2t-turn__editor-actions { display: flex; gap: .4rem; justify-content: flex-end; }
+.a2t-turn--editing .a2t-turn__text { opacity: .45; }
+
+/* The message being moved stays obviously the subject of the dialog in front of it. */
+.a2t-turn--moving .a2t-bubble { outline: 2px solid var(--primary); outline-offset: 2px; }
+.a2t-review--moving .a2t-turn:not(.a2t-turn--moving) .a2t-bubble { opacity: .5; }
+
+/* The plain forms are the whole interface without JavaScript. The script announces itself by adding
+   .a2t-review--enhanced, and only then do they step aside — so a failed script leaves a usable page
+   rather than an empty one. */
+.a2t-review--enhanced .a2t-turn__fallback { display: none; }
+.a2t-turn__fallback { display: flex; gap: .6rem; align-items: flex-start; flex-wrap: wrap; }
+.a2t-turn__fallback form { margin: 0; }
+.a2t-turn__advanced > summary { cursor: pointer; font-size: .8rem; color: var(--text-muted); }
+.a2t-turn__advanced form { margin: .6rem 0; }
+.a2t-turn__advanced-label { display: block; font-size: .8rem; color: var(--text-muted); margin-bottom: .3rem; }
+.a2t-turn__refused { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
+
+.a2t-confirm {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    padding: 1.25rem;
+    max-width: min(92vw, 32rem);
+}
+.a2t-confirm::backdrop { background: rgba(0, 0, 0, .55); }
+.a2t-confirm__title { margin: 0 0 .9rem; font-size: 1.05rem; }
+.a2t-confirm__row { display: flex; gap: .75rem; margin: 0 0 .5rem; font-size: .88rem; line-height: 1.45; }
+.a2t-confirm__key { flex: 0 0 5rem; color: var(--text-muted); }
+.a2t-confirm__value { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.a2t-confirm__note {
+    margin: .75rem 0 0;
+    padding: .6rem .7rem;
+    border-radius: 6px;
+    background: var(--surface-muted, rgba(0, 0, 0, .18));
+    font-size: .82rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+.a2t-confirm__actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; }
+
+@media (max-width: 900px) {
+    .a2t-review .a2t-bubble { max-width: 100%; }
+}
+
+/* Jump-to-latest, and the reveal that keeps a long conversation cheap to render.
+   Mirrors the Store Chat pill so the two screens behave the same way. */
+.a2t-chat { position: relative; }
+.a2t-chat__jump {
+    position: absolute; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .4rem .9rem; border-radius: 999px;
+    background: var(--primary); color: var(--primary-contrast);
+    border: none; box-shadow: var(--shadow-lg); cursor: pointer;
+    font: inherit; font-size: .82rem; font-weight: 600; z-index: 4;
+}
+.a2t-chat__jump:hover { background: var(--primary-hover); }
+.a2t-chat__jump[hidden] { display: none; }
+
+/* Inserted by the script above the turns it is holding back. Without the script every turn is
+   rendered as normal, so nothing is ever unreachable. */
+.a2t-thread__earlier {
+    align-self: center;
+    margin: .25rem 0 .6rem;
+    padding: .35rem .9rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: .8rem;
+    cursor: pointer;
+}
+.a2t-thread__earlier:hover { color: var(--text); border-color: var(--text-faint); }
+
+.a2t-chat__scroll::-webkit-scrollbar { width: 11px; }
+.a2t-chat__scroll::-webkit-scrollbar-track { background: transparent; }
+.a2t-chat__scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+}
+.a2t-chat__scroll:hover::-webkit-scrollbar-thumb { background: var(--text-faint); background-clip: padding-box; }
+
+/* Drop targets while a message is being dragged.
+   Three states, because a silent non-response is indistinguishable from a broken page: a neighbour
+   that can be merged, one the merge rule refuses, and everything else — which cannot be a target at
+   all, since the conversation keeps the order it was spoken in. */
+.a2t-turn--droppable .a2t-bubble { outline: 2px dashed var(--primary); outline-offset: 3px; }
+.a2t-turn--droppable.a2t-turn--over .a2t-bubble {
+    outline-style: solid;
+    background: rgba(99, 102, 241, .18);
+}
+
+.a2t-turn--refused .a2t-bubble { outline: 2px dashed var(--error-text); outline-offset: 3px; opacity: .75; }
+.a2t-turn--refused.a2t-turn--over { cursor: not-allowed; }
+
+.a2t-turn--invalid .a2t-bubble { opacity: .4; }
+.a2t-turn--invalid.a2t-turn--over { cursor: not-allowed; }
+
+/* The reason rides on the turn itself, so it appears exactly where the pointer is rather than in a
+   corner the eye has left. */
+.a2t-turn--over[data-a2t-drop-hint] { position: relative; }
+.a2t-turn--over[data-a2t-drop-hint]::after {
+    content: attr(data-a2t-drop-hint);
+    position: absolute;
+    left: 50%;
+    bottom: -.35rem;
+    transform: translate(-50%, 100%);
+    z-index: 31;
+    max-width: 22rem;
+    padding: .3rem .7rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-lg);
+    font-size: .78rem;
+    font-weight: 600;
+    white-space: normal;
+    text-align: center;
+    pointer-events: none;
+}
+.a2t-turn--droppable.a2t-turn--over[data-a2t-drop-hint]::after { border-color: var(--primary); }
+.a2t-turn--refused.a2t-turn--over[data-a2t-drop-hint]::after { border-color: var(--error-text); }

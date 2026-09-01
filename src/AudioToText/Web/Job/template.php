@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\EffectiveConversation;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Web\AudioToTextRoute;
+use App\AudioToText\Web\AudioToTextViews;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -16,6 +18,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var UrlGeneratorInterface $urlGenerator
  * @var TranscriptionJob $job
  * @var ConversationView $conversation
+ * @var EffectiveConversation $effective
  * @var int|null $queuePosition
  * @var int $pollSeconds
  * @var AppTimeZone $appTimeZone
@@ -118,14 +121,19 @@ $separation = $job->speakerSeparationStatus;
         <pre class="a2t-transcript"><?= Html::encode($job->transcript ?? '') ?></pre>
     </div>
 
-    <?php if ($separation === SpeakerSeparationStatus::COMPLETED && $job->hasSeparatedText()): ?>
+    <?php
+    // Gated on whether the roles may be shown as fact, not on what the machine concluded. An
+    // administrator's confirmation is the other way a conversation reaches that state, and reading the
+    // machine's status here would leave a confirmed call with role-labelled turns and no split cards.
+    ?>
+    <?php if ($conversation->rolesPublished && $effective->hasSeparatedText()): ?>
         <div class="a2t-split">
             <div class="card">
                 <div class="a2t-section__header">
                     <h2 class="card__title">Customer</h2>
                     <a class="btn btn--small" href="<?= Html::encode($downloadUrl('customer')) ?>">Download</a>
                 </div>
-                <pre class="a2t-transcript"><?= Html::encode($job->customerText ?? '') ?></pre>
+                <pre class="a2t-transcript"><?= Html::encode($effective->customerText ?? '') ?></pre>
             </div>
 
             <div class="card">
@@ -133,10 +141,10 @@ $separation = $job->speakerSeparationStatus;
                     <h2 class="card__title">Agent</h2>
                     <a class="btn btn--small" href="<?= Html::encode($downloadUrl('agent')) ?>">Download</a>
                 </div>
-                <pre class="a2t-transcript"><?= Html::encode($job->agentText ?? '') ?></pre>
+                <pre class="a2t-transcript"><?= Html::encode($effective->agentText ?? '') ?></pre>
             </div>
         </div>
-    <?php elseif ($separation !== null): ?>
+    <?php elseif ($separation !== null && !$conversation->rolesPublished): ?>
         <?php
         // Deliberately explicit about *why* there is no split, rather than silently showing nothing.
         // An empty section reads as a bug; a stated reason reads as a result.
@@ -159,12 +167,36 @@ $separation = $job->speakerSeparationStatus;
     <?php endif; ?>
 
     <?php if (!$conversation->isEmpty()): ?>
-        <details class="card a2t-conversation">
+        <details class="card a2t-conversation" open>
             <summary class="card__title">
                 <?= $conversation->rolesPublished
                     ? 'Speaker-labelled conversation'
                     : 'Detected speakers (roles not confirmed)' ?>
             </summary>
+
+            <?php
+            // A machine result and a person's assertion are different kinds of fact, so the page says
+            // which one it is showing rather than presenting both as "the answer".
+        ?>
+            <?php if ($job->rolesConfirmedAt !== null): ?>
+                <p class="a2t-conversation__provenance">
+                    Roles confirmed by an administrator on
+                    <?= Html::encode($localTime($job->rolesConfirmedAt)) ?>.
+                </p>
+            <?php elseif ($effective->isReviewed): ?>
+                <p class="a2t-conversation__provenance">
+                    This conversation has been corrected by an administrator. The complete transcript
+                    above is the system's original result and is unchanged.
+                </p>
+            <?php endif; ?>
+
+            <p class="a2t-conversation__actions">
+                <a class="btn btn--small"
+                   href="<?= Html::encode($urlGenerator->generate(
+                       AudioToTextRoute::JOB_REVIEW,
+                       ['publicId' => $job->publicId],
+                   )) ?>">Correct speakers</a>
+            </p>
 
             <?php if (!$conversation->rolesPublished && $conversation->hypotheses !== []): ?>
                 <?php
@@ -187,12 +219,7 @@ $separation = $job->speakerSeparationStatus;
                 </div>
             <?php endif; ?>
 
-            <?php foreach ($conversation->turns as $turn): ?>
-                <div class="a2t-turn">
-                    <span class="a2t-turn__who"><?= Html::encode($turn->label) ?></span>
-                    <span class="a2t-turn__text"><?= Html::encode($turn->text) ?></span>
-                </div>
-            <?php endforeach; ?>
+            <?= $this->render(AudioToTextViews::thread(), ['turns' => $conversation->turns]) ?>
         </details>
     <?php endif; ?>
 <?php endif; ?>

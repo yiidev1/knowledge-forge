@@ -44,7 +44,50 @@ final readonly class TranscriptionJob
         public ?DateTimeImmutable $startedAt,
         public ?DateTimeImmutable $completedAt,
         public ?DateTimeImmutable $expiresAt,
+        // --- reviewed layer -------------------------------------------------------------------
+        // Null on every job the pipeline produced. A correction adds this layer; it never rewrites the
+        // raw columns above, so "Yes. For pikup" stays in `transcript` while the reviewed conversation
+        // carries "Yes. For pickup".
+        public ?string $reviewedSegmentsJson = null,
+        public ?string $reviewedAgentText = null,
+        public ?string $reviewedCustomerText = null,
+        public ?DateTimeImmutable $reviewedAt = null,
+        /** Joined from `admin_users` — the numeric reviewer id is never exposed. */
+        public ?string $reviewedByUsername = null,
+        /**
+         * When an administrator explicitly confirmed who the speakers are.
+         *
+         * Separate from `reviewedAt` on purpose: correcting a turn boundary is not the same act as
+         * asserting both speakers' identities, and a NEEDS_REVIEW call must not gain confirmed roles
+         * because somebody fixed a boundary in it.
+         */
+        public ?DateTimeImmutable $rolesConfirmedAt = null,
+        /** Also the optimistic-lock version, as `messages.edit_count` is for chat edits. */
+        public int $reviewCount = 0,
     ) {}
+
+    /** Whether an administrator has corrected this conversation. */
+    public function isReviewed(): bool
+    {
+        return $this->reviewedSegmentsJson !== null;
+    }
+
+    /**
+     * Whether Agent/Customer may be stated as fact for this conversation.
+     *
+     * Either the machine cleared its own gates — a published split, which needs no further ceremony —
+     * or a person said so explicitly. Nothing else counts, and in particular the mere existence of a
+     * reviewed layer does not: fixing a boundary is not confirming an identity.
+     */
+    public function rolesConfirmed(): bool
+    {
+        if ($this->rolesConfirmedAt !== null) {
+            return true;
+        }
+
+        return $this->speakerSeparationStatus?->isPublishable() === true
+            && ($this->agentText !== null || $this->customerText !== null);
+    }
 
     public function isDownloadable(): bool
     {

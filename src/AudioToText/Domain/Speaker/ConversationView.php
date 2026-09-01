@@ -26,10 +26,14 @@ use function preg_match;
  *      gate. Only this one may be shown as a fact, and only this one populates `agent_text` /
  *      `customer_text`.
  *
- * `speaker_separation_status` is the sole arbiter of whether (2) has become (3), which is why this class
- * takes the status rather than inspecting the roles on the utterances. A NEEDS_REVIEW result carries
- * fully populated AGENT/CUSTOMER roles in its stored segments — identically to a COMPLETED one — so the
- * roles cannot be used to decide how much to claim about them.
+ * Whether (2) has become (3) is decided by `speaker_separation_status` **or** by an administrator's
+ * explicit confirmation — which is why this class takes both rather than inspecting the roles on the
+ * utterances. A NEEDS_REVIEW result carries fully populated AGENT/CUSTOMER roles in its stored segments,
+ * identically to a COMPLETED one, so the roles cannot be used to decide how much to claim about them.
+ *
+ * The two routes are not interchangeable to a reader, and the page says which one applied: a machine
+ * result and a person's assertion are different kinds of fact, and collapsing them would lose the
+ * distinction the whole review feature exists to record.
  */
 final readonly class ConversationView
 {
@@ -54,17 +58,31 @@ final readonly class ConversationView
      *                                   stronger — the four things the invariant names (status,
      *                                   confidence, aggregate text, turn labels) either all agree or
      *                                   nothing is presented as settled.
+     * @param bool $rolesConfirmedByHuman whether an administrator has explicitly confirmed the roles for
+     *                                    this conversation. A second, independent route to publication:
+     *                                    the machine cleared its own gate, *or* a person stood behind
+     *                                    the labels. Without it CONFIRM_ROLES would write correct data
+     *                                    that no page could read, because `speaker_separation_status`
+     *                                    records what the machine concluded and is never rewritten.
      */
     public static function from(
         ?SpeakerSeparationStatus $status,
         array $utterances,
         ?float $confidence = null,
         bool $aggregateTextPresent = true,
+        bool $rolesConfirmedByHuman = false,
     ): self {
-        $published = $status?->isPublishable() === true && $aggregateTextPresent;
+        $published = $aggregateTextPresent
+            && ($status?->isPublishable() === true || $rolesConfirmedByHuman);
+
+        // Presentation detail, computed once for the whole thread because both depend on neighbours:
+        // a turn's side follows the cluster's first appearance, and its delay is measured against the
+        // turn immediately before it. Neither is stored; both are derived from timestamps already held.
+        $timings = ResponseTiming::forUtterances($utterances);
+        $sides = ResponseTiming::sidesFor($utterances, $published);
 
         $turns = [];
-        foreach ($utterances as $utterance) {
+        foreach ($utterances as $index => $utterance) {
             $isRole = $utterance->role === SpeakerRole::AGENT || $utterance->role === SpeakerRole::CUSTOMER;
 
             // The role label is used only when the result as a whole was published. Previously this
@@ -72,8 +90,22 @@ final readonly class ConversationView
             // utterance still carries a role — rendered "Agent" and "Customer" exactly like a confident
             // one, while the list page showed the same job as an unpublished split.
             $turns[] = $published && $isRole
-                ? new ConversationTurn($utterance->role->label(), $utterance->text, true)
-                : new ConversationTurn(self::neutralLabel($utterance->speaker), $utterance->text, false);
+                ? new ConversationTurn(
+                    $utterance->role->label(),
+                    $utterance->text,
+                    true,
+                    $sides[$index] ?? ConversationSide::Neutral,
+                    $timings[$index] ?? TurnTiming::untimed(),
+                    $utterance->edited,
+                )
+                : new ConversationTurn(
+                    self::neutralLabel($utterance->speaker),
+                    $utterance->text,
+                    false,
+                    $sides[$index] ?? ConversationSide::Neutral,
+                    $timings[$index] ?? TurnTiming::untimed(),
+                    $utterance->edited,
+                );
         }
 
         return new self(

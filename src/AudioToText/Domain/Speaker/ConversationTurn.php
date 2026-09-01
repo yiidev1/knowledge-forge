@@ -18,10 +18,19 @@ final readonly class ConversationTurn
      *                          neutral speaker name
      * @param bool   $confirmed whether `$label` is a role the system is prepared to stand behind. False
      *                          for every neutral label, and the flag the tests assert on.
+     * @param ConversationSide $side   which column to draw the bubble in. Presentation only: it makes
+     *                                 the exchange readable and claims nothing `$label` does not.
+     * @param TurnTiming       $timing when the turn happened and how long the reply took, derived from
+     *                                 stored timestamps and never persisted.
+     * @param bool $edited whether an administrator corrected this turn's wording. Shown as a marker so
+     *                     a reader can tell corrected text from what the machine heard, without a diff.
      */
     public function __construct(
         public string $label,
         public string $text,
         public bool $confirmed,
+        public ConversationSide $side,
+        public TurnTiming $timing,
+        public bool $edited = false,
     ) {}
 }

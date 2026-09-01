@@ -497,12 +497,122 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         $this->connection->createCommand()->delete(self::TABLE, ['id' => $id])->execute();
     }
 
+    /**
+     * Store a corrected conversation, if nothing has changed underneath us.
+     *
+     * A conditional UPDATE on `review_count` rather than a read-then-write: two administrators
+     * correcting one call in two tabs would otherwise both read version 3, and the second save would
+     * silently discard the first. The same guard `messages.edit_count` gives chat edits.
+     *
+     * **Writes only reviewed columns.** `transcript`, `speaker_segments`, `agent_text` and
+     * `customer_text` are absent from this statement by design — the machine's result stays exactly as
+     * the worker left it, whatever an administrator corrects on top of it.
+     *
+     * The caller is responsible for wrapping this and the matching revision insert in one transaction.
+     *
+     * @return bool false when the version had moved on, so the caller can report a conflict rather than
+     *              overwriting somebody else's work
+     */
+    public function saveReview(
+        int $id,
+        string $reviewedSegmentsJson,
+        ?string $reviewedAgentText,
+        ?string $reviewedCustomerText,
+        int $reviewedByAdminId,
+        int $expectedReviewCount,
+    ): bool {
+        $affected = $this->connection->createCommand()->update(
+            self::TABLE,
+            [
+                'reviewed_segments' => $reviewedSegmentsJson,
+                'reviewed_agent_text' => $reviewedAgentText,
+                'reviewed_customer_text' => $reviewedCustomerText,
+                'reviewed_at' => DbDateTime::format($this->clock->now()),
+                'reviewed_by_admin_id' => $reviewedByAdminId,
+                'review_count' => new Expression('`review_count` + 1'),
+            ],
+            ['id' => $id, 'review_count' => $expectedReviewCount],
+        )->execute();
+
+        return $affected === 1;
+    }
+
+    /**
+     * Discard the reviewed layer, returning the job to the machine's own result.
+     *
+     * `review_count` still advances. The version counts *corrections made*, not layers present, so a
+     * revert cannot make a stale tab's save look current again — and the revert itself is recorded as a
+     * revision by the caller.
+     */
+    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool
+    {
+        $affected = $this->connection->createCommand()->update(
+            self::TABLE,
+            [
+                'reviewed_segments' => null,
+                'reviewed_agent_text' => null,
+                'reviewed_customer_text' => null,
+                // A revert removes the human judgement too: with no reviewed layer there is nothing
+                // left that a confirmation could be about.
+                'roles_confirmed_at' => null,
+                'reviewed_at' => DbDateTime::format($this->clock->now()),
+                'reviewed_by_admin_id' => $reviewedByAdminId,
+                'review_count' => new Expression('`review_count` + 1'),
+            ],
+            ['id' => $id, 'review_count' => $expectedReviewCount],
+        )->execute();
+
+        return $affected === 1;
+    }
+
+    /**
+     * Record that an administrator confirmed who the speakers are, and publish the two role columns.
+     *
+     * The derivation is passed in rather than computed here: the caller holds the reviewed turns and
+     * assembles the text the same way the pipeline does. Writing both in one statement is what keeps
+     * "roles are confirmed" and "aggregate text exists" from ever disagreeing — the invariant the
+     * conversation view's publish gate already depends on.
+     *
+     * Same optimistic lock as every other correction: confirming is a correction.
+     */
+    public function confirmRoles(
+        int $id,
+        string $segmentsJson,
+        string $agentText,
+        string $customerText,
+        int $confirmedByAdminId,
+        int $expectedReviewCount,
+    ): bool {
+        $now = DbDateTime::format($this->clock->now());
+
+        $affected = $this->connection->createCommand()->update(
+            self::TABLE,
+            [
+                // Written even when identical to `speaker_segments`: a confirmation without a reviewed
+                // layer leaves `isReviewed()` false, and the columns below would never be read.
+                'reviewed_segments' => $segmentsJson,
+                'roles_confirmed_at' => $now,
+                'reviewed_agent_text' => $agentText,
+                'reviewed_customer_text' => $customerText,
+                'reviewed_at' => $now,
+                'reviewed_by_admin_id' => $confirmedByAdminId,
+                'review_count' => new Expression('`review_count` + 1'),
+            ],
+            ['id' => $id, 'review_count' => $expectedReviewCount],
+        )->execute();
+
+        return $affected === 1;
+    }
+
     private function baseQuery(): Query
     {
         return (new Query($this->connection))
-            ->select(['j.*', 'uploaded_by' => 'a.username'])
+            // `reviewed_by` is joined for the same reason as `uploaded_by`: the page needs a name, and
+            // the numeric administrator id must never reach the browser.
+            ->select(['j.*', 'uploaded_by' => 'a.username', 'reviewed_by' => 'r.username'])
             ->from(['j' => self::TABLE])
-            ->leftJoin(['a' => self::ADMINS], 'a.id = j.uploaded_by_admin_id');
+            ->leftJoin(['a' => self::ADMINS], 'a.id = j.uploaded_by_admin_id')
+            ->leftJoin(['r' => self::ADMINS], 'r.id = j.reviewed_by_admin_id');
     }
 
     private function enqueueLockName(): string
@@ -569,6 +679,13 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             DbDateTime::parseNullable($this->str($row['started_at'] ?? null)),
             DbDateTime::parseNullable($this->str($row['completed_at'] ?? null)),
             DbDateTime::parseNullable($this->str($row['expires_at'] ?? null)),
+            $this->str($row['reviewed_segments'] ?? null),
+            $this->str($row['reviewed_agent_text'] ?? null),
+            $this->str($row['reviewed_customer_text'] ?? null),
+            DbDateTime::parseNullable($this->str($row['reviewed_at'] ?? null)),
+            $this->str($row['reviewed_by'] ?? null),
+            DbDateTime::parseNullable($this->str($row['roles_confirmed_at'] ?? null)),
+            (int) ($row['review_count'] ?? 0),
         );
     }
 
