@@ -210,10 +210,16 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                     </form>
 
                     <?php
-                    // Everything below is the no-JavaScript path, and it is exactly what this page did
-                    // before: plain forms, one action each. The script hides this block once it has
-                    // taken over, so the two never both appear.
+                    // The no-JavaScript path: plain forms, one action each, exactly what this page did
+                    // before the drag handle existed.
+                    //
+                    // Inside <noscript> rather than hidden by a class the script adds. A browser with
+                    // scripting on does not build these elements at all, so the enhanced layout is what
+                    // paints first; hiding them afterwards meant the big buttons were briefly on screen
+                    // and the bubbles jumped once the script caught up. The CSP forbids inline scripts
+                    // and inline styles, so there is no earlier hook than the parser itself.
                 ?>
+                    <noscript>
                     <div class="a2t-turn__fallback" data-a2t-fallback>
                         <form method="post" action="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MOVE, $turn->index)) ?>">
                             <?= $csrfField ?><?= $version() ?>
@@ -282,6 +288,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                             <?php endforeach; ?>
                         </details>
                     </div>
+                    </noscript>
                 </div>
             <?php endforeach; ?>
         </div>

@@ -1080,9 +1080,9 @@
         note: dialog.querySelector('[data-a2t-move-note]')
     };
 
-    // Announce that the script is running: the icon tools appear and the plain forms step aside, so
-    // the two sets of controls are never both on screen.
-    root.classList.add('a2t-review--enhanced');
+    // The plain forms live in <noscript>, so a scripting browser never built them — nothing to hide
+    // here, only the icon controls to reveal. They are absolutely positioned, so their arrival costs
+    // no reflow.
     var tools = root.querySelectorAll('[data-a2t-tools]');
     for (var i = 0; i < tools.length; i++) {
         tools[i].hidden = false;

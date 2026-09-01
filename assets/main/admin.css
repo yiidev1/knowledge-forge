@@ -1609,10 +1609,9 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-turn--moving .a2t-bubble { outline: 2px solid var(--primary); outline-offset: 2px; }
 .a2t-review--moving .a2t-turn:not(.a2t-turn--moving) .a2t-bubble { opacity: .5; }
 
-/* The plain forms are the whole interface without JavaScript. The script announces itself by adding
-   .a2t-review--enhanced, and only then do they step aside — so a failed script leaves a usable page
-   rather than an empty one. */
-.a2t-review--enhanced .a2t-turn__fallback { display: none; }
+/* The plain forms are the whole interface without JavaScript. They are rendered inside <noscript>,
+   so a scripting browser never builds them at all — which is why the enhanced layout is what paints
+   first, with no flash of the old controls and no reflow when the script arrives. */
 .a2t-turn__fallback { display: flex; gap: .6rem; align-items: flex-start; flex-wrap: wrap; }
 .a2t-turn__fallback form { margin: 0; }
 .a2t-turn__advanced > summary { cursor: pointer; font-size: .8rem; color: var(--text-muted); }
