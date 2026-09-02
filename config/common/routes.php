@@ -24,6 +24,7 @@ use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
+use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
 use App\Reports\Web as Reports;
 use App\Rules\Web\Detail as RulesDetail;
 use App\Rules\Web\GlobalBase as RulesGlobalBase;
@@ -295,6 +296,12 @@ return [
             Route::get('/admin/order58/store-audio')
                 ->action(Order58StoreAudio\Action::class)
                 ->name('order58.store-audio'),
+
+            // Hidden, URL-only manual probe of the two external recording endpoints. Diagnostic only: it
+            // reads and writes nothing, enqueues nothing, and is not linked from any navigation.
+            Route::get('/admin/order58/test-recording-apis')
+                ->action(Order58TestRecordingApis\Action::class)
+                ->name('order58.test-recording-apis'),
 
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')
