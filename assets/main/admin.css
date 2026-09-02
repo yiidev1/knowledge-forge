@@ -1203,6 +1203,14 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     color: var(--error-text);
 }
 
+/* Some recordings of this conversation finished and at least one did not. Warning rather than
+   error: the successful transcript is still there and still usable. */
+.a2t-badge--partially-completed {
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+}
+
 .a2t-meta { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 0 0 .9rem; }
 .a2t-meta div { display: flex; flex-direction: column; }
 
@@ -1348,6 +1356,7 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 
 /* Column widths: the three transcript previews share the slack, everything else is sized to content
    so nothing wraps a two-word heading onto three lines. */
+.a2t-table col.a2t-col-store { width: 10rem; }
 .a2t-table col.a2t-col-when { width: 8.5rem; }
 .a2t-table col.a2t-col-status { width: 7.5rem; }
 .a2t-table col.a2t-col-stage { width: 7rem; }

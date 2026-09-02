@@ -21,6 +21,7 @@ use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
+use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Reports\Web as Reports;
@@ -287,6 +288,14 @@ return [
                 ->action(Order58StoreChat\Action::class)
                 ->name('order58.store-chat'),
 
+            // Store audio: the same picker, for uploading call recordings against a store. Every store
+            // is a valid destination — unlike chat, transcribing a recording needs no knowledge base.
+            // The card links on by route name, which is what keeps this page and Audio-to-Text from
+            // naming each other's namespace.
+            Route::get('/admin/order58/store-audio')
+                ->action(Order58StoreAudio\Action::class)
+                ->name('order58.store-audio'),
+
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')
                 ->action(AdminRuleChat\Index\Action::class)
@@ -327,9 +336,23 @@ return [
             // specific reason: transcription costs ~94 seconds of a CPU core and 834 MB, so an anonymous
             // visitor must not be able to spend the machine. The upload request itself only validates and
             // queues — ffmpeg, whisper.cpp and the diarizer all run in `kf:audio:worker`.
-            Route::methods([Method::GET, Method::POST], '/audio-to-text')
+            // No longer an upload form: every conversion belongs to a store, so this address now
+            // redirects to the picker. GET only — the store-less POST is gone, because an upload that
+            // cannot name a store would have to invent one.
+            Route::get('/audio-to-text')
                 ->action(AudioToText\Action::class)
                 ->name(AudioToTextRoute::PAGE),
+            // One store's audio: the upload form and that store's own history. The store id lives in
+            // the URL because that is the only place it may come from — a posted store id would let
+            // one store's page write a conversation onto another store's history.
+            Route::methods([Method::GET, Method::POST], '/audio-to-text/store/{sourceId:\d+}')
+                ->action(AudioToText\Job\Store\Action::class)
+                ->name(AudioToTextRoute::STORE),
+            // One logical conversion. Declared before /job/{publicId} for the same reason /jobs is:
+            // the literal segment must not be read as an id.
+            Route::get('/audio-to-text/conversion/{publicId:[0-9a-f]{32}}')
+                ->action(AudioToText\Job\Conversion\Action::class)
+                ->name(AudioToTextRoute::CONVERSION),
             // Declared before the /job/{publicId} routes so the literal segment is unambiguous.
             Route::get('/audio-to-text/jobs')
                 ->action(AudioToText\Job\Index\Action::class)

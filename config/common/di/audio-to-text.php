@@ -9,9 +9,13 @@ use App\AudioToText\Application\Settings\WorkerSettings;
 use App\AudioToText\Domain\Speaker\SpeakerDiarizerInterface;
 use App\AudioToText\Domain\SystemResourceProbeInterface;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
+use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\WorkerHeartbeatRepositoryInterface;
 use App\AudioToText\Infrastructure\DbSegmentRevisionRepository;
+use App\AudioToText\Infrastructure\DbAudioConversationRepository;
+use App\AudioToText\Infrastructure\DbAudioStoreLookup;
 use App\AudioToText\Infrastructure\DbTranscriptionJobRepository;
 use App\AudioToText\Infrastructure\DbWorkerHeartbeatRepository;
 use App\AudioToText\Infrastructure\Diarization\NullSpeakerDiarizer;
@@ -37,6 +41,8 @@ use Yiisoft\Definitions\Reference;
 
 return [
     TranscriptionJobRepositoryInterface::class => DbTranscriptionJobRepository::class,
+    AudioConversationRepositoryInterface::class => DbAudioConversationRepository::class,
+    AudioStoreLookupInterface::class => DbAudioStoreLookup::class,
     SegmentRevisionRepositoryInterface::class => DbSegmentRevisionRepository::class,
     WorkerHeartbeatRepositoryInterface::class => DbWorkerHeartbeatRepository::class,
     SystemResourceProbeInterface::class => ProcSystemResourceProbe::class,

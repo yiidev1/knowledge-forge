@@ -7,9 +7,19 @@ stage runs on this machine. **No audio, and nothing derived from it, leaves the 
 
 ## 1. What it does
 
-An authenticated administrator opens `/audio-to-text`, picks a recording and presses **Convert to
-Text**. The HTTP request validates the upload, writes it to a private directory, records its duration
-and inserts a `QUEUED` row — then redirects. It does not transcribe anything.
+**Every conversion belongs to an Order58 store.** An authenticated administrator opens
+`/audio-to-text`, which leads to a store picker, chooses a store, and lands on that store's own audio
+page. There they upload in one of two modes:
+
+* **Common / mixed** — one recording containing both people. The pipeline works out who is speaking,
+  and the administrator can correct it afterwards (§8).
+* **Separate Customer + Agent** — two recordings from one call, one per person. The roles were
+  supplied rather than inferred, so **diarization never runs** for them, nothing is claimed about
+  speaker confidence, and there is nothing to correct.
+
+Either way the HTTP request validates the upload, writes each file to a private directory, records its
+duration and inserts a **conversation** row plus one `QUEUED` job per recording — then redirects. It
+does not transcribe anything.
 
 A background console worker claims the job and does the work:
 
@@ -98,21 +108,55 @@ The model is deliberately `ggml-small.bin`, **not** `ggml-small.en.bin`: recordi
 Spanish, Gujarati and Hindi, and the English-only model transcribes the rest as though it were
 English.
 
-### Web server — no change required
+### Web server — one change required for separate uploads
 
-Measured on this host and sufficient for the 30 MB limit:
+Measured on this host:
 
-| Setting | Value | Note |
-|---|---|---|
-| nginx `client_max_body_size` | `32m` | **the binding ceiling** |
-| PHP `upload_max_filesize` | `40M` | |
-| PHP `post_max_size` | `40M` | |
+| Setting | Current | Required for separate uploads | Note |
+|---|---|---|---|
+| nginx `client_max_body_size` | `32m` | **`64m`** | **the binding ceiling** |
+| PHP `post_max_size` | `40M` | **`64M`** | whole request body |
+| PHP `upload_max_filesize` | `40M` | unchanged | per file; 30 MB fits |
+| PHP `max_file_uploads` | `30` | unchanged | two is well inside it |
+| `AUDIO_TRANSCRIPTION_MAX_SIZE` | 30 MB | **unchanged** | per file, not per request |
+
+A **common** upload is one file and needs nothing changed. A **separate** upload is two files in one
+request: two at the 30 MB per-file ceiling plus multipart boundaries and headers is a little over
+60 MB, so 64 M leaves roughly 4 MB of headroom. The per-file limit is deliberately *not* reduced — it
+is the operator's stated ceiling, and nothing about pairing justifies lowering it.
+
+Until both are raised, a large separate upload dies at nginx with a bare 413 that the application never
+sees and cannot explain. Common uploads are unaffected either way.
+
+```bash
+# 1. nginx — /etc/nginx/sites-available/knowledge-forge.conf (and docs/nginx/knowledge-forge.conf)
+#    client_max_body_size 32m;  →  client_max_body_size 64m;
+sudo nginx -t && sudo systemctl reload nginx
+
+# 2. PHP-FPM — /etc/php/8.2/fpm/php.ini
+#    post_max_size = 40M  →  post_max_size = 64M
+sudo systemctl reload php8.2-fpm
+
+# 3. Confirm what is actually serving requests. The CLI ini is a different file and is not the one
+#    that answers HTTP, so `php -i` from a shell can and does report different numbers.
+php -r 'echo ini_get("post_max_size"), PHP_EOL;'   # CLI — NOT authoritative
+grep -n 'post_max_size' /etc/php/8.2/fpm/php.ini   # FPM — this is the one
+```
+
+**Rollback:** restore `32m` and `40M` and reload both. Separate uploads over about 32 MB combined then
+fail at nginx again; every other path, including all common uploads, is unaffected. No application
+change is needed to roll back.
 
 **nginx is the tightest of the three, so it — not PHP — is what caps
 `AUDIO_TRANSCRIPTION_MAX_SIZE`.** Above `client_max_body_size` the upload is refused with a 413 by
 the web server before PHP is reached, so the validator never runs and the administrator sees a bare
 error page rather than the feature's own message. Raising the setting past ~30 MB therefore means
 editing `/etc/nginx/sites-enabled/knowledge-forge.conf` first.
+
+The application does not depend on those ceilings for its messages. `SeparateUploadValidator` checks
+each file against the per-file limit and the pair against the combined one, so the ordinary failures
+produce a sentence naming the field rather than nginx's bare 413. The server-side check is
+authoritative; nginx and PHP are the outer wall.
 
 That matters for one supported case: a 5-minute *stereo* 44.1 kHz WAV is about 50 MB and is rejected.
 Every mono format fits — see the size table in `.env` beside `AUDIO_TRANSCRIPTION_MAX_SIZE`. Phone
@@ -723,10 +767,18 @@ before any action runs and keeps the database id out of every URL.
 One route per operation rather than one endpoint dispatching on a field, so the route name, the
 audited operation and the button a person pressed all say the same thing.
 
-**The conversions list's "View" action opens `/review`.** A row with nothing to correct — still
+**Every "View" action opens `/review`** — the global conversions list's and a store history's alike.
+A store row goes through `audio-to-text.conversion`, which redirects a common conversion here and
+renders a separate one itself (§9.9).
+
+That is safe from everywhere because this page never dead-ends: a row with nothing to correct — still
 queued, failed, or never speaker-separated — is redirected on to the job detail page, so one link is
 right for every row. An *unknown* id is still a 404: "no such job" and "not available to you" must be
 indistinguishable from outside.
+
+**Every route in this table applies to a common (mixed) recording only.** A separate Customer + Agent
+conversion has no `speaker_segments` to correct and no speakers to confirm — the roles were supplied,
+not inferred — so its conversion page offers neither `/conversation` nor `/review`. See §9.9.
 
 ---
 
@@ -1005,7 +1057,337 @@ also a hardening win: nothing inherited from PHP-FPM reaches ffmpeg, whisper or 
 
 ---
 
-## 9. Files
+## 9. Store-wise audio — two modes, one conversation
+
+Every conversion belongs to an Order58 store, and a conversion may have been recorded as one mixed
+file or as two files with the roles already known. This section is the whole of that: the model, the
+schema, the routes, the flow and the boundaries it had to respect.
+
+### 9.1 The model — one conversation, one or two recordings
+
+```
+audio_conversations                  ← the business view: one row per upload
+  └── audio_transcription_jobs       ← the technical view: one row per recording
+```
+
+**COMMON** → exactly one child, `source_role = COMMON`.
+**SEPARATE** → exactly two children, one `CUSTOMER` and one `AGENT`.
+
+Both views are needed and they legitimately disagree about how many things there are. A separate
+upload is **two jobs** in the queue — two files, two Whisper runs, two queue slots — and **one
+conversion** to an administrator. The store's history, its counts and its pagination all read
+conversations; the global `/audio-to-text/jobs` list stays job-oriented, because seeing both children
+individually is the point of the technical view.
+
+The invariant is asserted by `AudioConversation::hasValidShape()` and enforced structurally: the
+enqueue writes the parent and every child in one transaction, so it cannot drift.
+
+### 9.2 `mode` *is* the provenance flag
+
+There is no `role_source` column, and there is deliberately no `confidence = 1.0` on a separate child.
+`ConversationMode::Separate` means the administrator told us who is on each recording, so:
+
+* the worker **skips diarization entirely** — no diarizer process, no alignment, no role mapping;
+* `speaker_separation_status`, `speaker_separation_method`, `speaker_role_confidence` and
+  `speaker_separation_completed_at` all stay **NULL**;
+* the transcript is written whole into that role's column (`agent_text` *or* `customer_text`), and
+  `speaker_segments` stays NULL — a single-speaker recording has no exchange to segment.
+
+That is the same distinction §8.6 draws between a measurement and an assumption, applied one level up.
+Writing a confidence for a fact we were *told* would dress a given up as something we worked out,
+which is precisely what `speaker_separation_status` exists to prevent.
+
+### 9.3 Database schema
+
+```sql
+CREATE TABLE `audio_conversations` (
+  `id`                   bigint unsigned NOT NULL AUTO_INCREMENT,
+  `public_id`            char(32) NOT NULL,          -- 32 random hex; the internal id never leaves the server
+  `store_source_id`      bigint unsigned DEFAULT NULL,  -- NULL = a legacy, pre-store upload
+  `mode`                 varchar(16) NOT NULL,       -- COMMON | SEPARATE
+  `uploaded_by_admin_id` bigint NOT NULL,
+  `created_at`           datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ux_audio_conversations_public_id` (`public_id`),
+  KEY `ix_audio_conversations_store` (`store_source_id`, `id`),
+  CONSTRAINT `fk_audio_conversations_admin`
+      FOREIGN KEY (`uploaded_by_admin_id`) REFERENCES `admin_users` (`id`)
+      ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `chk_audio_conversations_mode` CHECK (`mode` IN ('COMMON','SEPARATE'))
+) ENGINE=InnoDB;
+
+ALTER TABLE `audio_transcription_jobs`
+  ADD COLUMN `conversation_id` bigint unsigned NULL AFTER `id`,
+  ADD COLUMN `source_role` varchar(16) NULL AFTER `conversation_id`,
+  ADD CONSTRAINT `fk_audio_transcription_jobs_conversation`
+      FOREIGN KEY (`conversation_id`) REFERENCES `audio_conversations` (`id`)
+      ON DELETE RESTRICT ON UPDATE RESTRICT,
+  ADD CONSTRAINT `chk_audio_transcription_jobs_source_role`
+      CHECK (`source_role` IS NULL OR `source_role` IN ('COMMON','CUSTOMER','AGENT'));
+```
+
+Applied by `M260902100000CreateAudioConversations`. Raw SQL because of the `CHECK` constraints, which
+is the house style already used by `M260831140000AddReviewedConversation`.
+
+**`RESTRICT` on the conversation**, matching the uploader key in the same table: a job row is an audit
+record and must not vanish because its parent was removed.
+
+**There is no foreign key to `order58_stores`, on purpose.** `information_schema` shows *zero*
+referential constraints pointing at that table, and five others already reference a store softly by
+its mirrored id — `knowledge_bases.source_store_id`, `order58_knowledge_records.store_source_id`,
+`order58_rule_records.source_store_id`, `order58_store_aliases.store_source_id`,
+`rule_store_links.store_source_id`. The reason is recorded in `M260728120000CreateOrder58Mirrors`: a
+record may arrive before its store has been synced. Adding the first-ever hard key here would break
+that property for everything else. Store deletion is not a risk regardless — the sync never deletes,
+only soft-deactivates (`deactivateNotSeen()`).
+
+Note the type: `order58_stores.source_id` is `bigint unsigned` and `order58_stores.id` is signed. The
+soft reference is to `source_id`, and a signed column here would have failed at key creation with
+MySQL error 3780 had a key been wanted.
+
+#### The back-fill
+
+The migration adds both columns nullable, so **no existing row is rewritten by the schema change**.
+It then back-fills every pre-existing job into its own `COMMON` conversation — a fresh `public_id`,
+`store_source_id = NULL`, and `uploaded_by_admin_id` / `created_at` copied from the job — in batches
+of 200, and asserts that no job is left with a NULL `conversation_id` before finishing.
+
+Machine and reviewed columns are never read or written by that step. Verified byte-for-byte across the
+23 pre-existing conversions:
+
+```
+jobs=23  transcript=18747  segments=72802  agent=8098  customer=2812  reviewed=10937   (unchanged)
+```
+
+`store_source_id` stays NULL for those rows. There is no store to infer, and inventing one would be
+worse than recording that it is unknown.
+
+`down()` follows the house rule — **refuse rather than destroy**: it counts conversations with a
+`store_source_id` and throws with the count if any exist, since dropping would lose the store
+association. Otherwise it drops the key, then the columns, then the table.
+
+### 9.4 Aggregate status
+
+One pure function, `ConversationStatus::fromChildren(list<JobStatus>)`, unit-tested across every
+combination and never re-derived in a template:
+
+| children | conversation |
+|---|---|
+| all QUEUED | `QUEUED` |
+| any PROCESSING, or some terminal and some not | `PROCESSING` |
+| all terminal, none failed | `COMPLETED` |
+| all terminal, none completed | `FAILED` |
+| all terminal, mixed | `PARTIALLY_COMPLETED` |
+
+`PARTIALLY_COMPLETED` is the state the enum exists for: a failed Agent recording must not make a
+perfectly good Customer transcript look lost. There is no automatic retry — the successful child keeps
+its result and the failed one keeps its error.
+
+**Nothing about ordering is assumed.** The two children of a pair are ordinary FIFO rows and the
+worker may process an unrelated job between them. The invariant being relied on is *one heavy job at a
+time*, never pair adjacency; `fromChildren()` reads whatever states exist at the moment it is asked.
+
+### 9.5 Routes
+
+| Method | Path | Name | Owner |
+|---|---|---|---|
+| GET | `/admin/order58/store-audio` | `order58.store-audio` | **Order58** — the picker |
+| GET · POST | `/audio-to-text/store/{sourceId:\d+}` | `audio-to-text.store` | Audio-to-Text — upload + that store's history |
+| GET | `/audio-to-text/conversion/{publicId:[0-9a-f]{32}}` | `audio-to-text.conversion` | Audio-to-Text — one logical conversion (COMMON redirects to `/review`) |
+| GET | `/audio-to-text` | `audio-to-text` | **redirect** → `order58.store-audio` |
+
+Everything else — `/audio-to-text/jobs`, `/job/{publicId}`, `/status`, `/download`, `/conversation`,
+`/review` and all seven correction POSTs — is untouched, so every bookmarked result URL survives.
+
+`GET /audio-to-text` is a redirect rather than a 404 so the sidebar entry, bookmarks and every
+"Convert a file" link keep working. **`POST /audio-to-text` is gone**: an upload endpoint that cannot
+name a store would have to either invent one or write a conversation that no history shows.
+
+**The store comes from the route and nowhere else.** A posted `store_id` is never read — the URL
+already says which store this is, and consulting the body for it would let anyone who can reach one
+store's page write onto another store's history. Pinned by
+`AudioToTextStoreCest::aPostedStoreIdIsIgnored`.
+
+### 9.6 Module isolation — why the picker lives in Order58
+
+Two rules in `ModuleIsolationTest` constrain this, and both match a namespace *literally*:
+
+* Audio-to-Text may not contain the string `App\Order58`;
+* **no file outside `src/AudioToText/` may contain the string `App\AudioToText`.**
+
+So neither module may name the other, in code or in a comment. (That is not hypothetical — the first
+version of the picker template failed the build on a docblock that merely mentioned the other
+namespace while explaining this very rule.)
+
+Store chat solved the same problem years of commits ago:
+`src/Order58/Web/StoreChat/template.php` builds its card link with
+`$urlGenerator->generate('chat.index', …)` — a **route-name string**, which the router resolves at
+render time. The audio picker does exactly the same with `audio-to-text.store`. Neither module names
+the other and neither isolation rule had to be relaxed.
+
+Consequences of that boundary:
+
+* The picker is an **Order58** page and reuses `StoreDirectoryReaderInterface` verbatim — the search
+  SQL, letter buckets, filters, counts and pagination are not reimplemented, only asked for. It reuses
+  the existing `.dir-toolbar`, `.filter-bar`, `.alpha-nav`, `.store-card` and `pager` markup, so it
+  adds **no CSS**.
+* Audio-to-Text needs only the store's *name* for a page heading, so it carries a narrow port of its
+  own — `AudioStoreLookupInterface` / `DbAudioStoreLookup`, one query, following the existing
+  `AgentStoreDirectoryInterface` precedent. Only the lookup is duplicated.
+* That lookup reads the name from `knowledge_bases.name`, **not** `order58_stores.name`, because that
+  is the column the picker sorts, buckets and displays. Reading the other one would show a different
+  name on the page you arrived at than on the card you clicked.
+
+Unlike Store chat, audio has **no eligibility gate**: a store with no knowledge base can still have a
+recording transcribed, so every card is a live link.
+
+### 9.7 The upload flow
+
+**Common** — the existing pipeline, one new association:
+
+```
+POST /audio-to-text/store/{sourceId}   mode=COMMON, audio=<file>
+  AudioUploadValidator  →  store file  →  ffprobe duration
+  → TX: insert audio_conversations(mode=COMMON) + 1 job(source_role=COMMON)
+  → redirect to the conversion, which redirects on to the job page
+worker: ffmpeg → whisper → diarize → align → role-map → save     (unchanged)
+```
+
+**Separate** — one submission, two children, no diarization:
+
+```
+POST /audio-to-text/store/{sourceId}   mode=SEPARATE, customer_audio=…, agent_audio=…
+  SeparateUploadValidator: BOTH files, field-specific errors   ← nothing stored until both pass
+  store both files, ffprobe both                                ← outside the lock
+  → TX: insert conversation(mode=SEPARATE) + job(CUSTOMER) + job(AGENT)
+  → on any failure: every file written so far is removed, no partial batch
+worker: claims ONE child at a time, FIFO, as always
+        ffmpeg → whisper → save.  separate() is never called.
+```
+
+The skip is a single early `return` at the one existing diarization call site, guarded on
+`$job->sourceRole?->isProvided()`, and completion branches to
+`markCompletedWithProvidedRole()`.
+
+#### The queue cap reserves both slots or neither
+
+`assertQueueHasRoom()` gained a count. Inside the **existing** `enqueueExclusively()` named lock:
+
+```
+enqueueExclusively(function () {
+    assertQueueHasRoom(2);      // room for the pair, or QueueFull before anything is written
+    TX: insert conversation + CUSTOMER child + AGENT child
+});
+```
+
+`countActive() + $needed > $maxQueue`, not `>=`. Accepting the Customer and then rejecting the Agent
+is therefore impossible: the cap is evaluated once, for the pair, before either row exists.
+`maxQueue = 0` (the default) still skips the lock entirely.
+
+#### Both forms are plain HTML
+
+The mode selector is **two separate forms**, each carrying its own hidden `mode`, rather than one form
+with a JavaScript toggle. The content security policy here is `script-src 'self'` with no inline
+JavaScript (§10, *Styles and scripts are not inline*), and a toggle that hides half a form is the
+kind of thing that quietly submits the wrong fields when the script does not run. What the
+administrator sees is exactly what is posted.
+
+### 9.8 Server load — two different quantities
+
+**Peak concurrency is unchanged.** The worker still claims one job, holds `worker.lock`, and runs
+exactly one heavy process at a time. Every existing ceiling — the admission guard, the timeouts, the
+systemd `MemoryMax` — is preserved untouched, and pairing introduces no new peak.
+
+**Total work per conversation is the sum of its children.** A separate conversation is two
+transcriptions: roughly the sum of both recordings' CPU time, two queue slots, and a completion time
+of `t(customer) + t(agent)` **plus queue wait**, where each `t` is that recording's actual runtime —
+not a figure derived from its duration. This is a throughput cost, not a concurrency risk, and it is
+why the cap reserves two slots.
+
+### 9.9 The conversion page
+
+`/audio-to-text/conversion/{publicId}` takes the *conversation's* public id and branches on mode:
+
+* **COMMON** → redirects to `/audio-to-text/job/{childPublicId}/review`, the same destination the
+  global conversions list's View action uses, so **View means one thing wherever it is pressed**. One
+  child, and the detail, `/conversation` and `/review` screens already do the right thing for it;
+  nothing is reimplemented and nothing about those screens changes. `/review` is safe for every row
+  because it never dead-ends: a job with nothing to correct — still queued, failed, or never
+  speaker-separated — redirects itself on to the detail page (§8.9).
+* **SEPARATE** → its own read-only view: the store, the uploader, the aggregate status, and **two
+  known-role blocks** — Customer and Agent — each with its own status, filename, duration, transcript
+  and, on failure, its own error message, so a failed Agent child is visible beside a completed
+  Customer one. Each block links to its child's own job page for the technical detail.
+
+**A separate conversation is never offered `/conversation` or `/review`.** Both are built on
+`speaker_segments` turns, which a separate upload does not have: two files recorded independently
+carry no shared clock, so interleaving them into one thread would mean inventing an ordering nobody
+measured. Role confirmation is skipped for the same reason the diarizer is — the roles were given, not
+inferred. The page says so in a sentence rather than leaving a reader to infer it from two missing
+buttons.
+
+### 9.10 Retention and cleanup
+
+The worker's housekeeping pass deletes expired jobs one at a time. Immediately after that loop it
+calls `AudioConversationRepositoryInterface::deleteChildless()`:
+
+```sql
+DELETE c FROM audio_conversations c
+WHERE NOT EXISTS (SELECT 1 FROM audio_transcription_jobs j WHERE j.conversation_id = c.id)
+```
+
+One statement, one place. Both children of a pair get their `expires_at` from the same window at
+enqueue so they expire together in practice, but the sweep is written for the general case where they
+do not — a pair whose two children fall in different passes still leaves no orphan. With the default
+indefinite retention nothing expires and the sweep is a no-op.
+
+### 9.11 Files
+
+**New — Order58 (the picker):** `src/Order58/Web/StoreAudio/{Action,template}.php`.
+
+**New — Audio-to-Text:**
+`Domain/{AudioConversation,AudioConversationChild,AudioConversationRepositoryInterface,
+ConversationMode,ConversationStatus,SourceRole,AudioStore,AudioStoreLookupInterface}.php`,
+`Application/SeparateUploadValidator.php`,
+`Infrastructure/{DbAudioConversationRepository,DbAudioStoreLookup}.php`,
+`Web/Job/Store/{Action,template}.php`, `Web/Job/Conversion/{Action,template}.php`,
+`src/Migration/M260902100000CreateAudioConversations.php`.
+
+**Modified:** `TranscriptionQueue` (`enqueue()` → `enqueueConversation()`,
+`assertQueueHasRoom(int $needed)`), `TranscriptionJobRepositoryInterface` +
+`DbTranscriptionJobRepository` (`create()` gains two nullable parameters,
+`markCompletedWithProvidedRole()` added), `AudioTranscriptionWorkerCommand` (the diarization branch
+and the childless sweep), `Web/Action.php` (now the redirect), `config/common/routes.php`,
+`config/common/di/audio-to-text.php`, and one CSS rule — `.a2t-badge--partially-completed`.
+
+**Removed:** `src/AudioToText/Web/template.php`, the store-less upload form.
+
+**No application configuration change.** Nothing new is operator-tunable, so nothing was added to
+`Environment.php` or `params.php`; the per-file limit keeps its existing setting. The only operator
+action is the request-size raise in §3.
+
+### 9.12 Tests
+
+| Suite | What it pins |
+|---|---|
+| `Unit/ConversationStatusTest` | every child-state combination, including partial failure, and that every state has a badge class that exists in the stylesheet |
+| `Unit/AudioConversationTest` | the shape invariants, and that duration is summed rather than maximised |
+| `Unit/SeparateUploadValidatorTest` | field-specific errors, both files reported at once, and that any pair the per-file rule accepts fits the combined ceiling |
+| `Integration/AudioConversationTest` | against real MySQL and real ffprobe: paired enqueue, **a failure on the second child leaves no conversation, no job and no stored file**, a cap with room for one rejects a pair whole, `forStore`/`countForStore` count a pair as one, and the childless sweep spares a parent with a surviving child |
+| `Web/AudioToTextStoreCest` | picker, store page, both modes end to end, no diarization for supplied roles, no half-created pair, store scoping, a posted `store_id` ignored, the conversion page's two blocks and absent `/review`, escaping, no path leaks |
+| `Unit/ModuleIsolationTest` | unchanged and still passing: neither module names the other |
+| `Unit/WebTierCannotRunWhisperTest` | now points at `Web/Job/Store/Action.php` — the file that actually enqueues |
+
+**Before any DB-touching suite**, check the real queue. `TranscriptionJobRepositoryTest` calls
+`claimNextQueued()`, which would take a genuine pending upload:
+
+```bash
+mysql -e 'SELECT COUNT(*) FROM audio_transcription_jobs WHERE status IN ("QUEUED","PROCESSING")' knowledge_forge_db
+```
+
+---
+
+## 10. Files
 
 ### Created
 
@@ -1123,7 +1505,7 @@ with JavaScript disabled — they just need a manual refresh, which the copy say
 
 ---
 
-## 10. Database
+## 11. Database
 
 `audio_transcription_jobs` — one row per job. **No audio is stored in the database**;
 `stored_audio_path` holds a bare filename and only until the worker deletes the recording.
@@ -1135,12 +1517,17 @@ Two details worth knowing:
   with a unique index on it — a race-proof way to enforce one active job per administrator. That
   restriction was removed in `M260826140000AllowMultipleQueuedJobsPerAdmin`, which drops the index and
   then the column, because it enforced "one at a time" in the wrong place: it stopped people *queueing*
-  work, which is what a queue is for. Concurrency is the worker's business (§11), not the upload form's.
+  work, which is what a queue is for. Concurrency is the worker's business (§12), not the upload form's.
   The migration is forward-only — the applied earlier migrations were not rewritten.
 * **The foreign key is `RESTRICT`, not `CASCADE`** — originally forced rather than preferred, because
   MySQL refuses a foreign key with `CASCADE` on the base column of a stored generated column (error
   1215). The generated column is gone, but `RESTRICT` stays: a job row is an audit record of who
   uploaded what, and deleting an administrator should not silently take their conversations with it.
+
+**The store-wise layer adds two columns to this table** — `conversation_id` and `source_role` — and
+one table, `audio_conversations`. Both are documented in full in **§9.3**, including the back-fill that
+gave every pre-existing job a parent, why there is no foreign key to `order58_stores`, and why a
+recording whose role was supplied leaves every separation column NULL.
 
 **The correction layer adds seven columns to this table** — `reviewed_segments`,
 `reviewed_agent_text`, `reviewed_customer_text`, `reviewed_at`, `reviewed_by_admin_id`,
@@ -1166,7 +1553,7 @@ and every heartbeat write is wrapped so it can never take the worker down.
 
 ---
 
-## 11. Queueing and ordering
+## 12. Queueing and ordering
 
 ### Uploading and processing are separate concerns
 
@@ -1232,7 +1619,7 @@ otherwise the original result would be silently overwritten and its audit trail 
 
 **Many QUEUED jobs: yes. Many PROCESSING jobs: no.**
 
-## 12. What is kept, and what is cleaned up
+## 13. What is kept, and what is cleaned up
 
 ### Successful conversations are kept — indefinitely, by default
 
@@ -1315,7 +1702,7 @@ Both the neutral acoustic cluster and the mapped business role are stored, so a 
 be paired with the agent response that followed it, and any mapping can be audited after the fact.
 Nothing consumes this yet, and it is deliberately coupled to nothing.
 
-## 13. Security
+## 14. Security
 
 | Concern | How |
 |---|---|
@@ -1334,7 +1721,7 @@ Nothing consumes this yet, and it is deliberately coupled to nothing.
 
 ---
 
-## 14. Testing
+## 15. Testing
 
 ```bash
 composer test        # full Codeception suite — free port 8080 first
@@ -1345,14 +1732,16 @@ composer quality
 # Just this feature, which is what you usually want:
 vendor/bin/codecept run Unit tests/Unit/AudioToText/
 vendor/bin/codecept run Integration tests/Integration/AudioToText/
-vendor/bin/codecept run Web tests/Web/AudioToTextCest.php
+vendor/bin/codecept run Web 'tests/Web/AudioToText*Cest.php'
 ```
 
 | Suite | Covers |
 |---|---|
-| `Unit/AudioToText/` | upload validation, filename and preview safety, settings and duration limits, worker health and admission, foreign locks, alignment, dialogue acts, role mapping, separation balance, conversation display, module isolation |
-| `Integration/AudioToText/` | the repository against real MySQL — atomic claim, FIFO, stale recovery, queue counts, heartbeat |
+| `Unit/AudioToText/` | upload validation, filename and preview safety, settings and duration limits, worker health and admission, foreign locks, alignment, dialogue acts, role mapping, separation balance, conversation display, conversation status and shape, separate-upload validation, module isolation |
+| `Integration/AudioToText/` | against real MySQL — atomic claim, FIFO, stale recovery, queue counts, heartbeat, the reviewed layer, and (with real ffprobe) the paired enqueue, its rollback, the pair-aware queue cap and the childless sweep |
 | `Web/AudioToTextCest.php` | the served application — auth, validation, the global list, the job page, downloads, escaping |
+| `Web/AudioToTextStoreCest.php` | store-wise audio — the picker, a store's page, both upload modes, store scoping, a posted `store_id` ignored, and the conversion page |
+| `Web/AudioToTextConversationCest.php` · `AudioToTextReviewCest.php` | the conversation-only page and the correction screen |
 
 No automated test requires ffmpeg, whisper or a diarization model. The web suite uploads a real WAV
 but no worker runs, so jobs stop at `QUEUED` — which is the assertion.
@@ -1381,7 +1770,7 @@ but no worker runs, so jobs stop at `QUEUED` — which is the assertion.
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 | Symptom | Cause |
 |---|---|
@@ -1393,37 +1782,62 @@ but no worker runs, so jobs stop at `QUEUED` — which is the assertion.
 | "Speech recognition is not available on this server" | `WHISPER_BINARY` is not executable |
 | "The speech recognition model has not been installed" | `WHISPER_MODEL` is not readable |
 | "You already have a transcription in progress" | one active job per administrator, by design |
+| A separate upload dies with a bare nginx 413 | `client_max_body_size` / `post_max_size` not raised to 64 — see §3 |
+| A store's page shows "Nothing uploaded for this store yet" after an upload | the upload went to a different store; the store comes from the URL, so check which page it was made from |
+| A conversion page offers no Correct speakers button | it is a separate Customer + Agent upload; the roles were supplied, so there is nothing to correct (§9.9) |
 | Speaker split always "Not supported" | `AUDIO_DIARIZATION_ENABLED=false`, or the models are missing |
 | Job fails immediately with no detail | check `runtime/logs/` — technical detail never reaches the browser |
 
 ---
 
-## 16. Rollback
+## 17. Rollback
 
 ### Rolling back part of it
 
-The three migrations are a stack, applied in this order, so a partial rollback unwinds from the top:
+The migrations are a stack, applied in this order, so a partial rollback unwinds from the top:
 
 | Applied | Migration | Adds |
 |---|---|---|
 | 1st | `M260826120000CreateAudioTranscriptionJobs` | the two tables |
 | 2nd | `M260826120100AddSpeakerSeparationColumns` | agent/customer text, speaker segments |
 | 3rd | `M260826130000RetainSuccessfulRecordings` | `retained_audio_path`, nullable `expires_at` |
+| 4th | `M260826140000AllowMultipleQueuedJobsPerAdmin` | drops the one-active-job index and column |
+| 5th | `M260831140000AddReviewedConversation` | the reviewed layer and `audio_segment_revisions` |
+| 6th | `M260831160000AddRolesConfirmation` | `roles_confirmed_at` |
+| 7th | `M260902100000CreateAudioConversations` | `audio_conversations`, `conversation_id`, `source_role` |
 
-**Retention behaviour only** — back to a required expiry date on every job:
+**The newest one refuses to unwind while any conversation has a store.** `down()` counts
+conversations with a `store_source_id` and throws with the count, because dropping the table would
+lose the store association silently. Clear or export those first if you genuinely mean to.
+
+`migrate:down N` unwinds the **newest N**, so the recipes below are cumulative — you cannot reach a
+middle migration without unwinding everything stacked on it.
+
+**Store-wise audio only** — back to global, store-less uploads:
 
 ```bash
-./yii migrate:down 1        # M260826130000
+./yii migrate:down 1        # M260902100000 — refuses while any conversation has a store
+```
+
+Every job, transcript and reviewed correction survives — only the parent table and the two columns
+pointing at it go. The web tier must go back with it, because `/audio-to-text` and its POST are now
+the store page: restore `src/AudioToText/Web/{Action,template}.php` and the four routes from git, and
+remove `src/Order58/Web/StoreAudio`.
+
+**Retention behaviour as well** — back to a required expiry date on every job:
+
+```bash
+./yii migrate:down 4        # M260902100000 … back through M260826130000
 ```
 
 Existing rows with no expiry are given a far-future date rather than "now", so reverting cannot
 schedule a mass deletion of conversations you have been keeping deliberately. Retained recordings on
 disk are left alone; remove `runtime/audio-to-text/recordings/` by hand if you want them gone.
 
-**Speaker separation as well** — note this unwinds retention too, because it is stacked on top:
+**Speaker separation as well** — note this unwinds everything above it too:
 
 ```bash
-./yii migrate:down 2        # M260826130000, then M260826120100
+./yii migrate:down 6        # M260902100000 … back through M260826120100
 rm -rf src/AudioToText/Domain/Speaker src/AudioToText/Application/Speaker \
        src/AudioToText/Infrastructure/Diarization
 rm -f tests/Unit/AudioToText/Speaker*Test.php
@@ -1449,19 +1863,25 @@ pgrep -a -f 'kf:audio:worker|whisper-cli'
 
 # 3. Drop the tables. migrate:down refuses while jobs still exist. Export first if you want to keep
 #    anything: transcripts, speaker splits and the retained recordings all go with them.
-#    Four migrations now, not three — see §9.
-./yii migrate:down 4
+#    Seven migrations now — the whole stack in the table above.
+./yii migrate:down 7
 
 # 4. Remove the feature.
 rm -rf src/AudioToText tests/Unit/AudioToText tests/Integration/AudioToText \
-       tests/Web/AudioToTextCest.php config/common/di/audio-to-text.php \
+       tests/Web/AudioToText*Cest.php config/common/di/audio-to-text.php \
        docs/AUDIO_TO_TEXT.md docs/server/systemd docs/server/cron \
        runtime/audio-to-text
+# The store picker is an Order58 page and goes with the feature it points at.
+rm -rf src/Order58/Web/StoreAudio
 rm -f src/Migration/M260826120000CreateAudioTranscriptionJobs.php \
       src/Migration/M260826120100AddSpeakerSeparationColumns.php \
       src/Migration/M260826130000RetainSuccessfulRecordings.php \
-      src/Migration/M260826140000AllowMultipleQueuedJobsPerAdmin.php
+      src/Migration/M260826140000AllowMultipleQueuedJobsPerAdmin.php \
+      src/Migration/M260831140000AddReviewedConversation.php \
+      src/Migration/M260831160000AddRolesConfirmation.php \
+      src/Migration/M260902100000CreateAudioConversations.php
 rm -f tests/Support/AudioToTextSettingsFactory.php
+rm -rf tests/Support/Fake/AudioToText
 
 # 5. Revert the additive edits.
 git checkout -- src/Environment.php config/common/params.php config/common/routes.php \
@@ -1477,7 +1897,7 @@ rollback — telecom-billing on this machine uses the same toolchain.
 
 ---
 
-## 17. Known limitations
+## 18. Known limitations
 
 * `flock` covers **one machine**. Several hosts sharing one database would need a database lease.
 * Speaker separation is only as good as the diarizer. 8 kHz telephone audio upsampled to 16 kHz is
@@ -1490,4 +1910,13 @@ rollback — telecom-billing on this machine uses the same toolchain.
   the whole call and the other a few words. Gate 2 (§8) detects that and refuses to publish, but it
   cannot repair it: the recording comes back as `NEEDS_REVIEW` with the full transcript intact and no
   split. Better separation would mean a different embedding model, not a threshold change.
-* The integration suite operates on the live database and can claim real queued jobs — see §14.
+* The integration suite operates on the live database and can claim real queued jobs — see §15.
+* **A separate Customer + Agent conversion is never interleaved into one thread.** The two files carry
+  no shared clock, so there is no ordering to recover — only one to invent. The conversion page shows
+  them side by side instead, and the conversation and correction screens do not apply (§9.9). If a
+  future recorder emits a common start timestamp for both legs, that becomes possible; nothing today
+  does.
+* **Legacy conversions have no store.** Every job that predates §9 was back-filled into its own
+  `COMMON` conversation with `store_source_id = NULL`, because there is no store to infer and
+  inventing one would be worse than recording that it is unknown. They still appear on
+  `/audio-to-text/jobs`; they appear on no store's page.

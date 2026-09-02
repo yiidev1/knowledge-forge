@@ -11,12 +11,14 @@ use App\Order58\Domain\Order58AgentRepositoryInterface;
 use App\Order58\Domain\Order58KnowledgeRepositoryInterface;
 use App\Order58\Domain\Order58RuleRepositoryInterface;
 use App\Order58\Domain\Order58StoreRepositoryInterface;
+use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\SyncRunRepositoryInterface;
 use App\Order58\Infrastructure\DbOrder58AgentRepository;
 use App\Order58\Infrastructure\DbOrder58KnowledgeRepository;
 use App\Order58\Infrastructure\DbOrder58RuleRepository;
 use App\Order58\Infrastructure\DbOrder58StoreRepository;
+use App\Order58\Infrastructure\DbStoreAudioCounts;
 use App\Order58\Infrastructure\DbStoreDirectoryReader;
 use App\Order58\Infrastructure\DbSyncRunRepository;
 use GuzzleHttp\Client as GuzzleClient;
@@ -43,6 +45,7 @@ return [
     SyncRunRepositoryInterface::class => DbSyncRunRepository::class,
     App\Order58\Domain\DailySyncScheduleRepositoryInterface::class => App\Order58\Infrastructure\DbDailySyncScheduleRepository::class,
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
+    StoreAudioCountsInterface::class => DbStoreAudioCounts::class,
 
     Order58RetryPolicy::class => [
         '__construct()' => ['profile' => Reference::to('order58.profile')],

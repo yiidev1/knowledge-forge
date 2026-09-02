@@ -26,6 +26,21 @@ final readonly class StoreDirectoryQuery
         public StoreSourceStatusFilter $sourceStatus = StoreSourceStatusFilter::All,
         /** Independent admin agent-access axis. */
         public StoreAgentAvailabilityFilter $agentAvailability = StoreAgentAvailabilityFilter::All,
+        /**
+         * Restrict the directory to these store source ids, or null for no restriction.
+         *
+         * Deliberately generic — a plain "only these stores" — rather than an axis named after
+         * whatever the caller is filtering on. It exists so a page can narrow the directory by a fact
+         * this reader knows nothing about (the store-audio picker restricts to stores that have
+         * conversions), while the rows, the total and the letter counts are still computed together
+         * and therefore still agree.
+         *
+         * An **empty list matches nothing**, which is not the same as null: "no store qualified" and
+         * "do not restrict" are different answers and must render differently.
+         *
+         * @var list<int>|null
+         */
+        public ?array $sourceIds = null,
     ) {}
 
     public function offset(): int

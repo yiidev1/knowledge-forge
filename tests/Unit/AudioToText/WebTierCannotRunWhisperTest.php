@@ -77,11 +77,15 @@ final class WebTierCannotRunWhisperTest extends TestCase
     /**
      * The upload action enqueues and does nothing else. Stated separately from the sweep above so a
      * failure names the actual rule rather than a generic boundary violation.
+     *
+     * The upload form lives on a store's own page now — every conversion belongs to a store, and the
+     * store comes from the URL — so this is the file that has to hold the line. `/audio-to-text` is a
+     * redirect to the picker and enqueues nothing at all.
      */
     public function testTheUploadActionOnlyEnqueues(): void
     {
         $source = $this->codeWithoutComments(
-            (string) file_get_contents(dirname(__DIR__, 3) . '/src/AudioToText/Web/Action.php'),
+            (string) file_get_contents(dirname(__DIR__, 3) . '/src/AudioToText/Web/Job/Store/Action.php'),
         );
 
         $this->assertStringContainsString('TranscriptionQueue', $source);

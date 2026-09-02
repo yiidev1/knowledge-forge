@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Application;
 
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
+use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Infrastructure\AudioDurationProbe;
+use App\Shared\Application\Transaction\TransactionRunnerInterface;
 use App\Shared\Domain\Clock\ClockInterface;
 use DateTimeImmutable;
 use Psr\Http\Message\UploadedFileInterface;
@@ -14,6 +18,7 @@ use Throwable;
 
 use function basename;
 use function bin2hex;
+use function count;
 use function mb_substr;
 use function pathinfo;
 use function random_bytes;
@@ -53,33 +58,105 @@ final readonly class TranscriptionQueue
 {
     public function __construct(
         private TranscriptionJobRepositoryInterface $jobs,
+        private AudioConversationRepositoryInterface $conversations,
         private QueuedAudioStorage $storage,
         private AudioDurationProbe $durations,
         private AudioToTextSettings $settings,
         private ClockInterface $clock,
+        private TransactionRunnerInterface $transaction,
     ) {}
 
     /**
-     * @return string the public id of the queued job
+     * Store one upload's recordings and queue a child job for each.
+     *
+     * One method for both modes, because they differ only in how many files arrive: a common upload is
+     * one recording whose speakers the worker must work out, a separate upload is a Customer file and
+     * an Agent file whose roles are already known. Everything else — the storage, the duration probe,
+     * the cap, the cleanup — is identical, and giving them separate implementations would mean two
+     * places for the cleanup to be got wrong.
+     *
+     * The whole pair is accepted or none of it is. Every file is written and probed **before** the
+     * lock is taken, then the parent and all its children are inserted in one transaction inside it;
+     * on any failure every file written so far is removed. There is no path that leaves a Customer
+     * queued without its Agent.
+     *
+     * @param array<string, UploadedFileInterface> $files keyed by {@see SourceRole} value
+     *
+     * @return string the public id of the conversation
      *
      * @throws AudioTranscriptionException with a message written for the uploader
      */
-    public function enqueue(UploadedFileInterface $file, int $adminUserId): string
-    {
-        $publicId = bin2hex(random_bytes(16));
-        $storedName = $this->storage->store($publicId, $file, $this->extensionOf($file->getClientFilename()));
+    public function enqueueConversation(
+        ConversationMode $mode,
+        ?int $storeSourceId,
+        array $files,
+        int $adminUserId,
+    ): string {
+        $conversationPublicId = bin2hex(random_bytes(16));
+        $children = [];
+        $stored = [];
 
         try {
-            $duration = $this->assertDurationWithinLimit($publicId);
+            // Slow work first and outside the lock: writing bytes and probing each recording.
+            foreach ($mode->childRoles() as $role) {
+                $file = $files[$role->value] ?? null;
 
-            $insert = fn(): string => $this->jobs->create(
-                $publicId,
-                $adminUserId,
-                $this->safeOriginalFilename($file->getClientFilename()),
-                $storedName,
-                $duration,
-                $this->expiresAt(),
-            );
+                if ($file === null) {
+                    throw AudioTranscriptionException::unexpected();
+                }
+
+                $publicId = bin2hex(random_bytes(16));
+                $stored[] = $publicId;
+
+                $storedName = $this->storage->store(
+                    $publicId,
+                    $file,
+                    $this->extensionOf($file->getClientFilename()),
+                );
+
+                $children[] = [
+                    'publicId' => $publicId,
+                    'role' => $role,
+                    'originalFilename' => $this->safeOriginalFilename($file->getClientFilename()),
+                    'storedName' => $storedName,
+                    'duration' => $this->assertDurationWithinLimit($publicId),
+                ];
+            }
+
+            $insert = function () use ($conversationPublicId, $storeSourceId, $mode, $adminUserId, $children): string {
+                // Parent and children in one transaction: a pair whose second insert failed would
+                // otherwise leave a conversation promising two recordings and holding one.
+                return $this->transaction->run(function () use (
+                    $conversationPublicId,
+                    $storeSourceId,
+                    $mode,
+                    $adminUserId,
+                    $children
+                ): string {
+                    $conversationId = $this->conversations->create(
+                        $conversationPublicId,
+                        $storeSourceId,
+                        $mode,
+                        $adminUserId,
+                        $this->clock->now(),
+                    );
+
+                    foreach ($children as $child) {
+                        $this->jobs->create(
+                            $child['publicId'],
+                            $adminUserId,
+                            $child['originalFilename'],
+                            $child['storedName'],
+                            $child['duration'],
+                            $this->expiresAt(),
+                            $conversationId,
+                            $child['role'],
+                        );
+                    }
+
+                    return $conversationPublicId;
+                });
+            };
 
             // With no cap there is nothing to serialise, so the named lock is skipped entirely. That is
             // not just an optimisation: holding a lock with a five-second timeout on every upload would
@@ -88,8 +165,12 @@ final readonly class TranscriptionQueue
                 return $insert();
             }
 
-            $accepted = $this->jobs->enqueueExclusively(function () use ($insert): string {
-                $this->assertQueueHasRoom();
+            $needed = count($children);
+
+            $accepted = $this->jobs->enqueueExclusively(function () use ($insert, $needed): string {
+                // Room for the whole upload, checked once. Asking per child would let a pair take the
+                // last slot with its Customer and be refused for its Agent.
+                $this->assertQueueHasRoom($needed);
 
                 return $insert();
             });
@@ -102,7 +183,9 @@ final readonly class TranscriptionQueue
 
             return $accepted;
         } catch (Throwable $e) {
-            $this->storage->remove($publicId);
+            foreach ($stored as $publicId) {
+                $this->storage->remove($publicId);
+            }
 
             throw $e;
         }
@@ -115,7 +198,7 @@ final readonly class TranscriptionQueue
      * administrator should not have to wait to hand the machine more work. A positive value caps the
      * number of QUEUED plus PROCESSING jobs across the whole installation, not per administrator.
      */
-    private function assertQueueHasRoom(): void
+    private function assertQueueHasRoom(int $needed): void
     {
         $maxQueue = $this->settings->transcription->maxQueue;
 
@@ -123,7 +206,9 @@ final readonly class TranscriptionQueue
             return;
         }
 
-        if ($this->jobs->countActive() >= $maxQueue) {
+        // `+ $needed`, not `>=`: a separate upload needs two slots, and a pair that only half fits is
+        // refused whole rather than accepted half.
+        if ($this->jobs->countActive() + $needed > $maxQueue) {
             throw AudioTranscriptionException::queueFull($maxQueue);
         }
     }

@@ -15,6 +15,20 @@ final class AudioToTextRoute
 {
     public const PAGE = 'audio-to-text';
     public const JOBS = 'audio-to-text.jobs';
+
+    /**
+     * One store's audio: the upload form and that store's own history.
+     *
+     * The store id lives in the URL because it is the only place it may come from — a posted store id
+     * would let one store's page write onto another store's history.
+     */
+    public const STORE = 'audio-to-text.store';
+
+    /**
+     * One logical conversion, whether it was recorded as one mixed file or as a Customer and an Agent
+     * file. This is what a row in the store history opens.
+     */
+    public const CONVERSION = 'audio-to-text.conversion';
     public const JOB = 'audio-to-text.job';
     public const JOB_STATUS = 'audio-to-text.job.status';
     public const JOB_DOWNLOAD = 'audio-to-text.job.download';

@@ -80,6 +80,7 @@ $lastRow = min($page * $limit, $total);
 ?>
                 <colgroup>
                     <col class="a2t-col-text">
+                    <col class="a2t-col-store">
                     <col class="a2t-col-when">
                     <col class="a2t-col-status">
                     <col class="a2t-col-stage">
@@ -93,6 +94,7 @@ $lastRow = min($page * $limit, $total);
                 <thead>
                     <tr>
                         <th>Audio</th>
+                        <th>Store</th>
                         <th>Uploaded at</th>
                         <th>Status</th>
                         <th>Stage</th>
@@ -124,6 +126,25 @@ $lastRow = min($page * $limit, $total);
                     ?>
                         <td class="a2t-cell-file" title="<?= Html::encode($item->originalFilename) ?>">
                             <?= Html::encode($item->originalFilename) ?>
+                        </td>
+                        <td class="a2t-cell-file">
+                            <?php
+                            // Linked when there is a store, so a row in the global list is one click
+                            // from that store's own history. A conversion that predates store-wise
+                            // audio has none — it says so rather than pretending to a store it was
+                            // never uploaded for.
+                    ?>
+                            <?php if ($item->storeSourceId === null): ?>
+                                <span class="util-muted">—</span>
+                            <?php else: ?>
+                                <a
+                                    href="<?= Html::encode($urlGenerator->generate(
+                                        AudioToTextRoute::STORE,
+                                        ['sourceId' => $item->storeSourceId],
+                                    )) ?>"
+                                    title="<?= Html::encode($item->storeName ?? ('Store #' . $item->storeSourceId)) ?>"
+                                ><?= Html::encode($item->storeName ?? ('Store #' . $item->storeSourceId)) ?></a>
+                            <?php endif; ?>
                         </td>
                         <td><?= Html::encode($appTimeZone->format($item->createdAt, 'M j, Y g:i A')) ?></td>
                         <td>

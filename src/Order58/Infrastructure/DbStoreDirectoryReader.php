@@ -131,6 +131,17 @@ final readonly class DbStoreDirectoryReader implements StoreDirectoryReaderInter
         $this->applyFilter($q, $query->filter);
         $this->applySearch($q, $query->search);
 
+        // Applied here, in the shared base query, so it narrows the rows, the total and the alphabet
+        // counts together. An empty list means nothing qualified, which must show an empty directory
+        // rather than the whole one.
+        if ($query->sourceIds !== null) {
+            $q->andWhere(
+                $query->sourceIds === []
+                    ? new Expression('1 = 0')
+                    : ['kb.source_store_id' => $query->sourceIds],
+            );
+        }
+
         // Independent axes — source-active and agent-access — never folded into the pipeline filter.
         match ($query->sourceStatus) {
             StoreSourceStatusFilter::All => null,

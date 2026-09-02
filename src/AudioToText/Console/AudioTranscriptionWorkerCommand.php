@@ -8,6 +8,7 @@ use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\ForeignLockGuard;
 use App\AudioToText\Application\QueuedAudioStorage;
 use App\AudioToText\Application\Speaker\SpeakerSeparationService;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
@@ -88,6 +89,7 @@ final class AudioTranscriptionWorkerCommand extends Command
 
     public function __construct(
         private readonly TranscriptionJobRepositoryInterface $jobs,
+        private readonly AudioConversationRepositoryInterface $conversations,
         private readonly WorkerHeartbeatRepositoryInterface $heartbeats,
         private readonly QueuedAudioStorage $storage,
         private readonly AudioTranscriber $transcriber,
@@ -282,6 +284,14 @@ final class AudioTranscriptionWorkerCommand extends Command
                     // split but never the transcription itself.
                     $this->jobs->markTranscribed($job->id, $transcription->text, $transcription->language);
 
+                    // A recording whose role the administrator supplied has nothing to discover. Running
+                    // the diarizer here would spend a minute of CPU rediscovering what we were told, and
+                    // then report a confidence for a mapping nobody inferred. The whole stage is skipped
+                    // and the job completes with no separation claimed at all.
+                    if ($job->sourceRole !== null && $job->sourceRole->isProvided()) {
+                        return;
+                    }
+
                     $this->jobs->markStage($job->id, ProcessingStage::DIARIZING);
                     $this->beat(WorkerProcessState::BUSY, $mode, false, null, $job->id);
 
@@ -297,25 +307,37 @@ final class AudioTranscriptionWorkerCommand extends Command
             // is marked complete, so a row can never claim to have retained a file that is not there.
             $retained = $this->storage->retain($job->publicId, $job->storedAudioPath);
 
-            // Defensive: separate() never throws, but if the callback somehow did not run there is still
-            // a transcript to save, and saving it is more important than the split.
-            $separation ??= $this->separation->separate('', []);
+            if ($job->sourceRole !== null && $job->sourceRole->isProvided()) {
+                // Known roles: complete with the separation columns left NULL. Nothing was inferred,
+                // so nothing is claimed — not a status, not a method, and above all not a confidence.
+                $this->jobs->markCompletedWithProvidedRole($job->id, $job->sourceRole, $retained);
+            } else {
+                // Defensive: separate() never throws, but if the callback somehow did not run there is
+                // still a transcript to save, and saving it is more important than the split.
+                $separation ??= $this->separation->separate('', []);
 
-            $this->jobs->markCompleted($job->id, $separation, $retained);
+                $this->jobs->markCompleted($job->id, $separation, $retained);
+            }
 
-            if ($separation->reason !== null) {
+            if ($separation !== null && $separation->reason !== null) {
                 $this->logger->info('Speaker separation did not complete.', [
                     'reason' => 'audio_speaker_separation_' . strtolower($separation->status->value),
                     'error_message' => $separation->reason,
                 ]);
             }
 
+            // Null for a recording whose role was supplied: no separation ran, so there is no status
+            // to print. Saying so beats printing a label for a stage that never happened.
+            $splitLabel = $separation === null
+                ? 'not analysed (role supplied)'
+                : $separation->status->label();
+
             $io->writeln(sprintf(
                 '  completed in %.1fs — %s, %d characters, speaker split: %s',
                 microtime(true) - $startedAt,
                 $result->language ?? 'unknown language',
                 mb_strlen($result->text),
-                $separation->status->label(),
+                $splitLabel,
             ));
         } catch (AudioTranscriptionException $e) {
             $this->jobs->markFailed($job->id, $e->getMessage());
@@ -383,6 +405,14 @@ final class AudioTranscriptionWorkerCommand extends Command
                 $this->storage->removeRetained($job->publicId);
                 $this->jobs->delete($job->id);
                 $io->writeln('  expired and removed ' . $job->publicId);
+            }
+
+            // Once per pass rather than per delete: the two children of a separate upload can expire in
+            // different iterations, so "was that the last one?" is a question best not asked at all.
+            $childless = $this->conversations->deleteChildless();
+
+            if ($childless > 0) {
+                $io->writeln('  removed ' . $childless . ' conversation(s) with no recordings left');
             }
 
             $swept = $this->storage->sweepOrphans(

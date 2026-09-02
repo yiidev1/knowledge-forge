@@ -87,6 +87,8 @@ interface TranscriptionJobRepositoryInterface
         string $storedAudioPath,
         ?float $durationSeconds,
         ?DateTimeImmutable $expiresAt,
+        ?int $conversationId = null,
+        ?SourceRole $sourceRole = null,
     ): string;
 
     /**
@@ -113,6 +115,20 @@ interface TranscriptionJobRepositoryInterface
     public function markCompleted(
         int $id,
         SpeakerSeparatedTranscript $separation,
+        ?string $retainedAudioPath = null,
+    ): void;
+
+    /**
+     * Complete a recording whose speaker was supplied rather than inferred.
+     *
+     * The transcript belongs entirely to one role, so it is copied into that role's column and the
+     * other is left NULL. Every separation column stays NULL too: no diarization ran, no mapping was
+     * scored, and writing `confidence = 1.0` would dress a fact we were told up as a measurement we
+     * made — which is exactly the confusion `speaker_separation_status` exists to prevent.
+     */
+    public function markCompletedWithProvidedRole(
+        int $id,
+        SourceRole $sourceRole,
         ?string $retainedAudioPath = null,
     ): void;
 

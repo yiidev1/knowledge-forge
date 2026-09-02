@@ -64,6 +64,20 @@ final readonly class TranscriptionJob
         public ?DateTimeImmutable $rolesConfirmedAt = null,
         /** Also the optimistic-lock version, as `messages.edit_count` is for chat edits. */
         public int $reviewCount = 0,
+        /**
+         * The upload this recording belongs to.
+         *
+         * Every job has one — the migration back-filled a conversation for each pre-existing row — but
+         * the property stays nullable so a job read through an older code path is still constructible.
+         */
+        public ?int $conversationId = null,
+        /**
+         * What this recording holds, as the administrator described it.
+         *
+         * `Common` means the speakers still have to be worked out. `Customer` or `Agent` means they do
+         * not, and the worker skips diarization and role mapping entirely for this job.
+         */
+        public ?SourceRole $sourceRole = null,
     ) {}
 
     /** Whether an administrator has corrected this conversation. */

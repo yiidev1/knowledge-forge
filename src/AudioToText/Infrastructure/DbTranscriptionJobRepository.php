@@ -7,8 +7,10 @@ namespace App\AudioToText\Infrastructure;
 use App\AudioToText\Application\TranscriptText;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
+use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\QueueSummary;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
+use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\TranscriptionJobListItem;
@@ -16,6 +18,7 @@ use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use Closure;
+use InvalidArgumentException;
 use DateTimeImmutable;
 use Throwable;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -43,6 +46,18 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
 {
     private const TABLE = '{{%audio_transcription_jobs}}';
     private const ADMINS = '{{%admin_users}}';
+    private const CONVERSATIONS = '{{%audio_conversations}}';
+
+    /**
+     * The store mirror, read directly.
+     *
+     * This module may not name the Order58 module — `ModuleIsolationTest` matches that namespace
+     * literally — so it queries the mirrored table itself, exactly as `DbAudioStoreLookup` and the
+     * agent realm's own directory do. The name comes from `knowledge_bases`, not `order58_stores`,
+     * because that is the column the picker sorts and displays.
+     */
+    private const STORE_NAMES = '{{%knowledge_bases}}';
+    private const STORE_SOURCE = 'order58';
     private const ENQUEUE_LOCK_TIMEOUT_SECONDS = 5;
 
     public function __construct(
@@ -93,10 +108,20 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 'agent_preview' => new Expression('LEFT(j.agent_text, :len)'),
                 'customer_preview' => new Expression('LEFT(j.customer_text, :len)'),
                 'uploaded_by' => 'a.username',
+                'store_source_id' => 'c.store_source_id',
+                'store_name' => 'kb.name',
             ])
             ->from(['j' => self::TABLE])
             ->leftJoin(['a' => self::ADMINS], 'a.id = j.uploaded_by_admin_id')
-            ->addParams([':len' => $sqlLength])
+            // Both LEFT, and for different reasons: a conversion that predates store-wise audio has a
+            // conversation but no store, and a store whose knowledge base has not been synced yet has
+            // no name row. Neither may cost the list its job row.
+            ->leftJoin(['c' => self::CONVERSATIONS], 'c.id = j.conversation_id')
+            ->leftJoin(
+                ['kb' => self::STORE_NAMES],
+                'kb.source_store_id = c.store_source_id AND kb.source_system = :storeSource',
+            )
+            ->addParams([':len' => $sqlLength, ':storeSource' => self::STORE_SOURCE])
             // By id, not created_at: two jobs enqueued in the same second need a stable order, and the
             // primary key is the only tiebreaker guaranteed to be unique.
             ->orderBy(['j.id' => SORT_DESC])
@@ -129,6 +154,8 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 $this->str($row['error_message'] ?? null),
                 DbDateTime::parse((string) ($row['created_at'] ?? '')),
                 $status === JobStatus::COMPLETED && (int) ($row['transcript_is_null'] ?? 1) === 0,
+                $row['store_source_id'] === null ? null : (int) $row['store_source_id'],
+                $this->str($row['store_name'] ?? null),
             );
         }
 
@@ -287,9 +314,13 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         string $storedAudioPath,
         ?float $durationSeconds,
         ?DateTimeImmutable $expiresAt,
+        ?int $conversationId = null,
+        ?SourceRole $sourceRole = null,
     ): string {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
+            'conversation_id' => $conversationId,
+            'source_role' => $sourceRole?->value,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'status' => JobStatus::QUEUED->value,
             'processing_stage' => ProcessingStage::QUEUED->value,
@@ -303,7 +334,11 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             'agent_text' => null,
             'customer_text' => null,
             'speaker_segments' => null,
-            'speaker_separation_status' => SpeakerSeparationStatus::PENDING->value,
+            // PENDING only where a separation is actually going to be attempted. A recording whose
+            // role the administrator supplied has nothing to separate, so it claims nothing.
+            'speaker_separation_status' => $sourceRole === null || $sourceRole === SourceRole::Common
+                ? SpeakerSeparationStatus::PENDING->value
+                : null,
             'speaker_separation_method' => null,
             'speaker_role_confidence' => null,
             'speaker_separation_completed_at' => null,
@@ -390,6 +425,50 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             'detected_language' => $detectedLanguage,
             'processing_stage' => ProcessingStage::DIARIZING->value,
             'speaker_separation_status' => SpeakerSeparationStatus::PROCESSING->value,
+        ], ['id' => $id])->execute();
+    }
+
+    public function markCompletedWithProvidedRole(
+        int $id,
+        SourceRole $sourceRole,
+        ?string $retainedAudioPath = null,
+    ): void {
+        $speakerRole = $sourceRole->speakerRole();
+
+        if ($speakerRole === null) {
+            // COMMON is not a provided role; sending it here would be a caller bug, and silently
+            // writing nothing would hide it.
+            throw new InvalidArgumentException('A common recording has no provided speaker role.');
+        }
+
+        // Read back rather than passed in: the transcript was committed by markTranscribed() the moment
+        // Whisper finished, and re-deriving it here would mean two sources for one string.
+        $transcript = $this->str(
+            (new Query($this->connection))
+                ->select('transcript')
+                ->from(self::TABLE)
+                ->where(['id' => $id])
+                ->scalar(),
+        );
+
+        $this->connection->createCommand()->update(self::TABLE, [
+            'status' => JobStatus::COMPLETED->value,
+            'processing_stage' => ProcessingStage::COMPLETED->value,
+            // The whole recording is one speaker, so the whole transcript is that role's text.
+            'agent_text' => $speakerRole === SpeakerRole::AGENT ? $transcript : null,
+            'customer_text' => $speakerRole === SpeakerRole::CUSTOMER ? $transcript : null,
+            // No turns: a single-speaker recording has no exchange to segment, and inventing one
+            // boundary per sentence would be a timeline nobody measured.
+            'speaker_segments' => null,
+            // Every separation column stays NULL. Nothing was inferred, so nothing is claimed.
+            'speaker_separation_status' => null,
+            'speaker_separation_method' => null,
+            'speaker_role_confidence' => null,
+            'speaker_separation_completed_at' => null,
+            'stored_audio_path' => null,
+            'retained_audio_path' => $retainedAudioPath,
+            'error_message' => null,
+            'completed_at' => DbDateTime::format($this->clock->now()),
         ], ['id' => $id])->execute();
     }
 
@@ -686,6 +765,8 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             $this->str($row['reviewed_by'] ?? null),
             DbDateTime::parseNullable($this->str($row['roles_confirmed_at'] ?? null)),
             (int) ($row['review_count'] ?? 0),
+            ($row['conversation_id'] ?? null) === null ? null : (int) $row['conversation_id'],
+            SourceRole::fromStorage($this->str($row['source_role'] ?? null)),
         );
     }
 

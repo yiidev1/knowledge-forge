@@ -50,6 +50,17 @@ final class AudioToTextCest
     private const PASSWORD = 'AudioTestPassw0rd!secure';
     private const SESSION_COOKIE = 'KFSESSID';
 
+    /**
+     * The store every upload in this suite belongs to.
+     *
+     * Every conversion belongs to a store now, and the store comes from the URL of the page it was
+     * uploaded from. Far outside anything the Order58 mirror holds, so nothing this suite writes can
+     * be confused with a real store's history.
+     */
+    private const STORE_SOURCE_ID = 987654321;
+    private const STORE_NAME = '__KF Audio Test Store__';
+    private const STORE_URL = '/audio-to-text/store/' . self::STORE_SOURCE_ID;
+
     private ConnectionInterface $connection;
 
     public function _before(WebTester $I): void
@@ -63,6 +74,7 @@ final class AudioToTextCest
         $repository->create(self::ADMIN_A, $hasher->hash(self::PASSWORD));
         $repository->create(self::ADMIN_B, $hasher->hash(self::PASSWORD));
 
+        $this->createStore();
         $this->writeFixtures();
     }
 
@@ -79,6 +91,9 @@ final class AudioToTextCest
 
         foreach ([
             '/audio-to-text',
+            self::STORE_URL,
+            '/admin/order58/store-audio',
+            '/audio-to-text/conversion/' . $publicId,
             '/audio-to-text/jobs',
             '/audio-to-text/job/' . $publicId,
             '/audio-to-text/job/' . $publicId . '/status',
@@ -89,17 +104,29 @@ final class AudioToTextCest
         }
     }
 
-    public function anAuthenticatedAdministratorSeesTheUploadPage(WebTester $I): void
+    /**
+     * `/audio-to-text` is no longer a form — every conversion belongs to a store, so it is the way in
+     * to the picker. A redirect rather than a 404 keeps the sidebar entry and every bookmark working.
+     */
+    public function theOldUploadAddressLeadsToTheStorePicker(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
 
         $I->amOnPage('/audio-to-text');
+        $I->seeCurrentUrlEquals('/admin/order58/store-audio');
         $I->seeResponseCodeIs(200);
-        $I->see('Audio to Text');
-        $I->see('Convert to Text');
-        // The queue summary and worker status are part of the page, not a separate screen.
-        $I->see('Queued');
-        $I->see('Audio worker:');
+        $I->see('Store audio');
+    }
+
+    public function anAuthenticatedAdministratorSeesAStoresUploadPage(WebTester $I): void
+    {
+        $this->signIn($I, self::ADMIN_A);
+
+        $I->amOnPage(self::STORE_URL);
+        $I->seeResponseCodeIs(200);
+        $I->see(self::STORE_NAME);
+        $I->see('Convert mixed recording');
+        $I->see('Convert both recordings');
     }
 
     /**
@@ -152,8 +179,8 @@ final class AudioToTextCest
     {
         $this->signIn($I, self::ADMIN_A);
 
-        $I->amOnPage('/audio-to-text');
-        $I->submitForm('form[enctype="multipart/form-data"]', []);
+        $I->amOnPage(self::STORE_URL);
+        $I->submitForm('#a2t-common-form', []);
 
         $I->see('Choose an audio file first.');
         Assert::assertSame(0, $this->jobCount());
@@ -163,9 +190,9 @@ final class AudioToTextCest
     {
         $this->signIn($I, self::ADMIN_A);
 
-        $I->amOnPage('/audio-to-text');
-        $I->attachFile('input[type=file]', 'kf_audio_fake.txt');
-        $I->submitForm('form[enctype="multipart/form-data"]', []);
+        $I->amOnPage(self::STORE_URL);
+        $I->attachFile('#a2t-audio', 'kf_audio_fake.txt');
+        $I->submitForm('#a2t-common-form', []);
 
         $I->see('Only .wav, .mp3, .m4a, .ogg, .webm files are supported.');
         Assert::assertSame(0, $this->jobCount());
@@ -176,9 +203,9 @@ final class AudioToTextCest
     {
         $this->signIn($I, self::ADMIN_A);
 
-        $I->amOnPage('/audio-to-text');
-        $I->attachFile('input[type=file]', 'kf_audio_disguised.wav');
-        $I->submitForm('form[enctype="multipart/form-data"]', []);
+        $I->amOnPage(self::STORE_URL);
+        $I->attachFile('#a2t-audio', 'kf_audio_disguised.wav');
+        $I->submitForm('#a2t-common-form', []);
 
         $I->see('That file is not audio, whatever its name says.');
         Assert::assertSame(0, $this->jobCount());
@@ -243,8 +270,8 @@ final class AudioToTextCest
             ['public_id' => $first],
         )->execute();
 
-        $I->amOnPage('/audio-to-text');
-        $I->see('Convert to Text');
+        $I->amOnPage(self::STORE_URL);
+        $I->see('Convert mixed recording');
         $I->dontSee('You already have a transcription in progress');
 
         $second = $this->upload($I);
@@ -416,28 +443,27 @@ final class AudioToTextCest
     }
 
     /**
-     * Both pages render the same counters, because both read the same summary.
+     * The queue summary lives in exactly one place, so there is nothing for it to disagree with.
      *
-     * The strip used to be computed from a cutoff each action worked out for itself. They agreed, but
-     * only by both being wrong; sharing one source is what makes agreement structural.
+     * It used to appear on two pages, each computing its window from a cutoff it worked out for
+     * itself; they agreed only by being wrong together. Now the conversions list — the technical view
+     * of the queue, where these counters mean something — is the only page that carries it. A store's
+     * page deliberately does not: its counters would be machine-wide numbers on a store-scoped screen,
+     * which is a different way to mislead.
      */
-    public function bothPagesShowTheSameSummaryCounters(WebTester $I): void
+    public function onlyTheConversionsListCarriesTheQueueSummary(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
         $publicId = $this->upload($I);
         $this->completeJob($publicId, 'A finished conversation.');
 
-        $I->amOnPage('/audio-to-text');
-        $upload = $this->summaryCounters($I);
-
         $I->amOnPage('/audio-to-text/jobs');
-        $list = $this->summaryCounters($I);
+        $counters = $this->summaryCounters($I);
 
-        Assert::assertSame(
-            $upload,
-            $list,
-            'The upload page and the conversions list disagree about the queue summary.',
-        );
+        Assert::assertNotSame([], $counters, 'The conversions list must show the queue summary.');
+
+        $I->amOnPage(self::STORE_URL);
+        $I->dontSeeElement('.a2t-status__counts');
     }
 
     /**
@@ -526,7 +552,7 @@ final class AudioToTextCest
     {
         $this->signIn($I, self::ADMIN_A);
 
-        $I->amOnPage('/audio-to-text');
+        $I->amOnPage(self::STORE_URL);
         $I->see('5 minutes');
         $I->see('30 MB');
         // The old wording, and the old cap, must both be gone.
@@ -616,7 +642,7 @@ final class AudioToTextCest
         $this->signIn($I, self::ADMIN_A);
         $publicId = $this->upload($I);
 
-        foreach (['/audio-to-text', '/audio-to-text/jobs', '/audio-to-text/job/' . $publicId] as $path) {
+        foreach ([self::STORE_URL, '/admin/order58/store-audio', '/audio-to-text/jobs', '/audio-to-text/job/' . $publicId] as $path) {
             $I->amOnPage($path);
             $I->dontSee('/var/www/');
             $I->dontSee('/opt/whisper');
@@ -655,13 +681,60 @@ final class AudioToTextCest
         $I->seeCurrentUrlEquals('/');
     }
 
+    /**
+     * One mixed recording, uploaded from the test store's own page.
+     *
+     * The form is addressed by its mode rather than by position: the page carries a common form and a
+     * separate form, and `form:first-of-type` would silently start uploading the wrong one the day
+     * they are reordered.
+     */
     private function upload(WebTester $I): string
     {
-        $I->amOnPage('/audio-to-text');
-        $I->attachFile('input[type=file]', 'kf_audio_valid.wav');
-        $I->submitForm('form[enctype="multipart/form-data"]', []);
+        $I->amOnPage(self::STORE_URL);
+        $I->attachFile('#a2t-audio', 'kf_audio_valid.wav');
+        $I->submitForm('#a2t-common-form', []);
 
         return $this->newestPublicId();
+    }
+
+    /**
+     * A store to upload against, mirrored the way the Order58 sync writes one.
+     *
+     * Both rows are needed: the lookup joins the store to its knowledge base, because the name on the
+     * page has to be the name on the card that led there.
+     */
+    private function createStore(): void
+    {
+        $this->removeStore();
+
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_stores}}', [
+            'source_id' => self::STORE_SOURCE_ID,
+            'name' => self::STORE_NAME,
+            'active' => 1,
+            'sync_hash' => str_repeat('0', 64),
+            'synced_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+
+        $this->connection->createCommand()->insert('{{%knowledge_bases}}', [
+            'name' => self::STORE_NAME,
+            'slug' => 'kf-audio-test-store',
+            'source_system' => 'order58',
+            'source_store_id' => self::STORE_SOURCE_ID,
+            'source_name' => self::STORE_NAME,
+            'source_active' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
+    private function removeStore(): void
+    {
+        IntegrationDb::cleanup($this->connection, '{{%knowledge_bases}}', ['source_store_id' => self::STORE_SOURCE_ID]);
+        IntegrationDb::cleanup($this->connection, '{{%order58_stores}}', ['source_id' => self::STORE_SOURCE_ID]);
     }
 
     private function newestPublicId(): string
@@ -837,12 +910,20 @@ final class AudioToTextCest
             $this->connection->createCommand()
                 ->delete('{{%audio_transcription_jobs}}', ['uploaded_by_admin_id' => $adminIds])
                 ->execute();
+
+            // And the parents the jobs hung off. Same reason and same order as above: the uploader
+            // foreign key is RESTRICT, so a conversation left behind would block its administrator
+            // from being removed and leave this suite's rows in a shared database.
+            $this->connection->createCommand()
+                ->delete('{{%audio_conversations}}', ['uploaded_by_admin_id' => $adminIds])
+                ->execute();
         }
 
         foreach ([self::ADMIN_A, self::ADMIN_B] as $username) {
             IntegrationDb::cleanup($this->connection, '{{%admin_users}}', ['username' => $username]);
         }
 
+        $this->removeStore();
         $this->removeJobDirectories();
         $this->removeFixtures();
     }
