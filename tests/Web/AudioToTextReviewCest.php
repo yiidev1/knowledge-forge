@@ -77,13 +77,30 @@ final class AudioToTextReviewCest
         $I->dontSee('Correct speakers', 'h1');
     }
 
-    public function anIncompleteJobHasNoReviewPage(WebTester $I): void
+    /**
+     * Nothing to correct, so the page hands the reader on rather than dead-ending.
+     *
+     * The conversions list sends every View link here, including queued and failed rows, and the
+     * detail page already explains why there is no conversation to correct.
+     */
+    public function anIncompleteJobIsSentToTheDetailPage(WebTester $I): void
     {
         $publicId = $this->seed(status: 'PROCESSING');
 
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
-        $I->seeResponseCodeIs(404);
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $publicId);
+        $I->see('Processing');
+    }
+
+    /** The conversions list's View action opens this page. */
+    public function theConversionsListViewActionOpensTheCorrectionPage(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/jobs');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/review"]');
     }
 
     public function anUnknownJobHasNoReviewPage(WebTester $I): void
@@ -387,14 +404,13 @@ final class AudioToTextReviewCest
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
 
-        // The fixture's two turns are different roles, so neither may merge with the other.
-        $I->seeElement('[data-a2t-turn="0"][data-a2t-merge-next]');
-        Assert::assertSame(
-            'That turn is assigned to the other role. Move one of them first.',
-            $I->grabAttributeFrom('[data-a2t-turn="0"]', 'data-a2t-merge-next'),
-        );
+        // A neighbour is all a manual merge needs, whatever the roles or voices are.
+        Assert::assertSame('ok', $I->grabAttributeFrom('[data-a2t-turn="0"]', 'data-a2t-merge-next'));
         // No neighbour above the first turn, so the attribute is absent rather than empty.
         $I->dontSeeElement('[data-a2t-turn="0"][data-a2t-merge-prev]');
+        // ...and the mirror image at the far end.
+        Assert::assertSame('ok', $I->grabAttributeFrom('[data-a2t-turn="1"]', 'data-a2t-merge-prev'));
+        $I->dontSeeElement('[data-a2t-turn="1"][data-a2t-merge-next]');
     }
 
     /** Two turns by one voice in one role publish "ok", and the merge endpoint accepts the drop. */
@@ -430,6 +446,438 @@ final class AudioToTextReviewCest
         Assert::assertSame('MERGE', $this->latestOperation($publicId));
     }
 
+    /**
+     * Selecting a message reveals its merge controls, and the edges of the conversation offer only
+     * the direction that exists.
+     */
+    public function theMergeControlsAppearPerTurnAndOmitImpossibleDirections(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        // Hidden until a message is selected — the thread is not lined with buttons.
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-merge-controls][hidden]');
+
+        // First turn: nothing before it, so no "with previous" at all.
+        $I->dontSeeElement('[data-a2t-turn="0"] [data-a2t-merge-with="previous"]');
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-merge-with="next"]');
+
+        // Last turn: the mirror image.
+        $I->seeElement('[data-a2t-turn="1"] [data-a2t-merge-with="previous"]');
+        $I->dontSeeElement('[data-a2t-turn="1"] [data-a2t-merge-with="next"]');
+    }
+
+    /**
+     * Adjacency is the whole rule now.
+     *
+     * The fixture's two turns differ in both role and voice, and both directions are still offered:
+     * an administrator pressing "merge" has looked at the turns and decided, and the diarizer's view
+     * is the thing they are correcting.
+     */
+    public function bothDirectionsAreOfferedRegardlessOfRoleOrVoice(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-merge-with="next"]');
+        $I->seeElement('[data-a2t-turn="1"] [data-a2t-merge-with="previous"]');
+        // Nothing is offered-then-refused any more, so no disabled control and no reason to print.
+        $I->dontSeeElement('[data-a2t-turn="0"] [data-a2t-merge-controls] button[disabled]');
+        $I->dontSeeElement('.a2t-turn__merge-why');
+    }
+
+    /** Different role and different voice, merged by hand through the endpoint the button posts to. */
+    public function aDifferentRoleNeighbourMergesOnConfirm(WebTester $I): void
+    {
+        $publicId = $this->seed();
+        $before = $this->rawColumns($publicId);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(1, $turns);
+        Assert::assertSame('Yes. For pikup or delivery?', $turns[0]['text'], 'previous + selected.');
+        Assert::assertSame(0, $turns[0]['start_ms']);
+        Assert::assertSame(3000, $turns[0]['end_ms']);
+        // The joined turn keeps the first one's role and voice.
+        Assert::assertSame('CUSTOMER', $turns[0]['role']);
+        Assert::assertSame('SPEAKER_00', $turns[0]['speaker']);
+        Assert::assertSame('MERGE', $this->latestOperation($publicId));
+
+        // And none of it touched what the machine produced.
+        $after = $this->rawColumns($publicId);
+        Assert::assertSame($before['transcript'], $after['transcript']);
+        Assert::assertSame($before['speaker_segments'], $after['speaker_segments']);
+    }
+
+    public function aDifferentRoleNeighbourMergesForwardToo(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/0/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'next',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(1, $turns);
+        Assert::assertSame('Yes. For pikup or delivery?', $turns[0]['text'], 'selected + next.');
+    }
+
+    /**
+     * Whisper's `>>` speaker-change markers are removed on the way to the screen, and only there.
+     */
+    public function speakerChangeMarkersAreHiddenButNeverErasedFromTheRecord(WebTester $I): void
+    {
+        $publicId = $this->seed(segmentText: '>> Okay, hold on. >>');
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        $I->see('Okay, hold on.', '[data-a2t-turn="0"] [data-a2t-text]');
+        $I->dontSee('>>', '[data-a2t-turn="0"] [data-a2t-text]');
+
+        // The stored segments still carry them: they are the only clue a turn holds two speakers.
+        $raw = (string) $this->rawColumns($publicId)['speaker_segments'];
+        Assert::assertStringContainsString('>>', $raw, 'The machine record is untouched.');
+    }
+
+    /** Merging into the previous turn: previous text first, then the selected one. */
+    public function mergingWithThePreviousTurnKeepsSpokenOrder(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        // Turn 1 merged into turn 0 — the direction the "With previous" button sends.
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(1, $turns, 'The selected turn is gone as a separate message.');
+        Assert::assertSame('Yes. For pikup or delivery?', $turns[0]['text'], 'previous + selected.');
+        // The span covers both turns: min of the starts, max of the ends.
+        Assert::assertSame(0, $turns[0]['start_ms']);
+        Assert::assertSame(3000, $turns[0]['end_ms']);
+        Assert::assertSame('MERGE', $this->latestOperation($publicId));
+    }
+
+    /**
+     * Adjacency is structural, not asserted by the request.
+     *
+     * The endpoint takes a turn index and a direction; the server derives the neighbour itself. There
+     * is no field naming a target, so a crafted post cannot pair two turns that are not side by side —
+     * and asking for a neighbour that does not exist is refused rather than guessed at.
+     */
+    public function aMergeBeyondTheEdgeOfTheConversationIsRefused(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        // Nothing precedes turn 0, and nothing follows the last turn. PhpBrowser follows the
+        // redirect, so the flash is on the page the client is already looking at.
+        foreach ([['0', 'previous'], ['1', 'next']] as [$index, $direction]) {
+            $I->amOnPage($review);
+            $I->sendAjaxPostRequest($review . '/turn/' . $index . '/merge', [
+                '_csrf' => $this->csrfToken($I),
+                'expected_review_count' => (string) $this->reviewCount($publicId),
+                'direction' => $direction,
+            ]);
+            $I->see('There is no turn on that side to merge with.');
+        }
+
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments'], 'Nothing was written.');
+        Assert::assertSame(0, $this->revisionCount($publicId));
+    }
+
+    public function aMergeWithoutACsrfTokenChangesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+        ]);
+
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments'], 'CSRF is still enforced.');
+        Assert::assertSame(0, $this->revisionCount($publicId));
+    }
+
+    public function aStaleMergeIsRefusedAndWritesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+        $token = $this->csrfToken($I);
+
+        // Somebody else corrects the conversation while this page is open.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['review_count' => 5],
+            ['public_id' => $publicId],
+        )->execute();
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $token,
+            'expected_review_count' => '0',
+            'direction' => 'previous',
+        ]);
+
+        $I->see('Somebody else corrected this conversation while you had it open.');
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments']);
+        Assert::assertSame(0, $this->revisionCount($publicId), 'No orphan audit row.');
+    }
+
+    /** Whatever a merge does to the reviewed layer, the machine's own columns are untouched. */
+    public function aMergeNeverAltersTheMachineResult(WebTester $I): void
+    {
+        $publicId = $this->seed(sameSpeaker: true, bothCustomer: true, agentText: null);
+        $before = $this->rawColumns($publicId);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+        ]);
+
+        $after = $this->rawColumns($publicId);
+        Assert::assertSame($before['transcript'], $after['transcript']);
+        Assert::assertSame($before['speaker_segments'], $after['speaker_segments']);
+        Assert::assertSame($before['agent_text'], $after['agent_text']);
+        Assert::assertSame($before['customer_text'], $after['customer_text']);
+        Assert::assertNotNull($after['reviewed_segments'], 'The correction lives in the reviewed layer.');
+    }
+
+    /**
+     * A highlighted range moves only those words; the source turn stays with the rest.
+     *
+     * The payload is the one Chrome actually submits — offsets in codepoints plus the selected text as
+     * a checksum, never a substring to search for.
+     */
+    public function aHighlightedRangeMovesIntoThePreviousTurnAndLeavesTheRest(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+        $before = $this->rawColumns($publicId);
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        // "fried rice," begins at codepoint 23 of "So lo mein with shrimp fried rice,".
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+            'selection_start' => '23',
+            'selection_end' => '34',
+            'selection_text' => 'fried rice,',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(3, $turns, 'The source turn still holds words, so it stays.');
+        Assert::assertSame('Hello there. fried rice,', $turns[0]['text']);
+        Assert::assertSame('So lo mein with shrimp', $turns[1]['text']);
+        Assert::assertSame('Anything else?', $turns[2]['text'], 'The far side is untouched.');
+
+        // Neither turn claims a millisecond it does not have.
+        Assert::assertSame(0, $turns[0]['start_ms']);
+        Assert::assertSame(1000, $turns[0]['end_ms']);
+        Assert::assertTrue($turns[0]['approx']);
+        Assert::assertTrue($turns[1]['approx']);
+
+        Assert::assertSame('MERGE', $this->latestOperation($publicId));
+        Assert::assertSame(1, $this->revisionCount($publicId));
+
+        $after = $this->rawColumns($publicId);
+        Assert::assertSame($before['transcript'], $after['transcript']);
+        Assert::assertSame($before['speaker_segments'], $after['speaker_segments']);
+        Assert::assertSame($before['agent_text'], $after['agent_text']);
+        Assert::assertSame($before['customer_text'], $after['customer_text']);
+    }
+
+    public function aHighlightedRangeMovesIntoTheNextTurnInFront(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'next',
+            'selection_start' => '23',
+            'selection_end' => '34',
+            'selection_text' => 'fried rice,',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(3, $turns);
+        Assert::assertSame('Hello there.', $turns[0]['text']);
+        Assert::assertSame('So lo mein with shrimp', $turns[1]['text']);
+        Assert::assertSame('fried rice, Anything else?', $turns[2]['text']);
+    }
+
+    /** Selecting every word leaves nothing behind, so the source turn goes with it. */
+    public function selectingTheWholeTurnStillRemovesIt(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+            'selection_start' => '0',
+            'selection_end' => '34',
+            'selection_text' => 'So lo mein with shrimp fried rice,',
+        ]);
+
+        $turns = $this->reviewedTurns($publicId);
+        Assert::assertCount(2, $turns, 'Nothing left behind, so the card is gone.');
+        Assert::assertSame('Hello there. So lo mein with shrimp fried rice,', $turns[0]['text']);
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: string, 2: string}>
+     */
+    public static function craftedRanges(): iterable
+    {
+        yield 'negative start' => ['-1', '5', 'So lo'];
+        yield 'end before start' => ['10', '4', 'x'];
+        yield 'past the end' => ['0', '999', 'x'];
+        yield 'empty range' => ['4', '4', ''];
+        yield 'text does not match' => ['0', '5', 'never said'];
+        yield 'not a number' => ['abc', 'def', 'So lo'];
+    }
+
+    /**
+     * @dataProvider craftedRanges
+     */
+    public function aCraftedRangeIsRefusedAndWritesNothing(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => (string) $this->reviewCount($publicId),
+            'direction' => 'previous',
+            'selection_start' => $example[0],
+            'selection_end' => $example[1],
+            'selection_text' => $example[2],
+        ]);
+
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments'], 'Nothing was written.');
+        Assert::assertSame(0, $this->revisionCount($publicId), 'And no audit row.');
+    }
+
+    public function aStaleRangeMoveIsRefused(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+        $I->amOnPage($review);
+        $token = $this->csrfToken($I);
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['review_count' => 4],
+            ['public_id' => $publicId],
+        )->execute();
+
+        $I->sendAjaxPostRequest($review . '/turn/1/merge', [
+            '_csrf' => $token,
+            'expected_review_count' => '0',
+            'direction' => 'previous',
+            'selection_start' => '23',
+            'selection_end' => '34',
+            'selection_text' => 'fried rice,',
+        ]);
+
+        $I->see('Somebody else corrected this conversation while you had it open.');
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments']);
+        Assert::assertSame(0, $this->revisionCount($publicId));
+    }
+
+    /** Three turns: a previous, a source with words to split off, and a next. */
+    private function seedThree(): string
+    {
+        $publicId = bin2hex(random_bytes(16));
+        $this->created[] = $publicId;
+
+        $rows = [
+            ['start_ms' => 0, 'end_ms' => 1000, 'speaker' => 'SPEAKER_00',
+                'role' => 'AGENT', 'text' => 'Hello there.', 'confidence' => 0.9],
+            ['start_ms' => 2000, 'end_ms' => 4000, 'speaker' => 'SPEAKER_01',
+                'role' => 'CUSTOMER', 'text' => 'So lo mein with shrimp fried rice,', 'confidence' => 0.9],
+            ['start_ms' => 5000, 'end_ms' => 6000, 'speaker' => 'SPEAKER_00',
+                'role' => 'AGENT', 'text' => 'Anything else?', 'confidence' => 0.9],
+        ];
+
+        $this->connection->createCommand()->insert('{{%audio_transcription_jobs}}', [
+            'public_id' => $publicId,
+            'uploaded_by_admin_id' => $this->adminId,
+            'status' => 'COMPLETED',
+            'processing_stage' => 'COMPLETED',
+            'original_filename' => 'range-fixture.wav',
+            'transcript' => 'Hello there. So lo mein with shrimp fried rice, Anything else?',
+            'agent_text' => 'Hello there. Anything else?',
+            'customer_text' => 'So lo mein with shrimp fried rice,',
+            'speaker_segments' => (string) json_encode($rows),
+            'speaker_separation_status' => 'COMPLETED',
+            'speaker_role_confidence' => 0.9,
+            'created_at' => gmdate('Y-m-d H:i:s'),
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+        ])->execute();
+
+        return $publicId;
+    }
+
     // ---------------------------------------------------------------- merge refusal
 
     /**
@@ -439,21 +887,28 @@ final class AudioToTextReviewCest
      * longer visible on screen. A control that simply vanished would read as a bug, so it stays and
      * says why.
      */
-    public function anImpossibleMergeStaysVisibleAndExplainsItself(WebTester $I): void
+    /**
+     * No merge is refused any more, so nothing is offered-then-disabled.
+     *
+     * This test used to pin the opposite. It is kept, inverted, because the absence of a refusal is
+     * now the behaviour worth guarding: a stray re-introduction of the role or voice check would show
+     * up here rather than only in the domain.
+     */
+    public function noMergeIsOfferedAndThenRefused(WebTester $I): void
     {
         $publicId = $this->seed();
 
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
 
-        // Different roles to begin with: the difference a reader can see.
-        $I->see('That turn is assigned to the other role. Move one of them first.');
-        $I->seeElement('.a2t-turn__refused button[disabled]');
+        $I->dontSee('That turn is assigned to the other role.');
+        $I->dontSee('The system heard two different voices here');
+        $I->dontSeeElement('.a2t-turn__refused button[disabled]');
 
-        // Now both are the Agent, and the only difference left is invisible.
+        // Even after a move makes the two turns share a role but not a voice.
         $I->submitForm('[data-a2t-turn="0"] [data-a2t-fallback] form[action$="/turn/0/move"]', []);
-        $I->see('The system heard two different voices here');
-        $I->seeElement('.a2t-turn__refused button[disabled]');
+        $I->dontSee('The system heard two different voices here');
+        $I->dontSeeElement('.a2t-turn__refused button[disabled]');
     }
 
     /** Halves of one split share a voice, so undoing a split is always available. */

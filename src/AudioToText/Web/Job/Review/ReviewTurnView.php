@@ -29,6 +29,8 @@ final readonly class ReviewTurnView
         public string $label,
         public bool $confirmed,
         public string $text,
+        /** The stored text, markers and all — what the move endpoint has to be given. */
+        public string $rawText,
         public SpeakerRole $role,
         public ConversationSide $side,
         public TurnTiming $timing,

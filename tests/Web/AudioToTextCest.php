@@ -279,8 +279,8 @@ final class AudioToTextCest
 
         // Each job's View link, which now opens the conversation page, is how a row is identified here.
         $I->amOnPage('/audio-to-text/jobs');
-        $I->seeElement('a[href="/audio-to-text/job/' . $fromA . '/conversation"]');
-        $I->seeElement('a[href="/audio-to-text/job/' . $fromB . '/conversation"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $fromA . '/review"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $fromB . '/review"]');
     }
 
     // ---------------------------------------------------------------- shared visibility
@@ -327,12 +327,12 @@ final class AudioToTextCest
         $I->amOnPage('/audio-to-text/jobs');
         $I->seeResponseCodeIs(200);
         $I->see('Audio conversions');
-        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/review"]');
 
         $this->signIn($I, self::ADMIN_B);
         $I->amOnPage('/audio-to-text/jobs');
         $I->seeResponseCodeIs(200);
-        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/review"]');
     }
 
     /** The uploader is still recorded, and still shown — on the job page. */

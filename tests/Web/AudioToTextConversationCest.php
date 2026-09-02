@@ -53,16 +53,31 @@ final class AudioToTextConversationCest
 
     // ---------------------------------------------------------------- the View action
 
-    public function theConversionsListViewActionOpensTheConversationPage(WebTester $I): void
+    /**
+     * The conversions list opens the correction page now, not this one.
+     *
+     * This page stays reachable at its own URL and from the correction page's "Back to conversation".
+     */
+    public function theConversionsListViewActionOpensTheCorrectionPage(WebTester $I): void
     {
         $publicId = $this->seed();
 
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/jobs');
-        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
 
         $I->click('View');
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $publicId . '/review');
+    }
+
+    public function theConversationPageIsStillReachableAtItsOwnUrl(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->click('Back to conversation');
         $I->seeCurrentUrlEquals('/audio-to-text/job/' . $publicId . '/conversation');
+        $I->seeElement('.a2t-chat__scroll .a2t-thread');
     }
 
     /** Nothing to read, so the row leads on to the page that explains why. */

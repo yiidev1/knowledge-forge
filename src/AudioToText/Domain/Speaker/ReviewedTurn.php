@@ -140,6 +140,29 @@ final readonly class ReviewedTurn
     }
 
     /**
+     * Words moved in from, or out to, the turn beside this one.
+     *
+     * The span is left exactly as it was and marked approximate, which is this codebase's existing way
+     * of saying "these boundaries no longer bound this text". Token timings are not persisted, so the
+     * moment the moved words were spoken is unknown; widening the span would claim this speaker was
+     * talking during the other's turn, and interpolating from character position would produce a
+     * number that looks measured and is not.
+     */
+    public function withMovedText(string $text): self
+    {
+        return new self(
+            $this->startMs,
+            $this->endMs,
+            $this->speaker,
+            $this->role,
+            $text,
+            $this->confidence,
+            true,
+            true,
+        );
+    }
+
+    /**
      * Cut in two at a character offset.
      *
      * **Both halves keep this turn's full range**, and both are marked approximate. There is no token

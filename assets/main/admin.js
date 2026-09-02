@@ -1067,7 +1067,10 @@
         direction: mergeForm.querySelector('[data-a2t-merge-direction]'),
         first: mergeDialog.querySelector('[data-a2t-merge-first]'),
         second: mergeDialog.querySelector('[data-a2t-merge-second]'),
-        result: mergeDialog.querySelector('[data-a2t-merge-result]')
+        result: mergeDialog.querySelector('[data-a2t-merge-result]'),
+        start: mergeForm.querySelector('[data-a2t-merge-start]'),
+        end: mergeForm.querySelector('[data-a2t-merge-end]'),
+        selected: mergeForm.querySelector('[data-a2t-merge-selected]')
     } : null;
 
     var fields = {
@@ -1342,24 +1345,59 @@
         drag = null;
     }
 
-    function openMergeConfirm(turn, target) {
-        if (!merge) {
+    function neighbourOf(turn, direction) {
+        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
+        var wanted = direction === 'previous' ? index - 1 : index + 1;
+
+        return root.querySelector('[data-a2t-turn="' + wanted + '"]');
+    }
+
+    /**
+     * Confirm a merge in one direction.
+     *
+     * Only the direction is ever sent: the server finds the neighbour itself from the turn index, so
+     * adjacency is structural rather than something a request can assert. What is shown here is a
+     * preview built from the same two turns the server will join.
+     */
+    function openMergeConfirm(turn, direction) {
+        var target = neighbourOf(turn, direction);
+
+        if (!merge || !target) {
             return;
         }
 
-        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
-        var targetIndex = parseInt(target.getAttribute('data-a2t-turn'), 10);
-        var before = targetIndex < index;
+        // The rendered text, so the preview matches what is on screen — the stored value still
+        // carries whisper's >> markers, which the page deliberately does not show.
+        var shown = function (el) {
+            var body = el.querySelector('[data-a2t-text]');
 
-        var dragged = turn.getAttribute('data-a2t-text-value') || '';
-        var neighbour = target.getAttribute('data-a2t-text-value') || '';
+            return body ? body.textContent : '';
+        };
 
-        merge.direction.value = before ? 'previous' : 'next';
+        var neighbour = shown(target);
+        var before = direction === 'previous';
+
+        // A live highlight inside this turn moves only those words. Without one — the drag path — the
+        // whole turn is joined, and the range fields stay disabled so the endpoint never sees them.
+        var picked = active !== null && active.turn === turn && !active.whole ? active : null;
+        var moving = picked !== null ? picked.text.trim() : shown(turn);
+
+        merge.direction.value = direction;
         mergeForm.setAttribute('action', turn.getAttribute('data-a2t-merge-url') || '');
 
+        merge.start.disabled = picked === null;
+        merge.end.disabled = picked === null;
+        merge.selected.disabled = picked === null;
+
+        if (picked !== null) {
+            merge.start.value = String(picked.start);
+            merge.end.value = String(picked.end);
+            merge.selected.value = picked.text;
+        }
+
         // Shown in the order they will be joined, which is the order they were spoken.
-        merge.first.textContent = before ? neighbour : dragged;
-        merge.second.textContent = before ? dragged : neighbour;
+        merge.first.textContent = before ? neighbour : moving;
+        merge.second.textContent = before ? moving : neighbour;
         merge.result.textContent = merge.first.textContent + ' ' + merge.second.textContent;
 
         turn.classList.add('a2t-turn--moving');
@@ -1432,7 +1470,9 @@
         stopDrag();
 
         if (mergeTarget) {
-            openMergeConfirm(turn, mergeTarget);
+            var from = parseInt(turn.getAttribute('data-a2t-turn'), 10);
+            var to = parseInt(mergeTarget.getAttribute('data-a2t-turn'), 10);
+            openMergeConfirm(turn, to < from ? 'previous' : 'next');
         } else if (moved) {
             openConfirm(turn);
         }
@@ -1441,6 +1481,92 @@
     });
 
     document.addEventListener('pointercancel', stopDrag);
+
+    /* ----------------------------------------------------------------- text selection */
+
+    // The range the administrator highlighted, in codepoints.
+    //
+    // JavaScript string offsets count UTF-16 code units, PHP's mb_substr counts codepoints, and the
+    // two disagree from the first emoji onward. Converting here rather than on the server means the
+    // number that crosses the wire means one thing.
+    function codepointsIn(text) {
+        return Array.from(text).length;
+    }
+
+    var active = null; // { turn, start, end, text }
+
+    /**
+     * The current selection, but only when it is one message's own words.
+     *
+     * A highlight that starts in one bubble and ends in another describes no single turn, and one that
+     * takes in the speaker label or the timestamp is not text anybody meant to move. Both are ignored
+     * rather than guessed at.
+     */
+    function selectionInsideOneTurn() {
+        var selection = window.getSelection();
+
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+            return null;
+        }
+
+        var range = selection.getRangeAt(0);
+        var body = range.startContainer.parentElement
+            ? range.startContainer.parentElement.closest('[data-a2t-text]')
+            : null;
+
+        if (!body || !body.contains(range.startContainer) || !body.contains(range.endContainer)) {
+            return null;
+        }
+
+        var text = range.toString();
+        if (text.replace(/\s+/g, '') === '') {
+            return null; // whitespace is not a selection of anything
+        }
+
+        // How far into this turn the highlight begins, measured the same way the server will.
+        var before = range.cloneRange();
+        before.selectNodeContents(body);
+        before.setEnd(range.startContainer, range.startOffset);
+        var start = codepointsIn(before.toString());
+
+        return {
+            turn: body.closest('[data-a2t-turn]'),
+            start: start,
+            end: start + codepointsIn(text),
+            text: text,
+            whole: text.trim() === body.textContent.trim()
+        };
+    }
+
+    /**
+     * One message at a time carries the merge controls, and only while its words are highlighted.
+     *
+     * Driven by the selection rather than by a click, because what the buttons act on *is* the
+     * selection — offering them for a card nobody has highlighted would promise a precision the
+     * request could not carry.
+     */
+    function showControlsFor(picked) {
+        active = picked;
+
+        var all = root.querySelectorAll('[data-a2t-turn]');
+        for (var i = 0; i < all.length; i++) {
+            var isTarget = picked !== null && all[i] === picked.turn;
+            all[i].classList.toggle('a2t-turn--selected', isTarget);
+
+            var controls = all[i].querySelector('[data-a2t-merge-controls]');
+            if (controls) {
+                controls.hidden = !isTarget;
+            }
+        }
+    }
+
+    function clearSelection() {
+        showControlsFor(null);
+    }
+
+    document.addEventListener('selectionchange', function () {
+        showControlsFor(selectionInsideOneTurn());
+    });
 
     /* ----------------------------------------------------------------- wiring */
 
@@ -1476,7 +1602,18 @@
         if (target.closest('[data-a2t-merge-cancel]')) {
             event.preventDefault();
             endMerge();
+
+            return;
         }
+
+        var mergeWith = target.closest('[data-a2t-merge-with]');
+        if (mergeWith) {
+            event.preventDefault();
+            openMergeConfirm(turnOf(mergeWith), mergeWith.getAttribute('data-a2t-merge-with'));
+
+            return;
+        }
+
     });
 
     function endMerge() {

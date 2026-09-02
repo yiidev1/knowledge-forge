@@ -107,10 +107,10 @@ $lastRow = min($page * $limit, $total);
                 <tbody>
                 <?php foreach ($items as $item): ?>
                     <?php
-    // View opens the conversation on its own. A row with nothing to read — queued, failed, or never
+    // View opens the correction page. A row with nothing to correct — queued, failed, or never
     // speaker-separated — is redirected on to the full detail page, so this one link is right for
-    // every row and the list does not have to predict what the conversation page will find.
-    $viewUrl = $urlGenerator->generate(AudioToTextRoute::JOB_CONVERSATION, ['publicId' => $item->publicId]);
+    // every row and the list does not have to predict what the correction page will find.
+    $viewUrl = $urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $item->publicId]);
                     $downloadUrl = $urlGenerator->generate(
                         AudioToTextRoute::JOB_DOWNLOAD,
                         ['publicId' => $item->publicId],

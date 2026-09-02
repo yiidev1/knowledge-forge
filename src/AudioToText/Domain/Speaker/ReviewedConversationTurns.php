@@ -170,11 +170,11 @@ final readonly class ReviewedConversationTurns
     }
 
     /**
-     * Join a turn with its neighbour.
+     * Join a turn with the one beside it, because an administrator said they are one turn.
      *
-     * The neighbour must have the same speaker **and** the same role — the two must be indistinguishable
-     * to a reader. Merging across a difference would silently reassign speech, which is the mistake this
-     * whole feature exists to correct rather than commit.
+     * Adjacency is the only requirement. The speaker and role of the neighbour are not consulted: this
+     * is the manual correction path, and the diarizer's view of who was talking is exactly what the
+     * person is here to overrule. The joined turn keeps the first one's speaker and role.
      */
     public function mergeWithPrevious(int $index): self
     {
@@ -187,11 +187,31 @@ final readonly class ReviewedConversationTurns
     }
 
     /**
-     * Whether this turn may be merged in that direction, and if not, why not.
+     * Whether an administrator may join this turn to its neighbour.
      *
-     * The rule is unchanged — this is the rule, and {@see merge()} enforces it by calling here. Exposing
-     * it lets the page disable a control *and say why*, without a second copy of the condition that
-     * could later disagree with the one the service applies.
+     * Adjacency is the whole rule. A person pressing "merge with previous" has looked at both turns
+     * and decided they are one; the diarizer's opinion about voices, and the role mapping derived
+     * from it, are the very things they are correcting. Refusing them here would be the machine
+     * overruling the reviewer in a screen that exists for the reviewer to overrule the machine.
+     *
+     * Distinct from {@see mergeAvailability()}, which stays strict because it governs the join that
+     * happens *automatically* after a move — nobody asked for that one, so it only fires where the
+     * two turns are indistinguishable anyway.
+     */
+    public function manualMergeAvailability(int $index, MergeDirection $direction): MergeRefusal
+    {
+        $neighbourIndex = $direction === MergeDirection::Previous ? $index - 1 : $index + 1;
+
+        return isset($this->turns[$index], $this->turns[$neighbourIndex])
+            ? MergeRefusal::None
+            : MergeRefusal::NoNeighbour;
+    }
+
+    /**
+     * Whether two turns are alike enough to be joined *without anyone asking*.
+     *
+     * Used only by the automatic join after a move. Left strict on purpose: an automatic merge across
+     * two voices would silently reassign speech nobody looked at.
      */
     public function mergeAvailability(int $index, MergeDirection $direction): MergeRefusal
     {
@@ -291,6 +311,103 @@ final readonly class ReviewedConversationTurns
         }
 
         return $working->moveTo($fragment, $role)->mergeAround($fragment);
+    }
+
+    /**
+     * Move the words an administrator highlighted into the turn beside this one.
+     *
+     * The range is authoritative, never the text. Selecting the second "yes" in "yes no yes" has to
+     * move *that* one, and searching for the substring would find the first — so the offsets decide,
+     * and `$selected` is only a checksum proving the page and the stored turn still agree.
+     *
+     * Offsets count codepoints, matching `mb_substr`. The browser counts UTF-16 units, so it converts
+     * before sending; the two disagree the moment a turn contains an emoji.
+     *
+     * Selecting the whole turn is the existing whole-turn merge, because nothing would be left behind.
+     * A partial selection leaves the source in place with the rest of its words.
+     *
+     * Both turns are read and written in their displayed form — whisper's `>>` markers stripped — since
+     * that is the text the administrator measured their selection against. Leaving the markers in one
+     * turn and not the other would store two conventions in one conversation.
+     *
+     * @param int    $start    first codepoint of the selection, inclusive
+     * @param int    $end      one past the last codepoint
+     * @param string $selected what the page believed lies in that range
+     *
+     * @throws ReviewRejected when there is no neighbour, or the range is not a range, or the page and
+     *                        the stored turn no longer agree about what it contains
+     */
+    public function mergeSelection(
+        int $index,
+        MergeDirection $direction,
+        int $start,
+        int $end,
+        string $selected,
+    ): self {
+        $availability = $this->manualMergeAvailability($index, $direction);
+
+        if (!$availability->isAllowed()) {
+            throw ReviewRejected::mergeRefused($availability);
+        }
+
+        $source = $this->turnAt($index);
+        $text = SpeakerMarkers::strip($source->text);
+        $length = mb_strlen($text);
+
+        if ($start < 0 || $end > $length || $start >= $end) {
+            throw ReviewRejected::selectionOutOfRange();
+        }
+
+        $inRange = mb_substr($text, $start, $end - $start);
+
+        // The checksum. If the page was rendered before somebody else corrected this turn, the words
+        // at those offsets are not the words the administrator highlighted.
+        if (trim($inRange) !== trim($selected)) {
+            throw ReviewRejected::selectionNotFound();
+        }
+
+        if (trim($inRange) === '') {
+            throw ReviewRejected::emptySelection();
+        }
+
+        $remaining = self::join(mb_substr($text, 0, $start), mb_substr($text, $end));
+
+        // Nothing left behind: this is the whole-turn merge, and the source turn goes with it.
+        if ($remaining === '') {
+            return $this->merge($index, $direction);
+        }
+
+        $targetIndex = $direction === MergeDirection::Previous ? $index - 1 : $index + 1;
+        $target = $this->turns[$targetIndex];
+        $targetText = SpeakerMarkers::strip($target->text);
+
+        $turns = $this->turns;
+        $turns[$index] = $source->withMovedText($remaining);
+        $turns[$targetIndex] = $target->withMovedText(
+            $direction === MergeDirection::Previous
+                ? self::join($targetText, trim($inRange))
+                : self::join(trim($inRange), $targetText),
+        );
+
+        return new self(array_values($turns));
+    }
+
+    /**
+     * Join two fragments across the seam a move left, and only there.
+     *
+     * One space between them, never two, and never none — "shrimp" and "fried" must not become
+     * "shrimpfried". Whitespace elsewhere in either fragment is left exactly as it was.
+     */
+    private static function join(string $left, string $right): string
+    {
+        $left = trim($left);
+        $right = trim($right);
+
+        if ($left === '') {
+            return $right;
+        }
+
+        return $right === '' ? $left : $left . ' ' . $right;
     }
 
     /** Correct wording. Lives only here; the machine's `transcript` is never rewritten. */
@@ -405,7 +522,8 @@ final readonly class ReviewedConversationTurns
         // means the page is stale, the second means the edge of the conversation. Each says so.
         $this->turnAt($index);
 
-        $availability = $this->mergeAvailability($index, $direction);
+        // Manual: adjacency only. The strict predicate governs the automatic join, not this one.
+        $availability = $this->manualMergeAvailability($index, $direction);
 
         if (!$availability->isAllowed()) {
             // The refusal carries its own wording, so the sentence on a disabled control and the

@@ -10,6 +10,7 @@ use App\AudioToText\Domain\Exception\ReviewRejected;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
+use App\AudioToText\Domain\Speaker\MergeDirection;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -120,6 +121,37 @@ final readonly class ReviewConversationService
             ReviewOperation::Split,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
                 => $turns->splitAt($turnIndex, $offset),
+        );
+    }
+
+    /**
+     * Move a highlighted range of one turn into the turn beside it.
+     *
+     * The same route, transaction, revision and version guard as a whole-turn merge — a partial move
+     * is the same correction expressed more precisely, not a second kind of edit. Recorded as MERGE,
+     * and the revision holds the whole conversation as it stood before, so what moved and where is
+     * recoverable by comparing the two.
+     *
+     * @throws ReviewRejected when the range is invalid, or the page and the stored turn disagree
+     * @throws ReviewConflict when somebody else corrected the conversation first
+     */
+    public function mergeSelection(
+        string $publicId,
+        int $adminId,
+        int $turnIndex,
+        MergeDirection $direction,
+        int $start,
+        int $end,
+        string $selected,
+        int $expectedVersion,
+    ): void {
+        $this->apply(
+            $publicId,
+            $adminId,
+            $expectedVersion,
+            ReviewOperation::Merge,
+            static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
+                => $turns->mergeSelection($turnIndex, $direction, $start, $end, $selected),
         );
     }
 

@@ -145,24 +145,43 @@ final class ReviewedConversationTurnsTest extends TestCase
     }
 
     /**
-     * The guard that matters: merging across a difference would silently reassign speech, which is the
-     * mistake this feature exists to correct rather than commit.
+     * A manual merge asks only that the two turns be adjacent.
+     *
+     * The diarizer's view of who was speaking is exactly what an administrator is here to correct, so
+     * refusing them on those grounds would be the machine overruling the reviewer.
      */
-    public function testMergingTurnsWithDifferentSpeakersIsRefused(): void
+    public function testTurnsByDifferentVoicesCanBeMergedByHand(): void
     {
-        $this->expectException(ReviewRejected::class);
-        $this->conversation()->mergeWithNext(0);
+        $turns = $this->conversation()->mergeWithNext(0);
+
+        $this->assertSame(1, $turns->count());
+        $this->assertSame('Yes. For pickup or delivery?', $turns->turns[0]->text);
+        // The joined turn keeps the first one's speaker and role.
+        $this->assertSame('SPEAKER_00', $turns->turns[0]->speaker);
+        $this->assertSame(SpeakerRole::CUSTOMER, $turns->turns[0]->role);
     }
 
-    public function testMergingTurnsWithTheSameSpeakerButDifferentRolesIsRefused(): void
+    public function testTurnsWithDifferentRolesCanBeMergedByHand(): void
     {
         $turns = ReviewedConversationTurns::fromUtterances([
             $this->utterance(0, 1000, 'SPEAKER_00', SpeakerRole::CUSTOMER, 'one'),
             $this->utterance(1000, 2000, 'SPEAKER_00', SpeakerRole::AGENT, 'two'),
-        ]);
+        ])->mergeWithNext(0);
 
-        $this->expectException(ReviewRejected::class);
-        $turns->mergeWithNext(0);
+        $this->assertSame(1, $turns->count());
+        $this->assertSame('one two', $turns->turns[0]->text);
+    }
+
+    /** Merging into the previous turn puts the earlier words first. */
+    public function testMergingWithThePreviousTurnKeepsSpokenOrder(): void
+    {
+        $turns = $this->conversation()->mergeWithPrevious(1);
+
+        $this->assertSame(1, $turns->count());
+        $this->assertSame('Yes. For pickup or delivery?', $turns->turns[0]->text);
+        // The span covers both: min of the starts, max of the ends.
+        $this->assertSame(0, $turns->turns[0]->startMs);
+        $this->assertSame(3000, $turns->turns[0]->endMs);
     }
 
     public function testMergingAtTheEdgesOfTheThreadIsRefused(): void
@@ -524,7 +543,8 @@ final class ReviewedConversationTurnsTest extends TestCase
         foreach ($conversations as $name => $conversation) {
             for ($index = 0; $index < $conversation->count(); $index++) {
                 foreach (MergeDirection::cases() as $direction) {
-                    $allowed = $conversation->mergeAvailability($index, $direction)->isAllowed();
+                    // The manual predicate, because these are the operations a person invokes.
+                    $allowed = $conversation->manualMergeAvailability($index, $direction)->isAllowed();
 
                     $accepted = true;
 

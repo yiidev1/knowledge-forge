@@ -1728,3 +1728,43 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 }
 .a2t-turn--droppable.a2t-turn--over[data-a2t-drop-hint]::after { border-color: var(--primary); }
 .a2t-turn--refused.a2t-turn--over[data-a2t-drop-hint]::after { border-color: var(--error-text); }
+
+/* Click-to-select, and the merge controls that come with it.
+   Only the selected message carries them, so the thread stays a conversation rather than a form. */
+.a2t-review .a2t-bubble { cursor: pointer; }
+.a2t-turn--selected .a2t-bubble {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    background: rgba(99, 102, 241, .1);
+}
+
+.a2t-turn__merge { display: flex; flex-direction: column; gap: .3rem; margin-top: .15rem; }
+.a2t-turn__merge[hidden] { display: none; }
+/* max-content, and no wrapping: the bar sits in a column flex item that shrinks to fit, so a
+   wrapping row collapsed to one button per line. */
+.a2t-turn__merge { width: max-content; max-width: 100%; }
+.a2t-turn__merge-row { display: flex; gap: .4rem; align-items: center; flex-wrap: nowrap; }
+.a2t-turn__merge-label { font-size: .78rem; color: var(--text-muted); }
+
+/* Its own button treatment rather than the shared one: at .5 opacity a refused direction looked
+   half-rendered rather than deliberately unavailable, and an available one looked no different. */
+.a2t-mergebtn {
+    padding: .24rem .65rem;
+    font-size: .77rem;
+    border: 1px solid var(--primary);
+    background: transparent;
+    color: var(--primary);
+    opacity: 1;
+}
+.a2t-mergebtn:hover { background: var(--primary); color: var(--primary-contrast); }
+.a2t-mergebtn--off,
+.a2t-mergebtn--off:hover {
+    border-style: dashed;
+    border-color: var(--border);
+    background: transparent;
+    color: var(--text-faint);
+    opacity: 1;
+    cursor: not-allowed;
+}
+/* Said out loud, not hidden in a tooltip. */
+.a2t-turn__merge-why { font-size: .74rem; color: var(--text-muted); max-width: 26rem; line-height: 1.4; }

@@ -92,7 +92,7 @@ final readonly class ConversationView
             $turns[] = $published && $isRole
                 ? new ConversationTurn(
                     $utterance->role->label(),
-                    $utterance->text,
+                    SpeakerMarkers::strip($utterance->text),
                     true,
                     $sides[$index] ?? ConversationSide::Neutral,
                     $timings[$index] ?? TurnTiming::untimed(),
@@ -100,7 +100,7 @@ final readonly class ConversationView
                 )
                 : new ConversationTurn(
                     self::neutralLabel($utterance->speaker),
-                    $utterance->text,
+                    SpeakerMarkers::strip($utterance->text),
                     false,
                     $sides[$index] ?? ConversationSide::Neutral,
                     $timings[$index] ?? TurnTiming::untimed(),

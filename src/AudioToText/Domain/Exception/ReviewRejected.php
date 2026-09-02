@@ -56,6 +56,11 @@ final class ReviewRejected extends RuntimeException
         return new self($refusal->reason() ?? 'Those turns cannot be merged.');
     }
 
+    public static function selectionOutOfRange(): self
+    {
+        return new self('That selection is not inside the text of this turn. Reload and try again.');
+    }
+
     public static function emptySelection(): self
     {
         return new self('Select some words to move first.');

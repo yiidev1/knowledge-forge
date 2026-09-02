@@ -11,8 +11,10 @@ use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
+use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\JobPageGuard;
 use App\Shared\Application\Time\AppTimeZone;
+use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
@@ -24,9 +26,9 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
  * the mode has to survive a reload; a separate URL gets that without a query parameter to remember, and
  * leaves the read-only page exactly as it was.
  *
- * Anything that is not a completed transcription is a 404, the same 404 an unknown id gets — matching
- * the service, which refuses to correct such a job through {@see ReviewRejected::notCompleted()}, and
- * the guard's rule that "no such job" and "not available" must be indistinguishable from outside.
+ * An unknown id is a 404 — "no such job" and "not available to you" must be indistinguishable from
+ * outside. Anything else with nothing to correct is redirected to the detail page instead, because the
+ * conversions list sends every View link here and an ordinary row must not reach a dead end.
  */
 final readonly class Action
 {
@@ -37,22 +39,27 @@ final readonly class Action
         private EffectiveConversationReader $conversations,
         private SegmentRevisionRepositoryInterface $revisions,
         private AppTimeZone $appTimeZone,
+        private Redirect $redirect,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
     {
         $job = $this->jobs->findByPublicId($publicId);
 
-        if ($job === null || $job->status !== JobStatus::COMPLETED) {
+        // An unknown id stays a 404: "no such job" and "not available to you" have to be
+        // indistinguishable from outside, which is the whole point of an unguessable public id.
+        if ($job === null) {
             return $this->guard->notFound();
         }
 
         $effective = $this->conversations->for($job);
 
-        if ($effective->isEmpty()) {
-            // Nothing to correct. The detail page explains why there is no conversation; repeating
-            // that here as an empty editor would only look broken.
-            return $this->guard->notFound();
+        // Nothing to correct — still queued or processing, failed, or a completed job whose speakers
+        // were never separated. Redirected rather than 404'd, because this is where the conversions
+        // list sends every View link: a dead end here would be reachable from an ordinary row, and
+        // the detail page already explains each of those cases.
+        if ($job->status !== JobStatus::COMPLETED || $effective->isEmpty()) {
+            return $this->redirect->toRoute(AudioToTextRoute::JOB, ['publicId' => $job->publicId]);
         }
 
         $conversation = ConversationView::from(

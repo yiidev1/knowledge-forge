@@ -8,6 +8,7 @@ use App\AudioToText\Domain\Speaker\ConversationSide;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\Speaker\MergeDirection;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
+use App\AudioToText\Domain\Speaker\SpeakerMarkers;
 use App\AudioToText\Domain\Speaker\SplitPoint;
 use App\AudioToText\Domain\Speaker\TurnTiming;
 use App\AudioToText\Domain\SpeakerRole;
@@ -66,14 +67,19 @@ final readonly class ReviewPageView
                 $index,
                 $display?->label ?? '',
                 $display?->confirmed ?? false,
+                // What the reader sees, and what the editor is prefilled with — so rewording a turn
+                // saves the cleaned text through the normal correction path.
+                SpeakerMarkers::strip($turn->text),
+                // The stored text, unchanged. The move endpoint matches a selection against what is
+                // actually in the reviewed layer, so it must be given that and not the tidied copy.
                 $turn->text,
                 $turn->role,
                 $display?->side ?? ConversationSide::Neutral,
                 $display?->timing ?? TurnTiming::untimed(),
                 $turn->approx,
                 $turn->edited,
-                $turns->mergeAvailability($index, MergeDirection::Previous),
-                $turns->mergeAvailability($index, MergeDirection::Next),
+                $turns->manualMergeAvailability($index, MergeDirection::Previous),
+                $turns->manualMergeAvailability($index, MergeDirection::Next),
                 SplitPoint::forText($turn->text),
                 self::wouldMerge($turns, $index, SpeakerRole::AGENT),
                 self::wouldMerge($turns, $index, SpeakerRole::CUSTOMER),

@@ -116,7 +116,7 @@ $separation = $job->speakerSeparationStatus;
     <div class="card">
         <div class="a2t-section__header">
             <h2 class="card__title">Complete transcript</h2>
-            <a class="btn btn--small" href="<?= Html::encode($downloadUrl('transcript')) ?>">Download text file</a>
+            <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('transcript')) ?>">Download text file</a>
         </div>
         <pre class="a2t-transcript"><?= Html::encode($job->transcript ?? '') ?></pre>
     </div>
@@ -131,7 +131,7 @@ $separation = $job->speakerSeparationStatus;
             <div class="card">
                 <div class="a2t-section__header">
                     <h2 class="card__title">Customer</h2>
-                    <a class="btn btn--small" href="<?= Html::encode($downloadUrl('customer')) ?>">Download</a>
+                    <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('customer')) ?>">Download</a>
                 </div>
                 <pre class="a2t-transcript"><?= Html::encode($effective->customerText ?? '') ?></pre>
             </div>
@@ -139,7 +139,7 @@ $separation = $job->speakerSeparationStatus;
             <div class="card">
                 <div class="a2t-section__header">
                     <h2 class="card__title">Agent</h2>
-                    <a class="btn btn--small" href="<?= Html::encode($downloadUrl('agent')) ?>">Download</a>
+                    <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('agent')) ?>">Download</a>
                 </div>
                 <pre class="a2t-transcript"><?= Html::encode($effective->agentText ?? '') ?></pre>
             </div>
@@ -191,7 +191,7 @@ $separation = $job->speakerSeparationStatus;
             <?php endif; ?>
 
             <p class="a2t-conversation__actions">
-                <a class="btn btn--small"
+                <a class="btn btn--sm"
                    href="<?= Html::encode($urlGenerator->generate(
                        AudioToTextRoute::JOB_REVIEW,
                        ['publicId' => $job->publicId],

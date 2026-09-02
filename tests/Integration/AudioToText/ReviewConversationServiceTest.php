@@ -174,8 +174,10 @@ final class ReviewConversationServiceTest extends Unit
         $rejected = false;
 
         try {
-            // Merging across different speakers is exactly the mistake this feature exists to correct.
-            $this->service->mergeWithNext($publicId, $this->adminId, 0, $this->version($publicId));
+            // Past the end of the conversation. A manual merge asks only for a neighbour, so this is
+            // the shape of invalid it still refuses — differing roles and voices no longer are, since
+            // an administrator asking for that merge is correcting the machine, not contradicting it.
+            $this->service->mergeWithNext($publicId, $this->adminId, 1, $this->version($publicId));
         } catch (ReviewRejected) {
             $rejected = true;
         }

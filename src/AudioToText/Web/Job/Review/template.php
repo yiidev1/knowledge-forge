@@ -102,10 +102,10 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
             <?php if ($page->canConfirm): ?>
                 <form method="post" action="<?= Html::encode($pageUrl(AudioToTextRoute::JOB_REVIEW_CONFIRM)) ?>">
                     <?= $csrfField ?><?= $version() ?>
-                    <button class="btn btn--small btn--primary" type="submit">Confirm speaker roles</button>
+                    <button class="btn btn--sm btn--primary" type="submit">Confirm speaker roles</button>
                 </form>
             <?php elseif ($page->confirmBlockedReason !== null): ?>
-                <button class="btn btn--small" type="button" disabled>Confirm speaker roles</button>
+                <button class="btn btn--sm" type="button" disabled>Confirm speaker roles</button>
                 <span class="a2t-review__hint"><?= Html::encode($page->confirmBlockedReason) ?></span>
             <?php endif; ?>
 
@@ -114,7 +114,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                       action="<?= Html::encode($pageUrl(AudioToTextRoute::JOB_REVIEW_REVERT)) ?>"
                       data-confirm="Discard all corrections and return to the system's original result? This is recorded.">
                     <?= $csrfField ?><?= $version() ?>
-                    <button class="btn btn--small btn--danger" type="submit">Discard all corrections</button>
+                    <button class="btn btn--sm btn--danger" type="submit">Discard all corrections</button>
                 </form>
             <?php endif; ?>
         </div>
@@ -132,15 +132,10 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                     ? $turn->mergesIfMovedToAgent
                     : $turn->mergesIfMovedToCustomer;
 
-                // "ok" when the domain would allow it, otherwise the domain's own refusal wording.
-                // Absent entirely when there is no neighbour on that side.
+                // "ok" wherever there is a neighbour on that side, and absent where there is not.
+                // A manual merge asks nothing else of the two turns.
                 $mergeAttr = static function (MergeRefusal $refusal, string $name): string {
-                    if ($refusal === MergeRefusal::NoNeighbour) {
-                        return '';
-                    }
-
-                    return ' ' . $name . '="'
-                        . Html::encode($refusal->isAllowed() ? 'ok' : (string) $refusal->reason()) . '"';
+                    return $refusal === MergeRefusal::NoNeighbour ? '' : ' ' . $name . '="ok"';
                 };
                 ?>
                 <div class="a2t-turn <?= Html::encode($turn->side->modifier()) ?><?=
@@ -151,7 +146,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                      data-a2t-target-role="<?= Html::encode($other->value) ?>"
                      data-a2t-target-label="<?= Html::encode($other->label()) ?>"
                      data-a2t-merges="<?= $mergesIfMoved ? '1' : '0' ?>"
-                     data-a2t-text-value="<?= Html::encode($turn->text) ?>"
+                     data-a2t-text-value="<?= Html::encode($turn->rawText) ?>"
                      data-a2t-move-url="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MOVE_TEXT, $turn->index)) ?>"
                      data-a2t-merge-url="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $turn->index)) ?>"
                      <?= $mergeAttr($turn->mergeWithPrevious, 'data-a2t-merge-prev') ?>
@@ -204,27 +199,53 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                         <textarea class="field__control a2t-turn__textarea" name="text" rows="3"
                                   data-a2t-editor-text aria-label="Corrected wording"><?= Html::encode($turn->text) ?></textarea>
                         <div class="a2t-turn__editor-actions">
-                            <button class="btn btn--small" type="button" data-a2t-edit-cancel>Cancel</button>
-                            <button class="btn btn--small btn--primary" type="submit" data-a2t-edit-save>Save</button>
+                            <button class="btn btn--sm" type="button" data-a2t-edit-cancel>Cancel</button>
+                            <button class="btn btn--sm btn--primary" type="submit" data-a2t-edit-save>Save</button>
                         </div>
                     </form>
 
                     <?php
-                    // The no-JavaScript path: plain forms, one action each, exactly what this page did
-                    // before the drag handle existed.
-                    //
-                    // Inside <noscript> rather than hidden by a class the script adds. A browser with
-                    // scripting on does not build these elements at all, so the enhanced layout is what
-                    // paints first; hiding them afterwards meant the big buttons were briefly on screen
-                    // and the bubbles jumped once the script caught up. The CSP forbids inline scripts
-                    // and inline styles, so there is no earlier hook than the parser itself.
+                    // Shown only while this turn is selected, so the thread is not permanently lined
+                    // with buttons. A manual merge needs nothing but a neighbour, so the only reason a
+                    // direction is unavailable is that there is no turn on that side — and then the
+                    // button is simply absent rather than present and refusing.
+                    $mergeButton = static function (
+                        MergeRefusal $refusal,
+                        string $direction,
+                        string $label,
+                    ): string {
+                        if ($refusal === MergeRefusal::NoNeighbour) {
+                            return '';
+                        }
+
+                        return '<button class="a2t-mergebtn" type="button" data-a2t-merge-with="'
+                            . Html::encode($direction) . '">' . Html::encode($label) . '</button>';
+                    };
+                ?>
+                    <div class="a2t-turn__merge" data-a2t-merge-controls hidden>
+                        <div class="a2t-turn__merge-row">
+                            <span class="a2t-turn__merge-label">Merge this message:</span>
+                            <?= $mergeButton($turn->mergeWithPrevious, 'previous', 'With previous') ?>
+                            <?= $mergeButton($turn->mergeWithNext, 'next', 'With next') ?>
+                        </div>
+                    </div>
+
+                    <?php
+                // The no-JavaScript path: plain forms, one action each, exactly what this page did
+                // before the drag handle existed.
+                //
+                // Inside <noscript> rather than hidden by a class the script adds. A browser with
+                // scripting on does not build these elements at all, so the enhanced layout is what
+                // paints first; hiding them afterwards meant the big buttons were briefly on screen
+                // and the bubbles jumped once the script caught up. The CSP forbids inline scripts
+                // and inline styles, so there is no earlier hook than the parser itself.
                 ?>
                     <noscript>
                     <div class="a2t-turn__fallback" data-a2t-fallback>
                         <form method="post" action="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MOVE, $turn->index)) ?>">
                             <?= $csrfField ?><?= $version() ?>
                             <?= Html::hiddenInput('role', $other->value) ?>
-                            <button class="btn btn--small" type="submit">
+                            <button class="btn btn--sm" type="submit">
                                 Move to <?= Html::encode($other->label()) ?>
                             </button>
                         </form>
@@ -236,7 +257,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                 <?= $csrfField ?><?= $version() ?>
                                 <label class="a2t-turn__advanced-label">Correct the wording</label>
                                 <textarea class="field__control" name="text" rows="3"><?= Html::encode($turn->text) ?></textarea>
-                                <button class="btn btn--small" type="submit">Save wording</button>
+                                <button class="btn btn--sm" type="submit">Save wording</button>
                             </form>
 
                             <?php if ($turn->canSplit()): ?>
@@ -255,7 +276,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                             </label>
                                         <?php endforeach; ?>
                                     </div>
-                                    <button class="btn btn--small" type="submit">Split here</button>
+                                    <button class="btn btn--sm" type="submit">Split here</button>
                                 </form>
                             <?php endif; ?>
 
@@ -275,11 +296,11 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                     <form method="post" action="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $turn->index)) ?>">
                                         <?= $csrfField ?><?= $version() ?>
                                         <?= Html::hiddenInput('direction', $merge['direction']) ?>
-                                        <button class="btn btn--small" type="submit"><?= Html::encode($merge['label']) ?></button>
+                                        <button class="btn btn--sm" type="submit"><?= Html::encode($merge['label']) ?></button>
                                     </form>
                                 <?php else: ?>
                                     <p class="a2t-turn__refused">
-                                        <button class="btn btn--small" type="button" disabled>
+                                        <button class="btn btn--sm" type="button" disabled>
                                             <?= Html::encode($merge['label']) ?>
                                         </button>
                                         <span class="a2t-review-tools__why"><?= Html::encode((string) $refusal->reason()) ?></span>
@@ -307,6 +328,13 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
     <form method="post" data-a2t-merge-form>
         <?= $csrfField ?><?= $version() ?>
         <input type="hidden" name="direction" data-a2t-merge-direction value="">
+        <?php
+        // Present only for a partial move. The endpoint treats their absence as "join the whole turn",
+        // so the two shapes of the same correction share one form.
+?>
+        <input type="hidden" name="selection_start" data-a2t-merge-start disabled value="">
+        <input type="hidden" name="selection_end" data-a2t-merge-end disabled value="">
+        <input type="hidden" name="selection_text" data-a2t-merge-selected disabled value="">
 
         <h2 class="a2t-confirm__title">Merge these messages?</h2>
 
@@ -328,8 +356,8 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
         </p>
 
         <div class="a2t-confirm__actions">
-            <button class="btn btn--small" type="button" data-a2t-merge-cancel>Cancel</button>
-            <button class="btn btn--small btn--primary" type="submit" data-a2t-merge-confirm>Confirm merge</button>
+            <button class="btn btn--sm" type="button" data-a2t-merge-cancel>Cancel</button>
+            <button class="btn btn--sm btn--primary" type="submit" data-a2t-merge-confirm>Confirm merge</button>
         </div>
     </form>
 </dialog>
@@ -358,8 +386,8 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
         <p class="a2t-confirm__note" data-a2t-move-note hidden></p>
 
         <div class="a2t-confirm__actions">
-            <button class="btn btn--small" type="button" data-a2t-move-cancel>Cancel</button>
-            <button class="btn btn--small btn--primary" type="submit" data-a2t-move-confirm>Confirm move</button>
+            <button class="btn btn--sm" type="button" data-a2t-move-cancel>Cancel</button>
+            <button class="btn btn--sm btn--primary" type="submit" data-a2t-move-confirm>Confirm move</button>
         </div>
     </form>
 </dialog>
