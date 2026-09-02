@@ -302,6 +302,11 @@ return [
             Route::get('/admin/order58/test-recording-apis')
                 ->action(Order58TestRecordingApis\Action::class)
                 ->name('order58.test-recording-apis'),
+            // The only route that hands back a file. Reached by clicking Download recording on the page
+            // above; the diagnostic request itself never downloads anything.
+            Route::get('/admin/order58/test-recording-apis/download')
+                ->action(Order58TestRecordingApis\DownloadAction::class)
+                ->name('order58.test-recording-apis.download'),
 
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')

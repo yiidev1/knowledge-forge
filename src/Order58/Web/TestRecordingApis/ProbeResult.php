@@ -28,6 +28,7 @@ final readonly class ProbeResult
         public string $reason,
         public array $headers,
         public string $contentType,
+        public string $contentDisposition,
         public ?string $contentLength,
         public int $bytes,
         public string $preview,

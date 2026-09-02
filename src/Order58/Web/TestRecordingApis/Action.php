@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\TestRecordingApis;
 
-use DateTimeImmutable;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Throwable;
@@ -14,7 +13,6 @@ use function is_array;
 use function is_scalar;
 use function json_decode;
 use function json_encode;
-use function mb_strlen;
 use function preg_match;
 use function sprintf;
 use function trim;
@@ -64,12 +62,6 @@ final readonly class Action
     /** Guard against a typo'd `?limit=` asking the provider for an unreasonable page. */
     private const MAX_LIMIT = 500;
 
-    /** A call session id is a numeric identifier; this bounds a typo, not the provider's id space. */
-    private const MAX_ID_DIGITS = 20;
-
-    /** Company and name are free text on the provider's side, so cap them at something sane. */
-    private const MAX_TEXT_LENGTH = 100;
-
     private const API_LATEST_CALLS = 'latest-calls';
     private const API_FETCH_RECORDING = 'fetch-recording';
 
@@ -113,6 +105,12 @@ final readonly class Action
                 'nameRaw' => $nameRaw,
                 'latest' => $latest,
                 'fetch' => $fetch,
+                // Offered only when a recording actually came back. A textual or failed response gets no
+                // download link, so the button can never save an error page as audio.
+                'canDownload' => $fetch !== null
+                    && $fetch['result'] instanceof ProbeResult
+                    && $fetch['result']->isSuccessful()
+                    && $fetch['result']->isBinary,
             ]);
     }
 
@@ -159,17 +157,9 @@ final readonly class Action
      */
     private function runFetchRecording(string $callSessionId, string $time, string $company, string $name): array
     {
-        $validationError = match (true) {
-            preg_match('/^\d{1,' . self::MAX_ID_DIGITS . '}$/', $callSessionId) !== 1
-                => 'Call Session ID is required and must be digits only.',
-            !$this->isCalendarDate($time)
-                => 'Time is required and must be a real date in YYYY-MM-DD format.',
-            !$this->isSafeText($company)
-                => sprintf('Company is required and must be at most %d characters.', self::MAX_TEXT_LENGTH),
-            !$this->isSafeText($name)
-                => sprintf('Name is required and must be at most %d characters.', self::MAX_TEXT_LENGTH),
-            default => null,
-        };
+        // The same rules the download endpoint enforces, so the page can never offer a download link for
+        // input that route would reject.
+        $validationError = RecordingRequest::validate($callSessionId, $time, $company, $name);
 
         if ($validationError !== null) {
             return $this->outcome(validationError: $validationError);
@@ -285,26 +275,6 @@ final readonly class Action
         $value = (int) $raw;
 
         return $value > 0 ? $value : null;
-    }
-
-    /** A real calendar date, not merely something shaped like one: `2026-02-31` is rejected. */
-    private function isCalendarDate(string $value): bool
-    {
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) !== 1) {
-            return false;
-        }
-
-        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
-
-        return $parsed !== false && $parsed->format('Y-m-d') === $value;
-    }
-
-    /** Non-empty, bounded, and free of control characters that have no business in a query string. */
-    private function isSafeText(string $value): bool
-    {
-        return $value !== ''
-            && mb_strlen($value) <= self::MAX_TEXT_LENGTH
-            && preg_match('/[\x00-\x1F\x7F]/', $value) !== 1;
     }
 
     private function text(mixed $raw, string $default = ''): string

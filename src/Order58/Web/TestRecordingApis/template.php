@@ -20,6 +20,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var string $nameRaw
  * @var array{validationError: ?string, result: ?ProbeResult, pretty: ?string, rows: list<array{callTime: string, callSessionId: string, orderId: string}>, failure: ?string}|null $latest
  * @var array{validationError: ?string, result: ?ProbeResult, pretty: ?string, rows: list<array{callTime: string, callSessionId: string, orderId: string}>, failure: ?string}|null $fetch
+ * @var bool $canDownload true only when a successful, binary recording came back
  */
 
 $this->setTitle('Order58 recording API test');
@@ -82,6 +83,11 @@ $renderOutcome = static function (array $outcome): void {
 
     <h3 class="field__label">Content-Type</h3>
     <p class="field__hint"><?= $result->contentType === '' ? '(not sent)' : Html::encode($result->contentType) ?></p>
+
+    <?php if ($result->contentDisposition !== ''): ?>
+        <h3 class="field__label">Content-Disposition</h3>
+        <p class="field__hint"><?= Html::encode($result->contentDisposition) ?></p>
+    <?php endif; ?>
 
     <h3 class="field__label">Bytes received</h3>
     <p class="field__hint">
@@ -238,5 +244,25 @@ $renderOutcome = static function (array $outcome): void {
 
     <?php if ($fetch !== null): ?>
         <?php $renderOutcome($fetch); ?>
+
+        <?php if ($canDownload): ?>
+            <?php
+            // A separate GET route, so the diagnostic above never triggers a download on its own —
+            // only following this link does. It carries the four values just tested, so nothing is
+            // retyped, and the endpoint re-validates every one of them before calling out again.
+            $downloadUrl = $urlGenerator->generate('order58.test-recording-apis.download') . '?' . http_build_query([
+                'call_session_id' => $callSessionIdRaw,
+                'time' => $timeRaw,
+                'company' => $companyRaw,
+                'name' => $nameRaw,
+            ]);
+            ?>
+            <h3 class="field__label">Download</h3>
+            <p class="field__hint">
+                Re-runs the same request and streams the response to your browser. Nothing is written to
+                disk or to the database on the way through.
+            </p>
+            <a class="btn btn--primary" href="<?= Html::encode($downloadUrl) ?>">Download recording</a>
+        <?php endif; ?>
     <?php endif; ?>
 </div>
