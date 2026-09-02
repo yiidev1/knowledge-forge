@@ -148,19 +148,6 @@ p { margin: 0 0 1rem; }
 .sidebar__link-icon { width: 18px; text-align: center; flex: 0 0 auto; opacity: .85; }
 
 /* Collapsible Knowledge Bases A–Z group (reuses the Order58 store directory via ?letter=). */
-.sidebar__kb { padding: 0 .75rem; }
-.sidebar__kb-summary { list-style: none; cursor: pointer; }
-.sidebar__kb-summary::-webkit-details-marker { display: none; }
-.sidebar__kb-caret { margin-left: auto; font-size: .7rem; opacity: .7; transition: transform .12s; }
-.sidebar__kb[open] .sidebar__kb-caret { transform: rotate(180deg); }
-.sidebar__az { display: flex; flex-wrap: wrap; gap: .2rem; padding: .35rem .25rem .5rem 2.4rem; }
-.sidebar__az-item {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-width: 1.5rem; height: 1.5rem; padding: 0 .3rem; border-radius: .3rem;
-    font-size: .78rem; color: var(--sidebar-text); opacity: .8; text-decoration: none;
-}
-.sidebar__az-item:hover { background: var(--sidebar-active-bg); color: #fff; opacity: 1; text-decoration: none; }
-.sidebar__az-item--active { background: var(--primary); color: #fff; opacity: 1; }
 
 .sidebar__spacer { flex: 1 1 auto; }
 

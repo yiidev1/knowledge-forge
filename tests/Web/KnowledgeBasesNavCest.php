@@ -12,9 +12,11 @@ use App\Tests\Support\WebTester;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
 /**
- * The Knowledge Bases A–Z sidebar group: it exposes letter links that open the Order58 store directory filtered
- * by that letter (reusing its SQL pagination/counts — no duplicate listing), and the current letter is
- * highlighted when the directory is active.
+ * The sidebar carries no Knowledge Bases group.
+ *
+ * It used to hold an A–Z that filtered the store listing by letter, which duplicated the "Store chat"
+ * entry directly above it — the same listing, reached two ways. It was removed on request; this pins
+ * that decision, and pins that the listing's own A–Z, which is the one that does the work, is untouched.
  */
 final class KnowledgeBasesNavCest
 {
@@ -36,29 +38,38 @@ final class KnowledgeBasesNavCest
         $this->cleanup();
     }
 
-    public function sidebarExposesTheKnowledgeBasesAToZLinkingTheStoreDirectory(WebTester $I): void
+    public function theSidebarNoLongerCarriesTheKnowledgeBasesAToZ(WebTester $I): void
     {
         $this->login($I);
-
-        // On the store directory filtered to "C", the sidebar group is present and the letter links target the
-        // directory's ?letter= parameter; the active letter (C) is highlighted.
         $I->amOnPage('/admin/order58/stores?letter=C');
-        $I->see('Knowledge Bases');
-        $I->seeElement("aside.sidebar a.sidebar__az-item[href*='/admin/order58/stores?letter=A']");
-        $I->seeElement("aside.sidebar a.sidebar__az-item--active");
+
+        $I->dontSeeElement('aside.sidebar .sidebar__kb');
+        $I->dontSeeElement('aside.sidebar .sidebar__az');
+        $I->dontSee('Knowledge Bases', 'aside.sidebar');
     }
 
-    public function sidebarLetterLinksFollowTheStoreChatPageWhenActive(WebTester $I): void
+    /** The letters on the page itself still work — only the sidebar copy went. */
+    public function theStoreListingKeepsItsOwnLetterNavigation(WebTester $I): void
     {
         $this->login($I);
+        $I->amOnPage('/admin/order58/stores?letter=C');
 
-        // The same A–Z group follows the page you are on: on Store chat the letter links filter Store chat (not the
-        // store directory) and the active letter is highlighted there too.
-        $I->amOnPage('/admin/order58/store-chat?letter=C');
-        $I->see('Knowledge Bases');
-        $I->seeElement("aside.sidebar a.sidebar__az-item[href*='/admin/order58/store-chat?letter=A']");
-        $I->dontSeeElement("aside.sidebar a.sidebar__az-item[href*='/admin/order58/stores?letter=A']");
-        $I->seeElement("aside.sidebar a.sidebar__az-item--active");
+        $I->seeElement('.alpha-nav__item');
+        $I->seeElement('.alpha-nav__item--active');
+    }
+
+    /** And the entries the sidebar does carry are unaffected. */
+    public function theRemainingSidebarEntriesStillWork(WebTester $I): void
+    {
+        $this->login($I);
+        $I->amOnPage('/');
+
+        foreach (['Dashboard', 'Order58 stores', 'Store chat', 'Rule Chat', 'Audio to Text'] as $entry) {
+            $I->see($entry, 'aside.sidebar');
+        }
+
+        $I->click('Store chat', 'aside.sidebar');
+        $I->seeInCurrentUrl('/admin/order58/store-chat');
     }
 
     private function login(WebTester $I): void
@@ -70,7 +81,6 @@ final class KnowledgeBasesNavCest
 
     private function cleanup(): void
     {
-        $connection = $this->connection ?? IntegrationDb::connectOrSkip();
-        IntegrationDb::cleanup($connection, '{{%admin_users}}', ['username' => self::USERNAME]);
+        IntegrationDb::cleanup($this->connection, '{{%admin_users}}', ['username' => self::USERNAME]);
     }
 }
