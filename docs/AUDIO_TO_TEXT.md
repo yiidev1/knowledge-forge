@@ -586,39 +586,317 @@ so a self-contradictory row degrades to neutral labels rather than to a confiden
 list page needs no equivalent rule because it renders only the aggregate columns, which are NULL by
 construction unless the split was published.
 
-### Correcting a conversation by hand
+### Correcting a conversation by hand — the reviewed layer
 
-`/audio-to-text/job/{publicId}/review` lets an administrator reassign, split, join and reword turns,
-and confirm who was speaking. Six POST routes under it, one per operation.
+Everything the pipeline produces is a machine's best guess. The correction layer lets an administrator
+overrule it **without ever destroying what the machine said**, which is the property the whole design
+turns on. Sections 8.7–8.12 below are the A-to-Z of that feature: storage, flow, operations, screens,
+validation and audit.
 
-**Nothing the machine produced is ever overwritten.** `transcript`, `speaker_segments`, `agent_text`
-and `customer_text` are read-only from this point on; every correction lands in `reviewed_segments`
-plus `reviewed_agent_text` / `reviewed_customer_text`, and `EffectiveConversationReader` decides which
-layer a page reads. A recording heard as "pikup" still says that in `transcript` after the wording has
-been fixed for readers — which is what makes the correction auditable rather than a quiet rewrite.
+---
 
-Four rules worth knowing before changing anything here:
+### 8.7 The two layers, and which one a page reads
 
-- **Correcting is not confirming.** Fixing a boundary says nothing about who was speaking, so a
-  `NEEDS_REVIEW` call keeps its Speaker 1 / Speaker 2 labels through any number of structural
-  corrections. Only `CONFIRM_ROLES` publishes, it is recorded as its own operation, and `roles_confirmed_at`
-  is the state — never inferred from `reviewed_segments` existing.
-- **Confirmation needs two sides.** `textFor()` returns `''`, not NULL, for a role with no turns, and
-  an empty string reads as "text is present" to the publish gate. `ReviewedConversationTurns::hasBothRoles()`
-  is checked in the service, so no caller can publish a one-sided split.
-- **Merging requires the same voice *and* the same role.** Two turns the diarizer heard as different
-  speakers never merge, even once an administrator has moved both to the same role. The control stays
-  on screen and explains itself rather than disappearing — after a move the difference between the two
-  turns is no longer visible, so a vanished button would read as a bug. `MergeRefusal` carries both the
-  rule and its wording, and `merge()` throws from the same predicate the page renders from.
-- **Split timestamps are inherited, never interpolated.** Token timings are not persisted, so both
-  halves keep the parent's span and are marked `approx`; the page prints the range once for the pair,
-  prefixed with `~`. Dividing the span by character position would produce a number that looks measured
-  and is not.
+Every job carries up to two versions of the same conversation.
 
-Every operation runs in one transaction that writes the revision first and then a conditional
-`UPDATE ... WHERE id = ? AND review_count = ?`, so a lost race leaves no orphan audit row. `Revert`
-discards the layer, clears the confirmation, and is itself recorded.
+| | columns | written by | mutable |
+|---|---|---|---|
+| **Machine layer** | `transcript`, `speaker_segments`, `agent_text`, `customer_text`, `speaker_separation_status` | `kf:audio:worker`, once | **never again** |
+| **Reviewed layer** | `reviewed_segments`, `reviewed_agent_text`, `reviewed_customer_text`, `roles_confirmed_at` | an administrator, through the review page | on every correction |
+
+`EffectiveConversationReader::for(TranscriptionJob)` is the **single** place that decides which one a
+screen sees:
+
+```
+reviewed_segments IS NOT NULL  →  the reviewed layer
+otherwise                      →  the machine layer
+```
+
+Every surface goes through it — the conversation page, the correction page and the job detail page —
+so "which version is authoritative" is answered once instead of being re-decided at each call site,
+where the copies would inevitably drift. It returns an `EffectiveConversation`: the turns, the two role
+texts, whether the layer is reviewed, and whether the roles may be shown as fact.
+
+A recording transcribed as *"Yes. For pikup"* still says exactly that in `transcript` after an
+administrator has fixed the spelling for readers. That is what makes a correction an auditable
+overlay rather than a quiet rewrite.
+
+---
+
+### 8.8 Database schema — the correction layer
+
+Two migrations add everything. Neither touches a machine column.
+
+**`M260831140000AddReviewedConversation`** — six columns on `audio_transcription_jobs`, plus the audit
+table.
+
+**`M260831160000AddRolesConfirmation`** — `roles_confirmed_at`, and widens the operation `CHECK` to
+admit `CONFIRM_ROLES`.
+
+#### `audio_transcription_jobs` — the columns the correction layer adds
+
+| column | type | null | meaning |
+|---|---|---|---|
+| `reviewed_segments` | `json` | yes | the corrected turns. **NULL means "never corrected"**, and is what `EffectiveConversationReader` branches on |
+| `reviewed_agent_text` | `text` | yes | aggregate Agent text, derived from `reviewed_segments`. NULL until the roles are confirmed |
+| `reviewed_customer_text` | `text` | yes | the same for the Customer |
+| `reviewed_at` | `datetime` | yes | when the layer was last written |
+| `reviewed_by_admin_id` | `bigint` | yes | who last wrote it. FK → `admin_users`, `RESTRICT` |
+| `roles_confirmed_at` | `datetime` | yes | when a person explicitly confirmed Agent/Customer. **NULL means unconfirmed** |
+| `review_count` | `smallint unsigned` | no, `0` | the optimistic lock. Counts corrections *made*, not layers present |
+
+Why a nullable timestamp rather than a boolean for `roles_confirmed_at`: it carries *when* at the same
+storage cost, and the codebase already uses that idiom for exactly this shape of state
+(`superseded_at`, `dismissed_at`, `reviewed_at`). There is deliberately **no `roles_confirmed_by`
+column** — confirming writes a `CONFIRM_ROLES` revision, so the person and the moment are already
+recorded once, and a second copy could only disagree with it.
+
+#### `audio_segment_revisions` — the audit trail
+
+```sql
+CREATE TABLE `audio_segment_revisions` (
+  `id`              bigint NOT NULL AUTO_INCREMENT,
+  `job_id`          bigint unsigned NOT NULL,
+  `revision_number` int unsigned NOT NULL,
+  `segments_json`   json NOT NULL,      -- the conversation BEFORE this change
+  `operation`       varchar(16) NOT NULL,
+  `edited_by_type`  varchar(16) NOT NULL,
+  `edited_by_id`    bigint unsigned NOT NULL,
+  `created_at`      datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ux_audio_segment_revisions_job_number` (`job_id`, `revision_number`),
+  CONSTRAINT `fk_audio_segment_revisions_job`
+      FOREIGN KEY (`job_id`) REFERENCES `audio_transcription_jobs` (`id`)
+      ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_audio_segment_revisions_number_positive` CHECK (`revision_number` > 0),
+  CONSTRAINT `chk_audio_segment_revisions_by_id_positive`  CHECK (`edited_by_id` > 0),
+  CONSTRAINT `chk_audio_segment_revisions_by_type`
+      CHECK (`edited_by_type` IN ('admin', 'agent')),
+  CONSTRAINT `chk_audio_segment_revisions_operation`
+      CHECK (`operation` IN ('MOVE','SPLIT','MERGE','EDIT_TEXT','REVERT','CONFIRM_ROLES'))
+) ENGINE=InnoDB;
+```
+
+Three decisions in that DDL are load-bearing:
+
+* **`segments_json` stores the state *before* the change**, following the `message_revisions`
+  precedent. On a job's first correction that is a copy of the machine's own segments, which makes the
+  trail self-contained back to origin — you never have to consult another table to know where the
+  conversation started.
+* **`job_id` is `BIGINT UNSIGNED`**, matching `audio_transcription_jobs.id`. A signed column here
+  fails with MySQL error 3780 at foreign-key creation time.
+* **`ON DELETE CASCADE`** on the job, unlike the `RESTRICT` on the uploader: the revisions describe a
+  conversation, so if the conversation goes they have nothing left to describe.
+
+`ReviewOperation` (a backed enum) is the authority on the allowed values, and the `CHECK` constraint
+mirrors it. **Adding a case there requires a migration** to widen the constraint.
+
+#### Table usage at a glance
+
+| table | read by the correction layer | written by it |
+|---|---|---|
+| `audio_transcription_jobs` | yes — every operation loads the job by `public_id` | only the seven `reviewed_*` / `roles_confirmed_at` / `review_count` columns |
+| `audio_segment_revisions` | on the review page, to name who confirmed the roles | one row per accepted operation |
+| `admin_users` | joined for the display username | never |
+| `audio_worker_heartbeat` | no | no |
+
+---
+
+### 8.9 Routes — every entry point
+
+All behind `RequireAdminMiddleware`. Every authorized administrator may correct every job; the
+uploader is recorded for audit only. The `{publicId:[0-9a-f]{32}}` constraint rejects a malformed id
+before any action runs and keeps the database id out of every URL.
+
+| method | path | route name | action |
+|---|---|---|---|
+| GET | `/audio-to-text/job/{publicId}/conversation` | `…job.conversation` | read the conversation as a chat |
+| GET | `/audio-to-text/job/{publicId}/review` | `…job.review` | the correction page |
+| POST | `…/review/turn/{index}/move` | `…job.review.move` | reassign a whole turn (`role=AGENT\|CUSTOMER`) |
+| POST | `…/review/turn/{index}/move-text` | `…job.review.move-text` | reassign a whole turn or a selection to the other speaker |
+| POST | `…/review/turn/{index}/split` | `…job.review.split` | cut a turn at a character offset |
+| POST | `…/review/turn/{index}/merge` | `…job.review.merge` | join with a neighbour, whole or by range |
+| POST | `…/review/turn/{index}/text` | `…job.review.text` | correct the wording |
+| POST | `…/review/confirm` | `…job.review.confirm` | confirm Agent/Customer for the conversation |
+| POST | `…/review/revert` | `…job.review.revert` | discard every correction |
+
+One route per operation rather than one endpoint dispatching on a field, so the route name, the
+audited operation and the button a person pressed all say the same thing.
+
+**The conversions list's "View" action opens `/review`.** A row with nothing to correct — still
+queued, failed, or never speaker-separated — is redirected on to the job detail page, so one link is
+right for every row. An *unknown* id is still a 404: "no such job" and "not available to you" must be
+indistinguishable from outside.
+
+---
+
+### 8.10 Structure — what each class is for
+
+```
+Domain/
+  ReviewOperation                    MOVE | SPLIT | MERGE | EDIT_TEXT | REVERT | CONFIRM_ROLES
+  SegmentRevision                    one audit row
+  SegmentRevisionRepositoryInterface port
+  EffectiveConversation              turns + role text + isReviewed + rolesConfirmed
+  Exception/ReviewRejected           a refusal, worded for the administrator
+  Exception/ReviewConflict           somebody else corrected it first
+
+Domain/Speaker/
+  ReviewedTurn                       one corrected turn: span, voice, role, text, approx, edited
+  ReviewedConversationTurns          the turn list as an immutable value — every rule lives here
+  MergeDirection                     Previous | Next
+  MergeRefusal                       None | NoNeighbour | DifferentRole | DifferentSpeaker (+ wording)
+  SplitPoint                         offered split positions, computed from the text
+  SpeakerMarkers                     strips whisper's ">>" speaker-change markers for display
+  ConversationView / ConversationTurn / ConversationSide / TurnTiming / ResponseTiming
+                                     what a page may claim, and how it is laid out
+
+Application/
+  EffectiveConversationReader        the one place that picks a layer
+  ReviewConversationService          load → apply → audit → save, atomically
+
+Web/Job/Conversation/                the read-only chat page
+Web/Job/Review/                      the correction page
+  Action, template                   GET
+  ReviewPageView, ReviewTurnView     decisions made once, printed by the template
+  ReviewRequest                      shared: who asked, which version, what to say
+  Move|MoveText|Split|Merge|Text|Confirm|Revert/Action    one POST each
+```
+
+**All the rules live in `ReviewedConversationTurns`.** It is immutable — every operation returns a new
+instance — so an invalid change cannot leave a half-applied conversation behind, and the caller decides
+when to persist. Nothing reorders turns: the conversation stays in the sequence it was spoken.
+
+---
+
+### 8.11 The operations
+
+| operation | rule | timestamps |
+|---|---|---|
+| **Move** | set the turn's role. Refused if it already has that role — a correction recording no change | untouched |
+| **Move text** | whole turn, or a highlighted range: one or two `splitAt` calls then `moveTo`, then a merge if the result lands beside a matching turn. One transaction, one `MOVE` revision | split halves inherit the parent span, marked `approx` |
+| **Split** | cut at a character offset. Refused at offset 0 / length, or if either half trims empty | **both halves inherit the parent's span**, both `approx` |
+| **Merge** | join with the neighbour above or below. **Adjacency is the only rule** — role and voice are deliberately not consulted | `min(start)`, `max(end)` |
+| **Merge (range)** | move only the highlighted words; the source keeps the rest. Selecting everything falls through to the whole-turn merge | both turns keep their spans and are marked `approx` |
+| **Edit text** | replace the wording. Refused if empty or unchanged | untouched; turn marked `edited` |
+| **Confirm roles** | write `roles_confirmed_at` and derive the two role columns. Refused if already confirmed, or if either role has no text | none |
+| **Revert** | clear the layer *and* the confirmation | n/a |
+
+Three rules deserve their reasoning:
+
+* **Correcting is not confirming.** Fixing a boundary says nothing about who was speaking, so a
+  `NEEDS_REVIEW` call keeps Speaker 1 / Speaker 2 through any number of structural corrections. Only
+  `CONFIRM_ROLES` publishes, and `roles_confirmed_at` is the state — never inferred from
+  `reviewed_segments` existing.
+* **Confirmation needs two sides.** `textFor()` returns `''`, not NULL, for a role with no turns, and
+  an empty string reads as "text is present" to the publish gate. `hasBothRoles()` is checked in the
+  service, so no caller can publish a one-sided split.
+* **Timestamps are never invented.** Token timings are not persisted — whisper's `-ojf` output lives in
+  the worker's scratch directory and is deleted — so there is no defensible time for a boundary *inside*
+  a turn. Split halves keep the parent's full range and say so with `approx`; a range move leaves both
+  turns' spans alone and marks them approximate. Interpolating by character position would produce a
+  number that looks measured and is not, because speech rate is not uniform.
+
+#### Merge: the rule that was deliberately relaxed
+
+Merging originally required the same role **and** the same diarization voice. That was correct for an
+automatic decision and wrong for a manual one: on a normally alternating conversation no two adjacent
+turns ever share a role, so merge was never available, and the advice to "move one of them first" led
+to a second refusal on the voice check. `manualMergeAvailability()` now returns `NoNeighbour` at the
+edges and `None` everywhere else — **adjacency is the whole rule**. The administrator is correcting the
+transcript, and their decision is authoritative.
+
+#### Publishing: two independent routes
+
+`ConversationView::from()` decides whether Agent/Customer may be printed as fact:
+
+```php
+$published = $aggregateTextPresent
+    && ($status?->isPublishable() === true || $rolesConfirmedByHuman);
+```
+
+`speaker_separation_status` records what the *machine* concluded and is never rewritten, so without the
+second term a confirmation would write correct columns that no page could read. The two routes are not
+interchangeable to a reader, and the page says which one applied — a machine result and a person's
+assertion are different kinds of fact.
+
+`confirmRoles()` also writes `reviewed_segments`, even when byte-identical to the machine's. Without a
+reviewed layer `isReviewed()` stays false, the reader falls back to the raw columns, and the two role
+columns it just wrote are never read.
+
+---
+
+### 8.12 The screens
+
+**`/conversation`** — the conversation and nothing else: Customer left, Agent right, speaker label,
+timestamp range, response delay, `edited` and `~approximate` markers. No transcript card, no raw text
+blocks, no metadata, no downloads. Fixed-height: the header stays put and the messages scroll in their
+own container, opening at the newest turn with a *Jump to latest* pill and only the last 20 turns
+rendered until *Show earlier messages* is used.
+
+**`/review`** — the same chat layout with per-message controls:
+
+* a **six-dot drag handle** and a **pencil**, grouped on the message's own side, always visible
+* **drag** a message across to the opposite lane to reassign it, or onto an adjacent message to merge —
+  invalid drops say why rather than doing nothing
+* **highlight text** inside a message to reveal *With previous* / *With next*; a partial selection
+  moves only those words and the source keeps the rest, a full selection merges the whole turn
+* the **pencil** opens an inline editor for the wording
+* page-level **Confirm speaker roles** and **Discard all corrections**
+
+Every mutation is a real `<form>` POST with CSRF, confirmed in a `<dialog>` before it fires, and
+followed by Post/Redirect/Get. Nothing goes through a JSON side channel, so CSRF, the version check
+and the redirect are identical to every other control in the application.
+
+**Progressive enhancement.** The plain per-turn forms live inside `<noscript>`, so a scripting browser
+never builds them and the enhanced layout is what paints first; without JavaScript they *are* the
+interface. The CSP (`script-src 'self'; style-src 'self'`) forbids inline scripts and styles, so all
+behaviour is in `assets/main/admin.js` behind `data-a2t-*` attributes and all styling is under the
+`.a2t-` prefix in `assets/main/admin.css`. `ModuleIsolationTest` enforces both.
+
+#### The `>>` markers
+
+Whisper emits `>>` where it hears a speaker change. `SpeakerMarkers::strip()` removes them **for
+display and for the correction layer only** — the machine's `transcript` and `speaker_segments` keep
+them. Because the reader measures a text selection against the cleaned text, a range move is computed
+against the cleaned text too, and both turns it touches are stored cleaned. Storing one convention in
+one turn and another in its neighbour would be worse than either.
+
+---
+
+### 8.13 Validation, concurrency and audit
+
+Every accepted operation runs through `ReviewConversationService::apply()`:
+
+```
+load the job by public_id          → ReviewRejected if unknown or not COMPLETED
+load the current turns             → reviewed layer if present, else the machine's
+apply the change (pure, in memory) → ReviewRejected if the rule refuses
+BEGIN
+    revisions->add(jobId, priorSegmentsJson, operation, adminId)
+    applied = jobs->saveReview(... expectedReviewCount)   -- conditional UPDATE
+    if (!applied) throw ReviewConflict                    -- rolls the revision back with it
+COMMIT
+```
+
+* **Validation happens before the transaction opens**, so a refused correction costs nothing and
+  leaves no trace.
+* **The revision is written first**, so a lost race unwinds both and never leaves an orphan audit row.
+* **The optimistic lock is a conditional statement**, not a read-then-write:
+  `UPDATE … SET review_count = review_count + 1 WHERE id = ? AND review_count = ?`. Check and write are
+  one atomic operation. Every page renders `expected_review_count` into every form.
+* **`revert` advances the version too** — the count is of corrections made, not layers present, so a
+  stale tab cannot become current again because somebody else reverted.
+
+**What a client may assert, and what it may not.** A turn has no id; its only handle is its index in
+the current conversation. So the client sends an index and a *direction*, never a target — the server
+derives the neighbour itself, and adjacency is structural rather than something a crafted request can
+claim. For a range move the client sends codepoint offsets plus the selected text as a checksum; the
+server slices by offset and refuses if the slice disagrees, so a page rendered before somebody else's
+edit cannot move the wrong words. Offsets are converted to codepoints in the browser because
+JavaScript counts UTF-16 units and `mb_substr` counts codepoints — they diverge from the first emoji.
+
+---
 
 ### Installing the diarization toolchain — system-level, run these yourself
 
@@ -749,8 +1027,40 @@ src/AudioToText/
     AlignmentQuality                                             duration-weighted attribution metrics
     SeparationBalance          ── gate 1 ──                      were there two speakers at all?
     DialogueAct, RoleScoreWeights                                role-mapping semantics / coefficients
-    ConversationView, ConversationTurn                           what the detail page may claim
+    ConversationView, ConversationTurn                           what a page may claim
+    ConversationSide, TurnTiming, ResponseTiming                 layout and reply timing, never stored
+    SpeakerMarkers                                               strips whisper's ">>" for display
     SpeakerDiarizerInterface                                     port
+
+  ── the correction layer (§8.7–8.13) ──────────────────────────────────────────
+  Domain/
+    ReviewOperation                                              the six audited operations
+    SegmentRevision, SegmentRevisionRepositoryInterface          the audit row and its port
+    EffectiveConversation                                        turns + role text + which layer
+    Exception/ReviewRejected                                     a refusal, worded for the admin
+    Exception/ReviewConflict                                     somebody corrected it first
+
+  Domain/Speaker/
+    ReviewedTurn                                                 one corrected turn
+    ReviewedConversationTurns                                    every correction rule, immutable
+    MergeDirection, MergeRefusal                                 merge direction and its verdict
+    SplitPoint                                                   split positions offered in the words
+
+  Application/
+    EffectiveConversationReader                                  the one place that picks a layer
+    ReviewConversationService                                    load → apply → audit → save
+
+  Infrastructure/
+    DbSegmentRevisionRepository                                  the audit trail
+
+  Web/Job/Conversation/                                          the read-only chat page
+  Web/Job/Review/                                                the correction page
+    Action, template                                             GET
+    ReviewPageView, ReviewTurnView                               decisions made once
+    ReviewRequest                                                shared POST handling
+    Move|MoveText|Split|Merge|Text|Confirm|Revert/Action          one POST each
+  Web/_partial/thread.php                                        the bubbles, shared by the
+                                                                 detail and conversation pages
 
   Application/
     AudioToTextSettings + Settings/{Transcription,Worker,Diarization}Settings   the one settings type
@@ -831,6 +1141,18 @@ Two details worth knowing:
   MySQL refuses a foreign key with `CASCADE` on the base column of a stored generated column (error
   1215). The generated column is gone, but `RESTRICT` stays: a job row is an audit record of who
   uploaded what, and deleting an administrator should not silently take their conversations with it.
+
+**The correction layer adds seven columns to this table** — `reviewed_segments`,
+`reviewed_agent_text`, `reviewed_customer_text`, `reviewed_at`, `reviewed_by_admin_id`,
+`roles_confirmed_at` and `review_count` — and one table, `audio_segment_revisions`. They are
+documented in full in **§8.8**, including why `reviewed_segments IS NULL` is the flag that decides
+which layer a page reads, and why the audit row stores the state *before* each change. Nothing in that
+layer ever writes a machine column.
+
+`audio_segment_revisions` — one row per accepted correction, `job_id` → `audio_transcription_jobs`
+with `ON DELETE CASCADE` (unlike the uploader's `RESTRICT`: a revision describes a conversation, so it
+has nothing left to describe once the conversation is gone). Its `operation` `CHECK` mirrors the
+`ReviewOperation` enum, so **adding a case there needs a migration**.
 
 `audio_worker_heartbeat` — a single row (`CHECK (id = 1)`) carrying two independent facts: `beat_at`
 / `state` for process liveness, and `last_tick_at` / `mode` for whether anything is still invoking the
