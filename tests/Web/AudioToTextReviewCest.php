@@ -458,6 +458,171 @@ final class AudioToTextReviewCest
         $I->see('Full conversion details');
     }
 
+    // ---------------------------------------------------------------- message history
+
+    /** H. A wording correction puts the icon on that message and a dialog beside it. */
+    public function aCorrectedMessageOffersItsHistory(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        // M. Nothing has happened yet, so no message offers history.
+        $I->dontSeeElement('[data-a2t-history]');
+
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/text"]',
+            ['text' => 'Yes. For pickup'],
+        );
+        $I->see('Wording corrected.');
+
+        // Exactly the message that changed, and its neighbour untouched.
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-history="0"]');
+        $I->dontSeeElement('[data-a2t-turn="1"] [data-a2t-history]');
+
+        $I->seeElement('dialog[data-a2t-history-dialog="0"]');
+        $I->see('Wording corrected', 'dialog[data-a2t-history-dialog="0"]');
+        $I->see('revision 1', 'dialog[data-a2t-history-dialog="0"]');
+        $I->see(self::ADMIN, 'dialog[data-a2t-history-dialog="0"]');
+        // The wording as it stood, which the machine transcript still says too.
+        $I->see('Yes. For pikup', 'dialog[data-a2t-history-dialog="0"]');
+    }
+
+    /** I. A whole-turn move is history even though it changed no words. */
+    public function aReassignedMessageOffersItsHistory(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->submitForm('[data-a2t-turn="0"] [data-a2t-fallback] form[action$="/turn/0/move"]', []);
+        $I->see('Turn reassigned to the Agent.');
+
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-history="0"]');
+        $I->see('Speaker reassigned', 'dialog[data-a2t-history-dialog="0"]');
+    }
+
+    /** J. Both halves of a split point at the one message they came from. */
+    public function bothHalvesOfASplitOfferTheSameParent(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/split"]',
+            ['offset' => '4'],
+        );
+        $I->see('Turn split.');
+
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-history="0"]');
+        $I->seeElement('[data-a2t-turn="1"] [data-a2t-history="1"]');
+        $I->see('Message split in two', 'dialog[data-a2t-history-dialog="0"]');
+        $I->see('Message split in two', 'dialog[data-a2t-history-dialog="1"]');
+        // The dialog names more than one message rather than reading like a text edit.
+        $I->see('involved more than one message', 'dialog[data-a2t-history-dialog="0"]');
+    }
+
+    /** K. The joined message names both of the messages that produced it. */
+    public function aMergedMessageNamesBothOfItsParents(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/merge"]',
+            ['direction' => 'next'],
+        );
+        $I->see('Turns joined.');
+
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-history="0"]');
+        $I->see('Messages joined', 'dialog[data-a2t-history-dialog="0"]');
+        $I->see('Hello there.', 'dialog[data-a2t-history-dialog="0"]');
+        $I->see('So lo mein with shrimp fried rice,', 'dialog[data-a2t-history-dialog="0"]');
+    }
+
+    /** N. Confirming roles changes no message, so it puts an icon on none of them. */
+    public function confirmingRolesAddsNoMessageHistory(WebTester $I): void
+    {
+        $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->click('Confirm speaker roles');
+        $I->see('Speaker roles confirmed.');
+
+        $I->dontSeeElement('[data-a2t-history]');
+        $I->dontSeeElement('dialog[data-a2t-history-dialog]');
+    }
+
+    /**
+     * O and P. Discarding the corrections discards their history with them — what is on screen is the
+     * machine's conversation again — and a correction made afterwards is attributed normally.
+     */
+    public function historyRestartsAfterCorrectionsAreDiscarded(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/text"]',
+            ['text' => 'discarded wording'],
+        );
+        $I->seeElement('[data-a2t-history="0"]');
+
+        // O. Everything before the discard describes a conversation that no longer exists.
+        $I->click('Discard all corrections');
+        $I->see('Corrections discarded.');
+        $I->dontSeeElement('[data-a2t-history]');
+
+        // P. And a correction made after it is history again.
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/1/text"]',
+            ['text' => 'or delivery please?'],
+        );
+        $I->seeElement('[data-a2t-turn="1"] [data-a2t-history="1"]');
+        $I->dontSeeElement('[data-a2t-turn="0"] [data-a2t-history]');
+        // Only the surviving correction, not the discarded one.
+        $I->see('or delivery?', 'dialog[data-a2t-history-dialog="1"]');
+        $I->dontSee('discarded wording');
+    }
+
+    /** Q. Historical text is data, exactly like current text. */
+    public function historicalTextIsEscaped(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/text"]',
+            ['text' => '<script>alert(1)</script>'],
+        );
+        // The hostile wording is now the current text; correcting again makes it historical too.
+        $I->submitForm(
+            'form[action="/audio-to-text/job/' . $publicId . '/review/turn/0/text"]',
+            ['text' => 'harmless again'],
+        );
+
+        $source = $I->grabPageSource();
+        Assert::assertStringNotContainsString('<script>alert(1)</script>', $source);
+        Assert::assertStringContainsString('&lt;script&gt;', $source);
+    }
+
+    /** R. The scroll anchor is still the confirm form's alone — history added no second writer. */
+    public function theScrollAnchorHookIsStillOnlyOnTheConfirmForm(WebTester $I): void
+    {
+        $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        $I->seeNumberOfElements('[data-a2t-confirm-form]', 1);
+        $I->seeElement('form[action$="/review/confirm"][data-a2t-confirm-form]');
+    }
+
     /** Without JavaScript the plain forms are still the whole interface. */
     public function theNoScriptFallbackKeepsEveryOperationReachable(WebTester $I): void
     {

@@ -6,6 +6,7 @@ use App\AudioToText\Domain\AudioConversation;
 use App\AudioToText\Domain\AudioConversationChild;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\Shared\Application\Time\AppTimeZone;
@@ -259,6 +260,20 @@ $formErrors = $errors['form'] ?? [];
                         </td>
                         <td class="a2t-cell-actions">
                             <a href="<?= Html::encode($viewUrl) ?>">View</a>
+                            <?php
+                            // The machine's own transcript, offered only where there is one to show.
+                            // A separate Customer + Agent conversion stores no segments at all — the
+                            // roles were supplied, so nothing was diarized — and an unfinished job has
+                            // not produced one yet. Offering a link that could only redirect would be
+                            // worse than not offering it.
+                            $original = !$separate ? $conversation->singleChild() : null;
+                    ?>
+                            <?php if ($original !== null && $original->status === JobStatus::COMPLETED): ?>
+                                <a href="<?= Html::encode($urlGenerator->generate(
+                                    AudioToTextRoute::JOB_ORIGINAL,
+                                    ['publicId' => $original->publicId],
+                                )) ?>">Original transcript</a>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

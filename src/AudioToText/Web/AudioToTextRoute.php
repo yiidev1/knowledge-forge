@@ -37,6 +37,14 @@ final class AudioToTextRoute
     public const JOB_CONVERSATION = 'audio-to-text.job.conversation';
 
     /**
+     * The machine's own conversation, read-only and permanent.
+     *
+     * Separate from JOB_CONVERSATION because that one follows the corrections and this one never does —
+     * the two exist precisely so a reader can compare them.
+     */
+    public const JOB_ORIGINAL = 'audio-to-text.job.original';
+
+    /**
      * Speaker correction. One route per operation rather than one endpoint dispatching on a field, so
      * the route name, the audited operation and the button a person pressed all say the same thing.
      */

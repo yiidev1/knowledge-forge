@@ -1526,6 +1526,58 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     }
 }
 
+/* Message history — the record of what was corrected, inside the shared confirm dialog. */
+/* Wider than the confirm dialogs it borrows its shell from, because it shows a different kind of
+   thing: those ask one short question, this lays two versions of a message beside each other and a
+   merge puts four of them in one event. At 34rem the transcript lines wrapped every few words and the
+   before/after comparison — the entire point of the dialog — was hard to read down.
+
+   Its own scroll container, styled like the conversation it describes: the thin track and the
+   rounded thumb that darkens on hover, matching `.a2t-chat__scroll` and `.chat__messages` rather than
+   leaving the browser's default bar against a dark panel. `overscroll-behavior` keeps a flick at the
+   end of the list from scrolling the page behind the modal. */
+.a2t-history {
+    /* `width`, not only `max-width`: a dialog sizes to fit-content, so a wider cap alone changed almost
+       nothing — the box kept shrinking to its longest line and ignored the room it had been given.
+       Both are set to the same value so the explicit width is not then clipped by the smaller cap
+       `.a2t-confirm` sets for the short confirmation dialogs. */
+    width: min(94vw, 62rem);
+    max-width: min(94vw, 62rem);
+    max-height: min(86vh, 46rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+}
+.a2t-history::-webkit-scrollbar { width: 11px; }
+.a2t-history::-webkit-scrollbar-track { background: transparent; }
+.a2t-history::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    border: 3px solid var(--surface);
+    background-clip: padding-box;
+}
+.a2t-history:hover::-webkit-scrollbar-thumb { background: var(--text-faint); background-clip: padding-box; }
+.a2t-history__event { padding: .7rem 0; border-top: 1px solid var(--border); }
+.a2t-history__event:first-of-type { border-top: none; padding-top: 0; }
+.a2t-history__head { margin: 0 0 .5rem; display: flex; flex-direction: column; gap: .15rem; }
+.a2t-history__meta { font-size: .78rem; color: var(--text-muted); }
+.a2t-history__label { margin: .45rem 0 .2rem; font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
+.a2t-history__turn { margin: 0 0 .3rem; padding: .4rem .55rem; border-radius: 8px; background: var(--surface-2); }
+.a2t-history__who { display: block; font-size: .76rem; font-weight: 600; color: var(--text-muted); }
+.a2t-history__text { display: block; font-size: .88rem; overflow-wrap: anywhere; }
+
+/* Follows from the dialog scrolling: a conversation corrected a dozen times would otherwise put Close
+   below the fold and make the reader scroll to the end to dismiss it. Scoped to this dialog — the move
+   and merge confirmations are short and their buttons stay where they are. */
+.a2t-history .a2t-confirm__actions {
+    position: sticky;
+    bottom: -1.25rem;
+    margin-bottom: -1.25rem;
+    padding: .75rem 0 1.25rem;
+    background: var(--surface);
+}
+
 /* Outside the bubble and always visible, matching the pencil beside a Store Chat question. Hidden
    until hover looked tidy but left the controls undiscoverable — nothing on screen said the message
    could be corrected at all. They sit in the margin so they never crowd the words. */
@@ -1540,6 +1592,21 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-turn--left .a2t-turn__tools { right: 100%; margin-right: .5rem; }
 .a2t-turn--right .a2t-turn__tools { left: 100%; margin-left: .5rem; }
 .a2t-turn--neutral .a2t-turn__tools { right: 100%; margin-right: .5rem; }
+
+/* The margin has to be wide enough for every control that sits in it, and the history icon made three.
+   The arithmetic, so nobody has to measure it again: each button is 30px with a .3rem gap, so three
+   come to 99.6px, and the .5rem offset from the bubble takes the group to 107.6px. The shared 5rem
+   gutter is 80px — the third button landed outside it and `overflow-x: hidden` cut it off rather than
+   letting it scroll into view. 7.5rem leaves a little over 12px clear.
+
+   Scoped twice on purpose. `.a2t-review` because only the correction page has controls: the read-only
+   conversation page shares this thread and keeps its own 5rem, so its column is untouched. And a
+   min-width companion to the max-width block below, because under 760px the controls drop beneath the
+   message and the gutter goes to zero — without the guard this rule would out-specify that and put the
+   padding back on the narrow layout it was removed from. */
+@media (min-width: 761px) {
+    .a2t-review .a2t-chat__scroll .a2t-thread { padding: 0 7.5rem; }
+}
 
 /* touch-action is the whole reason a touch drag works: without it the browser claims the gesture for
    scrolling and the handle never sees a pointermove. */

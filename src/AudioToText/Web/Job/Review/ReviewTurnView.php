@@ -7,6 +7,7 @@ namespace App\AudioToText\Web\Job\Review;
 use App\AudioToText\Domain\Speaker\ConversationSide;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
 use App\AudioToText\Domain\Speaker\SplitPoint;
+use App\AudioToText\Domain\Speaker\TurnLineage;
 use App\AudioToText\Domain\Speaker\TurnTiming;
 use App\AudioToText\Domain\SpeakerRole;
 
@@ -49,7 +50,20 @@ final readonly class ReviewTurnView
          */
         public bool $mergesIfMovedToAgent = false,
         public bool $mergesIfMovedToCustomer = false,
+        /**
+         * What has happened to this message, newest first.
+         *
+         * Derived from the audit trail rather than stored on the turn — turns have no identity, so this
+         * is the one place the derivation's answer is carried. Empty for a message no correction has
+         * touched since the last revert, which is what decides whether the icon appears at all.
+         */
+        public TurnLineage $history = new TurnLineage(),
     ) {}
+
+    public function hasHistory(): bool
+    {
+        return !$this->history->isEmpty();
+    }
 
     public function isAgent(): bool
     {

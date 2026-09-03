@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review;
 
+use App\AudioToText\Application\ConversationHistoryBuilder;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStore;
@@ -11,6 +12,7 @@ use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\ReviewOperation;
+use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
@@ -43,6 +45,7 @@ final readonly class Action
         private SegmentRevisionRepositoryInterface $revisions,
         private AudioConversationRepositoryInterface $conversationRepository,
         private AudioStoreLookupInterface $stores,
+        private ConversationHistoryBuilder $history,
         private AppTimeZone $appTimeZone,
         private Redirect $redirect,
     ) {}
@@ -81,11 +84,22 @@ final readonly class Action
             ? ReviewedConversationTurns::fromJson($job->reviewedSegmentsJson)
             : ReviewedConversationTurns::fromUtterances($effective->utterances);
 
+        $revisions = $this->revisions->forJob($job->id);
+
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
                 'job' => $job,
-                'page' => ReviewPageView::build($job, $conversation, $turns, $this->confirmedBy($job->id)),
+                // One read of the audit trail, used twice: who confirmed the roles, and what has
+                // happened to each message. Loading it a second time for the history would be the same
+                // rows fetched twice on every render.
+                'page' => ReviewPageView::build(
+                    $job,
+                    $conversation,
+                    $turns,
+                    $this->confirmedBy($revisions),
+                    $this->history->build($revisions, $turns),
+                ),
                 // Page chrome, not review state, so it is passed beside ReviewPageView rather than into
                 // it — the same shape the conversion page uses.
                 'store' => $this->owningStore($job->conversationId),
@@ -122,14 +136,16 @@ final readonly class Action
      * There is deliberately no `roles_confirmed_by` column — confirming is recorded as a CONFIRM_ROLES
      * revision, so the person and the moment are already stored once. Reading them back from there
      * keeps that the single record rather than adding a second that could disagree with it.
+     *
+     * @param list<SegmentRevision> $revisions already loaded, oldest first
      */
-    private function confirmedBy(int $jobId): ?string
+    private function confirmedBy(array $revisions): ?string
     {
         $username = null;
 
         // Ascending, so the last match wins: a revert clears the confirmation, and confirming again
         // afterwards writes a second CONFIRM_ROLES. The most recent one is the one in force.
-        foreach ($this->revisions->forJob($jobId) as $revision) {
+        foreach ($revisions as $revision) {
             if ($revision->operation === ReviewOperation::ConfirmRoles) {
                 $username = $revision->editedByUsername;
             }

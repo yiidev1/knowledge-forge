@@ -386,6 +386,11 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/conversation')
                 ->action(AudioToText\Job\Conversation\Action::class)
                 ->name(AudioToTextRoute::JOB_CONVERSATION),
+            // The machine's own conversation, read-only and permanent. Unlike the route above it never
+            // follows the corrections — the two exist so a reader can compare them.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/original')
+                ->action(AudioToText\Job\Original\Action::class)
+                ->name(AudioToTextRoute::JOB_ORIGINAL),
 
             // Speaker correction. One route per operation rather than one endpoint dispatching on a
             // field, so the route, the audited operation and the button pressed all say the same thing.

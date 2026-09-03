@@ -10,6 +10,7 @@ use App\AudioToText\Domain\Speaker\MergeDirection;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\Speaker\SpeakerMarkers;
 use App\AudioToText\Domain\Speaker\SplitPoint;
+use App\AudioToText\Domain\Speaker\TurnLineage;
 use App\AudioToText\Domain\Speaker\TurnTiming;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -50,11 +51,15 @@ final readonly class ReviewPageView
         public int $version,
     ) {}
 
+    /**
+     * @param list<TurnLineage> $lineages one per turn, positionally, as the history builder returns them
+     */
     public static function build(
         TranscriptionJob $job,
         ConversationView $conversation,
         ReviewedConversationTurns $turns,
         ?string $confirmedByUsername = null,
+        array $lineages = [],
     ): self {
         $views = [];
 
@@ -83,6 +88,10 @@ final readonly class ReviewPageView
                 SplitPoint::forText($turn->text),
                 self::wouldMerge($turns, $index, SpeakerRole::AGENT),
                 self::wouldMerge($turns, $index, SpeakerRole::CUSTOMER),
+                // Positional, because that is what the builder returns: one lineage per current turn,
+                // in the same order. An absent entry means no history rather than an error — a job
+                // whose corrections were all discarded has none for any turn.
+                $lineages[$index] ?? new TurnLineage(),
             );
         }
 

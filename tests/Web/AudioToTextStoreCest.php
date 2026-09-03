@@ -584,6 +584,41 @@ final class AudioToTextStoreCest
         $I->see('nothing to correct here');
     }
 
+    // ---------------------------------------------------------------- the original-transcript action
+
+    /**
+     * E, F, G. The machine's own transcript is offered exactly where one exists.
+     *
+     * All three states are asserted in one pass because they are the same decision seen from three
+     * sides — an action that only redirects is worse than no action, so the row offers it only for a
+     * finished common conversion.
+     */
+    public function theOriginalTranscriptActionIsOfferedOnlyForACompletedCommonConversion(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        // F. Common, still queued: no machine transcript yet, so no link.
+        $this->uploadCommon($I, self::STORE_A);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->dontSeeElement('a[href$="/original"]');
+
+        // E. The same conversion once the worker has finished with it.
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->see('Original transcript');
+        $I->seeElement('a[href="/audio-to-text/job/' . $child['public_id'] . '/original"]');
+        // Offered beside View, never instead of it.
+        $I->seeElement('a[href^="/audio-to-text/conversion/"]');
+
+        // G. Separate: two independent recordings, no segments, nothing to show as one conversation.
+        $this->uploadSeparate($I, self::STORE_B);
+        $I->amOnPage($this->storeUrl(self::STORE_B));
+        $I->dontSeeElement('a[href$="/original"]');
+        $I->dontSee('Original transcript');
+    }
+
     public function anUnknownConversionLeadsToTheConversionsList(WebTester $I): void
     {
         $this->signIn($I);

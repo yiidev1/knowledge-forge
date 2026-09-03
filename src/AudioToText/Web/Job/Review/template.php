@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
+use App\AudioToText\Domain\Speaker\ReviewedTurn;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Web\AudioToTextRoute;
@@ -63,6 +64,8 @@ $icon = static function (string $paths, string $label): string {
         . $paths . '</svg><span class="a2t-sr">' . Html::encode($label) . '</span>';
 };
 $pencil = '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>';
+// A clock face with a hand — the icon every interface already uses for "what happened before".
+$clock = '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>';
 // Six dots, the handle everyone already reads as "drag me".
 $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
     . '<circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/>'
@@ -217,6 +220,17 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                     ) ?></button>
                             <button class="a2t-iconbtn" type="button" data-a2t-edit
                                     title="Correct the wording"><?= $icon($pencil, 'Correct the wording') ?></button>
+                            <?php if ($turn->hasHistory()): ?>
+                                <?php
+                                // Only where there is something to show. "Something" means a correction
+                                // that this message actually carries: confirming the roles changes no
+                                // message, and everything before the last discard describes a
+                                // conversation that no longer exists.
+                                ?>
+                                <button class="a2t-iconbtn" type="button"
+                                        data-a2t-history="<?= $turn->index ?>"
+                                        title="Show what was corrected"><?= $icon($clock, 'Show what was corrected') ?></button>
+                            <?php endif; ?>
                         </span>
                     </div>
 
@@ -419,3 +433,68 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
         </div>
     </form>
 </dialog>
+
+<?php
+// One dialog per message that has history, rendered server-side and opened by its own icon. No fetch,
+// no endpoint, no template cloning: the page already holds the audit trail it needed for the roles
+// line, and a correction touches a handful of messages, so the markup is small. Every historical word
+// goes through Html::encode on the way in — a transcript is data, and a transcript from six revisions
+// ago is no more trustworthy than today's.
+$clock2 = static fn(int $ms): string => sprintf('%02d:%02d', intdiv($ms, 60000), intdiv($ms % 60000, 1000));
+
+$historyTurn = static function (ReviewedTurn $t) use ($clock2): string {
+    // The span as stored. A turn a person split carries its parent's range and says so with the tilde
+    // the rest of the feature already uses, rather than a number nobody measured.
+    $range = $t->startMs === 0 && $t->endMs === 0
+        ? ''
+        : ' · ' . ($t->approx ? '~' : '') . $clock2($t->startMs) . '–' . $clock2($t->endMs);
+
+    return '<p class="a2t-history__turn"><span class="a2t-history__who">'
+        . Html::encode($t->role->label() . $range)
+        . '</span><span class="a2t-history__text">' . Html::encode($t->text) . '</span></p>';
+};
+?>
+<?php foreach ($page->turns as $turn): ?>
+    <?php if (!$turn->hasHistory()): ?>
+        <?php continue; ?>
+    <?php endif; ?>
+    <dialog class="a2t-confirm a2t-history" data-a2t-history-dialog="<?= $turn->index ?>">
+        <h2 class="a2t-confirm__title">What was corrected</h2>
+        <?php foreach ($turn->history->events as $event): ?>
+            <div class="a2t-history__event">
+                <p class="a2t-history__head">
+                    <strong><?= Html::encode($event->summary()) ?></strong>
+                    <span class="a2t-history__meta">
+                        revision <?= $event->revisionNumber ?>
+                        · by <?= Html::encode($event->editedByUsername ?? 'an administrator') ?>
+                        · <?= Html::encode($appTimeZone->format($event->createdAt, 'M j, Y g:i A T')) ?>
+                    </span>
+                </p>
+
+                <?php
+                // Both sides always, and both may hold more than one message. A merge that showed only
+                // one "before" would read exactly like a text edit and misdescribe what was done.
+            ?>
+                <p class="a2t-history__label">Before</p>
+                <?php foreach ($event->before as $t): ?>
+                    <?= $historyTurn($t) ?>
+                <?php endforeach; ?>
+
+                <p class="a2t-history__label">After</p>
+                <?php foreach ($event->after as $t): ?>
+                    <?= $historyTurn($t) ?>
+                <?php endforeach; ?>
+
+                <?php if ($event->involvesSeveralTurns()): ?>
+                    <p class="a2t-confirm__note">
+                        This correction involved more than one message, so it is shown on each of them.
+                    </p>
+                <?php endif; ?>
+            </div>
+        <?php endforeach; ?>
+
+        <div class="a2t-confirm__actions">
+            <button class="btn btn--sm" type="button" data-a2t-history-close>Close</button>
+        </div>
+    </dialog>
+<?php endforeach; ?>

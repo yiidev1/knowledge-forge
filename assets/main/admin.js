@@ -1783,6 +1783,32 @@
         thread.insertBefore(button, thread.firstChild);
     }
 
+    /* ----------------------------------------------------------------- message history */
+
+    /* One dialog per message that has any, rendered with the page. Opening it needs no request and no
+       template assembly: the server already decided which messages have history and what it says, so
+       this only shows the right one. Nothing here mutates anything — history is a record, and a record
+       you can edit from the page displaying it is not one. */
+
+    document.addEventListener('click', function (event) {
+        var target = event.target instanceof Element ? event.target.closest('[data-a2t-history]') : null;
+        if (target) {
+            var dialog = document.querySelector('[data-a2t-history-dialog="' + target.getAttribute('data-a2t-history') + '"]');
+            if (dialog && typeof dialog.showModal === 'function') {
+                dialog.showModal();
+            }
+            return;
+        }
+
+        var close = event.target instanceof Element ? event.target.closest('[data-a2t-history-close]') : null;
+        if (close) {
+            var open = close.closest('dialog');
+            if (open) {
+                open.close();
+            }
+        }
+    });
+
     /* ------------------------------------------------------- confirm: stay where you were */
 
     /* Confirming speaker roles is a Post/Redirect/Get, so what comes back is a fresh document: without
