@@ -40,6 +40,16 @@ interface AudioConversationRepositoryInterface
     public function countForStore(int $storeSourceId): int;
 
     /**
+     * Which store a conversation was uploaded against, by its internal id.
+     *
+     * Deliberately narrower than {@see findByPublicId}: a page that only needs somewhere to navigate
+     * back to should not pay for the conversation's children, and a job holds the numeric parent id
+     * rather than the public one. Null covers both "no such conversation" and "uploaded outside any
+     * store" — neither has a store page, so neither needs telling apart.
+     */
+    public function storeSourceIdFor(int $conversationId): ?int;
+
+    /**
      * Remove parents that have no children left.
      *
      * Retention deletes expired jobs one at a time, and the two children of a pair can fall in

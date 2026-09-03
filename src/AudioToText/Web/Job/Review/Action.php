@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\AudioToText\Web\Job\Review;
 
 use App\AudioToText\Application\EffectiveConversationReader;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
+use App\AudioToText\Domain\AudioStore;
+use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\ReviewOperation;
@@ -38,6 +41,8 @@ final readonly class Action
         private JobPageGuard $guard,
         private EffectiveConversationReader $conversations,
         private SegmentRevisionRepositoryInterface $revisions,
+        private AudioConversationRepositoryInterface $conversationRepository,
+        private AudioStoreLookupInterface $stores,
         private AppTimeZone $appTimeZone,
         private Redirect $redirect,
     ) {}
@@ -81,9 +86,34 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'job' => $job,
                 'page' => ReviewPageView::build($job, $conversation, $turns, $this->confirmedBy($job->id)),
+                // Page chrome, not review state, so it is passed beside ReviewPageView rather than into
+                // it — the same shape the conversion page uses.
+                'store' => $this->owningStore($job->conversationId),
                 'appTimeZone' => $this->appTimeZone,
             ])
             ->withHeader('Cache-Control', 'no-store, private');
+    }
+
+    /**
+     * The store this job was uploaded against, or null when it was not uploaded against one.
+     *
+     * Derived from the job rather than from how the reader arrived: a job belongs to its store whether
+     * it was opened from that store's page, from the global conversions list or from a bookmark, so
+     * there is nothing about the journey worth carrying in a parameter.
+     *
+     * Two narrow reads, both skipped entirely for the store-less jobs that are still the majority. A
+     * store removed from the mirror since the upload also lands here as null, and the page simply omits
+     * the link — exactly what the conversion page already does.
+     */
+    private function owningStore(?int $conversationId): ?AudioStore
+    {
+        if ($conversationId === null) {
+            return null;
+        }
+
+        $sourceId = $this->conversationRepository->storeSourceIdFor($conversationId);
+
+        return $sourceId === null ? null : $this->stores->findBySourceId($sourceId);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -19,15 +20,23 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var Csrf $csrf
  * @var TranscriptionJob $job
  * @var ReviewPageView $page
+ * @var AudioStore|null $store the store this job was uploaded against, or null when it was not
  * @var AppTimeZone $appTimeZone
  */
 
 $this->setTitle('Correct speakers');
-$this->setParameter('breadcrumbs', [
+// The store sits in the trail only when the job was uploaded against one — the same conditional shape
+// the conversion page uses, so a job with no store keeps exactly the trail it has always had.
+$this->setParameter('breadcrumbs', array_values(array_filter([
     ['label' => 'Audio to Text', 'route' => AudioToTextRoute::PAGE],
+    $store === null ? null : [
+        'label' => $store->name,
+        'route' => AudioToTextRoute::STORE,
+        'arguments' => ['sourceId' => $store->sourceId],
+    ],
     ['label' => 'Conversions', 'route' => AudioToTextRoute::JOBS],
     ['label' => 'Correct speakers'],
-]);
+])));
 
 $csrfField = (string) $csrf->hiddenInput();
 $conversationUrl = $urlGenerator->generate(AudioToTextRoute::JOB_CONVERSATION, ['publicId' => $job->publicId]);
@@ -66,6 +75,17 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
             <p class="a2t-chat__subtitle"><?= Html::encode($job->originalFilename) ?></p>
         </div>
         <div class="a2t-chat__actions">
+            <?php if ($store !== null): ?>
+                <?php
+                // Added beside the existing two rather than replacing either. "Back to conversation" is
+                // the only link to the read-only transcript anywhere in the application, so repointing
+                // it would leave that page reachable by URL alone.
+                ?>
+                <a class="btn" href="<?= Html::encode($urlGenerator->generate(
+                    AudioToTextRoute::STORE,
+                    ['sourceId' => $store->sourceId],
+                )) ?>">Back to <?= Html::encode($store->name) ?></a>
+            <?php endif; ?>
             <a class="btn" href="<?= Html::encode($conversationUrl) ?>">Back to conversation</a>
             <a class="btn" href="<?= Html::encode($jobUrl) ?>">Full conversion details</a>
         </div>
@@ -100,7 +120,15 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
             <?php endif; ?>
 
             <?php if ($page->canConfirm): ?>
-                <form method="post" action="<?= Html::encode($pageUrl(AudioToTextRoute::JOB_REVIEW_CONFIRM)) ?>">
+                <?php
+                // data-a2t-confirm-form is the script's cue to remember which turn the reader was on
+                // before the Post/Redirect/Get replaces this page. Only this form carries it: the other
+                // corrections can reorder, split or merge turns, so a turn index saved before one of
+                // them would not name the same turn on the page that comes back. Confirmation
+                // re-serialises the same turns in the same order, which is what makes the index safe.
+                ?>
+                <form method="post" action="<?= Html::encode($pageUrl(AudioToTextRoute::JOB_REVIEW_CONFIRM)) ?>"
+                      data-a2t-confirm-form>
                     <?= $csrfField ?><?= $version() ?>
                     <button class="btn btn--sm btn--primary" type="submit">Confirm speaker roles</button>
                 </form>

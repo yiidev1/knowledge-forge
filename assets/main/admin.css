@@ -1282,7 +1282,11 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     padding: .5rem .75rem;
     border: 1px solid var(--border);
     border-radius: 12px;
-    background: var(--surface);
+    /* Indirected through a custom property so a bubble can be tinted by role without competing on
+       selector specificity with the drag, drop-target and moving states below — those set `background`
+       directly and must keep winning. Nothing sets the variable by default, so every bubble that is not
+       explicitly tinted resolves to exactly the surface it always used. */
+    background: var(--a2t-bubble-bg, var(--surface));
     color: var(--text);
 }
 
@@ -1498,6 +1502,29 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-review .a2t-turn--right { align-items: flex-end; }
 .a2t-review .a2t-turn--neutral { align-items: center; }
 .a2t-review .a2t-bubble { position: relative; max-width: min(68%, 34rem); }
+
+/* Our own side, tinted green so the two parties are not two identical grey blocks.
+   `:not(--unconfirmed)` is the load-bearing half: `data-a2t-role` carries the mapper's *hypothesis* on
+   every turn, including one the publish gate refused, so tinting on the role alone would show a reader
+   a guess the page's own text says the system could not make. Only a published — machine-cleared or
+   person-confirmed — agent turn is coloured; Speaker 1/2 keeps its neutral dashed look.
+   Lifted off the surface rather than dropped onto --success-bg, which is *darker* than the bubble in
+   the dark theme and would have read as recessed instead of highlighted. */
+.a2t-review .a2t-turn[data-a2t-role="AGENT"]:not(.a2t-turn--unconfirmed) {
+    --a2t-bubble-bg: var(--success-bg);
+}
+
+/* The guard is not decoration. `.a2t-bubble` reads this through `var(--a2t-bubble-bg, var(--surface))`,
+   but that fallback only fires when the property is *unset* — a property set to an unsupported
+   color-mix() still substitutes, leaves `background` invalid at computed-value time, and drops the
+   bubble to transparent. So the plain token is declared above and only replaced where the function is
+   understood. Two declarations in one block would not work: a custom property parses permissively, so
+   the color-mix one would always win regardless of support. */
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+    .a2t-review .a2t-turn[data-a2t-role="AGENT"]:not(.a2t-turn--unconfirmed) {
+        --a2t-bubble-bg: color-mix(in srgb, var(--success-border) 45%, var(--surface));
+    }
+}
 
 /* Outside the bubble and always visible, matching the pencil beside a Store Chat question. Hidden
    until hover looked tidy but left the controls undiscoverable — nothing on screen said the message

@@ -19,6 +19,8 @@ use function json_decode;
 use function json_encode;
 use function random_bytes;
 
+use const SORT_ASC;
+
 /**
  * Speaker correction, through the browser.
  *
@@ -372,6 +374,88 @@ final class AudioToTextReviewCest
         $I->dontSeeElement('[data-a2t-move]');
         $I->seeElement('[data-a2t-move-dialog] form[data-a2t-move-form]');
         $I->seeElement('[data-a2t-merge-dialog] form[data-a2t-merge-form]');
+    }
+
+    /**
+     * Exactly one form asks the page to remember where the reader was.
+     *
+     * The scroll anchor is a turn *index*, and confirmation is the only correction that leaves the
+     * turns numbered as they were — everything else may split, merge or reorder them. If this hook
+     * spread to another form the restored index would silently name a different message, so the
+     * boundary is asserted rather than left to the comment explaining it.
+     */
+    public function onlyTheConfirmFormCarriesTheScrollAnchorHook(WebTester $I): void
+    {
+        $publicId = $this->seedThree();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        // One correction first, so Discard all corrections is actually on the page — asserting the
+        // hook is absent from a form that was never rendered would prove nothing.
+        $I->submitForm('[data-a2t-turn="0"] [data-a2t-fallback] form[action$="/turn/0/move"]', []);
+        $I->seeElement('form[action$="/review/revert"]');
+
+        $I->seeElement('form[action$="/review/confirm"][data-a2t-confirm-form]');
+        $I->dontSeeElement('form[action$="/review/revert"][data-a2t-confirm-form]');
+        $I->dontSeeElement('form[action*="/review/turn/"][data-a2t-confirm-form]');
+        // One on the page, and it is the confirm form: nothing else may write the anchor.
+        $I->seeNumberOfElements('[data-a2t-confirm-form]', 1);
+    }
+
+    // ---------------------------------------------------------------- back to the owning store
+
+    /**
+     * A job uploaded against a store offers the way back to it.
+     *
+     * The destination is derived from the job's own conversation, not from how the reader arrived: the
+     * page is reached here by direct URL, with no store anywhere in the history, and the link still
+     * resolves. That is the whole reason this is not a returnTo parameter.
+     */
+    public function aStoreOwnedJobOffersTheWayBackToItsStore(WebTester $I): void
+    {
+        $store = $this->anyMirroredStore();
+        if ($store === null) {
+            $I->markTestSkipped('No mirrored Order58 store in this database to attach a conversation to.');
+        }
+
+        $publicId = $this->seed();
+        $this->attachToStore($publicId, $store['sourceId']);
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->seeResponseCodeIsSuccessful();
+
+        // The button, pointing at that store's audio page.
+        $I->seeElement('.a2t-chat__actions a[href="/audio-to-text/store/' . $store['sourceId'] . '"]');
+        $I->see('Back to ' . $store['name']);
+        // And the breadcrumb, which is the second way back.
+        $I->seeElement('a[href="/audio-to-text/store/' . $store['sourceId'] . '"]');
+
+        // Added, never substituted: both original actions survive.
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
+        $I->see('Back to conversation');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '"]');
+        $I->see('Full conversion details');
+    }
+
+    /** Most jobs belong to no store, and their page is exactly what it always was. */
+    public function aStorelessJobKeepsTheExistingActionsAndShowsNoStore(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->seeResponseCodeIsSuccessful();
+
+        // No store link anywhere on the page — not in the actions, not in the breadcrumb.
+        $I->dontSeeElement('a[href^="/audio-to-text/store/"]');
+        $I->dontSee('Back to 888');
+
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '/conversation"]');
+        $I->see('Back to conversation');
+        $I->seeElement('a[href="/audio-to-text/job/' . $publicId . '"]');
+        $I->see('Full conversion details');
     }
 
     /** Without JavaScript the plain forms are still the whole interface. */
@@ -948,8 +1032,20 @@ final class AudioToTextReviewCest
 
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
         $I->see('The system could not tell which speaker is the agent.');
+
+        // Before confirmation every turn is provisional, so none may be tinted as the agent's — the
+        // role attribute carries the mapper's guess either way, and the CSS keys off this class.
+        $I->seeElement('.a2t-turn--unconfirmed[data-a2t-role="AGENT"]');
+        $I->dontSeeElement('[data-a2t-role="AGENT"]:not(.a2t-turn--unconfirmed)');
+
         $I->click('Confirm speaker roles');
         $I->see('Speaker roles confirmed.');
+
+        // After it, the agent's turns are published and the tint applies; the customer's turns keep
+        // carrying their own role and are never matched by the agent rule.
+        $I->seeElement('[data-a2t-role="AGENT"]:not(.a2t-turn--unconfirmed)');
+        $I->seeElement('[data-a2t-role="CUSTOMER"]:not(.a2t-turn--unconfirmed)');
+        $I->dontSeeElement('.a2t-turn--unconfirmed');
 
         $I->amOnPage('/audio-to-text/job/' . $publicId);
         $I->dontSee('Speaker 1');
@@ -1213,6 +1309,57 @@ final class AudioToTextReviewCest
         return $publicId;
     }
 
+    /**
+     * An existing mirrored store, or null when this database has none.
+     *
+     * Read rather than seeded: `order58_stores` and `knowledge_bases` are the Order58 mirror, shared
+     * with real use, and inventing a row there to satisfy a navigation test would be writing into
+     * another module's data. The lookup mirrors DbAudioStoreLookup's own join, so a store this finds is
+     * one the page can resolve.
+     *
+     * @return array{sourceId: int, name: string}|null
+     */
+    private function anyMirroredStore(): ?array
+    {
+        /** @var array<string, mixed>|null $row */
+        $row = (new Query($this->connection))
+            ->select(['source_id' => 's.source_id', 'name' => 'kb.name'])
+            ->from(['s' => '{{%order58_stores}}'])
+            ->innerJoin(['kb' => '{{%knowledge_bases}}'], 'kb.source_store_id = s.source_id')
+            ->where(['kb.source_system' => 'order58'])
+            ->orderBy(['s.source_id' => SORT_ASC])
+            ->limit(1)
+            ->one();
+
+        return $row === null ? null : ['sourceId' => (int) $row['source_id'], 'name' => (string) $row['name']];
+    }
+
+    /** Attach an existing job to a conversation owned by the given store. */
+    private function attachToStore(string $publicId, int $storeSourceId): void
+    {
+        $conversationPublicId = bin2hex(random_bytes(16));
+
+        $this->connection->createCommand()->insert('{{%audio_conversations}}', [
+            'public_id' => $conversationPublicId,
+            'store_source_id' => $storeSourceId,
+            'mode' => 'COMMON',
+            'uploaded_by_admin_id' => $this->adminId,
+            'created_at' => gmdate('Y-m-d H:i:s'),
+        ])->execute();
+
+        $conversationId = (new Query($this->connection))
+            ->select('id')
+            ->from('{{%audio_conversations}}')
+            ->where(['public_id' => $conversationPublicId])
+            ->scalar();
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['conversation_id' => $conversationId, 'source_role' => 'COMMON'],
+            ['public_id' => $publicId],
+        )->execute();
+    }
+
     /** Scoped to this suite's own administrator, never a blanket delete. */
     private function cleanup(): void
     {
@@ -1226,6 +1373,12 @@ final class AudioToTextReviewCest
             // Jobs before administrators: the uploader foreign key is RESTRICT.
             $this->connection->createCommand()
                 ->delete('{{%audio_transcription_jobs}}', ['uploaded_by_admin_id' => $adminIds])
+                ->execute();
+
+            // Conversations after the jobs that point at them, and before the administrator they
+            // point at — both foreign keys are RESTRICT.
+            $this->connection->createCommand()
+                ->delete('{{%audio_conversations}}', ['uploaded_by_admin_id' => $adminIds])
                 ->execute();
         }
 

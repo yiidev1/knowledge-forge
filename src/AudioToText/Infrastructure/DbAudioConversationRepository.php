@@ -105,6 +105,19 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             ->count();
     }
 
+    public function storeSourceIdFor(int $conversationId): ?int
+    {
+        $value = (new Query($this->connection))
+            ->select('store_source_id')
+            ->from(['c' => self::TABLE])
+            ->where(['c.id' => $conversationId])
+            ->limit(1)
+            ->scalar();
+
+        // The column is nullable, and a missing row returns false. Both mean "no store page".
+        return $value === null || $value === false ? null : (int) $value;
+    }
+
     public function deleteChildless(): int
     {
         // One statement rather than a read-then-delete loop: the set is computed and removed inside

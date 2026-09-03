@@ -1737,6 +1737,19 @@
             + ' (' + count + ' hidden)';
     }
 
+    // Extracted so restoration can reveal turns without also running reveal()'s scroll anchoring,
+    // which would fight the saved anchor it is trying to restore.
+    function syncEarlierButton() {
+        if (hiddenTurns.length === 0) {
+            if (button) {
+                button.parentNode.removeChild(button);
+                button = null;
+            }
+        } else if (button) {
+            button.textContent = label();
+        }
+    }
+
     function reveal() {
         // Keep the reader where they are: revealing above them would otherwise shove the turn they
         // were reading down the page by however tall the new ones are.
@@ -1746,14 +1759,7 @@
             hiddenTurns.pop().hidden = false;
         }
 
-        if (hiddenTurns.length === 0) {
-            if (button) {
-                button.parentNode.removeChild(button);
-                button = null;
-            }
-        } else if (button) {
-            button.textContent = label();
-        }
+        syncEarlierButton();
 
         container.scrollTop = container.scrollHeight - anchor;
     }
@@ -1777,8 +1783,128 @@
         thread.insertBefore(button, thread.firstChild);
     }
 
+    /* ------------------------------------------------------- confirm: stay where you were */
+
+    /* Confirming speaker roles is a Post/Redirect/Get, so what comes back is a fresh document: without
+       this the reader is dropped at the bottom of a conversation they were reading the middle of, and
+       any turns they had revealed are hidden again.
+
+       An anchor is a turn index plus its offset from the top of the scroller, never message text. The
+       offset is re-measured against the new layout rather than replayed as a scrollTop, because
+       confirmation changes heights — the dashed border goes solid, "Speaker 1" becomes "Agent" or
+       "Customer", sides flip, and same-side neighbours pick up a negative margin.
+
+       Only the confirm form is wired up. Move, merge, split, edit and revert can reorder or renumber
+       turns, so an index saved before one of them would not name the same turn afterwards. */
+
+    var ANCHOR_KEY = 'a2t:confirm-anchor:' + window.location.pathname;
+    var ANCHOR_TTL_MS = 60000;
+
+    // Storage can be unavailable (private mode, disabled cookies, a full quota) or hold something a
+    // previous version wrote. None of that may stop the transcript rendering, so every access fails
+    // into the ordinary behaviour instead of throwing.
+    function remember(value) {
+        try {
+            window.sessionStorage.setItem(ANCHOR_KEY, JSON.stringify(value));
+        } catch (e) {
+            // Nothing saved; the page below will land where it always did.
+        }
+    }
+
+    // Consumed on read, whether or not it turns out to be usable: an anchor may fire once, so a later
+    // refresh or a normal visit to this page never inherits a stale position.
+    function takeAnchor() {
+        var raw;
+
+        try {
+            raw = window.sessionStorage.getItem(ANCHOR_KEY);
+            window.sessionStorage.removeItem(ANCHOR_KEY);
+        } catch (e) {
+            return null;
+        }
+
+        if (!raw) {
+            return null;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function saveAnchor() {
+        var box = container.getBoundingClientRect();
+        var all = turns();
+
+        for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (el.hidden) {
+                continue;
+            }
+
+            // The topmost turn that actually intersects the visible band. Testing both edges matters:
+            // `bottom > top` alone would accept the first turn in the thread when the reader is far
+            // below it, and `top < bottom` alone would accept one scrolled off above.
+            var rect = el.getBoundingClientRect();
+            if (rect.bottom > box.top && rect.top < box.bottom) {
+                remember({
+                    index: el.getAttribute('data-a2t-turn'),
+                    offset: rect.top - box.top,
+                    ts: Date.now()
+                });
+
+                return;
+            }
+        }
+    }
+
+    function restoreAnchor() {
+        var saved = takeAnchor();
+
+        if (!saved || typeof saved.index !== 'string' || !/^\d+$/.test(saved.index)
+            || typeof saved.offset !== 'number' || typeof saved.ts !== 'number'
+            || Date.now() - saved.ts > ANCHOR_TTL_MS) {
+            return false;
+        }
+
+        var target = thread ? thread.querySelector('[data-a2t-turn="' + saved.index + '"]') : null;
+        if (!target) {
+            return false; // the conversation changed underneath; the usual landing applies
+        }
+
+        // The reader may have been on a turn older than the default window. hiddenTurns runs
+        // oldest-first and pops newest-first, so this walks backwards exactly far enough, and its own
+        // length bounds the loop.
+        if (target.hidden) {
+            while (target.hidden && hiddenTurns.length > 0) {
+                hiddenTurns.pop().hidden = false;
+            }
+
+            syncEarlierButton();
+        }
+
+        // Measured now, so the heights confirmation changed are already settled. Assigned rather than
+        // scrollTo'd: the reader should find themselves where they were, not watch the page travel.
+        container.scrollTop += target.getBoundingClientRect().top
+            - container.getBoundingClientRect().top
+            - saved.offset;
+
+        return true;
+    }
+
+    var confirmForm = document.querySelector('[data-a2t-confirm-form]');
+    if (confirmForm) {
+        confirmForm.addEventListener('submit', saveAnchor);
+    }
+
     holdBackOlder();
-    toBottom(false);
+
+    if (!restoreAnchor()) {
+        toBottom(false);
+    }
+
     updateJump();
 
     container.addEventListener('scroll', updateJump, { passive: true });
