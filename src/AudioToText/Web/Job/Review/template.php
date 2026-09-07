@@ -80,16 +80,21 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
         <div class="a2t-chat__actions">
             <?php if ($store !== null): ?>
                 <?php
-                // Added beside the existing two rather than replacing either. "Back to conversation" is
-                // the only link to the read-only transcript anywhere in the application, so repointing
-                // it would leave that page reachable by URL alone.
+                // Added beside the existing actions rather than replacing one of them, so that hiding
+                // or restoring any of them stays an independent decision — which is exactly what
+                // happened to "Back to conversation" below.
                 ?>
                 <a class="btn" href="<?= Html::encode($urlGenerator->generate(
                     AudioToTextRoute::STORE,
                     ['sourceId' => $store->sourceId],
                 )) ?>">Back to <?= Html::encode($store->name) ?></a>
             <?php endif; ?>
-            <a class="btn" href="<?= Html::encode($conversationUrl) ?>">Back to conversation</a>
+            <?php
+            // Hidden by a stylesheet rule rather than removed, so bringing it back is deleting one CSS
+            // line and nothing else — the route, the URL and this markup all stay working meanwhile.
+            // See `.a2t-chat__action--conversation` in admin.css.
+?>
+            <a class="btn a2t-chat__action--conversation" href="<?= Html::encode($conversationUrl) ?>">Back to conversation</a>
             <a class="btn" href="<?= Html::encode($jobUrl) ?>">Full conversion details</a>
         </div>
     </div>

@@ -1394,6 +1394,21 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-chat__subtitle { margin: .3rem 0 0; color: var(--text-muted); font-size: .88rem; }
 .a2t-chat__actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 
+/* "Back to conversation" on the correction page, hidden for now.
+   ---------------------------------------------------------------------------------------------------
+   TO SHOW IT AGAIN: delete this one rule. Nothing else has to change — the link, its route and the
+   read-only page it points at are all untouched and still work.
+   ---------------------------------------------------------------------------------------------------
+   Hidden rather than deleted because the decision is a presentational one that may be reversed, and
+   because removing the markup would also mean removing the tests that assert it is there. One rule is
+   easier to undo than a commit.
+
+   Worth knowing while it is hidden: this link is the only route to `/conversation` anywhere in the
+   application, so that page is now reachable by URL alone. That is a consequence of hiding it, not a
+   fault — but it is the reason to reach for this rule rather than write a new page if it is ever
+   wanted back. */
+.a2t-chat__action--conversation { display: none; }
+
 /* The only thing on the page that scrolls. `overflow-x: hidden` rather than auto: a long unbroken
    word wraps inside its bubble (a2t-turn__text sets overflow-wrap), so a horizontal bar would only
    ever appear by accident. */
