@@ -1,0 +1,2815 @@
+================================================================================
+KNOWLEDGE FORGE — COMPLETE A-TO-Z TECHNICAL AUDIT
+================================================================================
+Audit date            : 2026-09-15
+Repository            : /var/www/html/knowledge-forge
+Branch / HEAD         : main @ fa7b3ce ("Back to Conversation btn hide")
+Method                : source code, live MySQL schema, config and tests read
+                        directly. Documentation used only as a cross-check.
+                        Where docs and code disagree, the code is reported and
+                        the conflict is called out (see section 34).
+Scope of changes made : NONE. This audit created this file and nothing else.
+                        No code, migration, package or configuration touched.
+================================================================================
+
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+Knowledge Forge is an admin-operated, single-tenant knowledge-base chat
+application built on Yii 3 / PHP 8.2, server-rendered, backed by MySQL 8.
+It has grown four distinct capability areas that are only loosely coupled:
+
+  1. Knowledge bases + documents + grounded chat   (OpenAI-backed retrieval)
+  2. Order58 mirror                                (stores, agents, rules)
+  3. Rules catalogue                               (classification + projection)
+  4. Audio-to-Text                                 (100% local transcription)
+
+The five findings that matter most for the work you are about to request:
+
+  F1. There is NO correction-learning / custom-vocabulary mechanism of any
+      kind. Verified by exhaustive repository search (section 12). The system
+      cannot today remember that "one ton" should be "wonton".
+
+  F2. There is NO transcription-provider abstraction. `AudioTranscriber` is a
+      concrete final class that shells out to whisper.cpp. There is no
+      `TranscriberInterface`. Swapping or adding a provider requires
+      introducing that seam first (sections 8 and 31).
+
+  F3. Audio-to-Text is genuinely isolated. It references NO other business
+      module (verified: `grep -rlE "App\\(KnowledgeBase|Rules|Chat|Ai|Order58)"
+      src/AudioToText/` returns nothing), and it calls NO external AI provider
+      at all. Knowledge bases and rules have ZERO influence on transcription.
+
+  F4. Store association is the ONLY link between Audio-to-Text and the rest of
+      the system, and it is a soft numeric reference
+      (`audio_conversations.store_source_id` -> `order58_stores.source_id`),
+      with no foreign key by deliberate design.
+
+  F5. The machine's transcription result is immutable. Corrections live in a
+      separate reviewed layer plus an append-only audit table. This is verified
+      at the SQL level (section 11) and is the foundation any future
+      learned-dictionary feature could build on.
+
+Overall health: high. 1,190 unit tests / 3,526 assertions pass; module
+isolation, web-tier/whisper separation and correction contiguity are all
+enforced by tests rather than convention. Technical debt is small and named in
+section 33.
+
+
+================================================================================
+2. TECHNOLOGY STACK
+================================================================================
+
+LANGUAGE / RUNTIME
+  PHP                8.2 (composer.json allows "php": "8.2 - 8.5")
+                     Verified running: PHP 8.2.28 (CLI and php8.2-fpm)
+  Python             3 (diarization only, in a dedicated venv at
+                     /opt/audio-diarization/venv)
+
+FRAMEWORK
+  Yii 3 (component packages, not a monolithic framework release):
+    yiisoft/di ^1.4.1              yiisoft/router ^4.0.2
+    yiisoft/db ^2.0                yiisoft/router-fastroute ^4.0.3
+    yiisoft/db-mysql ^2.0          yiisoft/view ^12.2.4
+    yiisoft/db-migration ^2.0      yiisoft/yii-view-renderer ^7.4.1
+    yiisoft/config ^1.6.2          yiisoft/yii-runner-http ^3.2.1
+    yiisoft/csrf ^2.2.3            yiisoft/yii-runner-console ^2.2.1
+    yiisoft/session ^3.0.1         yiisoft/yii-console ^2.4.2
+    yiisoft/validator ^2.6         yiisoft/error-handler ^4.3.2
+    yiisoft/html ^4                yiisoft/log ^2.2.0
+    yiisoft/middleware-dispatcher ^5.4
+
+DATABASE
+  MySQL 8.0+, InnoDB, utf8mb4_0900_ai_ci
+  Live schema: 29 tables (enumerated in section 13)
+
+FRONTEND
+  Server-rendered plain PHP templates (`*/template.php`). NO frontend
+  framework, NO build step, NO package.json, NO node_modules.
+  Exactly two asset files:
+    assets/main/admin.css   (~1,800 lines)
+    assets/main/admin.js    (~1,900 lines, vanilla ES5-style, no modules)
+  Asset registration: src/Web/Shared/Layout/Admin/AdminAsset.php
+  CSP: script-src 'self'; style-src 'self' — no inline JS or CSS anywhere.
+       src/Shared/Web/Middleware/SecurityHeadersMiddleware.php
+
+DEPENDENCY MANAGEMENT
+  Composer only. composer.json / composer.lock.
+  Notable non-Yii runtime deps:
+    guzzlehttp/guzzle ^7.15     HTTP client (Order58 API, OpenAI, recording API)
+    guzzlehttp/psr7 ^2.13       PSR-7 messages
+    league/commonmark ^2.8      Markdown rendering in chat answers
+    smalot/pdfparser ^2.12      PDF text extraction
+    symfony/console ^7.4.7      Console kernel
+    vlucas/phpdotenv ^5.6       .env loading
+    httpsoft/http-message ^1.1.6  PSR-7/17 implementation (web tier)
+
+TESTING
+  Codeception 5.3.5 with four suites: Unit, Integration, Web, Console, Functional
+  Psalm errorLevel 1 (psalm.xml)
+  php-cs-fixer (.php-cs-fixer.php)
+  rector.php present
+  composer-dependency-analyser.php present
+
+
+================================================================================
+3. COMPLETE ARCHITECTURE
+================================================================================
+
+3.1 DIRECTORY RESPONSIBILITIES (actual tree)
+
+  src/                        824 PHP files, 17 top-level modules
+    Agent/                    Order58 agent auth realm + agent-facing chat
+    Ai/                       OpenAI gateway, operation ledger, usage reporting
+    AudioToText/              Local transcription + speaker separation + review
+    Auth/                     Admin authentication, CurrentAdmin, middleware
+    Chat/                     Admin/agent grounded chat, messages, revisions
+    Console/                  Console-wide plumbing
+    Document/                 Document upload, processing, manual text, viewing
+    KnowledgeBase/            Knowledge bases, provisioning, indexing
+    Migration/                37 migration classes (M<datetime><Name>.php)
+    Order58/                  External system mirror: stores, agents, rules
+    Reports/                  Chat reporting/analytics
+    Rules/                    Rule catalogue, classification, readiness
+    Shared/                   Cross-cutting: clock, db, logging, web support
+    Web/                      Dashboard, admin layout, shared templates
+    Worker/                   The general (non-audio) background worker
+    Environment.php           THE configuration source of truth (SPEC array)
+    bootstrap.php             Composer autoload + .env load
+
+  config/
+    common/routes.php         ALL routes for the whole application (one file)
+    common/params.php         Reads env vars into parameter arrays
+    common/di/*.php           Per-module DI definitions (globbed, see below)
+    console/commands.php      Console command registration
+    web/di/*.php              Web-tier DI (psr17, auth)
+    configuration.php         yiisoft/config group definitions
+
+  tests/
+    Unit/                     Pure, no I/O
+    Integration/              Real MySQL (DANGEROUS — see section 28)
+    Web/                      Codeception PhpBrowser against a served app
+    Console/ Functional/      Smaller suites
+    Support/                  Testers, IntegrationDb, fakes
+
+  assets/main/                admin.css, admin.js, site.css (source)
+  public/                     WEB ROOT. Contains only: index.php, assets/,
+                              favicon.*, robots.txt
+  runtime/                    Outside web root. Logs, caches, audio storage
+  docs/                       AUDIO_TO_TEXT.md, PROJECT_GUIDE.md, server/, nginx/
+
+3.2 ARCHITECTURAL PATTERN
+
+Layered, per-module, with a consistent four-layer split inside each module:
+
+  Domain/          Immutable value objects, enums, repository INTERFACES (ports)
+  Application/     Services, orchestration, settings objects
+  Infrastructure/  Db* repository implementations, process runners, HTTP clients
+  Web/             One directory per page: Action.php + template.php
+  Console/         Commands
+
+Example (AudioToText), verified:
+  Domain/TranscriptionJobRepositoryInterface.php      <- port
+  Infrastructure/DbTranscriptionJobRepository.php     <- adapter
+  Application/TranscriptionQueue.php                  <- service
+  Web/Job/Review/Action.php + template.php            <- page
+  Console/AudioTranscriptionWorkerCommand.php         <- worker
+
+3.3 SINGLE-ACTION CONTROLLERS
+
+There are no multi-method controllers. Every route points at a
+`final readonly class Action` with a single `__invoke()`.
+Route arguments arrive via `#[RouteArgument]` attribute hydration.
+
+  Example: src/AudioToText/Web/Job/Review/Action.php
+    public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
+
+3.4 DEPENDENCY INJECTION
+
+  yiisoft/di with autowiring. Interfaces are bound in config/common/di/*.php.
+  `config/configuration.php` globs `common/di/*.php`, so adding a module needs
+  no edit to an existing config file.
+
+  Verified bindings (config/common/di/audio-to-text.php):
+    TranscriptionJobRepositoryInterface  => DbTranscriptionJobRepository
+    AudioConversationRepositoryInterface => DbAudioConversationRepository
+    AudioStoreLookupInterface            => DbAudioStoreLookup
+    SegmentRevisionRepositoryInterface   => DbSegmentRevisionRepository
+    SpeakerDiarizerInterface             => SherpaOnnxSpeakerDiarizer
+                                            (or NullSpeakerDiarizer)
+    WorkerHeartbeatRepositoryInterface   => DbWorkerHeartbeatRepository
+    SystemResourceProbeInterface         => ProcSystemResourceProbe
+
+  Classes with no interface (ConversationHistoryBuilder,
+  MachineConversationReader, EffectiveConversationReader) are autowired with no
+  DI entry at all.
+
+3.5 MIDDLEWARE / AUTH ARCHITECTURE
+
+  config/common/routes.php has exactly three zones:
+    (a) Public:  /login (GET,POST), /agent/login (GET,POST)
+    (b) Group::create()->middleware(RequireAdminMiddleware::class)
+                       ->middleware(DomainExceptionMiddleware::class)
+        -> everything admin, including ALL Audio-to-Text routes
+    (c) Group::create()->middleware(RequireAgentMiddleware::class)
+                       ->middleware(DomainExceptionMiddleware::class)
+        -> /agent/* only
+
+  src/Auth/Web/Middleware/RequireAdminMiddleware.php reloads the account from
+  the database on every request (not trusting session contents alone).
+  src/Agent/Web/Middleware/RequireAgentMiddleware.php is a SEPARATE realm;
+  Order58 agents can never reach an admin route.
+
+  Authorization model for Audio-to-Text is explicitly:
+      "authenticated administrator + the job exists"
+  There is NO per-store or per-uploader access control. `uploaded_by_admin_id`
+  is audit metadata only. Documented in docs/AUDIO_TO_TEXT.md §1 and confirmed
+  in code: no action consults the uploader before rendering.
+
+3.6 CONFIGURATION CHAIN (strictly one-directional)
+
+  src/Environment.php  (SPEC array: name => type, default, min, max)
+        |  THE only source of truth for defaults and validation
+        v
+  .env                 (deployment override only)
+        |
+        v
+  config/common/params.php   (reads variables; defines NO defaults)
+        |
+        v
+  config/common/di/audio-to-text.php  (assembles the settings object)
+        |
+        v
+  App\AudioToText\Application\AudioToTextSettings
+    ->transcription  (TranscriptionSettings)
+    ->worker         (WorkerSettings)
+    ->diarization    (DiarizationSettings)
+        |
+        v
+  Every service receives the settings object. NO class in src/AudioToText/
+  reads an environment variable directly. (Verified by inspection.)
+
+3.7 BACKGROUND PROCESSING
+
+  TWO independent workers:
+    kf:worker:run    — the general worker (OpenAI indexing, vector stores)
+                       src/Worker/Application/WorkerRunner.php
+    kf:audio:worker  — Audio-to-Text only
+                       src/AudioToText/Console/AudioTranscriptionWorkerCommand.php
+
+  They are deliberately separate. ModuleIsolationTest asserts that
+  `src/Worker/Application/WorkerRunner.php` does not contain the string
+  "AudioToText".
+
+3.8 LOGGING
+
+  yiisoft/log to runtime/logs/. Technical detail (exit codes, stderr,
+  filesystem paths) goes to the log; only user-safe wording reaches the
+  browser or `error_message`. Audio worker under systemd logs to journald
+  (identifier kf-audio-worker).
+
+3.9 MODULE ISOLATION RULES (ENFORCED BY TEST, NOT CONVENTION)
+
+  tests/Unit/AudioToText/ModuleIsolationTest.php — 6 tests, 59 assertions:
+    1. Audio-to-Text contains none of: App\Order58, App\Chat, App\Rules,
+       App\KnowledgeBase, App\Document, App\Agent  (Auth is allowed)
+    2. NO file outside src/AudioToText/ may contain the string "App\AudioToText"
+    3. src/Worker/Application/WorkerRunner.php must not contain "AudioToText"
+    4. Every CSS rule after the "Audio to Text" marker in admin.css must have
+       a selector containing "a2t-"
+    5. Every querySelector(...) in the audio JS block must contain "a2t"
+    6. Audio migrations may only touch audio_transcription_jobs and
+       audio_worker_heartbeat
+
+  tests/Unit/AudioToText/WebTierCannotRunWhisperTest.php:
+    Walks every src/*/Web/ directory and fails the build if the transcriber,
+    the diarizer, ProcessRunner or proc_open is so much as named there.
+    Its allow-list is empty.
+
+  CONSEQUENCE (important): because rule 2 forbids any other module naming
+  Audio-to-Text, cross-module links are built from ROUTE NAME STRINGS.
+  Example: src/Order58/Web/StoreAudio/template.php links to the store audio
+  page via $urlGenerator->generate('audio-to-text.store', ...).
+
+
+================================================================================
+4. MODULE MAP
+================================================================================
+
+  MODULE          OWNS                              TALKS TO
+  --------------  --------------------------------  -------------------------
+  AudioToText     transcription, diarization,       Auth only (CurrentAdmin).
+                  correction, audio storage         Reads order58_stores and
+                                                    knowledge_bases TABLES via
+                                                    its own narrow port, never
+                                                    Order58 CLASSES.
+  Order58         mirror of stores/agents/rules,    KnowledgeBase, Rules, Chat
+                  sync runs, store directory
+  KnowledgeBase   knowledge bases, provisioning,    Ai, Document, Order58
+                  vector store lifecycle
+  Document        uploads, processing, indexing     KnowledgeBase, Ai
+  Rules           rule catalogue, classification,   Order58, KnowledgeBase
+                  projection to stores/global
+  Chat            grounded chat, messages           KnowledgeBase, Ai
+  Agent           agent login realm, agent chat     Order58, Chat
+  Ai              OpenAI client, ledger, usage      (provider boundary)
+  Worker          general background worker         Ai, Document, KnowledgeBase
+  Auth            admin identity                    (used by all)
+  Shared          clock, db, logging, web support   (used by all)
+
+
+================================================================================
+5. AUDIO-TO-TEXT END-TO-END FLOW
+================================================================================
+
+5.1 FLOW DIAGRAM (actual implementation)
+
+  ADMIN
+   |
+   | clicks "Audio to Text" in sidebar  (src/Web/Shared/Layout/Admin/_sidebar.php)
+   v
+  GET /audio-to-text
+   |  AudioToText\Web\Action                     src/AudioToText/Web/Action.php
+   |  -> REDIRECT (this page no longer uploads)
+   v
+  GET /admin/order58/store-audio                 <-- OWNED BY ORDER58
+   |  Order58\Web\StoreAudio\Action              src/Order58/Web/StoreAudio/Action.php
+   |  store picker: search, A-Z buckets, filters, pagination
+   |  reuses Order58\Domain\StoreDirectoryReaderInterface
+   |  links out by ROUTE NAME 'audio-to-text.store' (module isolation)
+   v
+  GET /audio-to-text/store/{sourceId}
+   |  AudioToText\Web\Job\Store\Action           src/AudioToText/Web/Job/Store/Action.php
+   |  - AudioStoreLookupInterface::findBySourceId() -> store name/company/active
+   |  - AudioConversationRepositoryInterface::forStore() -> that store's history
+   |  - renders TWO separate <form>s (COMMON and SEPARATE), no JS toggle
+   v
+  POST /audio-to-text/store/{sourceId}
+   |  same Action (Method::GET|POST on one route)
+   |  STORE ID COMES FROM THE URL ONLY. A posted store_id is never read.
+   |  (pinned by AudioToTextStoreCest::aPostedStoreIdIsIgnored)
+   |
+   +-- mode=COMMON   -> AudioUploadValidator      src/AudioToText/Application/AudioUploadValidator.php
+   +-- mode=SEPARATE -> SeparateUploadValidator   src/AudioToText/Application/SeparateUploadValidator.php
+   |
+   v
+  VALIDATION (order is significant)
+   |  1. upload present / PHP upload error code
+   |  2. empty file
+   |  3. size    <= AUDIO_TRANSCRIPTION_MAX_SIZE (31,457,280 B = 30 MB)
+   |  4. extension in {wav, mp3, m4a, ogg, webm}   (AudioUploadValidator::EXTENSIONS)
+   |  5. REAL MIME sniff: finfo over the first 4,096 bytes (SNIFF_BYTES)
+   |     The browser-declared type is IGNORED ENTIRELY.
+   |  (SEPARATE additionally: both files validated, field-specific errors,
+   |   plus a combined-size check)
+   v
+  FILE WRITTEN TO DISK
+   |  QueuedAudioStorage                          src/AudioToText/Application/QueuedAudioStorage.php
+   |  runtime/audio-to-text/jobs/<publicId>/source.<ext>
+   |  The client filename NEVER becomes a path. Server names it source.<ext>.
+   v
+  DURATION PROBE (outside any lock — a slow probe must block nobody)
+   |  AudioDurationProbe (ffprobe)                src/AudioToText/Infrastructure/AudioDurationProbe.php
+   |  reject if > AUDIO_TRANSCRIPTION_MAX_DURATION (300 s)
+   v
+  ENQUEUE (transactional)
+   |  TranscriptionQueue::enqueueConversation()   src/AudioToText/Application/TranscriptionQueue.php
+   |  [ if AUDIO_TRANSCRIPTION_MAX_QUEUE > 0 ]
+   |      GET_LOCK(CONCAT(DATABASE(),':audio-to-text:enqueue'))
+   |      assertQueueHasRoom($needed)   -- 1 for COMMON, 2 for SEPARATE
+   |  TX: INSERT audio_conversations (1 row)
+   |      INSERT audio_transcription_jobs (1 or 2 rows, status=QUEUED)
+   |  on any failure: every file written so far is removed
+   v
+  REDIRECT (303) -> conversion page -> (COMMON) -> /review
+   |
+   |  ============ REQUEST ENDS HERE. NOTHING HAS BEEN TRANSCRIBED. ============
+   v
+  systemd timer knowledge-forge-audio-worker.timer  (OnUnitActiveSec=2min)
+   v
+  kf:audio:worker --once
+   |  AudioTranscriptionWorkerCommand              src/AudioToText/Console/AudioTranscriptionWorkerCommand.php
+   |  1. validate configuration (refuse to start on a problem)
+   |  2. flock(runtime/audio-to-text/worker.lock, LOCK_EX|LOCK_NB)
+   |  3. ForeignLockGuard::acquire()  (AUDIO_WORKER_FOREIGN_LOCKS)
+   |  4. WorkerAdmissionGuard: free RAM >= AUDIO_WORKER_MIN_AVAILABLE_MB (1500),
+   |     load/core <= AUDIO_WORKER_MAX_LOAD_PER_CORE (1.5)
+   |  5. claimNextQueued(): SELECT ... WHERE status='QUEUED' ORDER BY id ASC
+   |     then UPDATE ... SET status='PROCESSING' WHERE id=? AND status='QUEUED'
+   |     claimed only if exactly one row changed
+   v
+  STAGE: CONVERTING
+   |  AudioTranscriber::convert()                  src/AudioToText/Infrastructure/AudioTranscriber.php
+   |  ffmpeg -nostdin -hide_banner -loglevel error -y -threads 1
+   |         -i <source> -ar 16000 -ac 1 -c:a pcm_s16le <audio.wav>
+   v
+  STAGE: TRANSCRIBING
+   |  whisper-cli -m <model> -f audio.wav -l auto -t 1 -np
+   |              -otxt -oj -ojf -of <stem>
+   |  ONE pass produces: transcript.txt, transcript.json (language),
+   |                     token-level timestamps (-ojf)
+   |  == transcript COMMITTED to the database here (markTranscribed) ==
+   v
+   +-- IF job.source_role is CUSTOMER or AGENT (SEPARATE mode):
+   |      SKIP diarization entirely -> markCompletedWithProvidedRole()
+   |      (single early return, guarded on $job->sourceRole?->isProvided())
+   |
+   +-- ELSE (COMMON):
+          STAGE: DIARIZING
+           |  SherpaOnnxSpeakerDiarizer -> python3 diarize.py
+           v
+          STAGE: MAPPING_SPEAKERS
+           |  SpeakerTranscriptAligner -> DialogueActDetector -> SpeakerRoleMapper
+           |  five gates (section 10)
+           v
+          STAGE: SAVING
+           |  markCompleted(): agent_text, customer_text, speaker_segments,
+           |                   speaker_separation_status/_method/_confidence
+   v
+  RECORDING MOVED (rename(), atomic) jobs/<id>/source.ext
+                                  -> recordings/<id>/source.ext
+  then the whole jobs/<publicId>/ workspace is deleted
+   v
+  STATUS: COMPLETED, STAGE: COMPLETED
+   v
+  UI
+   |  /audio-to-text/job/{publicId}            detail page
+   |  /audio-to-text/job/{publicId}/conversation   read-only chat (link hidden)
+   |  /audio-to-text/job/{publicId}/review         correction page
+   |  /audio-to-text/job/{publicId}/original       machine-only chat
+   |  /audio-to-text/job/{publicId}/download       transcript download
+   v
+  RETENTION
+      AUDIO_TRANSCRIPTION_RETENTION_SECONDS=0 -> expires_at = NULL -> kept forever
+      Verified live: 28 jobs, 28 with expires_at NULL, 27 with a retained file.
+
+5.2 ENVIRONMENT VARIABLES TOUCHED ALONG THAT PATH
+  upload:      AUDIO_TRANSCRIPTION_MAX_SIZE, AUDIO_TRANSCRIPTION_MAX_DURATION
+  enqueue:     AUDIO_TRANSCRIPTION_MAX_QUEUE
+  worker gate: AUDIO_WORKER_MIN_AVAILABLE_MB, AUDIO_WORKER_MAX_LOAD_PER_CORE,
+               AUDIO_WORKER_FOREIGN_LOCKS, AUDIO_WORKER_YIELD_TO_OTHER_WHISPER
+  convert:     AUDIO_TRANSCRIPTION_THREADS, AUDIO_TRANSCRIPTION_TIMEOUT
+  transcribe:  WHISPER_BINARY, WHISPER_MODEL, AUDIO_TRANSCRIPTION_THREADS,
+               AUDIO_TRANSCRIPTION_TIMEOUT
+  diarize:     AUDIO_DIARIZATION_ENABLED/_BINARY/_SEGMENTATION_MODEL/
+               _EMBEDDING_MODEL/_MAX_SPEAKERS/_TIMEOUT
+  map:         AUDIO_DIARIZATION_MIN_CONFIDENCE,
+               AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS
+  recovery:    AUDIO_TRANSCRIPTION_STALE_AFTER
+  retention:   AUDIO_TRANSCRIPTION_RETENTION_SECONDS
+
+
+================================================================================
+6. COMMON MODE FLOW
+================================================================================
+  Upload            : 1 file, field name `audio`, mode=COMMON
+  Validator         : AudioUploadValidator
+  audio_conversations: 1 row, mode='COMMON'
+  audio_transcription_jobs: 1 row, source_role='COMMON'
+  Diarization       : RUNS
+  Role mapping      : RUNS
+  Confidence        : CALCULATED (speaker_role_confidence populated)
+  Manual review     : AVAILABLE (/review, all seven correction endpoints)
+  Final transcript  : transcript + speaker_segments + agent_text/customer_text
+  Conversion page   : redirects straight to /review (Conversion/Action.php:75)
+
+
+================================================================================
+7. SEPARATE MODE FLOW
+================================================================================
+  Upload            : 2 files, `customer_audio` + `agent_audio`, mode=SEPARATE
+  Validator         : SeparateUploadValidator (both files, per-field errors,
+                      combined-size ceiling)
+  audio_conversations: 1 row, mode='SEPARATE'
+  audio_transcription_jobs: 2 rows, source_role='CUSTOMER' and 'AGENT'
+  Diarization       : NEVER RUNS. `$job->sourceRole?->isProvided()` early return
+  Role mapping      : NEVER RUNS
+  Confidence        : NOT CALCULATED. speaker_separation_status,
+                      _method, _confidence, _completed_at all stay NULL
+  speaker_segments  : NULL (markCompletedWithProvidedRole writes null)
+  Manual review     : NOT AVAILABLE — no segments to correct, no speakers to
+                      confirm. /conversation and /review are not offered.
+  Final transcript  : transcript written whole into that role's column only
+                      (agent_text OR customer_text)
+  One file fails    : the other keeps its result -> PARTIALLY_COMPLETED.
+                      NO automatic retry.
+  Queue reservation : both slots or neither (assertQueueHasRoom(2))
+
+7.1 SIDE-BY-SIDE COMPARISON
+
+  ASPECT                      COMMON / MIXED          SEPARATE CUSTOMER+AGENT
+  --------------------------  ----------------------  -----------------------
+  Files uploaded              1                       2
+  Conversation rows           1                       1
+  Transcription job rows      1                       2
+  Queue slots reserved        1                       2
+  Whisper runs                1                       2
+  How roles are determined    INFERRED by diarizer     SUPPLIED by the admin
+                              + dialogue-act mapper
+  Diarization runs            YES                     NO
+  Role mapping runs           YES                     NO
+  Confidence calculated       YES                     NO (deliberately NULL)
+  speaker_segments written    YES                     NO (NULL)
+  Manual review available     YES                     NO
+  "Original transcript" page  YES                     NO (no segments)
+  Aggregate status source     single child            ConversationStatus::fromChildren
+  Failure isolation           n/a                     PARTIALLY_COMPLETED
+
+  DESIGN NOTE (src/AudioToText/Domain/ConversationMode.php + docs §9.2):
+  `mode` IS the provenance flag. There is deliberately no `role_source` column
+  and no `confidence = 1.0` on a supplied role — writing a confidence for a
+  fact we were TOLD would dress a given up as a measurement.
+
+
+================================================================================
+8. TRANSCRIPTION ENGINE
+================================================================================
+
+VERIFIED FROM CODE, NOT DOCUMENTATION.
+
+  Engine            whisper.cpp  (NOT OpenAI Whisper API, NOT a PHP library)
+  Invoked from      src/AudioToText/Infrastructure/AudioTranscriber.php
+  Binary            WHISPER_BINARY = /opt/whisper.cpp/build/bin/whisper-cli
+                    Version on this host: 1.9.3-dev
+  Model             WHISPER_MODEL = /opt/whisper.cpp/models/ggml-small.bin
+                    ~487 MB, MULTILINGUAL (deliberately not ggml-small.en.bin
+                    — recordings mix English, Spanish, Gujarati and Hindi)
+  Preflight         AudioTranscriber:122-127 — is_file + is_executable on the
+                    binary; is_file + is_readable on the model. Throws
+                    AudioTranscriptionException::whisperMissing / modelMissing.
+
+  FFMPEG PREPROCESSING (AudioTranscriber:167-177) — NOT optional:
+    ffmpeg -nostdin -hide_banner -loglevel error -y -threads 1
+           -i <source> -ar 16000 -ac 1 -c:a pcm_s16le <out.wav>
+    whisper.cpp will not resample; 16 kHz mono PCM s16le is required.
+
+  WHISPER COMMAND (AudioTranscriber:196-208):
+    <WHISPER_BINARY>
+      -m  <WHISPER_MODEL>
+      -f  <audio.wav>
+      -l  auto                 <- language auto-detection
+      -t  <AUDIO_TRANSCRIPTION_THREADS>   (currently 1)
+      -np                      <- no progress animation
+      -otxt                    <- plain transcript (shown + downloaded)
+      -oj                      <- JSON sidecar, read for detected language
+      -ojf                     <- FULL token-level timestamps (speaker alignment)
+      -of <outputStem>
+
+  Timeout           AUDIO_TRANSCRIPTION_TIMEOUT = 600 s, applied to BOTH the
+                    ffmpeg call and the whisper call.
+                    On expiry: AudioTranscriptionException::conversionTimedOut /
+                    ::transcriptionTimedOut
+  Max duration      AUDIO_TRANSCRIPTION_MAX_DURATION = 300 s (5 min)
+  Max upload size   AUDIO_TRANSCRIPTION_MAX_SIZE = 31,457,280 B (30 MB) per file
+  Input formats     wav, mp3, m4a, ogg, webm (extension allow-list + MIME sniff)
+  Output            transcript.txt + transcript.json (language + tokens)
+  Token timestamps  YES, via -ojf, read by AudioTranscriber::readTokens()
+  Language detect   YES, read by AudioTranscriber::readLanguage() from the JSON
+
+  PROCESS EXECUTION (src/AudioToText/Infrastructure/Process/ProcessRunner.php):
+    proc_open() with an ARGV ARRAY, never a string -> straight to execve(),
+    no shell. Quoting, globbing, `;`, backticks and $(...) are all inert.
+    Timeout -> SIGTERM -> grace period -> SIGKILL.
+    Output capped at 256 KB per stream.
+    Child environment is minimal and built once in
+    AudioToTextSettings::childProcessEnvironment(), pinning
+    OMP_NUM_THREADS / OPENBLAS_NUM_THREADS / MKL_NUM_THREADS.
+
+8.1 CAN THE PROVIDER BE REPLACED CLEANLY?
+
+  ANSWER: NO — not today. There is NO abstraction.
+
+  Verified: there is no `TranscriberInterface`, `SpeechToTextInterface` or any
+  equivalent anywhere in src/. `AudioTranscriber` is a
+  `final readonly class` with no interface, constructed directly and injected
+  by concrete type.
+
+  By contrast, diarization DOES have a port:
+    src/AudioToText/Domain/Speaker/SpeakerDiarizerInterface.php
+    implementations: SherpaOnnxSpeakerDiarizer, NullSpeakerDiarizer
+
+  So the module already demonstrates the pattern — it was simply never applied
+  to transcription, because there has only ever been one transcriber.
+
+  WHAT IS COUPLED TO WHISPER TODAY:
+    a) AudioTranscriber (the whole class)
+    b) Settings names: `whisperBinary`, `whisperModel` in TranscriptionSettings
+    c) Env var names: WHISPER_BINARY, WHISPER_MODEL
+    d) AudioTranscriptionException::whisperMissing() / ::modelMissing()
+    e) The worker's direct call sites in AudioTranscriptionWorkerCommand
+    f) Startup validation in AudioToTextSettings::problems()
+    g) tests/Unit/AudioToText/WebTierCannotRunWhisperTest.php (names the class)
+
+  WHAT IS *NOT* COUPLED (and would not need to change):
+    - Every database table and column. Nothing is Whisper-specific in the
+      schema; `speaker_segments` is a neutral JSON shape.
+    - TranscriptToken / SpeakerUtterance / SpeakerSegment value objects
+    - The whole alignment + role-mapping + review + history stack
+
+  See section 31 for the full Deepgram-readiness analysis.
+
+
+================================================================================
+9. SPEAKER DIARIZATION
+================================================================================
+
+  Tool              sherpa-onnx 1.13.6 (Apache-2.0), offline, language-independent
+  Runtime           Python 3 in /opt/audio-diarization/venv
+  Why Python        sherpa-onnx has no PHP binding and there is no PHP ONNX
+                    runtime. PHP keeps argv safety, timeout, bounded output
+                    capture and the single-thread environment.
+  Script            src/AudioToText/Infrastructure/Diarization/diarize.py
+  PHP adapter       src/AudioToText/Infrastructure/Diarization/SherpaOnnxSpeakerDiarizer.php
+  Port              src/AudioToText/Domain/Speaker/SpeakerDiarizerInterface.php
+  Null adapter      src/AudioToText/Infrastructure/Diarization/NullSpeakerDiarizer.php
+
+  MODELS
+    Segmentation    AUDIO_DIARIZATION_SEGMENTATION_MODEL
+                    /opt/audio-diarization/models/segmentation.onnx
+                    pyannote segmentation 3.0, MIT, 5,992,913 B extracted
+                    sha256 220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079
+    Embedding       AUDIO_DIARIZATION_EMBEDDING_MODEL
+                    /opt/audio-diarization/models/embedding.onnx
+                    3D-Speaker CAM++ zh+en bilingual, Apache-2.0, 28,281,164 B
+                    sha256 aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2
+
+  AVAILABILITY CHECK (SherpaOnnxSpeakerDiarizer:58-61)
+    enabled AND is_executable(binary) AND is_readable(both models)
+    -> otherwise NOT_SUPPORTED, never an error.
+
+  COMMAND (SherpaOnnxSpeakerDiarizer:90-98)
+    <AUDIO_DIARIZATION_BINARY> diarize.py
+      --audio              <16 kHz mono wav>
+      --segmentation-model <...>
+      --embedding-model    <...>
+      --max-speakers       <AUDIO_DIARIZATION_MAX_SPEAKERS = 2>
+      --num-threads        <AUDIO_TRANSCRIPTION_THREADS = 1>
+    timeout: AUDIO_DIARIZATION_TIMEOUT = 300 s
+
+  diarize.py DETAIL
+    - argparse options: --audio, --segmentation-model, --embedding-model,
+      --max-speakers (0 = cluster by distance threshold), --num-threads,
+      --cluster-threshold
+    - sherpa_onnx.FastClusteringConfig(num_clusters = max_speakers if > 0 else -1,
+      threshold = cluster_threshold)
+    - num_threads passed to BOTH segmentation and embedding configs
+    - prints ONE JSON object to stdout: {"segments":[...]}
+    - every failure prints to stderr and exits non-zero (import failure,
+      empty audio, rejected config, generic exception)
+
+  OUTPUT
+    Neutral intervals only: SPEAKER_00 / SPEAKER_01 with start/end times.
+    The diarizer knows WHICH VOICE, never WHOSE.
+
+  ALIGNMENT
+    src/AudioToText/Application/Speaker/SpeakerTranscriptAligner.php
+    Each whisper token is assigned to the diarization interval it OVERLAPS
+    MOST; adjacent same-speaker tokens are coalesced into utterances.
+    AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS = 1500 bridges small gaps.
+    Aligning at whisper's own SEGMENT level does not work: on the 73.7 s
+    reference recording whisper emitted only FIVE segments, one spanning
+    25.0-39.2 s containing ~8 speaker turns (docs §8).
+
+  NEUTRAL DISPLAY LABELS
+    src/AudioToText/Domain/Speaker/ConversationView.php::neutralLabel()
+    SPEAKER_00 -> "Speaker 1", SPEAKER_01 -> "Speaker 2"  (positional, +1)
+    Unmatched tokens are stored with speaker 'UNKNOWN' -> "Unidentified speaker"
+
+
+================================================================================
+10. SPEAKER ROLE MAPPING — HOW SPEAKER 1 BECOMES CUSTOMER OR AGENT
+================================================================================
+
+  Class   src/AudioToText/Application/Speaker/SpeakerRoleMapper.php
+  Acts    src/AudioToText/Domain/Speaker/DialogueAct.php
+  Weights src/AudioToText/Domain/Speaker/RoleScoreWeights.php
+  Detect  src/AudioToText/Application/Speaker/DialogueActDetector.php
+
+10.1 WHY NOT KEYWORDS
+
+  Documented in SpeakerRoleMapper:36-45 and confirmed by the code: counting
+  role-ish keywords FAILED, because the two sides use the same words. "Cash"
+  and "card" are substrings of the agent's own question; a competent agent
+  repeats the address back and recites items during the recap. Every one of
+  those scored as customer evidence AGAINST the agent. On a call whose roles
+  were obvious to a human, the margin came out at 0.077.
+
+10.2 WHAT IS ACTUALLY SCORED: ADJACENCY PAIRS
+
+  The mapper detects DialogueActs and scores question/answer pairs across two
+  DIFFERENT speakers. It never infers a speaker from words alone and never
+  assumes the first voice is the agent.
+
+  AGENT-SIDE ACTS   GREET_BUSINESS, ASK_ORDER, ASK_DELIVERY_METHOD,
+                    ASK_ADDRESS, ASK_PAYMENT, ASK_QUANTITY, ASK_ANYTHING_ELSE,
+                    CONFIRM_ORDER, QUOTE_PRICE, QUOTE_DELIVERY_TIME
+  CUSTOMER-SIDE     REQUEST_ORDER, PROVIDE_ORDER_ITEM, SELECT_DELIVERY_METHOD,
+                    PROVIDE_ADDRESS, SELECT_PAYMENT, PROVIDE_QUANTITY,
+                    DECLINE_MORE
+
+  PAIRED WEIGHTS (question + its answer, two different speakers)
+    PAIR_ADDRESS           3.0
+    PAIR_PAYMENT           3.0
+    PAIR_DELIVERY_METHOD   3.0
+    PAIR_ORDER             3.0
+    PAIR_ANYTHING_ELSE     2.5
+    PAIR_QUANTITY          1.5
+
+  UNPAIRED WEIGHTS (agent move with no answer found)
+    UNPAIRED_QUOTE_PRICE           1.5
+    UNPAIRED_QUOTE_DELIVERY_TIME   1.5
+    UNPAIRED_GREET_BUSINESS        1.0
+    UNPAIRED_CONFIRM_ORDER         1.0
+    UNPAIRED_QUESTION              0.75
+
+  UNPAIRED CUSTOMER MOVES
+    UNPAIRED_REQUEST_ORDER            1.0   <- the one move an order-taker
+                                              never makes
+    UNPAIRED_DECLINE_MORE             0.5
+    UNPAIRED_ECHOABLE_CUSTOMER_MOVE   0.0   <- indistinguishable from the agent
+                                              echoing; carries no orientation
+
+  OTHER CONSTANTS
+    ANSWER_WINDOW         2      how far ahead to look for the answer
+    RELIABLE_WORD_COUNT   6      an unpaired act is scaled by utterance length,
+                                 so a strong act on a two-word fragment cannot
+                                 cancel a completed exchange
+    SUFFICIENT_EVIDENCE   6.0    the volume denominator
+
+10.3 CONFIDENCE FORMULA (SpeakerRoleMapper:111-117) — EXACT
+
+    $agreement  = abs($forward - $backward) / $total;
+    $volume     = min(1.0, $total / RoleScoreWeights::SUFFICIENT_EVIDENCE);
+    $confidence = $agreement * $volume;
+
+  agreement = how one-sided the evidence is (contradictory signals cancel)
+  volume    = how much evidence there is at all
+  Without volume, a single lucky pair in a short call would score a perfect
+  ratio and publish.
+
+  Within one utterance the MOST SPECIFIC ACT WINS: "cash or card?" is a payment
+  QUESTION and never also a payment CHOICE.
+
+10.4 THE FIVE GATES (src/AudioToText/Application/Speaker/SpeakerSeparationService.php)
+
+  Checked IN ORDER; the first failure decides the outcome. Order matters —
+  each question only makes sense once the previous one is answered.
+
+  PRE-GATES (not NEEDS_REVIEW)
+    diarization disabled            -> NOT_SUPPORTED   (line 60-62)
+    toolchain not installed         -> NOT_SUPPORTED   (line 64-66)
+    whisper produced no tokens      -> FAILED          (line 68)
+    diarizer threw / timed out      -> FAILED          (line 84)
+    diarizer returned no segments   -> FAILED          (line 87)
+    no token matched any segment    -> FAILED          (line 103)
+
+  GATE 1  ALIGNMENT       quality->attributedShare < MIN_ATTRIBUTED_SHARE (0.75)
+                          -> NEEDS_REVIEW                       (line 114)
+  GATE 2  SEPARATION      SeparationBalance::of()->isUsable() false
+          BALANCE         -> NEEDS_REVIEW                       (line 129)
+                          thresholds (SeparationBalance.php):
+                            MIN_MINOR_SHARE    0.05
+                            MIN_MINOR_SECONDS  5.0
+                            MIN_MINOR_WORDS    10
+                            MIN_ALTERNATIONS   4
+  GATE 3  ROLE MAPPING    mapping['reason'] !== null (one cluster, 3+, or no
+                          role signals) -> NEEDS_REVIEW         (line 143)
+  GATE 4  CONFIDENCE      confidence < AUDIO_DIARIZATION_MIN_CONFIDENCE (0.55)
+                          -> NEEDS_REVIEW                       (line 152)
+  GATE 5  BOTH SIDES      agentText === '' OR customerText === ''
+                          -> NEEDS_REVIEW                       (line 170)
+  ALL PASS                -> COMPLETED                          (line 184)
+
+  WHY GATES 2 AND 4 ARE SEPARATE (docs §8, confirmed in code): a 174-second
+  call (21911549.wav) where one cluster got 98.4% of the speech and the other a
+  single three-word turn was published as COMPLETED at confidence 1.000. The
+  confidence was CORRECT — with one side's dialogue acts entirely absent there
+  was nothing to contradict — and the result was still unusable. Gate 2 is the
+  missing question: "were there two speakers?" vs "which one is the agent?".
+
+10.5 IN EVERY OUTCOME
+  The full transcript is saved and the JOB status is COMPLETED.
+  `speaker_segments` is always written when diarization ran, so any mapping can
+  be audited. Only `agent_text` / `customer_text` are withheld.
+
+
+================================================================================
+11. MANUAL CORRECTION SYSTEM
+================================================================================
+
+11.1 THE TWO LAYERS
+
+  MACHINE LAYER   transcript, speaker_segments, agent_text, customer_text,
+                  speaker_separation_status/_method/_confidence/_completed_at
+                  WRITTEN ONCE by kf:audio:worker. NEVER AGAIN.
+
+  REVIEWED LAYER  reviewed_segments, reviewed_agent_text,
+                  reviewed_customer_text, reviewed_at, reviewed_by_admin_id,
+                  roles_confirmed_at, review_count
+                  Written by administrators through the review page.
+
+  THE SELECTOR    src/AudioToText/Application/EffectiveConversationReader.php
+                    if ($job->isReviewed())  -> reviewed layer
+                    else                     -> machine layer
+                  `isReviewed()` is exactly `reviewed_segments IS NOT NULL`.
+
+  IMMUTABILITY PROOF (read from DbTranscriptionJobRepository.php):
+    saveReview()   line 603 -> writes reviewed_segments, reviewed_agent_text,
+                   reviewed_customer_text, reviewed_at, reviewed_by_admin_id,
+                   review_count
+    confirmRoles() line 667 -> the same six + roles_confirmed_at
+    clearReview()  line 628 -> NULLs the five reviewed_* + roles_confirmed_at,
+                   bumps review_count
+    NOT ONE machine column appears in any of them.
+    The machine columns are written only by markTranscribed(),
+    markCompleted(), markCompletedWithProvidedRole(),
+    markCompletedWithoutSeparation() — all worker-side, once per job.
+
+11.2 THE SIX SEMANTIC VERSIONS THE UI DISTINGUISHES
+
+  1. Original machine transcript      `transcript`         (plain text, whole)
+  2. Machine speaker segments         `speaker_segments`   (JSON turns)
+  3. Machine Customer/Agent text      `agent_text` / `customer_text`
+  4. Reviewed/corrected transcript    `reviewed_segments`  (JSON turns)
+  5. Reviewed Agent text              `reviewed_agent_text`
+  6. Reviewed Customer text           `reviewed_customer_text`
+
+  WHICH PAGE READS WHICH
+    /conversation  -> EffectiveConversationReader  (reviewed if present)
+    /review        -> EffectiveConversationReader  (reviewed if present)
+    /original      -> MachineConversationReader    (ALWAYS machine, never reviewed)
+                      src/AudioToText/Application/MachineConversationReader.php
+    job detail     -> EffectiveConversationReader
+    download       -> transcript column (machine)
+
+  A recording transcribed as "Yes. For pikup" still says exactly that in
+  `transcript` after an administrator fixes the spelling for readers.
+
+11.3 THE SEVEN CORRECTION OPERATIONS
+
+  All POST, all inside RequireAdminMiddleware, all CSRF-protected, all
+  Post/Redirect/Get (303). All carry `expected_review_count`.
+
+  #  ROUTE                                    ACTION CLASS            RULE
+  1  .../review/turn/{index}/move             Move\Action             set the turn's role; refused if unchanged
+  2  .../review/turn/{index}/move-text        MoveText\Action         whole turn or highlighted range -> other speaker
+  3  .../review/turn/{index}/split            Split\Action            cut at a codepoint offset; refused at 0/length or if a half trims empty
+  4  .../review/turn/{index}/merge            Merge\Action            join with neighbour (whole or by range); ADJACENCY IS THE ONLY RULE
+  5  .../review/turn/{index}/text             Text\Action             replace wording; refused if empty or unchanged
+  6  .../review/confirm                       Confirm\Action          write roles_confirmed_at + derive role columns
+  7  .../review/revert                        Revert\Action           discard the layer AND the confirmation
+
+  ALL RULES LIVE IN ONE PLACE
+    src/AudioToText/Domain/Speaker/ReviewedConversationTurns.php
+    Immutable — every operation returns a NEW instance, so an invalid change
+    cannot leave a half-applied conversation behind.
+    Public API: moveTo, splitAt, mergeWithPrevious, mergeWithNext,
+    manualMergeAvailability, mergeAvailability, moveTextTo, mergeSelection,
+    editText, textFor, hasBothRoles, toJson, count, isEmpty
+
+  MERGE RULE WAS DELIBERATELY RELAXED (docs §8.11 + manualMergeAvailability):
+    Merging originally required the same role AND the same diarization voice.
+    On a normally alternating conversation no two adjacent turns ever share a
+    role, so merge was never available. `manualMergeAvailability()` now returns
+    NoNeighbour at the edges and None everywhere else.
+
+11.4 THE SHARED REQUEST HANDLER
+
+  src/AudioToText/Web/Job/Review/ReviewRequest.php
+    adminId()          -> CurrentAdmin
+    expectedVersion()  -> form's `expected_review_count`; ABSENT OR UNPARSEABLE
+                          BECOMES -1, not 0, because 0 is a real version (every
+                          never-corrected job has it). A missing field must LOSE
+                          the race, not silently win it.
+    apply()            -> run, flash, redirect 303 to JOB_REVIEW
+
+11.5 CONCURRENCY + AUDIT (src/AudioToText/Application/ReviewConversationService.php)
+
+    load job by public_id             -> ReviewRejected if unknown/not COMPLETED
+    load current turns                -> reviewed layer if present, else machine
+    apply the change (pure, in memory)-> ReviewRejected if the rule refuses
+    BEGIN
+        revisions->add(jobId, priorSegmentsJson, operation, adminId)
+        applied = jobs->saveReview(... expectedReviewCount)   -- conditional UPDATE
+        if (!applied) throw ReviewConflict                    -- rolls back the revision too
+    COMMIT
+
+  * Validation happens BEFORE the transaction opens — a refused correction
+    costs nothing and leaves no trace.
+  * The revision is written FIRST, so a lost race unwinds both and never
+    leaves an orphan audit row.
+  * The optimistic lock is a CONDITIONAL STATEMENT, not read-then-write:
+      UPDATE ... SET review_count = review_count + 1
+      WHERE id = ? AND review_count = ?
+  * `revert` ADVANCES the version too — the count is of corrections MADE, not
+    layers present, so a stale tab cannot become current because somebody
+    else reverted.
+
+11.6 WHAT A CLIENT MAY ASSERT
+
+  A turn has NO id. Its only handle is its index in the current conversation.
+  So the client sends an index and a DIRECTION, never a target — the server
+  derives the neighbour itself, and adjacency is structural rather than
+  something a crafted request can claim.
+  For a range move the client sends CODEPOINT offsets plus the selected text as
+  a checksum; the server slices by offset and refuses if the slice disagrees.
+  Offsets are converted to codepoints in the browser because JavaScript counts
+  UTF-16 units and mb_substr counts codepoints — they diverge from the first
+  emoji.
+
+11.7 PER-MESSAGE CORRECTION HISTORY (added 2026-09-03)
+
+  src/AudioToText/Application/ConversationHistoryBuilder.php
+  src/AudioToText/Domain/Speaker/ConversationDiff.php
+  src/AudioToText/Domain/Speaker/HistoryEvent.php
+  src/AudioToText/Domain/Speaker/TurnLineage.php
+
+  Because turns have no identity, history is DERIVED by diffing consecutive
+  `audio_segment_revisions` snapshots (longest common prefix + longest common
+  suffix) to isolate the contiguous changed run, then propagating lineage.
+  Validated against all 112 recorded corrections at the time of writing; the
+  changed-run shapes were:
+    EDIT_TEXT 1->1 | SPLIT 1->2 | MERGE 2->1 or 2->2 | MOVE 1->1 or 1->3
+    CONFIRM_ROLES 0->0 (23/23 occurrences — never a structural change)
+  A 2->2 range merge shows ONE SHARED region-level event on both messages;
+  no one-to-one child ancestry is claimed, because the data cannot prove it.
+  REVERT resets the lineage baseline.
+  The underlying property is enforced by
+  tests/Unit/AudioToText/ReviewedConversationTurnsContiguityTest.php.
+
+
+================================================================================
+12. CORRECTION LEARNING — CURRENT CAPABILITY
+================================================================================
+
+  ############################################################################
+  ##  CURRENTLY SUPPORTED:  NO                                              ##
+  ############################################################################
+
+  The system does NOT learn vocabulary from manual corrections. If an
+  administrator changes "one ton soup" to "wonton soup" fifty times, the
+  fifty-first recording will still be transcribed "one ton soup".
+
+  SEARCH PERFORMED (repository-wide, excluding vendor/), case-insensitive, over
+  src/ config/ assets/ tests/ .env.example, for:
+    custom.?vocab | vocabulary | keyterm | key_term | phrase.?hint |
+    speech.?hint | boost.?word | learned.?word | correction.?memory |
+    word.?replace | transcription.?dictionary | lexicon | model.?adapt |
+    language.?model | spelling.?correct | term.?hint | prompt.?hint |
+    initial.?prompt
+
+  RESULT: 5 matches, ALL of them prose in comments, NONE a feature:
+    src/AudioToText/Application/Speaker/SpeakerRoleMapper.php:36  ("the two
+        sides use the same vocabulary" — explaining why keyword scoring failed)
+    src/AudioToText/Application/Speaker/SpeakerRoleMapper.php:45
+    src/Order58/Domain/StoreDirectoryFilter.php:8  ("friendly knowledge
+        vocabulary" — UI copy)
+    src/Ai/Application/Operation/OperationTypes.php:8
+    src/Ai/Contract/Dto/IndexStatus.php:8
+
+  ADDITIONALLY CONFIRMED ABSENT:
+    - No whisper `--prompt` / `--initial-prompt` argument is passed.
+      The full argv is AudioTranscriber:196-208 and contains no prompt flag.
+    - No table stores words, phrases, aliases or replacements for audio.
+      (29 tables enumerated in section 13; none is a vocabulary store.)
+    - No post-processing step rewrites transcript text after whisper returns.
+    - `order58_store_aliases` (469 rows) exists but is a STORE-NAME alias table
+      used by the Order58 mirror, NOT a transcription vocabulary.
+
+  WHAT DOES EXIST, AND WOULD BE THE RAW MATERIAL FOR SUCH A FEATURE:
+    `audio_segment_revisions` (118 rows today) stores the FULL conversation
+    BEFORE every accepted correction, with operation, editor and timestamp.
+    Combined with the current `reviewed_segments`, that is a complete
+    before/after corpus of every wording change ever made — see section 31.12.
+
+
+================================================================================
+13. COMPLETE DATABASE SCHEMA
+================================================================================
+
+  TOTAL TABLES IN SCHEMA = 29
+
+  BREAKDOWN BY AREA
+    Audio-to-Text tables = 4
+      audio_transcription_jobs, audio_conversations,
+      audio_segment_revisions, audio_worker_heartbeat
+    Order58 tables       = 6
+      order58_stores, order58_agents, order58_knowledge_records,
+      order58_rule_records, order58_store_aliases,
+      order58_daily_sync_schedules
+    Knowledge tables     = 4
+      knowledge_bases, documents, document_index_files,
+      document_processing_events
+    Rules tables         = 5
+      rule_catalog_rules, rule_catalog_sources, rule_store_links,
+      rule_classification_events, knowledge_base_rules
+    Chat tables          = 4
+      conversations, messages, message_revisions, chat_answer_scores
+    Shared/other tables  = 6
+      admin_users, auth_login_attempts, agent_login_activity,
+      ai_operations, integration_sync_runs, migration
+
+13.1 audio_transcription_jobs   (33 columns, 28 rows)
+  PURPOSE: one row per RECORDING. The technical view of the queue.
+  A separate upload is legitimately TWO rows here and ONE conversation.
+
+  COLUMN                            TYPE                NULL  MEANING
+  id                                bigint unsigned     NO    PK
+  conversation_id                   bigint unsigned     YES   FK -> audio_conversations.id (RESTRICT/RESTRICT)
+  source_role                       varchar(16)         YES   COMMON|CUSTOMER|AGENT (CHECK)
+  public_id                         char(32)            NO    UNIQUE. 32 random hex. The ONLY id the browser sees
+  uploaded_by_admin_id              bigint              NO    FK -> admin_users.id (RESTRICT/RESTRICT). AUDIT ONLY, not an access key
+  status                            varchar(16)         NO    QUEUED|PROCESSING|COMPLETED|FAILED
+  processing_stage                  varchar(24)         YES   additive telemetry; nullable so an older worker's row stays valid
+  original_filename                 varchar(255)        NO    display only
+  stored_audio_path                 varchar(190)        YES   bare filename while queued; NULLed on completion
+  retained_audio_path               varchar(190)        YES   bare filename after the move to recordings/
+  duration_seconds                  decimal(9,2)        YES   from ffprobe
+  transcript                        text                YES   MACHINE. Never rewritten
+  detected_language                 varchar(16)         YES   MACHINE, from whisper -oj
+  agent_text                        text                YES   MACHINE aggregate. NULL unless the split published
+  customer_text                     text                YES   MACHINE aggregate. NULL unless the split published
+  speaker_segments                  json                YES   MACHINE turns. NULL for SEPARATE mode
+  reviewed_segments                 json                YES   REVIEWED turns. NULL = never corrected (THE layer flag)
+  reviewed_agent_text               text                YES   REVIEWED aggregate, NULL until roles confirmed
+  reviewed_customer_text            text                YES   REVIEWED aggregate
+  reviewed_at                       datetime            YES   when the layer was last written
+  reviewed_by_admin_id              bigint              YES   FK -> admin_users.id (RESTRICT/RESTRICT)
+  roles_confirmed_at                datetime            YES   NULL = unconfirmed. Deliberately a timestamp, not a bool
+  review_count                      smallint unsigned   NO    0. THE OPTIMISTIC LOCK. Counts corrections MADE
+  speaker_separation_status         varchar(16)         YES   PENDING|PROCESSING|COMPLETED|NEEDS_REVIEW|FAILED|NOT_SUPPORTED
+  speaker_separation_method         varchar(32)         YES   diarizer identifier
+  speaker_role_confidence           decimal(4,3)        YES   agreement x volume
+  speaker_separation_completed_at   datetime            YES
+  error_message                     varchar(255)        YES   USER-SAFE wording only
+  created_at                        datetime            NO
+  started_at                        datetime            YES
+  completed_at                      datetime            YES
+  expires_at                        datetime            YES   NULL = keep indefinitely (the default)
+
+  INDEXES (verified with SHOW INDEX)
+    PRIMARY                                    (id)
+    ux_audio_transcription_jobs_public_id      UNIQUE (public_id)
+    ix_audio_transcription_jobs_status         (status, id)   <- makes "oldest QUEUED" an index scan
+    ix_audio_transcription_jobs_expires_at     (expires_at)
+    ix_audio_transcription_jobs_uploader       (uploaded_by_admin_id)
+    fk_audio_transcription_jobs_reviewer       (reviewed_by_admin_id)
+    fk_audio_transcription_jobs_conversation   (conversation_id)
+
+  CHECK CONSTRAINTS
+    chk_audio_transcription_jobs_source_role
+      (source_role IS NULL OR source_role IN ('COMMON','CUSTOMER','AGENT'))
+
+  MIGRATIONS AFFECTING THIS TABLE (in order)
+    M260826120000CreateAudioTranscriptionJobs      created it
+    M260826120100AddSpeakerSeparationColumns       agent/customer text, segments
+    M260826130000RetainSuccessfulRecordings        retained_audio_path, nullable expires_at
+    M260826140000AllowMultipleQueuedJobsPerAdmin   DROPPED the one-active-job index + generated column
+    M260831140000AddReviewedConversation           six reviewed_* columns + review_count
+    M260831160000AddRolesConfirmation              roles_confirmed_at
+    M260902100000CreateAudioConversations          conversation_id + source_role
+
+  HISTORICAL NOTE: `active_uploader_admin_id` no longer exists. It was a STORED
+  generated column equal to uploaded_by_admin_id while QUEUED/PROCESSING, with
+  a unique index, enforcing one active job per administrator. Dropped by
+  M260826140000 because it enforced "one at a time" in the wrong place — it
+  stopped people QUEUEING work, which is what a queue is for.
+
+13.2 audio_conversations   (6 columns, 27 rows)
+  PURPOSE: one row per UPLOAD. The business view.
+
+  COLUMN                  TYPE                NULL  MEANING
+  id                      bigint unsigned     NO    PK
+  public_id               char(32)            NO    UNIQUE, 32 random hex
+  store_source_id         bigint unsigned     YES   SOFT reference -> order58_stores.source_id.
+                                                    NULL = legacy pre-store upload. NO FOREIGN KEY (see 13.2.1)
+  mode                    varchar(16)         NO    COMMON|SEPARATE (CHECK chk_audio_conversations_mode)
+  uploaded_by_admin_id    bigint              NO    FK -> admin_users.id (RESTRICT/RESTRICT)
+  created_at              datetime            NO
+
+  INDEXES: PRIMARY(id), UNIQUE ux_audio_conversations_public_id(public_id),
+           KEY ix_audio_conversations_store(store_source_id, id)
+
+  13.2.1 WHY THERE IS NO FK TO order58_stores — VERIFIED, NOT ASSUMED
+    information_schema shows ZERO referential constraints pointing at
+    order58_stores from anywhere in the schema. FIVE other tables already
+    reference a store softly by its mirrored id:
+      knowledge_bases.source_store_id
+      order58_knowledge_records.store_source_id
+      order58_rule_records.source_store_id
+      order58_store_aliases.store_source_id
+      rule_store_links.store_source_id
+    The reason is recorded in M260728120000CreateOrder58Mirrors: a record may
+    arrive BEFORE its store has been synced. Adding the first-ever hard key
+    here would break that property for everything else.
+    Store deletion is not a risk: the sync never deletes, only soft-deactivates
+    (deactivateNotSeen()).
+    TYPE NOTE: order58_stores.source_id is bigint UNSIGNED while
+    order58_stores.id is SIGNED. The soft reference is to source_id.
+
+13.3 audio_segment_revisions   (8 columns, 118 rows)
+  PURPOSE: append-only audit trail of manual corrections.
+
+  COLUMN            TYPE                NULL  MEANING
+  id                bigint              NO    PK
+  job_id            bigint unsigned     NO    FK -> audio_transcription_jobs.id  ON DELETE CASCADE / ON UPDATE CASCADE
+  revision_number   int unsigned        NO    1-based, per job
+  segments_json     json                NO    THE CONVERSATION *BEFORE* THIS CHANGE
+  operation         varchar(16)         NO    MOVE|SPLIT|MERGE|EDIT_TEXT|REVERT|CONFIRM_ROLES (CHECK)
+  edited_by_type    varchar(16)         NO    'admin'|'agent' (CHECK)
+  edited_by_id      bigint unsigned     NO    CHECK > 0
+  created_at        datetime            NO
+
+  UNIQUE KEY ux_audio_segment_revisions_job_number (job_id, revision_number)
+
+  CHECK CONSTRAINTS (all verified live)
+    chk_audio_segment_revisions_operation        operation IN (the six)
+    chk_audio_segment_revisions_number_positive  revision_number > 0
+    chk_audio_segment_revisions_by_type          edited_by_type IN ('admin','agent')
+    chk_audio_segment_revisions_by_id_positive   edited_by_id > 0
+
+  THREE LOAD-BEARING DDL DECISIONS
+    - segments_json stores the state BEFORE the change (the message_revisions
+      precedent). On a job's first correction that is a copy of the machine's
+      own segments, making the trail self-contained back to origin.
+    - job_id is BIGINT UNSIGNED to match the parent. A signed column fails with
+      MySQL error 3780 at FK creation time.
+    - ON DELETE CASCADE, unlike the uploader's RESTRICT: the revisions describe
+      a conversation, so if the conversation goes they have nothing to describe.
+
+  NO AFFECTED-TURN COLUMN. A revision stores ONLY the full prior snapshot —
+  no index, no turn reference, no operation metadata. This is why per-message
+  history has to be derived (section 11.7).
+
+  Created by M260831140000AddReviewedConversation; operation CHECK widened by
+  M260831160000AddRolesConfirmation to admit CONFIRM_ROLES.
+
+13.4 audio_worker_heartbeat   (1 row, enforced)
+  PURPOSE: worker liveness + scheduler liveness, readable by the web tier.
+  CHECK chk_audio_worker_heartbeat_single: (id = 1)
+  Carries two INDEPENDENT facts: beat_at/state (process liveness) and
+  last_tick_at/mode (whether anything is still invoking the worker).
+  A table rather than a runtime file so the web tier can read it without
+  access to the worker's private 0700 directory.
+  Purely informational — worker.lock remains the authority on concurrency, and
+  every heartbeat write is wrapped so it can never take the worker down.
+
+13.5 knowledge_bases   (24 columns, 237 rows)
+  PURPOSE: one retrieval corpus. For Order58 stores, ONE PER STORE.
+  KEY COLUMNS
+    id, name, slug (UNIQUE), description, system_instructions
+    openai_vector_store_id       varchar(64) UNIQUE
+    vector_store_status          ENUM('pending','provisioning','ready','failed')
+    provision_attempts, provision_started_at, provision_next_attempt_at
+    vector_store_error_code, vector_store_error
+    status                       ENUM('active','archived')
+    source_system                varchar(32)  <- 'order58' for mirrored stores
+    source_store_id              bigint unsigned  <- THE STORE LINK
+    source_name, source_active
+    agent_enabled                tinyint(1)
+    purpose                      varchar(16)
+    last_source_synced_at, last_indexed_at, created_at, updated_at
+
+13.6 documents   (29 columns, 425 rows)
+  status ENUM('uploaded','queued','processing','indexing','ready','failed','deleted')
+  checksum_sha256 char(64), dedupe_hash char(64)
+  source_type / source_ref / source_sync_hash  (Order58 provenance)
+  source_text mediumtext + is_source_overridden  (manual text documents)
+  is_enabled tinyint(1)  (per-document enable/disable)
+  FK knowledge_base_id -> knowledge_bases.id  ON DELETE CASCADE
+
+13.7 document_index_files   (12 columns, 320 rows)
+  role ENUM('source','derived_markdown')
+  index_status ENUM('pending','in_progress','completed','failed','cancelled')
+  openai_file_id varchar(64) UNIQUE
+  pending_removal tinyint(1) INDEXED  <- the cleanup flag
+  FK document_id -> documents.id  ON DELETE CASCADE
+
+13.8 rule_catalog_rules   (16 columns, 352 rows)
+  canonical_hash char(64) UNIQUE, description_hash char(64) INDEXED
+  title text, content text
+  scope_type varchar(16) INDEXED
+  classification_status varchar(24), classification_confidence decimal(5,4)
+  detected_store_text varchar(500), classification_reason varchar(1000)
+  reviewed_by_admin_id, reviewed_at
+  is_active tinyint(1) INDEXED, is_globally_available tinyint(1)
+
+13.9 rule_catalog_sources   (5 columns)
+  Links a catalogue rule to the Order58 record it came from.
+  order58_rule_record_id UNIQUE -> order58_rule_records.id (RESTRICT/CASCADE)
+  rule_catalog_rule_id -> rule_catalog_rules.id (RESTRICT/CASCADE)
+
+13.10 rule_store_links   (234 rows)
+  rule_catalog_rule_id -> rule_catalog_rules.id (RESTRICT/CASCADE)
+  store_source_id bigint unsigned INDEXED  <- SOFT store reference
+
+13.11 knowledge_base_rules   (0 rows)
+  FK knowledge_base_id -> knowledge_bases.id ON DELETE CASCADE
+  EMPTY in this installation. NOT DETERMINED whether it is deprecated or
+  simply unused so far — reason: no rows and no write path was traced during
+  this audit.
+
+13.12 ORDER58 MIRROR TABLES (row counts live)
+  order58_stores               235
+  order58_agents               528
+  order58_rule_records         380
+  order58_knowledge_records    115
+  order58_store_aliases        469
+  order58_daily_sync_schedules   (schedule state for the daily syncs)
+
+13.13 SHARED
+  admin_users              1 row.  RESTRICT from three audio columns.
+  auth_login_attempts, agent_login_activity, ai_operations,
+  integration_sync_runs, migration
+
+
+================================================================================
+14. TABLE RELATIONSHIPS / ERD
+================================================================================
+
+  HARD FOREIGN KEYS (all 17 verified from information_schema)
+
+  admin_users (id)
+    |
+    +--< audio_conversations.uploaded_by_admin_id        RESTRICT / RESTRICT
+    +--< audio_transcription_jobs.uploaded_by_admin_id   RESTRICT / RESTRICT
+    +--< audio_transcription_jobs.reviewed_by_admin_id   RESTRICT / RESTRICT
+
+  audio_conversations (id)
+    |
+    +--< audio_transcription_jobs.conversation_id        RESTRICT / RESTRICT
+             |
+             +--< audio_segment_revisions.job_id         CASCADE  / CASCADE
+
+  knowledge_bases (id)
+    |
+    +--< documents.knowledge_base_id                     CASCADE  / CASCADE
+    |        |
+    |        +--< document_index_files.document_id       CASCADE  / CASCADE
+    |        +--< document_processing_events.document_id CASCADE  / CASCADE
+    |
+    +--< conversations.knowledge_base_id                 CASCADE  / CASCADE
+    |        |
+    |        +--< messages.conversation_id               CASCADE  / CASCADE
+    |                 |
+    |                 +--< message_revisions.message_id  CASCADE  / CASCADE
+    |                 +--< chat_answer_scores.message_id CASCADE  / CASCADE
+    |
+    +--< knowledge_base_rules.knowledge_base_id          CASCADE  / CASCADE
+
+  rule_catalog_rules (id)
+    |
+    +--< rule_catalog_sources.rule_catalog_rule_id       RESTRICT / CASCADE
+    +--< rule_store_links.rule_catalog_rule_id           RESTRICT / CASCADE
+    +--< rule_classification_events.rule_catalog_rule_id RESTRICT / CASCADE
+
+  order58_rule_records (id)
+    |
+    +--< rule_catalog_sources.order58_rule_record_id     RESTRICT / CASCADE
+         (UNIQUE — one catalogue source per mirrored record)
+
+  SOFT REFERENCES (NO FOREIGN KEY, BY DESIGN — section 13.2.1)
+
+  order58_stores.source_id  (bigint unsigned)
+    ^
+    |  ..... audio_conversations.store_source_id
+    |  ..... knowledge_bases.source_store_id
+    |  ..... order58_knowledge_records.store_source_id
+    |  ..... order58_rule_records.source_store_id
+    |  ..... order58_store_aliases.store_source_id
+    |  ..... rule_store_links.store_source_id
+
+  THE ONE PATH FROM AN AUDIO JOB TO A STORE (two hops, both nullable)
+
+    audio_transcription_jobs.conversation_id
+      -> audio_conversations.store_source_id
+        -> order58_stores.source_id
+
+  LIVE COVERAGE MEASURED DURING THIS AUDIT (28 jobs):
+    jobs with NO conversation_id ................ 0
+    jobs whose conversation has NULL store ...... 23
+    jobs that resolve to a store ................ 5
+  So the store is NOT always available, and any feature depending on it must
+  handle absence as the common case, not the exception.
+
+
+================================================================================
+15. STATUS / STATE MACHINES
+================================================================================
+
+15.1 JOB STATUS   src/AudioToText/Domain/JobStatus.php
+  QUEUED | PROCESSING | COMPLETED | FAILED
+  activeValues()   = QUEUED, PROCESSING
+  terminalValues() = COMPLETED, FAILED
+
+15.2 PROCESSING STAGE   src/AudioToText/Domain/ProcessingStage.php
+  QUEUED | CLAIMED | CONVERTING | TRANSCRIBING | DIARIZING |
+  MAPPING_SPEAKERS | SAVING | COMPLETED | FAILED
+
+15.3 SPEAKER SEPARATION STATUS   src/AudioToText/Domain/SpeakerSeparationStatus.php
+  PENDING | PROCESSING | COMPLETED | NEEDS_REVIEW | FAILED | NOT_SUPPORTED
+  isPublishable() === ($this === COMPLETED)   <- the ONE place that decides
+
+15.4 TRANSITION DIAGRAM
+
+    [upload]
+       |
+       v
+    QUEUED / stage QUEUED
+       |  worker: atomic conditional claim
+       |  UPDATE ... SET status='PROCESSING' WHERE id=? AND status='QUEUED'
+       v
+    PROCESSING / CLAIMED
+       |
+       v
+    PROCESSING / CONVERTING        ffmpeg
+       |
+       v
+    PROCESSING / TRANSCRIBING      whisper   == transcript COMMITTED here ==
+       |
+       +--(SEPARATE: source_role provided)--> SAVING -> COMPLETED
+       |
+       v
+    PROCESSING / DIARIZING         sherpa-onnx
+       |
+       v
+    PROCESSING / MAPPING_SPEAKERS  align + role map + 5 gates
+       |
+       v
+    PROCESSING / SAVING
+       |
+       v
+    COMPLETED / COMPLETED          <- TERMINAL, PERMANENT
+
+    Any unrecoverable error before the transcript is committed:
+       -> FAILED / FAILED  with a user-safe error_message
+
+15.5 WHO CHANGES WHAT
+  QUEUED             the web request (TranscriptionQueue::enqueueConversation)
+  PROCESSING         the worker, atomic conditional claim only
+  COMPLETED / FAILED the worker
+  stage              the worker, markStage() at each step
+  NOTHING ELSE writes status. There is no admin "retry" button and no API.
+
+15.6 RETRY / RECOVERY — VERIFIED
+  RETRY               DOES NOT EXIST. No automatic retry anywhere.
+  CRASH               the job stays PROCESSING until the stale sweep.
+  STALE RECOVERY      AUDIO_TRANSCRIPTION_STALE_AFTER = 1200 s.
+                      Housekeeping only ever moves jobs OUT of PROCESSING
+                      (into COMPLETED or FAILED), NEVER back into QUEUED.
+                      IF THE TRANSCRIPT WAS ALREADY COMMITTED, the job is
+                      COMPLETED with the speaker split marked failed; only a
+                      crash BEFORE transcription fails the job.
+  TIMEOUT             ProcessRunner SIGTERM -> grace -> SIGKILL; the stage's
+                      exception fails the job (or completes it if the
+                      transcript already landed).
+  OOM at MemoryMax    survivable by design, same rule as above.
+  REPROCESSING        IMPOSSIBLE. Both halves of the claim filter on
+                      status='QUEUED' — the candidate scan AND the conditional
+                      UPDATE. A COMPLETED or FAILED row can never be selected.
+  RETRYING A FAILED   would require creating a NEW job; reopening a terminal
+  RECORDING           row would silently overwrite the original result and lose
+                      its audit trail.
+
+
+================================================================================
+16. QUEUE & WORKER
+================================================================================
+
+16.1 COMMAND
+  kf:audio:worker            registered in config/console/commands.php
+  Class  src/AudioToText/Console/AudioTranscriptionWorkerCommand.php
+  Modes  (no flag) continuous | --once (what the timer runs, and what tests use)
+  A second worker refuses the lock, says so, and EXITS 0 — a correctly-refused
+  duplicate is not a failure and a supervisor must not restart it in a loop.
+
+16.2 FIFO
+  claimNextQueued() scans WHERE status='QUEUED' ORDER BY id ASC, then claims
+  with UPDATE ... WHERE id=? AND status='QUEUED'. `id` is monotonic, so a
+  recording uploaded later can never be taken before an earlier one. The queue
+  position shown on a job page uses the same ordering.
+
+16.3 FOUR INDEPENDENT CONCURRENCY MECHANISMS
+
+  1. flock on runtime/audio-to-text/worker.lock
+     LOCK_EX | LOCK_NB, held for the whole process lifetime.
+     AudioTranscriptionWorkerCommand:516 (acquire), :542 (release)
+     Chosen over a database advisory lock because the KERNEL releases it
+     however the process dies — no stale lock to detect, no recovery code to
+     get subtly wrong. Trade-off: it covers ONE MACHINE.
+     The lock file lives BESIDE jobs/, never inside it, so the orphan sweep
+     cannot delete the file that guarantees single-worker operation. It is
+     never unlinked (unlinking races with a process that already opened it).
+
+  2. Atomic conditional claim (see 16.2).
+     The claim ALONE is not enough: it would let worker A take job 1 while
+     worker B takes job 2 — two whisper processes on one CPU. The lock is what
+     prevents that.
+
+  3. Foreign lock  AUDIO_WORKER_FOREIGN_LOCKS
+     src/AudioToText/Application/ForeignLockGuard.php
+     Currently set to:
+       /var/www/html/telecom-billing/runtime/audio-to-text/cron-worker.lock
+     Takes an exclusive non-blocking flock on ANOTHER PROJECT'S lock file
+     before claiming, and holds it until the job finishes. Both projects are
+     then in one kernel-arbitrated queue. The file is opened READ-ONLY, so it
+     is never created. FAILS CLOSED: a configured lock that is held, missing OR
+     UNREADABLE defers the tick, with an explicit startup warning naming the
+     path.
+
+  4. AUDIO_WORKER_YIELD_TO_OTHER_WHISPER (default true)
+     A process scan catching a foreign worker started BY HAND, which takes no
+     cron lock. EXPLICITLY DOCUMENTED AS RACY BY CONSTRUCTION and never the
+     basis of an exclusivity claim.
+
+  MAXIMUM CONCURRENT TRANSCRIPTION JOBS = 1 (machine-wide, within this feature)
+
+16.4 ADMISSION GUARD
+  src/AudioToText/Application/WorkerAdmissionGuard.php
+    free RAM >= AUDIO_WORKER_MIN_AVAILABLE_MB   (1500)
+    load per core <= AUDIO_WORKER_MAX_LOAD_PER_CORE  (1.5)
+  Probe: src/AudioToText/Infrastructure/ProcSystemResourceProbe.php (/proc)
+
+16.5 HEARTBEAT
+  AUDIO_WORKER_HEARTBEAT_SECONDS = 5    write cadence
+  AUDIO_WORKER_STALE_AFTER       = 30   process presumed dead
+  AUDIO_WORKER_TICK_STALE_AFTER  = 180  ticks presumed stopped (~3 missed
+                                        2-minute ticks)
+  Between ticks NO worker process exists, so the admin page reads
+  "Scheduled — last ran N ago", not "Running".
+  src/AudioToText/Application/WorkerHealthService.php
+
+16.6 SCHEDULING
+  CHOSEN: systemd timer.
+    docs/server/systemd/knowledge-forge-audio-worker.timer
+      OnBootSec=2min ; OnUnitActiveSec=2min
+    docs/server/systemd/knowledge-forge-audio-worker.service
+      ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:audio:worker --once
+      TimeoutStartSec=1200
+      CPUQuota=100%      <- exactly one core
+      MemoryHigh=1200M   <- throttles by reclaiming
+      MemoryMax=1600M    <- OOM backstop
+      Nice=15 ; IOSchedulingClass=idle
+    systemd will NOT start a second run of a unit that is still active, so the
+    timer needs no outer lock file.
+  FALLBACK: docs/server/cron/knowledge-forge-audio-transcription
+    Needs an OUTER flock on cron-worker.lock — a DIFFERENT file from the
+    application's worker.lock. Pointing it at worker.lock would make every run
+    skip. Do not install while the timer is enabled.
+  NOTHING IN THIS PROJECT WRITES TO /etc. Installation is manual.
+
+16.7 ENQUEUE LOCK
+  Only when AUDIO_TRANSCRIPTION_MAX_QUEUE > 0 (currently 0 = unlimited, so the
+  lock is SKIPPED ENTIRELY). Lock name is
+  CONCAT(DATABASE(), ':audio-to-text:enqueue') — the prefix matters because
+  MySQL named locks are SERVER-GLOBAL, not per-schema.
+
+
+================================================================================
+17. AUDIO STORAGE & RETENTION
+================================================================================
+
+  TWO SIBLING TREES — the separation IS the safety property.
+
+  runtime/audio-to-text/
+    worker.lock                 the single-worker guarantee. OUTSIDE both trees
+    jobs/<publicId>/            TEMPORARY workspace. SWEPT. Deleted when done.
+        source.<ext>  audio.wav  transcript.txt  transcript.json
+    recordings/<publicId>/      PERMANENT. NEVER SWEPT.
+        source.<ext>
+
+  VERIFIED ON DISK (this audit):
+    drwxrwx---  runtime/audio-to-text
+    drwxrwx---  runtime/audio-to-text/jobs         (32 entries)
+    drwxrwx---  runtime/audio-to-text/recordings   (29 entries)
+    -rw-rwxr--  runtime/audio-to-text/worker.lock
+
+  PUBLIC ACCESSIBILITY: NO.
+    The web root is public/ and contains ONLY: index.php, assets/, favicon.ico,
+    favicon.svg, robots.txt. `find public -name "*.wav"` returns nothing.
+    runtime/ is a sibling of public/, not inside it.
+    No filesystem path is ever shown in the UI or returned by any endpoint —
+    the job page says only "Retained on this server".
+
+  ON SUCCESS the recording is MOVED — rename(), atomic within a filesystem —
+  out of jobs/ and into recordings/ BEFORE the row is marked complete. A move
+  rather than a copy means the file exists in exactly one place at any moment,
+  so there is never a window where the sweeper could collect something the
+  database already considers retained.
+
+  NAMING: the client filename NEVER becomes a path. The server names the file
+  source.<ext> where <ext> comes from the validated extension allow-list.
+
+  ORPHAN SWEEP walks ONLY jobs/. Retained recordings are in a SIBLING TREE, not
+  a subdirectory, so "the sweeper cannot reach them" is a fact about the layout
+  rather than a rule someone has to remember.
+
+  RETENTION: AUDIO_TRANSCRIPTION_RETENTION_SECONDS
+    0 (CURRENT)  keep indefinitely. expires_at = NULL, and the purge query
+                 filters expires_at IS NOT NULL, so nothing can match.
+    positive     expire that many seconds after creation.
+  LIVE STATE MEASURED: 28 jobs, 28 with expires_at NULL, 27 with a retained
+  file. Nothing is currently eligible for deletion.
+
+  HOUSEKEEPING STILL DELETES (even with retention off):
+    - abandoned jobs/<publicId>/ workspaces older than the stale window
+    - the workspace of every finished job, success or failure
+    - stale PROCESSING jobs are recovered (section 15.6)
+    - AudioConversationRepositoryInterface::deleteChildless() removes parents
+      with no children left:
+        DELETE c FROM audio_conversations c
+        WHERE NOT EXISTS (SELECT 1 FROM audio_transcription_jobs j
+                          WHERE j.conversation_id = c.id)
+
+
+================================================================================
+18. ORDER58
+================================================================================
+
+  RESPONSIBILITY: mirror an external retail system and make it usable inside
+  Knowledge Forge. It OWNS stores, agents and raw rule records; it does NOT own
+  knowledge bases, rules classification or audio.
+
+  MODULE STRUCTURE (src/Order58/)
+    Client/          HttpOrder58Client, credentials, retry policy, error mapper,
+                     response parser, HTTP profile, credential validator
+    Contract/        Order58ClientInterface, DTOs, exceptions
+    Domain/          Order58Store*, StoreDirectory*, filters, sync runs,
+                     StoreAudioCountsInterface, DailySyncScheduleRepositoryInterface
+    Application/     Sync, Mapper, Formatter
+    Infrastructure/  Db* repositories, DbStoreDirectoryReader, DbStoreAudioCounts
+    Console/         schedulers and reconcilers
+    Web/             DataManagement, Agents, Stores, StoreChat, StoreAudio
+
+  API CLIENT
+    src/Order58/Client/HttpOrder58Client.php
+    Guzzle as the PSR-18 transport with http_errors=false; bounded retries;
+    redacted logging; a single Bearer token revealed ONLY when the
+    Authorization header is built.
+    ORDER58_API_BASE_URL = https://order58.seawolf.io/api/integration/v1
+    All methods are GETs (safe to auto-retry).
+
+  STORE IDENTITY
+    order58_stores.source_id (bigint unsigned) is THE identifier used
+    everywhere, including in URLs. order58_stores.id (signed) never leaves the
+    server-side mirror.
+
+  STORE DIRECTORY (the reusable engine)
+    src/Order58/Domain/StoreDirectoryReaderInterface.php
+    src/Order58/Infrastructure/DbStoreDirectoryReader.php
+      const SOURCE = 'order58'
+      innerJoin knowledge_bases kb ON s.source_id = kb.source_store_id
+      where kb.source_system = 'order58'
+    Provides: search (name/company/city/address), A-Z letter buckets with
+    counts, filters, pagination. Reused verbatim by the audio store picker.
+
+  KEY INSIGHT: a store is only visible in the directory if it HAS a knowledge
+  base row. The join is INNER. So "store" in the UI effectively means
+  "mirrored store that has a knowledge base".
+
+18.1 HOW AUDIO-TO-TEXT GETS THE STORE — TRACED
+
+  STORE ID (sourceId)
+    From the URL ONLY: /audio-to-text/store/{sourceId:\d+}
+    A posted store_id is NEVER read. Pinned by
+    AudioToTextStoreCest::aPostedStoreIdIsIgnored.
+    Rationale: consulting the body would let anyone who can reach one store's
+    page write onto another store's history.
+
+  STORE NAME / COMPANY / ACTIVE
+    src/AudioToText/Domain/AudioStoreLookupInterface.php   (the PORT)
+    src/AudioToText/Infrastructure/DbAudioStoreLookup.php  (the ADAPTER)
+      const STORES = order58_stores ; const KB = knowledge_bases
+      const SOURCE = 'order58'
+      SELECT s.source_id, kb.name AS name, s.company, kb.source_active AS active
+      FROM order58_stores s
+      INNER JOIN knowledge_bases kb ON kb.source_store_id = s.source_id
+      WHERE kb.source_system = 'order58' AND s.source_id = ?
+    NOTE: the NAME comes from knowledge_bases.name, NOT order58_stores.name,
+    because that is the column the picker sorts, buckets and displays. Reading
+    the other one would show a different name on the page you arrived at than
+    on the card you clicked.
+
+  STORE SOURCE ID FOR AN EXISTING JOB
+    src/AudioToText/Domain/AudioConversationRepositoryInterface::storeSourceIdFor(int)
+    SELECT store_source_id FROM audio_conversations WHERE id = ?
+
+18.2 DOES AUDIO-TO-TEXT DEPEND ON ORDER58 CLASSES?
+
+  NO. Verified: `grep -rlE "App\\(KnowledgeBase|Rules|Chat|Ai|Order58)"
+  src/AudioToText/` returns NOTHING.
+
+  Audio-to-Text reads the order58_stores and knowledge_bases TABLES through its
+  own narrow port (DbAudioStoreLookup, ONE query). It duplicates only a lookup,
+  following the existing AgentStoreDirectoryInterface precedent.
+
+  The reverse direction is equally constrained: no file outside
+  src/AudioToText/ may contain "App\AudioToText". So the Order58 store picker
+  links to audio by ROUTE NAME:
+    src/Order58/Web/StoreAudio/template.php
+      $urlGenerator->generate('audio-to-text.store', ['sourceId' => ...])
+  Store chat solved the same problem earlier the same way ('chat.index').
+
+  CONSEQUENCE: the picker LIVES IN ORDER58 (src/Order58/Web/StoreAudio/) and
+  reuses StoreDirectoryReaderInterface verbatim — the search SQL, letter
+  buckets, filters, counts and pagination are not reimplemented, only asked
+  for. It adds NO CSS (reuses .dir-toolbar, .filter-bar, .alpha-nav,
+  .store-card, pager).
+
+  Unlike Store chat, audio has NO ELIGIBILITY GATE: a store with no knowledge
+  base content can still have a recording transcribed, so every card is a live
+  link. (The store must still HAVE a knowledge_bases row to appear at all —
+  see the inner join above.)
+
+
+================================================================================
+19. STORE SYSTEM
+================================================================================
+
+  There is no standalone "Store" module. A store is:
+    - a row in order58_stores (the mirror), identified by source_id
+    - PAIRED with a row in knowledge_bases where
+      source_system='order58' AND source_store_id=<source_id>
+
+  STORE-FACING PAGES
+    /admin/order58/stores            admin store directory (Order58\Web\Stores)
+    /admin/order58/store-chat        chat picker
+    /admin/order58/store-audio       audio picker (Order58\Web\StoreAudio)
+    /audio-to-text/store/{sourceId}  that store's audio page (AudioToText)
+
+  STORE ACTIVE STATUS
+    knowledge_bases.source_active mirrors the Order58 state.
+    An inactive store KEEPS its page and its history and loses only the upload;
+    the server refuses the POST regardless of what the template renders.
+    Reconciler: kf:order58:reconcile-active
+
+  AUDIO COUNTS PER STORE
+    src/Order58/Domain/StoreAudioCountsInterface.php
+    src/Order58/Infrastructure/DbStoreAudioCounts.php
+    Used by the picker to show conversions per store and to filter
+    "with audio". ONE query for the whole page, not one per card.
+    NOTE: this is ORDER58 code reading the audio tables — allowed, because the
+    isolation rule forbids naming the AudioToText NAMESPACE, not reading a
+    table. This is the one place the boundary is thin.
+
+
+================================================================================
+20. KNOWLEDGE / KNOWLEDGE BASE
+================================================================================
+
+  A knowledge base is one retrieval corpus with its own OpenAI vector store.
+  For Order58 it is ONE PER STORE (237 rows against 235 mirrored stores).
+
+  TABLES: knowledge_bases, documents, document_index_files,
+          document_processing_events
+
+  PROVISIONING
+    vector_store_status ENUM('pending','provisioning','ready','failed') with
+    provision_attempts / provision_started_at / provision_next_attempt_at and
+    error code+message. Done by kf:worker:run, never in a web request.
+
+  DOCUMENTS
+    Uploaded (PDF/PNG/JPG/WEBP), stored outside the web root, SHA-256
+    deduplicated (checksum_sha256 + dedupe_hash), queued. Text PDFs indexed
+    directly; images and scanned PDFs converted to Markdown by a vision model
+    first (role='derived_markdown' in document_index_files).
+    Manual text documents supported via source_text + is_source_overridden.
+    Per-document enable/disable via is_enabled.
+
+  RETRIEVAL
+    OpenAI-hosted Vector Stores via the Responses API File Search tool.
+    openai_vector_store_id on the knowledge base; openai_file_id per index file.
+    THERE IS NO LOCAL VECTOR DATABASE AND NO LOCAL EMBEDDING STORE.
+
+  CHAT INTEGRATION
+    conversations -> messages -> message_revisions / chat_answer_scores.
+    Retrieval is forced and a server-side grounding check runs on every answer.
+
+20.1 THE THREE CRITICAL ANSWERS
+
+  Q: Does Audio-to-Text use Knowledge Base data during transcription?
+  A: **NO.**
+     Verified three ways:
+       1. src/AudioToText/ contains no reference to App\KnowledgeBase
+          (ModuleIsolationTest enforces this).
+       2. The whisper argv (AudioTranscriber:196-208) contains no prompt,
+          no vocabulary and no hint parameter of any kind.
+       3. DbAudioStoreLookup reads knowledge_bases for exactly two fields —
+          `name` and `source_active` — for a page heading. Nothing else.
+
+  Q: Does Audio-to-Text use menu/product/restaurant terms from the Knowledge
+     Base?
+  A: **NO.** No document content is read by the audio module at any point.
+
+  Q: Does Audio-to-Text use restaurant-specific vocabulary from any existing
+     store data?
+  A: **NO.** The only store data it reads is the store's display name,
+     company and active flag — for page chrome.
+
+  The ONLY domain knowledge in the audio pipeline is the hard-coded English
+  dialogue-act patterns in
+  src/AudioToText/Application/Speaker/DialogueActDetector.php, used for ROLE
+  MAPPING (who is the agent), never for word recognition.
+
+
+================================================================================
+21. RULES SYSTEM
+================================================================================
+
+  There is ONE rule system, not several. "Rule" in this codebase means a
+  business rule mirrored from Order58 and turned into retrievable knowledge.
+  There is NO condition/action/trigger engine, NO rule priority evaluation, and
+  NO runtime rule interpreter.
+
+  IMPORTANT: there are NO audio-related rules of any kind.
+
+  PIPELINE (traced)
+
+    Order58 API
+      |  kf:order58:schedule-rules  (daily scheduler)
+      v
+    order58_rule_records            380 rows — the RAW MIRROR, never edited
+      |
+      |  Rules\Application deduplication + classification
+      |  canonical_hash / description_hash collapse duplicates
+      v
+    rule_catalog_rules              352 rows — the CANONICAL CATALOGUE
+      |    scope_type               store-scoped vs global
+      |    classification_status    pending / approved / rejected
+      |    classification_confidence
+      |    detected_store_text      what the classifier thought it saw
+      |    is_active, is_globally_available
+      |
+      +--> rule_catalog_sources     provenance: which mirrored record(s)
+      |                             produced this canonical rule
+      +--> rule_store_links         234 rows — which stores this rule applies to
+      +--> rule_classification_events  audit of classification decisions
+      |
+      |  ADMIN REVIEW
+      |  POST /admin/order58/rules/review   (Rules\Web\Review\Action)
+      v
+    DUAL PROJECTION (the design decision recorded in project memory)
+      An approved rule is projected into BOTH:
+        - the store's own knowledge base            (order58_rule_store)
+        - the hidden global rules knowledge base    (order58_rule_global)
+      so ANY store can answer a global rule at chat stage 2.
+      Reconciler: kf:rules:reconcile-global
+      Lifecycle repair: kf:rules:repair-lifecycle
+      Retirement: kf:rules:retire-store-projections
+      v
+    documents rows inside knowledge bases
+      v
+    indexed into the OpenAI vector store
+      v
+    RETRIEVED AT CHAT TIME — this is the rule's final effect.
+
+  TRACING ONE RULE END TO END
+    1. order58_rule_records row arrives from the API (source_store_id set).
+    2. Mapper computes canonical_hash; a matching rule_catalog_rules row is
+       reused or created, and rule_catalog_sources records the link.
+    3. Classification proposes scope_type + confidence + detected_store_text.
+    4. An administrator approves at /admin/order58/rules/review; the decision
+       is recorded in rule_classification_events and the projection is
+       reconciled IMMEDIATELY (not on a later schedule).
+    5. rule_store_links gains a row per applicable store.
+    6. A document is written into each target knowledge base and indexed.
+    7. At chat time the rule is retrieved by File Search like any other
+       document, and is cited like any other document.
+
+  RULE-FACING PAGES
+    /admin/order58/rules             raw mirror + catalogue summary
+    /admin/order58/rules/readiness   operational readiness (the Browse target)
+    /admin/order58/rules/global      HIDDEN diagnostic view of the global base
+    /admin/order58/rules/list        advanced filterable listing (URL-only)
+    /admin/order58/rules/{ruleId}    per-rule detail
+    POST /admin/order58/rules/review admin decision
+    /admin/rule-chat                 chat against the hidden global base
+
+  knowledge_base_rules TABLE: EMPTY (0 rows). NOT DETERMINED whether it is
+  superseded by rule_store_links or simply unused — reason: no write path was
+  traced during this audit and there are no rows to infer from.
+
+
+================================================================================
+22. INTEGRATION BETWEEN ORDER58 / STORES / KNOWLEDGE / RULES / AUDIO
+================================================================================
+
+22.1 THE ACTUAL SHAPE (not the assumed one)
+
+  The chain ORDER58 -> STORE -> KNOWLEDGE -> RULES is REAL and tight.
+  AUDIO hangs off STORE by a single thread and connects to NOTHING else.
+
+                        ORDER58 API (external)
+                               |
+              +----------------+----------------+
+              |                |                |
+        order58_stores   order58_agents   order58_rule_records
+              |                                  |
+              | source_id                        | dedupe + classify
+              |                                  v
+              |                          rule_catalog_rules
+              |                             |          |
+              |                   rule_store_links   is_globally_available
+              |                             |          |
+              v                             v          v
+        knowledge_bases  <----- projected as documents ----
+        (one per store)
+              |
+              +--> documents -> document_index_files -> OpenAI vector store
+              |
+              +--> conversations -> messages          (grounded chat)
+              |
+              |  [ name + source_active ONLY ]
+              v
+        audio_conversations.store_source_id            <-- THE ONLY AUDIO LINK
+              |
+              v
+        audio_transcription_jobs
+              |
+              v
+        audio_segment_revisions
+
+22.2 EACH INTEGRATION, ANSWERED
+
+  Order58 -> Audio-to-Text
+    HOW: indirectly and weakly. The store PICKER is an Order58 page that links
+    to the audio route BY ROUTE NAME STRING ('audio-to-text.store'). Order58
+    also reads audio counts via DbStoreAudioCounts. No class dependency either
+    way.
+
+  Store -> Audio-to-Text
+    HOW: audio_conversations.store_source_id, set at upload time from the URL
+    segment. Read back via storeSourceIdFor(). The store's NAME and ACTIVE
+    flag are fetched through AudioStoreLookupInterface for page chrome and the
+    upload gate. THIS IS THE ENTIRE INTEGRATION.
+
+  Knowledge -> Audio-to-Text
+    HOW: **ONLY** as the source of the store's DISPLAY NAME and source_active
+    flag (DbAudioStoreLookup joins knowledge_bases). NO document content, NO
+    embeddings, NO vocabulary, NO influence on transcription whatsoever.
+
+  Rules -> Audio-to-Text
+    **DOES NOT EXIST.** No code path connects them. No rule affects any audio
+    behaviour. No audio-scoped rule type exists.
+
+  Knowledge -> Order58
+    HOW: knowledge_bases.source_system='order58' + source_store_id links a
+    knowledge base to a mirrored store. The store DIRECTORY is built on an
+    INNER JOIN between them, so the two are effectively one concept in the UI.
+
+  Rules -> Knowledge
+    HOW: an approved catalogue rule is PROJECTED as a document row into one or
+    more knowledge bases (store-specific and/or the hidden global base), then
+    indexed. That projection is the rule's only runtime effect.
+
+  Rules -> Order58
+    HOW: rule_catalog_sources.order58_rule_record_id (hard FK) traces every
+    canonical rule back to the mirrored record(s) it came from.
+    rule_store_links.store_source_id scopes a rule to stores by soft reference.
+
+22.3 INTEGRATIONS THAT DO NOT EXIST (explicitly verified)
+
+    Audio-to-Text  ->  Knowledge Base content        NONE
+    Audio-to-Text  ->  Rules                         NONE
+    Audio-to-Text  ->  Chat                          NONE
+    Audio-to-Text  ->  Ai / OpenAI                   NONE
+    Audio-to-Text  ->  Order58 classes               NONE
+    Audio transcripts -> vector store / retrieval    NONE
+    Rules          ->  transcription behaviour       NONE
+    Knowledge      ->  transcription behaviour       NONE
+
+  A transcript produced by Audio-to-Text is NEVER indexed, NEVER retrievable
+  by chat, and NEVER sent anywhere. It lives only in
+  audio_transcription_jobs.transcript and its reviewed counterpart.
+
+
+================================================================================
+23. ROUTES
+================================================================================
+
+  ALL routes live in ONE file: config/common/routes.php
+  ALL routes below are inside the RequireAdminMiddleware group.
+  publicId constraint is [0-9a-f]{32} on every job route — rejects a malformed
+  id before any action runs and keeps the database id out of every URL.
+
+  METHOD  PATH                                              ROUTE NAME                         OWNER        ACTION
+  ------  ------------------------------------------------  ---------------------------------  -----------  ------------------------------------
+  GET     /admin/order58/store-audio                        order58.store-audio                Order58      Order58\Web\StoreAudio\Action
+  GET     /audio-to-text                                    audio-to-text                      AudioToText  AudioToText\Web\Action (REDIRECT to picker)
+  GET     /audio-to-text/jobs                               audio-to-text.jobs                 AudioToText  Job\Index\Action
+  GET,POST /audio-to-text/store/{sourceId:\d+}              audio-to-text.store                AudioToText  Job\Store\Action  (upload + history)
+  GET     /audio-to-text/conversion/{publicId}              audio-to-text.conversion           AudioToText  Job\Conversion\Action (COMMON -> 302 to /review)
+  GET     /audio-to-text/job/{publicId}                     audio-to-text.job                  AudioToText  Job\Action  (detail)
+  GET     /audio-to-text/job/{publicId}/status              audio-to-text.job.status           AudioToText  Job\Status\Action  (2 s polling)
+  GET     /audio-to-text/job/{publicId}/download            audio-to-text.job.download         AudioToText  Job\Download\Action
+  GET     /audio-to-text/job/{publicId}/conversation        audio-to-text.job.conversation     AudioToText  Job\Conversation\Action  (read-only)
+  GET     /audio-to-text/job/{publicId}/original            audio-to-text.job.original         AudioToText  Job\Original\Action  (MACHINE ONLY)
+  GET     /audio-to-text/job/{publicId}/review              audio-to-text.job.review           AudioToText  Job\Review\Action
+  POST    .../review/turn/{index:\d+}/move                  audio-to-text.job.review.move      AudioToText  Job\Review\Move\Action
+  POST    .../review/turn/{index:\d+}/move-text             audio-to-text.job.review.move-text AudioToText  Job\Review\MoveText\Action
+  POST    .../review/turn/{index:\d+}/split                 audio-to-text.job.review.split     AudioToText  Job\Review\Split\Action
+  POST    .../review/turn/{index:\d+}/merge                 audio-to-text.job.review.merge     AudioToText  Job\Review\Merge\Action
+  POST    .../review/turn/{index:\d+}/text                  audio-to-text.job.review.text      AudioToText  Job\Review\Text\Action
+  POST    .../review/confirm                                audio-to-text.job.review.confirm   AudioToText  Job\Review\Confirm\Action
+  POST    .../review/revert                                 audio-to-text.job.review.revert    AudioToText  Job\Review\Revert\Action
+
+  AUTHORIZATION for every row above: authenticated administrator + the job
+  exists. An unknown id is a 404 (never a 403) so "no such job" and "not
+  available to you" are indistinguishable from outside.
+
+  ROUTE COUNT BY AREA (whole application, from routes.php):
+    knowledge-bases  39
+    admin (Order58 + AI usage + rule chat)  33
+    agent  27
+    audio-to-text  17
+    login/logout/dashboard  4
+
+  NOTES
+    - POST /audio-to-text is GONE. An upload endpoint that cannot name a store
+      would have to invent one or write a conversation no history shows.
+    - "View" everywhere opens /review, because that page never dead-ends: a row
+      with nothing to correct redirects to the detail page.
+    - A SEPARATE conversion is never offered /conversation or /review.
+    - /conversation is currently reachable BY URL ONLY: its sole inbound link
+      on the review page is hidden by CSS
+      (.a2t-chat__action--conversation { display: none; }, commit fa7b3ce).
+
+
+================================================================================
+24. PACKAGES & DEPENDENCIES (AUDIO-TO-TEXT SPECIFIC)
+================================================================================
+
+24.1 PHP COMPOSER PACKAGES
+  NONE are audio-specific. Audio-to-Text uses only what the framework already
+  provides: yiisoft/db, yiisoft/router, yiisoft/view, yiisoft/html,
+  yiisoft/validator, psr/log. It adds ZERO composer dependencies.
+  Required PHP extensions used by this module: ext-fileinfo (MIME sniffing),
+  ext-pdo/pdo_mysql, ext-mbstring (codepoint slicing), ext-json.
+
+24.2 JAVASCRIPT / NPM PACKAGES
+  NONE. There is no package.json, no node_modules and no build step.
+  All behaviour is in assets/main/admin.js (vanilla, CSP-safe).
+
+24.3 SYSTEM BINARIES
+  NAME         PATH                                          REQUIRED  PURPOSE
+  ffmpeg       /usr/bin/ffmpeg                               YES       resample to 16 kHz mono PCM s16le
+  ffprobe      /usr/bin/ffprobe                              YES       duration probe before enqueue
+  whisper-cli  /opt/whisper.cpp/build/bin/whisper-cli (1.9.3-dev)  YES  transcription
+  python3      /opt/audio-diarization/venv/bin/python3       OPTIONAL  diarization only
+
+24.4 PYTHON PACKAGES
+  sherpa-onnx 1.13.6  (PINNED — an unpinned install makes the machine
+  unreproducible). Installed in /opt/audio-diarization/venv.
+  Pulls onnxruntime as a transitive dependency.
+  Total footprint: ~20 MB of Python packages plus ~35 MB of models.
+
+24.5 AI / ML MODELS (ALL LOCAL, ALL FREE, NO API)
+  ggml-small.bin        ~487 MB  whisper.cpp multilingual model
+  segmentation.onnx     5,992,913 B   pyannote segmentation 3.0, MIT
+  embedding.onnx        28,281,164 B  3D-Speaker CAM++ zh+en, Apache-2.0
+  Checksums recorded in docs/AUDIO_TO_TEXT.md §3 and verified there.
+
+24.6 SYSTEM SERVICES
+  knowledge-forge-audio-worker.service   oneshot, resource-limited
+  knowledge-forge-audio-worker.timer     OnUnitActiveSec=2min
+  (installed manually; nothing in this project writes to /etc)
+
+24.7 EXTERNAL AI PROVIDERS USED BY AUDIO-TO-TEXT
+
+  ############################################################################
+  ##  NONE.                                                                 ##
+  ############################################################################
+
+  Verified: `grep -rniE "openai|anthropic|deepgram|aws|azure|google"
+  src/AudioToText/ --include=*.php --include=*.py` returns NO MATCHES.
+
+  DEEPGRAM IS NOT PRESENT ANYWHERE IN THIS CODEBASE.
+  No package, no client, no configuration, no reference.
+
+  COST: audio transcription costs NOTHING per minute. It is entirely local CPU.
+
+  (For contrast, the REST of the application does use OpenAI — Responses API,
+  Vector Stores, vision — via src/Ai/. That is a separate module with its own
+  ledger, `ai_operations`, and Audio-to-Text touches none of it.)
+
+24.8 DEAD CONFIGURATION FOUND
+  .env defines SEVEN AUDIO_CHAT_* variables:
+    AUDIO_CHAT_MODEL=gpt-4o-mini
+    AUDIO_CHAT_MAX_CALLS=12
+    AUDIO_CHAT_MAX_CHARS_PER_CALL=4000
+    AUDIO_CHAT_MAX_OUTPUT_TOKENS=900
+    AUDIO_CHAT_MAX_QUESTION_LENGTH=500
+    AUDIO_CHAT_HISTORY_MESSAGE_LIMIT=8
+    AUDIO_CHAT_HISTORY_CHAR_LIMIT=1200
+  They are DEAD. Verified:
+    - grep -c "AUDIO_CHAT" src/Environment.php  => 0  (not in the SPEC)
+    - No file anywhere outside .env mentions AUDIO_CHAT
+  Because Environment.php validates against its SPEC, these are ignored
+  entirely. They appear to be the residue of an abandoned or planned
+  "chat with a transcript" feature. See section 33.
+
+
+================================================================================
+25. ENVIRONMENT VARIABLES
+================================================================================
+
+  DEFINED IN   src/Environment.php  (SPEC: type, default, min, max)
+  OVERRIDDEN   .env
+  READ IN      config/common/params.php
+  ASSEMBLED    config/common/di/audio-to-text.php
+  CONSUMED     App\AudioToText\Application\AudioToTextSettings
+               ->transcription | ->worker | ->diarization
+
+  VARIABLE                              CURRENT (.env)                     TYPE/RANGE          PURPOSE
+  ------------------------------------  ---------------------------------  ------------------  -------------------------------------------
+  WHISPER_BINARY                        /opt/whisper.cpp/build/bin/whisper-cli  string         transcription binary
+  WHISPER_MODEL                         /opt/whisper.cpp/models/ggml-small.bin  string         whisper model file
+  AUDIO_TRANSCRIPTION_TEMP_DIR          (empty)                            string             override workspace root
+  AUDIO_TRANSCRIPTION_MAX_SIZE          31457280 (30 MB)                   int 1024..1073741824  per-file upload ceiling
+  AUDIO_TRANSCRIPTION_MAX_DURATION      300 (5 min)                        int 1..7200        longest recording accepted
+  AUDIO_TRANSCRIPTION_TIMEOUT           600                                int 1..7200        ffmpeg AND whisper child timeout
+  AUDIO_TRANSCRIPTION_THREADS           1                                  int 1..64          THE single CPU budget (ffmpeg -threads,
+                                                                                              whisper -t, diarizer --num-threads,
+                                                                                              OMP/OPENBLAS/MKL_NUM_THREADS)
+  AUDIO_TRANSCRIPTION_MAX_QUEUE         0 (unlimited)                      int 0..100000      queue cap; 0 skips the named lock entirely
+  AUDIO_TRANSCRIPTION_RETENTION_SECONDS 0 (keep forever)                   int 0..315360000   expiry window
+  AUDIO_TRANSCRIPTION_STALE_AFTER       1200                               int 60..86400      a PROCESSING job older than this is dead
+  AUDIO_TRANSCRIPTION_WORKER_SLEEP      2                                  int 1..300         idle poll interval (continuous mode)
+  AUDIO_WORKER_HEARTBEAT_SECONDS        5                                  int 1..300         heartbeat write cadence
+  AUDIO_WORKER_STALE_AFTER              30                                 int 5..3600        process presumed dead
+  AUDIO_WORKER_TICK_STALE_AFTER         180                                int 10..86400      ticks presumed stopped
+  AUDIO_WORKER_MIN_AVAILABLE_MB         1500                               int 0..1048576     admission: free RAM floor
+  AUDIO_WORKER_MAX_LOAD_PER_CORE        1.5                                float 0..1000      admission: load ceiling
+  AUDIO_WORKER_FOREIGN_LOCKS            /var/www/html/telecom-billing/...  string             cross-project coordination (§16.3)
+  AUDIO_WORKER_YIELD_TO_OTHER_WHISPER   true                               bool               best-effort process scan (RACY)
+  AUDIO_DIARIZATION_ENABLED             true                               bool (default FALSE) master switch
+  AUDIO_DIARIZATION_BINARY              /opt/audio-diarization/venv/bin/python3  string       python interpreter
+  AUDIO_DIARIZATION_SEGMENTATION_MODEL  /opt/audio-diarization/models/segmentation.onnx  string
+  AUDIO_DIARIZATION_EMBEDDING_MODEL     /opt/audio-diarization/models/embedding.onnx     string
+  AUDIO_DIARIZATION_TIMEOUT             300                                int 1..7200        diarizer child timeout
+  AUDIO_DIARIZATION_MIN_CONFIDENCE      0.55                               float 0..1         GATE 4 threshold
+  AUDIO_DIARIZATION_MAX_SPEAKERS        2                                  int 0..20          0 = cluster by distance instead
+  AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS 1500                             int 0..10000       gap bridging in alignment
+
+  NOTE: AUDIO_DIARIZATION_ENABLED defaults to FALSE in the SPEC and is set to
+  TRUE in this deployment. Diarization paths are only validated when it is on,
+  so the shipped default does not fail its own validation.
+
+25.1 STARTUP VALIDATION
+  AudioToTextSettings::problems() runs before the worker claims any work and
+  REFUSES TO START on a problem, naming the variable to fix. It checks:
+    - binaries and models exist and are executable/readable
+    - AUDIO_TRANSCRIPTION_TIMEOUT >= AUDIO_TRANSCRIPTION_MAX_DURATION x 1.5
+    - every configured foreign lock is READABLE (the one misconfiguration that
+      would otherwise stall the queue in total silence)
+  Non-fatal observations print as notes and the worker carries on.
+
+25.2 THE DURATION CHAIN (the one setting that is NOT self-contained)
+    MAX_DURATION 300  --(x1.19 measured RTF)-->  ~355 s of whisper
+      TRANSCRIPTION_TIMEOUT 600   enforced >= MAX_DURATION x 1.5 at startup
+      DIARIZATION_TIMEOUT   300   measured ~49 s at 5 min, ~6x headroom
+      STALE_AFTER          1200   must exceed 600 + 300 = 900
+      TimeoutStartSec      1200   systemd; must also exceed 900   <- LIVES IN /etc
+  The last one is the ONLY part of this feature that cannot be changed from
+  .env alone.
+
+25.3 NON-CONFIGURABLE ALGORITHM COEFFICIENTS (deliberately in code)
+  RoleScoreWeights.php constants, DialogueAct semantics, DialogueActDetector
+  patterns, SeparationBalance thresholds, MIN_ATTRIBUTED_SHARE (0.75).
+  These are algorithm coefficients, not operator settings.
+  AUDIO_DIARIZATION_MIN_CONFIDENCE remains the ONLY dial, and it decides how
+  much certainty is required to publish, not how certainty is reached.
+
+
+================================================================================
+26. SECURITY
+================================================================================
+
+  CONTROL              IMPLEMENTATION                                           VERDICT
+  -------------------  -------------------------------------------------------  --------
+  Authentication       RequireAdminMiddleware on every audio route; reloads the  OK
+                       account from the DB per request
+  Agent isolation      RequireAgentMiddleware is a separate realm; agents can    OK
+                       never reach an audio route
+  Authorization        authenticated admin + job exists. 404 never 403           OK (but see R1)
+  Store access         store comes from the URL; a posted store_id is IGNORED    OK
+                       (pinned by test)
+  CSRF                 application-wide middleware; every correction form        OK
+                       carries a token
+  Upload: size         AUDIO_TRANSCRIPTION_MAX_SIZE, checked server-side         OK
+  Upload: extension    allow-list {wav,mp3,m4a,ogg,webm}                         OK
+  Upload: MIME         finfo over the REAL first 4,096 bytes. The browser's      OK
+                       declared type is ignored entirely
+  Upload: duration     ffprobe before enqueue                                    OK
+  Path safety          client filename NEVER becomes a path; server names the    OK
+                       file source.<ext>
+  Private storage      runtime/ is outside the web root; public/ verified to      OK
+                       contain no audio; 0750/0700 dirs, never 0777
+  Enumeration          32-hex random public_id; internal ids never in a URL      OK
+  Command injection    proc_open() with an ARGV ARRAY — no shell, so quoting,    OK
+                       globbing, ; ` and $(...) are inert
+  Process limits       wall-clock timeout, SIGTERM -> 2 s -> SIGKILL,            OK
+                       256 KB cap per output stream, minimal child env
+  SQL injection        yiisoft/db query builder with bound parameters throughout OK
+  XSS                  every rendered value through Html::encode(); raw JSON     OK
+                       never shown; historical transcript text escaped too
+  CSP                  script-src 'self'; style-src 'self'; no unsafe-inline     OK
+  Concurrent edits     conditional UPDATE optimistic lock on review_count;       OK
+                       missing version becomes -1 and LOSES
+  Audit                append-only audio_segment_revisions; no update, no delete OK
+  Error separation     user-safe wording in error_message; exit codes, stderr    OK
+                       and paths to the log only
+
+26.1 RISKS (REPORTED, NOT FIXED)
+
+  R1  NO PER-STORE AUTHORIZATION.  Any authenticated administrator can view,
+      correct, confirm and download EVERY store's recordings and transcripts.
+      This is a documented product decision ("shared administrator demo"), not
+      an oversight — but it is worth restating because call recordings may
+      contain customer names, addresses and payment discussion. If the admin
+      population ever grows beyond one trusted operator, this becomes the
+      first thing to revisit. Live admin_users count today: 1.
+
+  R2  FOREIGN-LOCK COUPLING TO ANOTHER PROJECT'S FILESYSTEM.
+      AUDIO_WORKER_FOREIGN_LOCKS points at
+      /var/www/html/telecom-billing/runtime/audio-to-text/cron-worker.lock.
+      That directory is 0750 www-data:www-data. If this worker ever runs as a
+      different user it will defer EVERY tick. It fails closed with a warning,
+      which is correct — but the queue stalls silently to anyone not reading
+      the startup output.
+
+  R3  AUDIO_WORKER_YIELD_TO_OTHER_WHISPER IS RACY BY CONSTRUCTION.
+      Documented as such. It must never be treated as an exclusivity
+      guarantee. Only the flock mechanisms are.
+
+  R4  DEAD AUDIO_CHAT_* CONFIGURATION IN .env (section 24.8).
+      Not exploitable — the values are never read — but a future reader could
+      reasonably assume transcripts are being sent to gpt-4o-mini, which they
+      are not. Misleading configuration is a security-communication risk.
+
+  R5  RETAINED RECORDINGS ARE KEPT FOREVER BY DEFAULT.
+      AUDIO_TRANSCRIPTION_RETENTION_SECONDS=0. 27 recordings currently on
+      disk with expires_at NULL. There is no data-retention expiry and no
+      deletion UI. This is a deliberate setting, but it is a compliance
+      surface for recordings of real customer calls.
+
+  R6  INTEGRATION TESTS OPERATE ON THE LIVE DATABASE (section 28.2).
+      Not a production risk, but a real operational one.
+
+
+================================================================================
+27. ERROR HANDLING
+================================================================================
+
+  CASE                     USER-VISIBLE            DB STATUS           FILES              LOG        RETRY
+  -----------------------  ----------------------  ------------------  -----------------  ---------  -----
+  Invalid upload           field-specific message  NO ROW WRITTEN      none written       no         n/a
+  Oversized upload         "up to N MB" message    NO ROW              none               no         n/a
+  Oversized SEPARATE pair  per-field + combined    NO ROW, NO PARTIAL  every file written no         n/a
+                           message                 BATCH               so far is removed
+  Invalid format/MIME      extension message       NO ROW              none               no         n/a
+  Too long (ffprobe)       duration message        NO ROW              file removed       no         n/a
+  Queue full (cap set)     "queue full"            NO ROW              file removed       no         n/a
+  ffprobe failure          upload rejected         NO ROW              file removed       yes        n/a
+  ffmpeg failure           user-safe error_message FAILED / FAILED     workspace deleted  yes        NO
+  ffmpeg timeout           same                    FAILED              workspace deleted  yes        NO
+  Transcription failure    user-safe error_message FAILED              workspace deleted  yes        NO
+  Transcription timeout    same (600 s)            FAILED              workspace deleted  yes        NO
+  Diarization failure      NOTHING VISIBLE BREAKS  **COMPLETED**,      recording RETAINED yes        NO
+                           — split shown as        separation=FAILED
+                           "not available"
+  Diarization timeout      same                    COMPLETED,          retained           yes        NO
+                                                   separation=FAILED
+  Speaker mapping refused  "needs review" state    COMPLETED,          retained           no         n/a
+                           Speaker 1/2 labels      separation=NEEDS_REVIEW
+  Diarization disabled     "not supported"         COMPLETED,          retained           note       n/a
+                                                   separation=NOT_SUPPORTED
+  Database failure         500 / generic           transaction rolls   as written         yes        NO
+                                                   back
+  Worker crash             job appears stuck       PROCESSING until    workspace remains  yes        recovered,
+                           until the sweep         the stale sweep     until swept                   NOT requeued
+  Worker OOM (MemoryMax)   as above                as above            as above           journald   as above
+  Low memory / high load   "Deferring new jobs     NO CLAIM MADE       none               yes        next tick
+                           while the server is     (stays QUEUED)
+                           busy"
+  Foreign lock unavailable "Deferring — a          NO CLAIM            none               yes        next tick
+                           coordination lock is
+                           unavailable"
+  SEPARATE: customer OK,   conversion shows        one child COMPLETED both retained      yes        NO
+  agent fails              PARTIALLY_COMPLETED     one child FAILED
+                           with BOTH blocks
+  Correction conflict      "Somebody else          NO WRITE. The       n/a                no         user
+                           corrected this          revision rolls back                               retries
+                           conversation while you
+                           had it open..."
+  Correction refused       the domain's own        NO WRITE, NO TRACE  n/a                no         n/a
+  (rule violation)         message, shown as-is
+
+  KEY INVARIANT: the transcript is committed the moment whisper succeeds, so an
+  OOM kill or crash after that point completes the job and loses ONLY the
+  speaker split. Only a crash BEFORE transcription fails the job.
+
+
+================================================================================
+28. TESTS
+================================================================================
+
+28.1 INVENTORY
+
+  tests/Unit/AudioToText/  (27 files)
+    AudioConversationTest                     shape invariants, duration summing
+    AudioUploadValidatorTest                  COMMON upload validation
+    ConversationHistoryBuilderTest            per-message lineage derivation
+    ConversationStatusTest                    every child-state combination
+    ConversationViewTest                      what a page may claim
+    DialogueActDetectorTest                   act detection patterns
+    EffectiveConversationReaderTest           which layer is chosen
+    ForeignLockGuardTest                      cross-project lock behaviour
+    MergeSelectionTest                        range merge
+    ModuleIsolationTest                       6 architectural rules
+    QueueLimitSettingTest                     cap semantics
+    ResponseTimingTest                        reply delay computation
+    RetentionSettingTest                      expiry semantics
+    ReviewedConversationTurnsContiguityTest   THE history foundation guard
+    ReviewedConversationTurnsTest             every correction rule
+    SeparateUploadValidatorTest               pair validation, field errors
+    SeparationBalanceTest                     gate 2 thresholds
+    SpeakerMarkersTest                        ">>" stripping
+    SpeakerRoleMapperTest                     role decision + confidence
+    SpeakerSeparationServiceTest              the five gates
+    SpeakerTranscriptAlignerTest              token x interval alignment
+    SplitPointTest                            offered split positions
+    TranscriptFilenameTest                    download filename safety
+    TranscriptionDurationLimitTest            duration ceiling
+    WebTierCannotRunWhisperTest               web tier may not name the engine
+    WorkerAdmissionGuardTest                  RAM/load gate
+    WorkerHealthServiceTest                   liveness reporting
+
+  tests/Integration/AudioToText/  (5 files)
+    AudioConversationTest                     paired enqueue, rollback, cap,
+                                              childless sweep (REAL MySQL + REAL ffprobe)
+    QueueSummaryIntegrationTest
+    ReviewConversationServiceTest             atomic correction + audit
+    ReviewedConversationPersistenceTest
+    TranscriptionJobRepositoryTest            atomic claim, FIFO, stale recovery
+
+  tests/Web/  (5 audio files)
+    AudioToTextCest                 auth, validation, global list, job page,
+                                    downloads, escaping
+    AudioToTextStoreCest            picker, store page, BOTH upload modes end
+                                    to end, no diarization for supplied roles,
+                                    no half-created pair, store scoping,
+                                    posted store_id ignored, conversion page
+    AudioToTextConversationCest     read-only conversation page
+    AudioToTextReviewCest           the correction screen (63 tests)
+    AudioToTextOriginalCest         the machine-only page (10 tests)
+
+  SUITE TOTALS MEASURED THIS AUDIT: Unit = 1,190 tests / 3,526 assertions, PASS
+
+28.2 COVERAGE VERDICT BY FEATURE
+
+  FEATURE                                   VERDICT
+  ----------------------------------------  ------------------------------------
+  COMMON upload + validation                TESTED
+  SEPARATE upload + pair validation         TESTED
+  Paired enqueue atomicity / rollback       TESTED (integration)
+  Queue cap reserving both slots            TESTED
+  FIFO + atomic claim                       TESTED (integration)
+  Stale job recovery                        TESTED (integration)
+  Foreign lock behaviour                    TESTED
+  Worker admission (RAM/load)               TESTED
+  Alignment                                 TESTED
+  Dialogue act detection                    TESTED
+  Role mapping + confidence                 TESTED
+  Separation balance (gate 2)               TESTED
+  The five gates end to end                 TESTED
+  Every correction operation                TESTED
+  Correction audit + optimistic lock        TESTED (integration)
+  Per-message history derivation            TESTED
+  Contiguity property (history foundation)  TESTED
+  Machine-layer immutability                TESTED (AudioToTextOriginalCest)
+  Conversation status combinations          TESTED
+  Retention / childless sweep               TESTED
+  Module isolation                          TESTED
+  Web tier cannot run whisper               TESTED
+  ----------------------------------------  ------------------------------------
+  ACTUAL ffmpeg / whisper execution         NOT TESTED (by design — no
+                                            automated test requires the
+                                            binaries; the web suite uploads a
+                                            real WAV but no worker runs, so
+                                            jobs stop at QUEUED, which IS the
+                                            assertion)
+  ACTUAL sherpa-onnx execution              NOT TESTED (same reason)
+  Rendered CSS / colours                    NOT TESTED (PhpBrowser has no
+                                            rendering engine)
+  JavaScript behaviour (dialogs, drag,      NOT TESTED (PhpBrowser has no JS
+  scroll restoration)                       runtime)
+  Browser download of a transcript          PARTIALLY TESTED (headers asserted,
+                                            not a real browser save)
+
+28.3 DANGEROUS TESTS — OPERATIONAL WARNING
+
+  tests/Integration/AudioToText/TranscriptionJobRepositoryTest.php exercises
+  claimNextQueued() against the **LIVE** database — one case drains the queue
+  in a loop. It WILL claim a real administrator's queued jobs and leave them
+  PROCESSING when the test ends. The stale sweep then fails them after
+  AUDIO_TRANSCRIPTION_STALE_AFTER and the recording must be uploaded again.
+
+  CHECK BEFORE RUNNING ANY DB-TOUCHING SUITE:
+    mysql -e "SELECT id, original_filename, status FROM audio_transcription_jobs
+              WHERE status IN ('QUEUED','PROCESSING')" knowledge_forge_db
+
+  RECOVERY (nothing is lost — no transcript was written yet):
+    UPDATE audio_transcription_jobs
+       SET status='QUEUED', processing_stage='QUEUED', started_at=NULL
+     WHERE id IN (...) AND status='PROCESSING';
+
+  The real fix is to scope those tests to their own administrators the way
+  AudioToTextCest already does. Known sharp edge, not a surprise.
+
+28.4 ENVIRONMENT NOTE
+  tests/Web.suite.yml points PhpBrowser at http://127.0.0.1:8080 and starts
+  `composer serve`. On this machine port 8080 is occupied by a DIFFERENT
+  project (/var/www/html/telecom-billing), so the server cannot bind and the
+  whole Web suite fails at the login step with a 404. Workaround used during
+  recent work:
+    ./vendor/bin/codecept run Web <Cest> \
+      -o "modules: config: PhpBrowser: url: http://127.0.0.1:8099"
+  with `php ./yii serve --port=8099` running.
+
+
+================================================================================
+29. PERFORMANCE
+================================================================================
+
+  SOURCE OF NUMBERS: docs/AUDIO_TO_TEXT.md §6, recorded as measured on this
+  machine. NOT RE-MEASURED DURING THIS AUDIT — treat as documented, not
+  freshly verified.
+
+  PER-STAGE, EACH PINNED TO ONE THREAD
+
+  STAGE                  73.7 s RECORDING   297 s RECORDING   RTF     PEAK RSS @297s
+  ---------------------  -----------------  ----------------  ------  --------------
+  ffmpeg                 0.07 s             0.10 s            0.0003x  49.6 MB
+  whisper-cli -t 1       82-106 s           354.6 s           1.19x    904.4 MB
+  sherpa-onnx diarize    10.4 s             48.9 s            0.16x    368.1 MB
+  align + role mapping   < 20 ms            15 ms             —        in-process
+  END TO END             ~110 s             403.6 s           1.36x    ~964 MB incl PHP
+
+  The stages run SEQUENTIALLY inside one job, so the peak is
+  max(904, 368) + ~60 MB for the PHP worker, NOT their sum.
+
+  SYSTEMD CEILINGS (docs/server/systemd/knowledge-forge-audio-worker.service)
+    CPUQuota      100%    exactly one core (whisper measured 99% at -t 1)
+    MemoryHigh    1200M   1.45 x the 833.9 MB whisper peak — throttles, not kills
+    MemoryMax     1600M   1.9 x peak, OOM backstop
+    TimeoutStartSec 1200  must exceed 600 s transcription + 300 s diarization
+    Nice 15 / IOSchedulingClass idle   nginx, PHP-FPM and MySQL served first
+
+29.1 THROUGHPUT — THE 50-FILE QUESTION, ANSWERED
+
+  Q: If 50 files are uploaded at once, what happens?
+  A: ALL 50 ARE QUEUED IMMEDIATELY. AUDIO_TRANSCRIPTION_MAX_QUEUE = 0 means no
+     cap, so no upload is refused. All 50 rows land in
+     audio_transcription_jobs with status='QUEUED'.
+
+  Q: How many process concurrently?
+  A: EXACTLY ONE. Machine-wide. Guaranteed by flock on worker.lock plus the
+     atomic conditional claim (section 16.3).
+
+  Q: In what order?
+  A: Strict FIFO by auto-increment id. ORDER BY id ASC. A recording uploaded
+     later can never be taken before an earlier one.
+
+  Q: A mix of 2 min / 4 min / 1 min / 5 min?
+  A: Each is transcribed at roughly 1.19-1.36x real time end to end, one after
+     another, with a timer tick every 2 minutes. Worked example for
+     2+4+1+5 = 12 minutes of audio:
+       ~2.4 + ~4.8 + ~1.2 + ~6.0  =  ~14.4 minutes of processing
+     plus up to 2 minutes of queue wait per job, because the unit is
+     `--once` and a new tick is needed after each job finishes.
+     PRACTICAL RULE: throughput ceiling is roughly 45 minutes of audio per
+     hour of wall clock, minus tick latency. Fifty 5-minute files (250 minutes
+     of audio) would take on the order of 5-6 hours to drain.
+
+  Q: Does a long job block the next tick?
+  A: systemd will not start a second run while the unit is active, so the tick
+     that lands mid-job is SKIPPED, not queued in parallel. A 5-minute
+     recording (~404 s) outlives the 2-minute interval and skips ~3 ticks.
+
+  Q: What limits throughput?
+  A: Deliberately, everything: one core (CPUQuota=100%), one thread
+     (AUDIO_TRANSCRIPTION_THREADS=1), one job, a 2-minute tick, an admission
+     guard, and a shared lock with another project. This is a demo box running
+     nginx, PHP-FPM and MySQL alongside.
+
+
+================================================================================
+30. CURRENT LIMITATIONS  (each VERIFIED, not assumed)
+================================================================================
+
+  L1   NO ADAPTIVE VOCABULARY.                            VERIFIED (section 12)
+       No custom vocabulary, keyterms, phrase hints or prompt of any kind
+       reaches whisper. The argv contains no such flag.
+
+  L2   NO RESTAURANT / MENU / STORE-SPECIFIC VOCABULARY.  VERIFIED
+       No document, rule, product or menu data is read by the audio module.
+
+  L3   NO LEARNING FROM CORRECTIONS.                      VERIFIED
+       Corrections are stored and audited but never fed back anywhere.
+
+  L4   NO TRANSCRIPTION-PROVIDER ABSTRACTION.             VERIFIED
+       No TranscriberInterface exists. AudioTranscriber is final and concrete.
+       (Diarization DOES have a port — the pattern exists, just not here.)
+
+  L5   MAXIMUM 5-MINUTE AUDIO.                            VERIFIED
+       AUDIO_TRANSCRIPTION_MAX_DURATION=300. Raising it requires the whole
+       duration chain in §25.2, including a systemd unit re-install.
+
+  L6   SINGLE WORKER, MACHINE-WIDE.                       VERIFIED
+       flock covers ONE machine. Several hosts sharing one database would need
+       a database lease, which does not exist.
+
+  L7   ONE CPU THREAD FOR EVERY STAGE.                    VERIFIED
+       AUDIO_TRANSCRIPTION_THREADS=1 drives ffmpeg, whisper, the diarizer and
+       the OMP/OPENBLAS/MKL family. The worker warns at startup if raised.
+
+  L8   MAXIMUM 2 SPEAKERS.                                VERIFIED
+       AUDIO_DIARIZATION_MAX_SPEAKERS=2. A third voice maps to OTHER/UNKNOWN
+       and is never folded into the agent or customer columns.
+
+  L9   SEPARATE MODE HAS NO REVIEW AT ALL.                VERIFIED
+       No speaker_segments means no /conversation, no /review, no role
+       confirmation, no correction, no history, no "Original transcript".
+       The two files carry no shared clock, so interleaving them would mean
+       inventing an ordering nobody measured.
+
+  L10  NO RETRY, ANYWHERE.                                VERIFIED
+       No automatic retry, no manual retry button, no requeue path.
+       Housekeeping only ever moves jobs OUT of PROCESSING. Retrying would
+       require creating a NEW job.
+
+  L11  LANGUAGE: multilingual model with -l auto, so NOT limited to English —
+       BUT the ROLE MAPPER's dialogue-act patterns are English and tuned for
+       restaurant/order calls. A Spanish or Gujarati call will transcribe, then
+       very likely land in NEEDS_REVIEW because the acts will not match.
+       The neutral clusters and the alignment ARE domain- and
+       language-independent; only the role decision is not.
+
+  L12  QUEUE IS UNBOUNDED BY DEFAULT.                     VERIFIED
+       AUDIO_TRANSCRIPTION_MAX_QUEUE=0. Nothing stops 500 uploads; they simply
+       drain slowly (section 29.1).
+
+  L13  DIARIZATION SOMETIMES MISSES A SPEAKER ENTIRELY on difficult telephone
+       audio — one cluster gets the whole call. Gate 2 detects and refuses to
+       publish, but CANNOT REPAIR it. Better separation means a different
+       embedding model, not a threshold change.
+
+  L14  8 kHz TELEPHONE AUDIO upsampled to 16 kHz is harder for speaker
+       embeddings than clean wideband audio. This is exactly why the
+       NEEDS_REVIEW path exists rather than a forced two-way split.
+
+  L15  CROSS-PROJECT EXCLUSIVITY is race-safe ONLY against schedules that take
+       a lock file. The process-scan fallback is best-effort.
+
+  L16  AUDIO TRANSCRIPTS ARE NOT SEARCHABLE. They are never indexed, never
+       embedded, never retrievable by chat. There is no search over transcripts
+       at all.
+
+  L17  NO PER-STORE AUTHORIZATION (see R1).
+
+  L18  LEGACY CONVERSIONS HAVE NO STORE. 23 of 28 jobs have
+       store_source_id NULL. They appear on /audio-to-text/jobs and on no
+       store's page.
+
+
+================================================================================
+31. DEEPGRAM INTEGRATION READINESS   (ANALYSIS ONLY — NOTHING IMPLEMENTED)
+================================================================================
+
+  31.1 WHERE WOULD IT BELONG?
+    src/AudioToText/Infrastructure/  alongside AudioTranscriber.php, as a
+    sibling adapter (e.g. DeepgramTranscriber), with a new port in
+    src/AudioToText/Domain/ and the binding in
+    config/common/di/audio-to-text.php. This mirrors EXACTLY how diarization
+    already works: SpeakerDiarizerInterface with SherpaOnnxSpeakerDiarizer and
+    NullSpeakerDiarizer behind it.
+
+  31.2 WHAT EXISTING INTERFACE COULD SUPPORT IT?
+    NONE for transcription. There is no TranscriberInterface.
+    The nearest precedent that shows the intended shape:
+      src/AudioToText/Domain/Speaker/SpeakerDiarizerInterface.php
+
+  31.3 WHAT IS CURRENTLY COUPLED TO WHISPER?
+    (a) src/AudioToText/Infrastructure/AudioTranscriber.php — the whole class
+    (b) TranscriptionSettings properties `whisperBinary`, `whisperModel`
+    (c) env names WHISPER_BINARY / WHISPER_MODEL and their Environment.php SPEC
+    (d) AudioTranscriptionException::whisperMissing() / ::modelMissing()
+    (e) the direct call sites in AudioTranscriptionWorkerCommand
+    (f) startup validation in AudioToTextSettings::problems()
+    (g) tests/Unit/AudioToText/WebTierCannotRunWhisperTest.php (names the class)
+    (h) the local-only claim in docs and in the UI copy
+
+  31.4 WHICH TABLES COULD REMAIN UNCHANGED?
+    ALL FOUR AUDIO TABLES, unchanged. Nothing in the schema is Whisper-shaped:
+      audio_transcription_jobs   transcript, detected_language, duration,
+                                 speaker_segments are all provider-neutral
+      audio_conversations        provider-agnostic entirely
+      audio_segment_revisions    provider-agnostic entirely
+      audio_worker_heartbeat     provider-agnostic entirely
+
+  31.5 WHICH FIELDS ARE WHISPER-SPECIFIC?
+    NONE at the column level.
+    `speaker_separation_method` is a free-text identifier that would simply
+    carry a different value. `speaker_role_confidence` is computed by OUR
+    mapper, not by the engine — if Deepgram supplied its own diarization, the
+    meaning of this column would need a deliberate decision (see 31.6).
+
+  31.6 COULD DIARIZATION COME FROM DEEPGRAM INSTEAD OF SHERPA?
+    YES, structurally — SpeakerDiarizerInterface already abstracts it, so a
+    DeepgramDiarizer could satisfy the same port.
+    BUT two consequences would need deciding, not assuming:
+      (i)  Deepgram returns speaker labels WITH the transcript in one call, so
+           the current two-stage shape (transcribe, then diarize, then align)
+           would collapse. SpeakerTranscriptAligner might become unnecessary
+           for that provider while remaining necessary for whisper.
+      (ii) `speaker_role_confidence` and the five gates are OURS. Deepgram
+           gives speaker separation but NOT customer/agent role assignment, so
+           SpeakerRoleMapper, the dialogue acts and the gates WOULD STILL RUN.
+           This is a strength: the role logic is provider-independent.
+
+  31.7 COULD MANUAL REVIEW CONTINUE WORKING?
+    YES, entirely unchanged. The review layer consumes `speaker_segments` (a
+    neutral JSON shape) and knows nothing about where it came from. Every
+    correction operation, the audit trail, the optimistic lock, the history
+    derivation and the Original-transcript page would all keep working
+    untouched.
+
+  31.8 COULD COMMON AND SEPARATE MODES CONTINUE WORKING?
+    YES. The mode branch is on `$job->sourceRole?->isProvided()` in the worker,
+    which is entirely independent of the transcription provider. SEPARATE would
+    still skip diarization; COMMON would still run it.
+
+  31.9 COULD WE SEND RESTAURANT-SPECIFIC KEYTERMS PER STORE?
+    STRUCTURALLY YES — the store is already known at job time
+    (audio_conversations.store_source_id) and resolvable in the worker.
+    BUT TODAY NOTHING IS BUILT: no keyterm source, no keyterm storage, no
+    plumbing from a job to any vocabulary, and the worker does not currently
+    load the store at all. This would be new work in three places: a source of
+    terms, a way to attach them to a job, and a provider that accepts them
+    (whisper.cpp does not; Deepgram does).
+
+  31.10 IS THERE EXISTING STORE/KNOWLEDGE DATA THAT COULD GENERATE KEYTERMS?
+    YES, and this is the most promising finding in this section.
+      documents            425 rows, with `source_text` (mediumtext) holding
+                           extracted/manual document text per knowledge base
+      knowledge_bases      237 rows, one per store, linked by
+                           source_store_id -> order58_stores.source_id
+      order58_knowledge_records  115 rows of mirrored store knowledge
+      rule_catalog_rules   352 rows of rule text, scoped to stores via
+                           rule_store_links (234 rows)
+    A store's menu terminology, if it is present anywhere, is in those document
+    bodies. The JOIN PATH ALREADY EXISTS AND IS SHORT:
+      audio_conversations.store_source_id
+        -> knowledge_bases (source_system='order58', source_store_id=...)
+          -> documents.knowledge_base_id
+    CAVEAT NOT TO GLOSS OVER: nobody has verified that these documents actually
+    CONTAIN menu items. They may be policies, hours or rules. Extracting useful
+    keyterms would need a term-extraction step, not a straight read.
+    NOTE ALSO: any such link would be the FIRST dependency from Audio-to-Text
+    to Knowledge, and ModuleIsolationTest FORBIDS naming App\KnowledgeBase from
+    inside src/AudioToText/. It would have to go through a narrow port in the
+    DbAudioStoreLookup style (read the tables, name no foreign class), or the
+    isolation rule would have to be deliberately amended.
+
+  31.11 WHERE COULD A LEARNED-CORRECTIONS DICTIONARY BE STORED?
+    No such table exists. A new one would be needed. The natural shape,
+    following this codebase's existing conventions:
+      - scoped by store_source_id (soft reference, like every other store link)
+      - or global, with a scope column, mirroring rule_catalog_rules.scope_type
+      - with an occurrence counter to implement "after 2-3 times, remember it"
+      - with an approval flag, mirroring the rules classification workflow
+        (nothing in this system auto-publishes a machine inference — every
+        comparable feature has an admin gate)
+    It would be a NEW migration. This audit creates none.
+
+  31.12 WOULD EXISTING CORRECTION HISTORY HELP BUILD THAT DICTIONARY?
+    YES — this is the strongest existing asset for the feature.
+    `audio_segment_revisions` (118 rows today) stores the FULL conversation
+    BEFORE every accepted correction, with operation, editor and timestamp,
+    and the current state is on the job. The infrastructure to extract exactly
+    what changed ALREADY EXISTS AND IS TESTED:
+      src/AudioToText/Domain/Speaker/ConversationDiff.php
+        -> isolates the contiguous changed run between two snapshots
+      src/AudioToText/Application/ConversationHistoryBuilder.php
+        -> walks the whole chain and produces before/after pairs per message
+    Filtering those events to `operation = EDIT_TEXT` with a 1->1 shape yields
+    a clean corpus of (before text, after text) wording corrections, already
+    attributed to an administrator and a moment.
+    LIMITATIONS TO STATE HONESTLY:
+      - only 118 revisions exist, across 8 corrected jobs. That is a very small
+        corpus; "2-3 occurrences" thresholds would rarely trigger yet.
+      - EDIT_TEXT events replace a WHOLE TURN's text, not a word. Extracting
+        "one ton" -> "wonton" from "we have one ton soup" -> "we have wonton
+        soup" needs a word-level diff that does not exist today.
+      - corrections made before a REVERT describe a conversation that was
+        discarded; the history builder already excludes those, and a dictionary
+        builder would need the same rule or it would learn from withdrawn edits.
+
+  31.13 SUMMARY OF WORK REQUIRED (NOT DONE, NOT PLANNED HERE)
+    To add a second provider, the minimum honest list is:
+      1. Introduce a transcription port (interface) in Domain/
+      2. Make AudioTranscriber implement it (no behaviour change)
+      3. Rename or generalise the whisper-specific settings/env names, OR keep
+         them and add provider-specific ones alongside
+      4. Add the new adapter + its settings + its startup validation
+      5. Bind by configuration in config/common/di/audio-to-text.php
+      6. Decide what happens to diarization when the provider supplies it
+      7. Update WebTierCannotRunWhisperTest so the guard still holds
+    Steps 1-2 alone are a safe, behaviour-preserving refactor that would make
+    everything after it optional.
+
+
+================================================================================
+32. IMPORTANT RISKS
+================================================================================
+
+  RISK-1  No per-store authorization on recordings of real customer calls (R1).
+  RISK-2  Recordings retained forever by default; no expiry, no deletion UI (R5).
+  RISK-3  Integration tests operate on the live database and can claim real
+          queued jobs (R6 / 28.3).
+  RISK-4  Worker throughput is ~45 min of audio per wall-clock hour on this
+          box, shared with another project via a foreign lock. A burst of
+          uploads drains over hours, with no visibility beyond the queue count.
+  RISK-5  Gate 2 exists because a confidently-wrong split reached COMPLETED
+          once (21911549.wav). The gates are sound now, but the class of bug —
+          "confident and useless" — recurs whenever a new gate is added
+          without asking what question it answers.
+  RISK-6  Single point of failure: flock covers one machine. Any move to a
+          second host silently breaks the single-worker guarantee.
+  RISK-7  The role mapper is tuned for English restaurant/order calls. Any
+          other domain or language will transcribe fine and then land in
+          NEEDS_REVIEW, which looks like a failure but is the system being
+          honest.
+
+
+================================================================================
+33. IMPORTANT TECHNICAL DEBT
+================================================================================
+
+  TD-1  DEAD AUDIO_CHAT_* CONFIGURATION (7 variables in .env, defined in no
+        SPEC, read by no code). Section 24.8. Either implement or delete.
+
+  TD-2  NO TRANSCRIPTION PORT. The diarizer has one; the transcriber does not.
+        This is the single biggest blocker to any provider work.
+
+  TD-3  STALE DOCBLOCK IN EffectiveConversationReader.php:
+          "**Today it always returns the raw machine result**, because nothing
+           writes a reviewed conversation yet."
+        FALSE. It branches on isReviewed(). This is the most misleading comment
+        in the audio module and directly contradicts the class it sits on.
+
+  TD-4  DOCS §8.9 lists `move-text` as its own audited operation. It is not.
+        It records ReviewOperation::Move. There is no MOVE_TEXT value in the
+        enum or the DB CHECK constraint.
+
+  TD-5  DOCS §10 labels SeparationBalance "gate 1" and SpeakerRoleMapper
+        "gate 2", while docs §8's own table numbers them 2 and 3. Internally
+        inconsistent.
+
+  TD-6  README links to docs/KNOWLEDGE_FORGE_A_TO_Z.md and
+        docs/DATABASE_SCHEMA_AND_API_EFFECTS.md. NEITHER FILE EXISTS.
+        Verified: docs/ contains AUDIO_TO_TEXT.md, PROJECT_GUIDE.md,
+        extra_doc.zip, deploy/, nginx/, server/.
+
+  TD-7  INTEGRATION TESTS NOT SCOPED to their own administrators
+        (TranscriptionJobRepositoryTest). Known and documented; still unfixed.
+
+  TD-8  knowledge_base_rules TABLE IS EMPTY and its purpose is unclear
+        relative to rule_store_links. Dead schema or unfinished feature.
+
+  TD-9  TWO .wav FIXTURES (~4.4 MB) WERE COMMITTED into
+        runtime/audio-to-text/recordings/ in commit 69bf0ca. runtime/ probably
+        should be gitignored.
+
+  TD-10 PSALM: 8 pre-existing errors remain, all outside the audio module —
+        src/Chat/Console/ParticipantBackfillReportCommand.php (4) and
+        src/Document/Web/ManualText/{form,binary-form}.php (4).
+
+  TD-11 /conversation IS REACHABLE BY URL ONLY. Its single inbound link is
+        hidden by CSS (deliberate, commit fa7b3ce), so the read-only
+        conversation page is effectively orphaned in the UI.
+
+  TD-12 tests/Web.suite.yml HARD-CODES PORT 8080, which is occupied by another
+        project on this machine, so the Web suite cannot run with the default
+        configuration (section 28.4).
+
+
+================================================================================
+34. QUESTIONS / UNKNOWNS
+================================================================================
+
+  U-1  knowledge_base_rules purpose.
+       NOT DETERMINED — reason: table is empty (0 rows) and no write path was
+       traced during this audit. It may be superseded by rule_store_links or
+       may be an unfinished feature.
+
+  U-2  Whether store knowledge-base documents actually contain menu/product
+       terminology usable as transcription keyterms.
+       NOT DETERMINED — reason: requires reading document bodies across 425
+       rows and judging their content, which is a data question, not a code
+       question. The JOIN PATH exists (31.10); the CONTENT is unverified.
+
+  U-3  Exact classification algorithm inside the Rules module (how
+       classification_confidence and detected_store_text are produced).
+       NOT FULLY TRACED — reason: out of the stated scope of this audit, which
+       named Rules as an area to map rather than to trace line by line. The
+       tables, routes, lifecycle and projection behaviour ARE documented above.
+
+  U-4  Performance numbers in section 29.
+       DOCUMENTED, NOT RE-MEASURED during this audit. They come from
+       docs/AUDIO_TO_TEXT.md §6 where they are recorded as measured on this
+       machine. Anyone depending on them for capacity planning should re-run
+       the benchmark in docs §8.
+
+  U-5  Whether AUDIO_CHAT_* represents an abandoned feature or a planned one.
+       NOT DETERMINED — reason: no code, no branch, no migration and no
+       documentation references them. Only the .env entries survive.
+
+  U-6  Whether the 8 pre-existing Psalm errors are intentional suppressions.
+       NOT DETERMINED — reason: they are outside the audited modules and were
+       not investigated.
+
+
+================================================================================
+FINAL VERIFICATION — ALL 27 QUESTIONS ANSWERED
+================================================================================
+
+  1.  Upload to transcript display?            Section 5 (full trace)
+  2.  How many tables involved?                29 total; 4 audio, 6 Order58,
+                                               4 knowledge, 5 rules, 4 chat,
+                                               6 shared (section 13)
+  3.  Full schema of every relevant table?     Section 13
+  4.  Which transcription engine?              whisper.cpp 1.9.3-dev, local
+                                               binary, ggml-small.bin
+                                               multilingual (section 8)
+  5.  Which packages/models?                   Section 24
+  6.  How are speakers separated?              sherpa-onnx 1.13.6 + pyannote
+                                               segmentation + CAM++ embeddings
+                                               (section 9)
+  7.  How are Customer and Agent identified?   Dialogue-act adjacency pairs,
+                                               weighted, confidence =
+                                               agreement x volume (section 10)
+  8.  What happens when confidence is low?     Gate 4 -> NEEDS_REVIEW; full
+                                               transcript kept; role columns
+                                               NULL; Speaker 1/2 labels shown
+  9.  How can an admin correct it?             Seven operations (section 11.3)
+  10. Where are corrections stored?            reviewed_* columns +
+                                               audio_segment_revisions
+  11. Is the original preserved?               YES — proven at SQL level
+                                               (section 11.1)
+  12. Does it learn vocabulary?                **NO** (section 12)
+  13. How is Audio-to-Text linked to a Store?  audio_conversations.store_source_id,
+                                               set from the URL (section 18.1)
+  14. How is the Store linked to Order58?      order58_stores.source_id, soft
+                                               reference, no FK (section 13.2.1)
+  15. How is Knowledge linked to the Store?    knowledge_bases.source_system=
+                                               'order58' + source_store_id
+  16. Do Knowledge or Rules influence
+      transcription?                           **NO, neither** (section 20.1)
+  17. What Rules exist?                         One system: mirrored -> catalogue
+                                               -> classified -> projected as
+                                               documents (section 21). No audio
+                                               rules.
+  18. COMMON audio?                             Section 6
+  19. SEPARATE audio?                           Section 7
+  20. One separate recording fails?             PARTIALLY_COMPLETED; the other
+                                               keeps its result; no retry
+  21. How does the queue work?                  FIFO by id, atomic claim, one
+                                               job machine-wide (section 16)
+  22. How many process simultaneously?          EXACTLY ONE
+  23. How are files retained/cleaned?           Two sibling trees; move on
+                                               success; retention 0 = forever
+                                               (section 17)
+  24. After a crash or timeout?                 Stale sweep moves it OUT of
+                                               PROCESSING only; completed if the
+                                               transcript landed, else failed;
+                                               never requeued (section 15.6)
+  25. What changes for Deepgram?                Section 31.13
+  26. Store-specific vocabulary later?          Structurally possible; nothing
+                                               built; isolation rule would need
+                                               a narrow port or an amendment
+                                               (section 31.9-31.10)
+  27. Learn from repeated corrections later?    Possible; the audit corpus and
+                                               the diff machinery already exist;
+                                               a new table and a word-level diff
+                                               would be required (31.11-31.12)
+
+
+================================================================================
+END OF AUDIT
+No code, configuration, migration, package or test was modified.
+The only file created is this one: docs/project_flow.txt
+================================================================================
