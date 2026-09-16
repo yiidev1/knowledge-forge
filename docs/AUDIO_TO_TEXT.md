@@ -21,6 +21,14 @@ Either way the HTTP request validates the upload, writes each file to a private 
 duration and inserts a **conversation** row plus one `QUEUED` job per recording — then redirects. It
 does not transcribe anything.
 
+**Which engine transcribes is selectable.** Whisper (local, the default) or Deepgram (cloud). There is
+a global default an administrator sets on `/admin/order58/store-audio`, and a per-upload override on
+each store's audio page. The choice is written onto the job at enqueue and never re-read, so changing
+the default never affects work already queued. Deepgram replaces **speech-to-text only** — speaker
+separation stays local, and nothing else about this document changes. See
+[`docs/server/deepgram_flow.txt`](server/deepgram_flow.txt) for the whole of it, and §19 below for the
+short version.
+
 A background console worker claims the job and does the work:
 
 ```
@@ -1920,3 +1928,130 @@ rollback — telecom-billing on this machine uses the same toolchain.
   `COMMON` conversation with `store_source_id = NULL`, because there is no store to infer and
   inventing one would be worse than recording that it is unknown. They still appear on
   `/audio-to-text/jobs`; they appear on no store's page.
+
+---
+
+## 19. Transcription providers — Whisper and Deepgram
+
+The full account, written from the implemented code, is
+[`docs/server/deepgram_flow.txt`](server/deepgram_flow.txt). This section is the part an operator of
+*this* document needs.
+
+### What changes, and what does not
+
+Deepgram replaces **speech-to-text only**. Everything in §8 — the local Sherpa ONNX diarizer, the
+aligner, the dialogue-act detector, the role mapper, the five publish gates — is untouched and runs
+identically whichever engine produced the words. Deepgram is never asked to diarize, summarise, redact
+or detect entities, and it never sees a knowledge base, a rule or a chat message.
+
+Whisper stays the default. A deployment that sets no key and changes no setting behaves exactly as this
+document described before.
+
+### Choosing
+
+| Where | What it does |
+|---|---|
+| `/admin/order58/store-audio` → **Transcription settings** button → dialog | the **global default** — what upload forms preselect |
+| each store's audio page, **both** upload forms | a **per-upload override** for that recording only |
+| `audio_transcription_jobs.transcription_provider` | what actually ran, copied at enqueue |
+
+The column is the record. Changing the global default never touches a queued job, and `NULL` means
+Whisper — every job predating this feature, with no back-fill.
+
+**The two are never confused.** Changing the field on an upload form does not write
+`audio_to_text_settings`; a web test asserts the row's `updated_at` is unchanged after an upload.
+
+The settings dialog opens from a real `<a href="?settings=1">`, which the server answers by rendering
+the dialog already open — so with JavaScript disabled the one global setting is still reachable and
+still saveable. `admin.js` intercepts that click and calls `showModal()` instead, which is where
+Escape, the backdrop and the focus trap come from.
+
+### The provider field is always shown
+
+Both upload forms always render **Transcription provider**, listing every provider. One this server
+cannot run appears `disabled` and suffixed `— Not configured`, with a plain explanation below:
+
+```
+Transcription provider
+[ Whisper (local)                          ]
+[ Deepgram (cloud) — Not configured   ✗    ]
+
+Global default: Whisper (local). This choice applies only to this upload.
+Deepgram is not currently configured on this server.
+```
+
+It used to disappear when only one provider was usable. That hid which engine an upload would use and
+made a broken install look identical to a single-provider one. Availability is decided from **local
+configuration only** — rendering either page contacts no provider.
+
+If the stored global default names a provider that cannot currently run, the page preselects one that
+can, says so explicitly, and **does not rewrite the setting**:
+
+> The global default is Deepgram (cloud), which is not available on this server, so another provider
+> is selected for this upload. The global setting has not been changed.
+
+### One provider's health is no longer every provider's
+
+This corrected a real flaw. The whisper binary and model used to be checked in
+`AudioToTextSettings::problems()`, which makes the worker exit `DATAERR` **before claiming any job** —
+so a machine without whisper.cpp could not drain Deepgram jobs either.
+
+Now `problems()` checks only what every provider needs (ffmpeg, ffprobe, temp dir, timeouts, foreign
+locks, and diarization when enabled). Per-provider readiness is checked once per job by the engine,
+**before ffmpeg runs**, and fails that one job:
+
+```bash
+# With WHISPER_MODEL pointing at a missing file:
+php ./yii kf:audio:worker --once
+# note: Whisper (local) is not ready, so jobs queued for it will fail
+#       (other providers are unaffected): WHISPER_MODEL: "…" is not a readable file.
+# Audio transcription worker started (pid …, 1 thread, single job).
+```
+
+The worker starts. Deepgram jobs run. The reverse holds too.
+
+### Configuration
+
+All in `.env`, all optional, all defined in `src/Environment.php` like every other setting:
+
+```dotenv
+DEEPGRAM_API_KEY=                 # blank ⇒ Deepgram is simply not offered
+DEEPGRAM_BASE_URL=https://api.deepgram.com/v1/listen
+DEEPGRAM_MODEL=nova-3             # Keyterm Prompting requires a Nova-3 model
+DEEPGRAM_LANGUAGE=multi           # a DEPLOYMENT decision — `en` is cheaper if single-language
+DEEPGRAM_SMART_FORMAT=true
+DEEPGRAM_TIMEOUT=120
+
+# QUOTE THIS. Multi-word terms contain spaces, and an unquoted space makes the
+# whole .env unparseable — the application will not boot.
+DEEPGRAM_KEYTERMS="wonton, lo mein, General Tso"
+```
+
+`DEEPGRAM_KEYTERMS` is Keyterm Prompting: terms the model would otherwise mishear. Deepgram allows at
+most **100 terms** within a **500-token budget**. The count is exactly knowable and is enforced here;
+the token budget is **not** — a whitespace word count is not a token count — so it only produces a
+startup warning and **Deepgram's own HTTP 400 is the authority**. A rejected request fails that one
+job, safely.
+
+> Keyterms are **configuration, typed by a human**. There is still no mechanism that learns them from
+> manual corrections; that remains unbuilt.
+
+### Security notes for §14
+
+| Concern | How |
+|---|---|
+| Key storage | `.env` only, `'secret' => true` in `Environment::SPEC`. **Never** in the database, never written by a web request |
+| Key in memory | `SecretValue`; revealed twice inside `DeepgramEngine` — the `Authorization` header, and the `SecretRedactor` that protects it |
+| Key in logs | a failed response body is **redacted then truncated** before it is logged, because that body is written by a third party |
+| Client-side | none. The browser never receives a key, a token, a signed URL or a Deepgram endpoint |
+| Web tier | `WebTierCannotRunWhisperTest` bans `DeepgramEngine` (and the other engine classes) under any `/Web/` path, so no web request can call Deepgram |
+| Readiness | local configuration only — the key is never verified by calling Deepgram |
+
+### Rolling back (extends §17)
+
+Set the default back to Whisper; optionally blank `DEEPGRAM_API_KEY`, which removes it from the upload
+forms. Jobs already queued for Deepgram then fail cleanly with "not configured", affecting nothing else.
+
+`M260915100000AddTranscriptionProvider::down()` follows the house rule and **refuses** while any job
+has `transcription_provider = 'DEEPGRAM'`: that column is the only record of it, and dropping it would
+make those transcripts read as Whisper output. A database that has only run Whisper reverts cleanly.

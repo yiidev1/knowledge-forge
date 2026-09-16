@@ -1121,7 +1121,12 @@
         var box = editor.querySelector('[data-a2t-editor-text]');
         var original = turn.querySelector('[data-a2t-text]');
         if (box && original) {
-            box.value = original.textContent; // discard the draft, matching what Cancel promises
+            /* Discard the draft, matching what Cancel promises — restoring the STORED value, not the
+               rendered one. The bubble may show a display-normalised price ("$43.45" where the stored
+               text reads "$43 and 45"), and copying that back would put it in an editable field whose
+               next Save would persist it as the administrator's own correction. */
+            var raw = original.getAttribute('data-a2t-raw');
+            box.value = raw === null ? original.textContent : raw;
         }
     }
 
@@ -1941,4 +1946,67 @@
             jump.setAttribute('hidden', '');
         });
     }
+}());
+
+/* ------------------------------------------------------------------------------------------------
+ * Audio to Text — the global transcription-settings dialog.
+ *
+ * Rendered on the store-audio picker, which is an Order58 page: the setting belongs to Audio-to-Text
+ * but the place an administrator thinks about it is there.
+ *
+ * Progressive enhancement, the same way the chat report drill-downs work. The trigger is a real
+ * <a href> pointing at this page with `?settings=1`, which the server answers by printing the dialog
+ * already open — so with JavaScript off the one global setting is still reachable and still saveable.
+ * Here that click is intercepted and turned into showModal(), which is what gives Escape, the
+ * backdrop and the focus trap without a line of key handling.
+ *
+ * Nothing is fetched and nothing is mutated here. The form inside posts to its own route and the
+ * server does the deciding, so a browser that never runs this file behaves identically, only with one
+ * page load more.
+ * ---------------------------------------------------------------------------------------------- */
+(function () {
+    'use strict';
+
+    function settingsDialog() {
+        return document.querySelector('[data-a2t-settings-dialog]');
+    }
+
+    document.addEventListener('click', function (event) {
+        if (!(event.target instanceof Element) || !event.target.closest) {
+            return;
+        }
+
+        var dialog = settingsDialog();
+        if (!dialog) {
+            return; // not this page — leave every link doing exactly what its href says
+        }
+
+        var open = event.target.closest('[data-a2t-settings-open]');
+        if (open) {
+            // Only take over when the browser can actually do better than the href. Without
+            // showModal() the navigation is the correct fallback, so it is left alone.
+            if (typeof dialog.showModal !== 'function') {
+                return;
+            }
+
+            event.preventDefault();
+            if (!dialog.open) {
+                dialog.showModal();
+            }
+            return;
+        }
+
+        var close = event.target.closest('[data-a2t-settings-close]');
+        if (close && dialog.open) {
+            event.preventDefault();
+            dialog.close();
+            return;
+        }
+
+        // A click landing on the dialog element itself is outside its content box, which is how a
+        // native <dialog> reports a backdrop hit.
+        if (event.target === dialog && dialog.open) {
+            dialog.close();
+        }
+    });
 }());

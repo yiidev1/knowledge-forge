@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Application;
 
+use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
+use App\AudioToText\Domain\TranscriptionProvider;
 
+use function implode;
 use function is_dir;
 use function is_executable;
 use function is_file;
@@ -41,6 +44,7 @@ final readonly class AudioToTextSettings
         public TranscriptionSettings $transcription,
         public WorkerSettings $worker,
         public DiarizationSettings $diarization,
+        public DeepgramSettings $deepgram,
     ) {}
 
     /**
@@ -84,27 +88,36 @@ final readonly class AudioToTextSettings
      * **Diarization is only checked when it is enabled.** Requiring models nobody has installed would
      * make the default configuration fail its own validation, which is precisely backwards.
      *
+     * ## No transcription provider is checked here, and that is the point
+     *
+     * A non-empty result stops the worker before it claims anything, so anything listed here takes the
+     * whole queue down. That is correct for ffmpeg, which every job needs, and wrong for an engine,
+     * which only its own jobs need: this method used to check the whisper binary and model, which meant
+     * an uninstalled whisper model froze Deepgram jobs too, for no reason.
+     *
+     * Provider readiness now lives with each provider — {@see Settings\TranscriptionSettings::whisperProblems()}
+     * and {@see Settings\DeepgramSettings::problems()} — is checked once per job by the engine's
+     * `assertReady()`, and fails that job alone while the worker carries on. An unready provider is
+     * surfaced here only as a {@see warnings()} line, which never stops anything.
+     *
      * @return list<string> problems, most serious first; empty when the configuration is usable
      */
     public function problems(): array
     {
         $problems = [];
 
+        // ffmpeg and ffprobe only. **Every** provider needs both — ffmpeg normalises the WAV that the
+        // diarizer also consumes, and ffprobe measures duration at enqueue — so neither belongs to one
+        // engine, and neither can be deferred to one.
+        //
+        // The whisper binary and model are deliberately absent: see the method docblock.
         foreach ([
             'FFMPEG_BINARY' => $this->transcription->ffmpegBinary,
             'FFPROBE_BINARY' => $this->transcription->ffprobeBinary,
-            'WHISPER_BINARY' => $this->transcription->whisperBinary,
         ] as $variable => $path) {
             if (!is_file($path) || !is_executable($path)) {
                 $problems[] = sprintf('%s: "%s" is not an executable file.', $variable, $path);
             }
-        }
-
-        if (!is_file($this->transcription->whisperModel) || !is_readable($this->transcription->whisperModel)) {
-            $problems[] = sprintf(
-                'WHISPER_MODEL: "%s" is not a readable file.',
-                $this->transcription->whisperModel,
-            );
         }
 
         if ($this->transcription->temporaryDirectory === '') {
@@ -166,11 +179,27 @@ final readonly class AudioToTextSettings
     /**
      * Problems that are not fatal but are worth saying out loud once, at startup.
      *
+     * This is where an unready transcription provider surfaces. Saying it here rather than in
+     * {@see problems()} is the whole trade: the operator sees the problem on every tick, and the queue
+     * keeps draining the jobs that do not need that provider.
+     *
      * @return list<string>
      */
     public function warnings(): array
     {
         $warnings = [];
+
+        foreach ($this->providerProblems() as $label => $problems) {
+            $warnings[] = sprintf(
+                '%s is not ready, so jobs queued for it will fail (other providers are unaffected): %s',
+                $label,
+                implode(' ', $problems),
+            );
+        }
+
+        foreach ($this->deepgram->warnings() as $advisory) {
+            $warnings[] = $advisory;
+        }
 
         if ($this->transcription->threads > 1) {
             $warnings[] = sprintf(
@@ -195,5 +224,51 @@ final readonly class AudioToTextSettings
         }
 
         return $warnings;
+    }
+
+    /**
+     * Every provider that cannot run here, with the reasons.
+     *
+     * The one place that walks all providers. Keeping the loop here — rather than a pair of `if`s —
+     * means adding a third engine adds a case to {@see TranscriptionProvider} and a branch below, and
+     * the startup warning, the readiness check and any future admin page all learn about it at once.
+     *
+     * Configuration inspection only. Nothing here opens a socket or starts a process, so it is safe to
+     * call on every worker tick and inside a web request alike.
+     *
+     * @return array<string, list<string>> keyed by provider label; a ready provider is absent
+     */
+    public function providerProblems(): array
+    {
+        $byProvider = [];
+
+        foreach (TranscriptionProvider::all() as $provider) {
+            $problems = match ($provider) {
+                TranscriptionProvider::Whisper => $this->transcription->whisperProblems(),
+                TranscriptionProvider::Deepgram => $this->deepgram->problems(),
+            };
+
+            if ($problems !== []) {
+                $byProvider[$provider->label()] = $problems;
+            }
+        }
+
+        return $byProvider;
+    }
+
+    /**
+     * Whether a provider may be offered for a new upload.
+     *
+     * Asked by the upload page before enqueue, so a recording is never queued for an engine that cannot
+     * possibly run it. **Local configuration only** — this must never be allowed to become a health
+     * check against a provider's API: that would put a network round trip in an upload request and make
+     * a provider outage look like a misconfiguration.
+     */
+    public function providerIsUsable(TranscriptionProvider $provider): bool
+    {
+        return match ($provider) {
+            TranscriptionProvider::Whisper => $this->transcription->whisperIsUsable(),
+            TranscriptionProvider::Deepgram => $this->deepgram->isUsable(),
+        };
     }
 }

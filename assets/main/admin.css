@@ -185,6 +185,9 @@ p { margin: 0 0 1rem; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .page-header__title { margin: 0; }
 .page-header__subtitle { color: var(--text-muted); margin: .25rem 0 0; }
+/* More than one action beside a title. Wraps rather than shrinking, so two buttons stack on a narrow
+   screen instead of squeezing their labels onto two lines each. */
+.page-header__actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 
 /* ---- Cards & grid --------------------------------------------------------- */
 
@@ -1746,7 +1749,23 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     color: var(--text-muted);
     line-height: 1.45;
 }
-.a2t-confirm__actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; }
+.a2t-confirm__actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; align-items: center; }
+
+/* The global transcription setting. Wider than a confirmation because it holds a labelled select
+   whose longest option ("Deepgram (cloud)") should not wrap, and `width` as well as `max-width`
+   because a <dialog> sizes to fit-content and would otherwise collapse to the select's own width. */
+.a2t-settings { width: min(94vw, 34rem); max-width: min(94vw, 34rem); }
+.a2t-settings .field { margin-bottom: 0; }
+/* The no-JavaScript path prints `open`, which a plain <dialog> renders in flow rather than centred.
+   Positioning it here means that fallback still looks like a dialog instead of a stray panel. */
+.a2t-settings[open]:not(:modal) {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 50;
+    box-shadow: var(--shadow);
+}
 
 @media (max-width: 900px) {
     .a2t-review .a2t-bubble { max-width: 100%; }

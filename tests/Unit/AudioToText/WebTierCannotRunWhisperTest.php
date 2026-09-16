@@ -43,6 +43,19 @@ final class WebTierCannotRunWhisperTest extends TestCase
      */
     private const FORBIDDEN_IN_WEB_TIER = [
         'AudioTranscriber',
+        // The engines behind the provider port, and the ffmpeg step they share. `DeepgramEngine` is
+        // here for a reason the others are not: it sends the recording over the network and waits for a
+        // remote service. That must never happen inside a web request — an upload has to enqueue and
+        // return — so this is the rule that makes "no Deepgram call from the web tier" structural
+        // rather than a convention somebody has to remember.
+        //
+        // The web tier still needs to know whether a provider is usable. It asks the *settings*
+        // (`whisperProblems()`, `DeepgramSettings::problems()`), which inspect local configuration and
+        // cannot open a socket.
+        'TranscriptionEngine',
+        'WhisperEngine',
+        'DeepgramEngine',
+        'AudioNormalizer',
         'SpeakerDiarizer',
         'SpeakerSeparationService',
         'ProcessRunner',

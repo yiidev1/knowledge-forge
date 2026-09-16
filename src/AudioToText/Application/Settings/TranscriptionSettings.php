@@ -8,8 +8,12 @@ use App\AudioToText\Application\AudioUploadValidator;
 
 use function implode;
 use function intdiv;
+use function is_executable;
+use function is_file;
+use function is_readable;
 use function number_format;
 use function rtrim;
+use function sprintf;
 
 /**
  * The transcription half of {@see \App\AudioToText\Application\AudioToTextSettings}.
@@ -38,6 +42,43 @@ final readonly class TranscriptionSettings
         public int $staleAfterSeconds,
         public int $workerSleepSeconds,
     ) {}
+
+    /**
+     * Local configuration problems that stop the **Whisper** engine running.
+     *
+     * Lives here rather than in `WhisperEngine` so the web tier can ask "can this provider be offered?"
+     * without naming an engine class — `WebTierCannotRunWhisperTest` bans that name under `/Web/`, and
+     * rightly so. One definition, consulted by `WhisperEngine::assertReady()` and by the upload page.
+     *
+     * Deliberately **not** part of {@see \App\AudioToText\Application\AudioToTextSettings::problems()}.
+     * A missing whisper model used to stop the worker starting at all, which meant a broken Whisper
+     * install also froze every Deepgram job. Readiness is per provider now: this fails Whisper jobs, and
+     * only Whisper jobs.
+     *
+     * Inspects the filesystem only — no process is started, nothing is executed.
+     *
+     * @return list<string>
+     */
+    public function whisperProblems(): array
+    {
+        $problems = [];
+
+        if (!is_file($this->whisperBinary) || !is_executable($this->whisperBinary)) {
+            $problems[] = sprintf('WHISPER_BINARY: "%s" is not an executable file.', $this->whisperBinary);
+        }
+
+        if (!is_file($this->whisperModel) || !is_readable($this->whisperModel)) {
+            $problems[] = sprintf('WHISPER_MODEL: "%s" is not a readable file.', $this->whisperModel);
+        }
+
+        return $problems;
+    }
+
+    /** Whether Whisper can be selected for an upload on this machine. */
+    public function whisperIsUsable(): bool
+    {
+        return $this->whisperProblems() === [];
+    }
 
     /**
      * "15 MB", or "15.5 MB" when the limit is not a round number.

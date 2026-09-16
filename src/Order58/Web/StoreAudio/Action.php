@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\StoreAudio;
 
+use App\Order58\Domain\AudioProviderDefaultInterface;
 use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
@@ -50,6 +51,7 @@ final readonly class Action
         private WebViewRenderer $viewRenderer,
         private StoreDirectoryReaderInterface $reader,
         private StoreAudioCountsInterface $audioCounts,
+        private AudioProviderDefaultInterface $providerDefault,
     ) {}
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
@@ -64,6 +66,12 @@ final readonly class Action
         );
         $letter = AlphabetIndex::normalize(is_string($params['letter'] ?? null) ? (string) $params['letter'] : null);
         $page = is_string($params['page'] ?? null) ? max(1, (int) $params['page']) : 1;
+
+        // The transcription-settings dialog is opened by a real link carrying `?settings=1`, so it
+        // works with JavaScript switched off — the page simply renders the dialog already open.
+        // `admin.js` intercepts the same link and calls showModal() instead. This mirrors the chat
+        // report drill-downs, where every trigger is likewise a working href first.
+        $settingsOpen = ($params['settings'] ?? null) === '1';
 
         // Resolved once, before the directory query, and handed to it as a plain id restriction. The
         // reader then narrows its rows, its total and its letter counts together — a filter applied
@@ -104,6 +112,16 @@ final readonly class Action
                     static fn(StoreDirectoryItem $item): int => $item->sourceId,
                     $result->items,
                 )),
+                // The transcription default, shown here because this is where an administrator already
+                // is when they think about store audio. Read through this module's own port and posted
+                // to the owning module by route name — see AudioProviderDefaultInterface.
+                //
+                // It lives in a dialog rather than on the page: it is changed rarely, it applies to
+                // every store rather than to the picker below it, and a permanent card for it pushed
+                // the store list an administrator actually came for below the fold.
+                'providerDefault' => $this->providerDefault->current(),
+                'providerChoices' => $this->providerDefault->choices(),
+                'settingsOpen' => $settingsOpen,
             ]);
     }
 }

@@ -89,6 +89,7 @@ interface TranscriptionJobRepositoryInterface
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
+        ?TranscriptionProvider $transcriptionProvider = null,
     ): string;
 
     /**

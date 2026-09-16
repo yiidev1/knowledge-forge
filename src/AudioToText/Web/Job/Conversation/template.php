@@ -60,7 +60,11 @@ $reviewUrl = $urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' =
     </div>
 
     <div class="a2t-chat__scroll" data-a2t-scroll>
-        <?= $this->render(AudioToTextViews::thread(), ['turns' => $conversation->turns]) ?>
+        <?php // Reader-facing; verbatim once a human has corrected it. See SpokenPrice.?>
+        <?= $this->render(AudioToTextViews::thread(), [
+            'turns' => $conversation->turns,
+            'normalisePrices' => !$effective->isReviewed,
+        ]) ?>
     </div>
 
     <?php // Shown by the script only once the reader has scrolled away from the newest turn.?>

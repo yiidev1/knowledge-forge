@@ -9,6 +9,7 @@ use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Infrastructure\AudioDurationProbe;
 use App\Shared\Application\Transaction\TransactionRunnerInterface;
 use App\Shared\Domain\Clock\ClockInterface;
@@ -80,7 +81,11 @@ final readonly class TranscriptionQueue
      * on any failure every file written so far is removed. There is no path that leaves a Customer
      * queued without its Agent.
      *
-     * @param array<string, UploadedFileInterface> $files keyed by {@see SourceRole} value
+     * @param array<string, UploadedFileInterface> $files    keyed by {@see SourceRole} value
+     * @param TranscriptionProvider                $provider the engine chosen at upload, **copied onto
+     *                                                       every child here and never re-read**. The
+     *                                                       global default may change while these jobs
+     *                                                       are queued; what was chosen is what runs.
      *
      * @return string the public id of the conversation
      *
@@ -91,6 +96,7 @@ final readonly class TranscriptionQueue
         ?int $storeSourceId,
         array $files,
         int $adminUserId,
+        TranscriptionProvider $provider = TranscriptionProvider::Whisper,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
@@ -123,7 +129,14 @@ final readonly class TranscriptionQueue
                 ];
             }
 
-            $insert = function () use ($conversationPublicId, $storeSourceId, $mode, $adminUserId, $children): string {
+            $insert = function () use (
+                $conversationPublicId,
+                $storeSourceId,
+                $mode,
+                $adminUserId,
+                $children,
+                $provider
+            ): string {
                 // Parent and children in one transaction: a pair whose second insert failed would
                 // otherwise leave a conversation promising two recordings and holding one.
                 return $this->transaction->run(function () use (
@@ -131,7 +144,8 @@ final readonly class TranscriptionQueue
                     $storeSourceId,
                     $mode,
                     $adminUserId,
-                    $children
+                    $children,
+                    $provider
                 ): string {
                     $conversationId = $this->conversations->create(
                         $conversationPublicId,
@@ -151,6 +165,10 @@ final readonly class TranscriptionQueue
                             $this->expiresAt(),
                             $conversationId,
                             $child['role'],
+                            // The same provider for every child of one conversation. A SEPARATE upload
+                            // is one call recorded twice; transcribing its two halves with different
+                            // engines would make the customer and agent sides incomparable for no gain.
+                            $provider,
                         );
                     }
 

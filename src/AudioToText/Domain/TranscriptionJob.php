@@ -78,7 +78,32 @@ final readonly class TranscriptionJob
          * not, and the worker skips diarization and role mapping entirely for this job.
          */
         public ?SourceRole $sourceRole = null,
+        /**
+         * Which engine this job was queued for. **Raw** — read {@see transcriptionProvider()} instead.
+         *
+         * NULL means Whisper, and means it for two different reasons that happen to agree: every job
+         * that predates provider selection was produced by whisper.cpp, and a job written by an older
+         * code path never set the column. Keeping the property nullable is what lets both stay valid
+         * without a back-fill inventing a decision nobody made.
+         */
+        public ?TranscriptionProvider $transcriptionProviderOrNull = null,
     ) {}
+
+    /**
+     * The engine that transcribed, or will transcribe, this recording.
+     *
+     * **The only place the legacy NULL-means-Whisper rule lives.** Every query, template and worker path
+     * goes through here, so the rule cannot drift into a `?? 'WHISPER'` scattered across the module.
+     *
+     * Note what this never does: consult the global default. That setting answers "what will the *next*
+     * upload use?" and an administrator may change it while this job is still queued. Reading it here
+     * would make a Whisper transcript start claiming Deepgram the moment somebody flipped a radio
+     * button — the stored value is a record, not a preference.
+     */
+    public function transcriptionProvider(): TranscriptionProvider
+    {
+        return $this->transcriptionProviderOrNull ?? TranscriptionProvider::Whisper;
+    }
 
     /** Whether an administrator has corrected this conversation. */
     public function isReviewed(): bool

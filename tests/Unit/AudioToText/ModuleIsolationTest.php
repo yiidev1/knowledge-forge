@@ -169,6 +169,7 @@ final class ModuleIsolationTest extends TestCase
             'M260826120000CreateAudioTranscriptionJobs',
             'M260826120100AddSpeakerSeparationColumns',
             'M260826130000RetainSuccessfulRecordings',
+            'M260915100000AddTranscriptionProvider',
         ];
 
         foreach ($migrations as $class) {
@@ -179,7 +180,7 @@ final class ModuleIsolationTest extends TestCase
             foreach ($matches[1] as $table) {
                 $this->assertContains(
                     $table,
-                    ['audio_transcription_jobs', 'audio_worker_heartbeat'],
+                    ['audio_transcription_jobs', 'audio_worker_heartbeat', 'audio_to_text_settings'],
                     $class . ' must not modify the existing table "' . $table . '".',
                 );
             }

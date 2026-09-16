@@ -422,6 +422,14 @@ return [
             Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/revert')
                 ->action(AudioToText\Job\Review\Revert\Action::class)
                 ->name(AudioToTextRoute::JOB_REVIEW_REVERT),
+
+            // The global default transcription provider. POST only — there is no page here; the form
+            // lives on /admin/order58/store-audio, which addresses this by route name, and this
+            // redirects straight back there. Owned by this module because the rules about which
+            // providers exist and which are configured are this module's to enforce.
+            Route::post('/audio-to-text/settings/default-provider')
+                ->action(AudioToText\Settings\DefaultProviderAction::class)
+                ->name(AudioToTextRoute::SETTINGS_DEFAULT_PROVIDER),
         ),
 
     // Order58 agents: a separate authenticated realm behind RequireAgentMiddleware. Agents can select any

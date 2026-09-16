@@ -56,4 +56,14 @@ final class AudioToTextRoute
     public const JOB_REVIEW_TEXT = 'audio-to-text.job.review.text';
     public const JOB_REVIEW_CONFIRM = 'audio-to-text.job.review.confirm';
     public const JOB_REVIEW_REVERT = 'audio-to-text.job.review.revert';
+
+    /**
+     * The global default transcription provider.
+     *
+     * POST only, and owned here rather than by the page that renders the form. `/admin/order58/store-audio`
+     * is where an administrator naturally changes it, but the rules about which providers exist and
+     * which may be selected belong to this module; Order58 addresses this by route name, which is not a
+     * namespace and so does not breach module isolation.
+     */
+    public const SETTINGS_DEFAULT_PROVIDER = 'audio-to-text.settings.default-provider';
 }

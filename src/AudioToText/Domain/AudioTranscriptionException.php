@@ -201,6 +201,75 @@ final class AudioTranscriptionException extends RuntimeException
 
     // ---------------------------------------------------------------- recovery
 
+    // ---------------------------------------------------------------- provider selection
+
+    /**
+     * The engine this job was queued with cannot run on this machine.
+     *
+     * Raised from `assertReady()`, **before any audio is converted**, so a misconfigured provider costs
+     * nothing and fails only its own jobs. The reason is local configuration — a missing binary, an
+     * absent key — never a failed call to the provider.
+     *
+     * The user-facing half names the provider and nothing else: which file is missing, or that a
+     * credential is unset, is the operator's business and belongs in the log.
+     */
+    public static function providerNotConfigured(string $providerLabel, string $detail): self
+    {
+        return new self(
+            sprintf(
+                '%s is not configured on this server, so this recording could not be transcribed. '
+                    . 'An administrator needs to finish setting it up.',
+                $providerLabel,
+            ),
+            sprintf('provider %s is not ready: %s', $providerLabel, $detail),
+        );
+    }
+
+    /**
+     * Deepgram answered, and the answer was not a transcript.
+     *
+     * Covers every HTTP status Deepgram can refuse with. The status and its body go to the log; the
+     * administrator is told that the service refused the recording, because the distinction between
+     * 401 and 429 is not one they can act on from the page.
+     */
+    public static function deepgramRejected(int $status, string $detail): self
+    {
+        $user = match (true) {
+            $status === 401 || $status === 403
+                => 'Deepgram rejected the credentials for this server. An administrator needs to check the '
+                    . 'Deepgram configuration.',
+            $status === 429
+                => 'Deepgram is rate-limiting this server, so the recording could not be transcribed. '
+                    . 'Try again shortly.',
+            $status >= 500
+                => 'Deepgram is temporarily unavailable, so the recording could not be transcribed. '
+                    . 'Try again shortly.',
+            default
+            => 'Deepgram could not transcribe this recording.',
+        };
+
+        return new self($user, sprintf('Deepgram returned HTTP %d: %s', $status, $detail));
+    }
+
+    /** The request never reached Deepgram — DNS, TLS, connection refused, timeout. */
+    public static function deepgramUnreachable(string $detail): self
+    {
+        return new self(
+            'Deepgram could not be reached from this server, so the recording could not be transcribed.',
+            sprintf('Deepgram transport failure: %s', $detail),
+        );
+    }
+
+    /** A 200 whose body was not the shape the pipeline needs. */
+    public static function deepgramUnreadable(string $detail): self
+    {
+        return new self(
+            'Deepgram returned a response this server could not read, so the recording could not be '
+                . 'transcribed.',
+            sprintf('Deepgram response unusable: %s', $detail),
+        );
+    }
+
     public static function interrupted(int $staleAfterSeconds): self
     {
         return new self(

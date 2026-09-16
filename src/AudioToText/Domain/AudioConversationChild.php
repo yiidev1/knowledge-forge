@@ -21,5 +21,12 @@ final readonly class AudioConversationChild
         public string $originalFilename,
         public ?float $durationSeconds,
         public ?string $errorMessage,
+        /**
+         * Which engine transcribed this recording, already resolved.
+         *
+         * Not nullable here, unlike on the job row: the NULL-means-Whisper rule is applied once, where
+         * the row is read, so a template never has to know the legacy case existed.
+         */
+        public TranscriptionProvider $transcriptionProvider = TranscriptionProvider::Whisper,
     ) {}
 }

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\Speaker\ConversationTurn;
 use Yiisoft\Html\Html;
 
@@ -16,8 +17,14 @@ use Yiisoft\Html\Html;
  * `ConversationView` before they arrive. A template choosing who sits on the right would be choosing
  * who the agent is.
  *
+ * `$normalisePrices` follows that same rule — it is a decision the caller makes, not this partial, and
+ * it is **required** rather than defaulted so every surface has to state its intent. The Original page
+ * is an audit view and the review page feeds editable fields; both pass false. Only a caller showing
+ * *uncorrected machine output to a reader* passes true.
+ *
  * @var Yiisoft\View\WebView $this
  * @var list<ConversationTurn> $turns
+ * @var bool $normalisePrices render the USD "dollars-and" shorthand as a price
  */
 ?>
 <div class="a2t-thread">
@@ -30,7 +37,9 @@ use Yiisoft\Html\Html;
             $turn->confirmed ? '' : ' a2t-turn--unconfirmed' ?>">
             <div class="a2t-bubble">
                 <span class="a2t-turn__who"><?= Html::encode($turn->label) ?></span>
-                <span class="a2t-turn__text"><?= Html::encode($turn->text) ?></span>
+                <span class="a2t-turn__text"><?= Html::encode(
+                    $normalisePrices ? SpokenPrice::format($turn->text) : $turn->text,
+                ) ?></span>
                 <?php if ($range !== null || $delay !== null || $turn->edited): ?>
                     <span class="a2t-turn__meta">
                         <?php if ($range !== null): ?>

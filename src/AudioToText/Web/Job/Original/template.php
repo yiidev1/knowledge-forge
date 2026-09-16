@@ -71,7 +71,11 @@ $jobUrl = $urlGenerator->generate(AudioToTextRoute::JOB, ['publicId' => $job->pu
     // correction controls nor the agent tint can apply here — both are scoped to the review page.
     ?>
     <div class="a2t-chat__scroll" data-a2t-scroll>
-        <?= $this->render(AudioToTextViews::thread(), ['turns' => $conversation->turns]) ?>
+        <?php // Verbatim: this page is the machine's own record, so nothing here is reformatted.?>
+        <?= $this->render(AudioToTextViews::thread(), [
+            'turns' => $conversation->turns,
+            'normalisePrices' => false,
+        ]) ?>
     </div>
 
     <button class="a2t-chat__jump" type="button" data-a2t-jump hidden>&darr; Jump to latest</button>

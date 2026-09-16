@@ -3,16 +3,21 @@
 declare(strict_types=1);
 
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
+use App\AudioToText\Application\TranscriberResolver;
+use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\Speaker\SpeakerDiarizerInterface;
 use App\AudioToText\Domain\SystemResourceProbeInterface;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
+use App\AudioToText\Domain\Transcription\DeepgramKeyterms;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\WorkerHeartbeatRepositoryInterface;
+use App\AudioToText\Infrastructure\DbAudioToTextSettingsRepository;
 use App\AudioToText\Infrastructure\DbSegmentRevisionRepository;
 use App\AudioToText\Infrastructure\DbAudioConversationRepository;
 use App\AudioToText\Infrastructure\DbAudioStoreLookup;
@@ -21,6 +26,14 @@ use App\AudioToText\Infrastructure\DbWorkerHeartbeatRepository;
 use App\AudioToText\Infrastructure\Diarization\NullSpeakerDiarizer;
 use App\AudioToText\Infrastructure\Diarization\SherpaOnnxSpeakerDiarizer;
 use App\AudioToText\Infrastructure\ProcSystemResourceProbe;
+use App\AudioToText\Infrastructure\Transcription\DeepgramEngine;
+use App\AudioToText\Infrastructure\Transcription\WhisperEngine;
+use App\Shared\Domain\ValueObject\SecretValue;
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Psr7\HttpFactory;
+use Psr\Http\Client\ClientInterface as PsrHttpClient;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 use Yiisoft\Aliases\Aliases;
 use Yiisoft\Definitions\DynamicReference;
 use Yiisoft\Definitions\Reference;
@@ -99,7 +112,32 @@ return [
         ],
     ],
 
-    // The one type every Audio-to-Text service injects. The three groups above exist for readability;
+    DeepgramSettings::class => [
+        '__construct()' => [
+            // Wrapped the moment it leaves configuration, and revealed exactly once — in the
+            // Authorization header. A SecretValue cannot be printed, serialised or var_dump'd back
+            // into a log by accident.
+            'apiKey' => DynamicReference::to(
+                static fn(): SecretValue => new SecretValue($params['app/audio-deepgram']['apiKey']),
+            ),
+            'baseUrl' => $params['app/audio-deepgram']['baseUrl'],
+            'model' => $params['app/audio-deepgram']['model'],
+            'language' => $params['app/audio-deepgram']['language'],
+            'smartFormat' => $params['app/audio-deepgram']['smartFormat'],
+            'numerals' => $params['app/audio-deepgram']['numerals'],
+            'timeoutSeconds' => $params['app/audio-deepgram']['timeoutSeconds'],
+            // Splitting the configured string is assembly, which is this file's job — `params.php`
+            // carries values, it does not interpret them. `fromList` does the rest: trim, drop empties,
+            // de-duplicate.
+            'keyterms' => DynamicReference::to(
+                static fn(): DeepgramKeyterms => DeepgramKeyterms::fromList(
+                    explode(',', $params['app/audio-deepgram']['keyterms']),
+                ),
+            ),
+        ],
+    ],
+
+    // The one type every Audio-to-Text service injects. The four groups above exist for readability;
     // nothing outside this file depends on them individually, which is what stops a new setting from
     // rippling through constructors across the module.
     AudioToTextSettings::class => [
@@ -107,8 +145,37 @@ return [
             'transcription' => Reference::to(TranscriptionSettings::class),
             'worker' => Reference::to(WorkerSettings::class),
             'diarization' => Reference::to(DiarizationSettings::class),
+            'deepgram' => Reference::to(DeepgramSettings::class),
         ],
     ],
+
+    AudioToTextSettingsRepositoryInterface::class => DbAudioToTextSettingsRepository::class,
+
+    // Guzzle as the PSR-18 transport, following `order58.php`. `http_errors => false` so PSR-18 returns
+    // a response for every status and only a genuine transport failure throws — the engine maps a
+    // refusal and a transport failure to different exceptions, and needs to be able to tell them apart.
+    //
+    // Its own client instance, with the Deepgram timeout: this uploads an audio file and waits for a
+    // transcription, which is nothing like the request profile of any other client in the application.
+    DeepgramEngine::class => [
+        '__construct()' => [
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => 10,
+                'timeout' => $params['app/audio-deepgram']['timeoutSeconds'],
+                'http_errors' => false,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => new HttpFactory()),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => new HttpFactory()),
+        ],
+    ],
+
+    // Every case of TranscriptionProvider must appear here. `TranscriberResolver` throws rather than
+    // falling back if one is missing, and a unit test asserts each case resolves — a silent fallback
+    // would transcribe with the wrong engine and record it as the right one.
+    TranscriberResolver::class => static fn(
+        WhisperEngine $whisper,
+        DeepgramEngine $deepgram,
+    ): TranscriberResolver => TranscriberResolver::of($whisper, $deepgram),
 
     // Resolved at build time from configuration, so the "diarization is off" path is a real object with
     // the same interface rather than a flag checked in five places. Selecting the null implementation

@@ -7,6 +7,7 @@ use App\AudioToText\Domain\AudioConversationChild;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\Shared\Application\Time\AppTimeZone;
@@ -33,6 +34,10 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $combinedLimitLabel
  * @var bool $canUpload
  * @var AppTimeZone $appTimeZone
+ * @var TranscriptionProvider $provider currently selected, and what both forms preselect
+ * @var list<TranscriptionProvider> $providerChoices every provider, usable or not
+ * @var array<string, bool> $providerUsable storage value => can this server run it (local check only)
+ * @var TranscriptionProvider $globalDefault the stored setting, reported as-is and never rewritten here
  */
 
 $this->setTitle($store->name . ' — audio');
@@ -58,14 +63,99 @@ $fieldErrors = static function (array $messages): string {
     return $html;
 };
 
+/**
+ * The provider select, rendered into both forms.
+ *
+ * A closure rather than two copies because the two forms post to the same action and must offer
+ * exactly the same choices — a difference between them would be a bug nobody would see until an
+ * upload came back with the wrong engine. The id differs per form so each `<label for>` stays valid
+ * on a page that renders both.
+ *
+ * ## Always rendered, never hidden
+ *
+ * Every provider appears every time, including ones this machine cannot currently run. Hiding the
+ * field when only one provider works looked tidy and was wrong twice over: an administrator could not
+ * see which engine their upload would use, and a broken install was indistinguishable from a
+ * single-provider one. An unusable provider is shown `disabled` and labelled instead, which says the
+ * true thing — the choice exists, this machine cannot make it yet.
+ *
+ * Availability comes from LOCAL configuration that the action already computed. Rendering this page
+ * contacts no provider.
+ *
+ * `disabled` on an option is a courtesy, not the control: the server refuses an unusable provider
+ * whatever is posted.
+ */
+$providerField = static function (string $id) use (
+    $provider,
+    $providerChoices,
+    $providerUsable,
+    $globalDefault,
+    $errors,
+    $fieldErrors
+): string {
+    $options = '';
+    foreach ($providerChoices as $choice) {
+        $usable = $providerUsable[$choice->value] ?? false;
+
+        $options .= '<option value="' . Html::encode($choice->value) . '"'
+            . ($usable ? '' : ' disabled')
+            . ($choice === $provider ? ' selected' : '') . '>'
+            . Html::encode($choice->label() . ($usable ? '' : ' — Not configured'))
+            . '</option>';
+    }
+
+    // One line per unusable provider, in plain words. Deliberately says nothing about WHICH setting is
+    // missing: that is the operator's business and it belongs in the log, not on a page anyone with an
+    // upload to make can read.
+    $unavailable = '';
+    foreach ($providerChoices as $choice) {
+        if (($providerUsable[$choice->value] ?? false) === false) {
+            $unavailable .= '<div class="field__hint">'
+                . Html::encode($choice->shortLabel() . ' is not currently configured on this server.')
+                . '</div>';
+        }
+    }
+
+    // The configured default names something that cannot run. Said out loud rather than papered over:
+    // the preselected provider below is NOT the global default, and an administrator who does not know
+    // that would reasonably assume their upload used the engine the settings page advertises.
+    $defaultNote = ($providerUsable[$globalDefault->value] ?? false) === false
+        ? '<div class="field__hint">'
+            . Html::encode(
+                'The global default is ' . $globalDefault->label() . ', which is not available on this '
+                . 'server, so another provider is selected for this upload. The global setting has not '
+                . 'been changed.',
+            )
+            . '</div>'
+        : '<div class="field__hint">'
+            . Html::encode('Global default: ' . $globalDefault->label() . '.')
+            . ' This choice applies only to this upload.'
+            . '</div>';
+
+    return '<div class="field">'
+        . '<label class="field__label" for="' . Html::encode($id) . '">Transcription provider</label>'
+        . '<select class="field__control' . (isset($errors['transcription_provider']) ? ' field__control--error' : '')
+        . '" id="' . Html::encode($id) . '" name="transcription_provider">' . $options . '</select>'
+        . $fieldErrors($errors['transcription_provider'] ?? [])
+        . $defaultNote
+        . $unavailable
+        . '<div class="field__hint">Speech recognition only — speakers are always worked out on this server.</div>'
+        . '</div>';
+};
+
 $formErrors = $errors['form'] ?? [];
 ?>
 <div class="page-header">
     <div>
         <h1 class="page-header__title"><?= Html::encode($store->name) ?></h1>
+        <?php
+        // Provider-neutral wording. This used to promise that nothing left the server, which stopped
+        // being true the moment Deepgram became selectable — and a false privacy claim is worse than
+        // no claim. What each upload actually uses is stated on the field that decides it.
+?>
         <p class="page-header__subtitle">
-            Upload call recordings for this store. Everything is transcribed on this server — nothing is
-            sent to an external service.
+            Upload call recordings for this store. New uploads use the configured default transcription
+            provider unless you choose another one.
         </p>
     </div>
     <a class="btn" href="<?= Html::encode($urlGenerator->generate('order58.store-audio')) ?>">All stores</a>
@@ -146,6 +236,8 @@ $formErrors = $errors['form'] ?? [];
             </div>
         </div>
 
+        <?= $providerField('a2t-common-provider') ?>
+
         <button class="btn btn--primary" type="submit">Convert mixed recording</button>
     </form>
 </div>
@@ -191,6 +283,8 @@ $formErrors = $errors['form'] ?? [];
                 Both recordings are queued separately and may finish at different times.
             </div>
         </div>
+
+        <?= $providerField('a2t-separate-provider') ?>
 
         <button class="btn btn--primary" type="submit">Convert both recordings</button>
     </form>

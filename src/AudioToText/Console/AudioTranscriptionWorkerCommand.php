@@ -18,7 +18,7 @@ use App\AudioToText\Domain\WorkerHeartbeatRepositoryInterface;
 use App\AudioToText\Domain\WorkerMode;
 use App\AudioToText\Domain\WorkerProcessState;
 use App\AudioToText\Infrastructure\AudioTranscriber;
-use App\AudioToText\Infrastructure\AudioTranscriptionResult;
+use App\AudioToText\Domain\Transcription\AudioTranscriptionResult;
 use App\AudioToText\Application\WorkerAdmissionGuard;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -263,6 +263,9 @@ final class AudioTranscriptionWorkerCommand extends Command
 
             $result = $this->transcriber->transcribeFile(
                 $source,
+                // As persisted at enqueue. The global default is never consulted here: a job queued
+                // while it said Whisper is transcribed by Whisper however often it changes since.
+                $job->transcriptionProvider(),
                 function (string $stage) use ($job, $mode): void {
                     $parsed = ProcessingStage::tryFrom($stage);
 

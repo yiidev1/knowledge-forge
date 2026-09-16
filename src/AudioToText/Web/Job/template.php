@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\EffectiveConversation;
 use App\AudioToText\Domain\Speaker\ConversationView;
@@ -83,6 +84,12 @@ $separation = $job->speakerSeparationStatus;
     <dl class="a2t-meta">
         <div><dt>Duration</dt><dd><?= Html::encode($duration) ?></dd></div>
         <div><dt>Language</dt><dd><?= Html::encode($job->detectedLanguage ?? '—') ?></dd></div>
+        <?php
+        // Speech recognition only. Kept next to Language rather than next to Speaker split, because a
+        // reader comparing two transcripts wants to know what produced the words — the speakers are
+        // worked out on this server whichever engine transcribed.
+?>
+        <div><dt>Transcribed by</dt><dd><?= Html::encode($job->transcriptionProvider()->shortLabel()) ?></dd></div>
         <div><dt>Speaker split</dt><dd><?= Html::encode($separation?->label() ?? '—') ?></dd></div>
         <div><dt>Completed</dt><dd><?= Html::encode($localTime($job->completedAt)) ?></dd></div>
         <?php // Whether the recording was kept — never where it is kept.?>
@@ -118,13 +125,19 @@ $separation = $job->speakerSeparationStatus;
             <h2 class="card__title">Complete transcript</h2>
             <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('transcript')) ?>">Download text file</a>
         </div>
-        <pre class="a2t-transcript"><?= Html::encode($job->transcript ?? '') ?></pre>
+        <?php
+        // Display only. The stored transcript keeps the provider's exact words; this renders the
+        // "dollars-and" shorthand — "15 dollars and twenty one" — as the price it means. See
+        // SpokenPrice for the evidence and for every case it refuses to touch. The downloaded file
+        // below is deliberately NOT normalised: that export is the verbatim machine record.
+    ?>
+        <pre class="a2t-transcript"><?= Html::encode(SpokenPrice::format($job->transcript ?? '')) ?></pre>
     </div>
 
     <?php
-    // Gated on whether the roles may be shown as fact, not on what the machine concluded. An
-    // administrator's confirmation is the other way a conversation reaches that state, and reading the
-    // machine's status here would leave a confirmed call with role-labelled turns and no split cards.
+        // Gated on whether the roles may be shown as fact, not on what the machine concluded. An
+        // administrator's confirmation is the other way a conversation reaches that state, and reading the
+        // machine's status here would leave a confirmed call with role-labelled turns and no split cards.
     ?>
     <?php if ($conversation->rolesPublished && $effective->hasSeparatedText()): ?>
         <div class="a2t-split">
@@ -133,7 +146,9 @@ $separation = $job->speakerSeparationStatus;
                     <h2 class="card__title">Customer</h2>
                     <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('customer')) ?>">Download</a>
                 </div>
-                <pre class="a2t-transcript"><?= Html::encode($effective->customerText ?? '') ?></pre>
+                <pre class="a2t-transcript"><?= Html::encode(
+                    SpokenPrice::formatUnlessReviewed($effective->customerText ?? '', $effective->isReviewed),
+                ) ?></pre>
             </div>
 
             <div class="card">
@@ -141,7 +156,9 @@ $separation = $job->speakerSeparationStatus;
                     <h2 class="card__title">Agent</h2>
                     <a class="btn btn--sm" href="<?= Html::encode($downloadUrl('agent')) ?>">Download</a>
                 </div>
-                <pre class="a2t-transcript"><?= Html::encode($effective->agentText ?? '') ?></pre>
+                <pre class="a2t-transcript"><?= Html::encode(
+                    SpokenPrice::formatUnlessReviewed($effective->agentText ?? '', $effective->isReviewed),
+                ) ?></pre>
             </div>
         </div>
     <?php elseif ($separation !== null && !$conversation->rolesPublished): ?>
@@ -219,7 +236,15 @@ $separation = $job->speakerSeparationStatus;
                 </div>
             <?php endif; ?>
 
-            <?= $this->render(AudioToTextViews::thread(), ['turns' => $conversation->turns]) ?>
+            <?php
+            // Reader-facing, so the shorthand is rendered as a price — but only while this is still
+            // the machine's own text. Once an administrator has corrected the conversation, what they
+            // saved is shown verbatim.
+?>
+            <?= $this->render(AudioToTextViews::thread(), [
+                'turns' => $conversation->turns,
+                'normalisePrices' => !$effective->isReviewed,
+            ]) ?>
         </details>
     <?php endif; ?>
 <?php endif; ?>

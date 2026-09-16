@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\AudioConversation;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\JobStatus;
@@ -122,11 +123,13 @@ $duration = static fn(?float $seconds): string => $seconds === null
                     <div><dt>File</dt><dd><?= Html::encode($job->originalFilename) ?></dd></div>
                     <div><dt>Duration</dt><dd><?= Html::encode($duration($job->durationSeconds)) ?></dd></div>
                     <div><dt>Language</dt><dd><?= Html::encode($job->detectedLanguage ?? '—') ?></dd></div>
+                    <div><dt>Transcribed by</dt><dd><?= Html::encode($job->transcriptionProvider()->shortLabel()) ?></dd></div>
                     <div><dt>Completed</dt><dd><?= Html::encode($localTime($job->completedAt)) ?></dd></div>
                 </dl>
 
                 <?php if ($job->status === JobStatus::COMPLETED): ?>
-                    <pre class="a2t-transcript"><?= Html::encode($job->transcript ?? '') ?></pre>
+                    <?php // Display only; the stored transcript keeps the provider's exact words. See SpokenPrice.?>
+                    <pre class="a2t-transcript"><?= Html::encode(SpokenPrice::format($job->transcript ?? '')) ?></pre>
                 <?php elseif ($job->status === JobStatus::FAILED): ?>
                     <?php
                     // Shown against this recording alone. A failed Agent file must not make a perfectly

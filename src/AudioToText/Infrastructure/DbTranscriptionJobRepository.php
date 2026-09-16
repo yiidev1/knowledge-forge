@@ -15,6 +15,7 @@ use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\TranscriptionJobListItem;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use Closure;
@@ -316,11 +317,15 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
+        ?TranscriptionProvider $transcriptionProvider = null,
     ): string {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
             'conversation_id' => $conversationId,
             'source_role' => $sourceRole?->value,
+            // Copied from the choice made at upload and never revisited. NULL stays legal and means
+            // Whisper, so a caller that predates provider selection still writes a valid row.
+            'transcription_provider' => $transcriptionProvider?->value,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'status' => JobStatus::QUEUED->value,
             'processing_stage' => ProcessingStage::QUEUED->value,
@@ -767,6 +772,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             (int) ($row['review_count'] ?? 0),
             ($row['conversation_id'] ?? null) === null ? null : (int) $row['conversation_id'],
             SourceRole::fromStorage($this->str($row['source_role'] ?? null)),
+            TranscriptionProvider::fromStorage($this->str($row['transcription_provider'] ?? null)),
         );
     }
 

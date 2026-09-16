@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\Support;
 
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
+use App\AudioToText\Domain\Transcription\DeepgramKeyterms;
+use App\Shared\Domain\ValueObject\SecretValue;
 
 /**
  * Builds the one Audio-to-Text settings object for tests.
@@ -50,6 +53,20 @@ final class AudioToTextSettingsFactory
         float $minConfidence = 0.55,
         int $maxSpeakers = 2,
         int $boundaryToleranceMs = 1500,
+        // Deepgram. Unconfigured by default — an empty key — because that is the state of a machine
+        // that has not opted in, and every existing test is about the Whisper path. A test that wants
+        // Deepgram usable passes a key; nothing here ever reaches the network either way.
+        string $deepgramApiKey = '',
+        string $deepgramBaseUrl = 'https://api.deepgram.com/v1/listen',
+        string $deepgramModel = 'nova-3',
+        string $deepgramLanguage = 'multi',
+        bool $deepgramSmartFormat = true,
+        // Off by default, as Deepgram and this project both default it — so a test that does not care
+        // about numerals produces the request every other test already expects.
+        bool $deepgramNumerals = false,
+        int $deepgramTimeoutSeconds = 120,
+        /** @var list<string> */
+        array $deepgramKeyterms = [],
     ): AudioToTextSettings {
         return new AudioToTextSettings(
             new TranscriptionSettings(
@@ -85,6 +102,16 @@ final class AudioToTextSettingsFactory
                 minConfidence: $minConfidence,
                 maxSpeakers: $maxSpeakers,
                 boundaryToleranceMs: $boundaryToleranceMs,
+            ),
+            new DeepgramSettings(
+                apiKey: new SecretValue($deepgramApiKey),
+                baseUrl: $deepgramBaseUrl,
+                model: $deepgramModel,
+                language: $deepgramLanguage,
+                smartFormat: $deepgramSmartFormat,
+                numerals: $deepgramNumerals,
+                timeoutSeconds: $deepgramTimeoutSeconds,
+                keyterms: DeepgramKeyterms::fromList($deepgramKeyterms),
             ),
         );
     }

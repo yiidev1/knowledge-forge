@@ -1,0 +1,991 @@
+================================================================================
+KNOWLEDGE FORGE — DEEPGRAM TRANSCRIPTION PROVIDER
+================================================================================
+Written                : 2026-09-15
+Repository             : /var/www/html/knowledge-forge
+Source of truth        : the implemented code, read directly. Every file path,
+                         class name, query parameter and message below was taken
+                         from the source after implementation, not from a plan.
+Scope                  : speech-to-text ONLY. Nothing else about Audio-to-Text
+                         changed — see section 4 for the exhaustive list of what
+                         Deepgram does NOT do.
+
+CONTAINS NO CREDENTIALS. No API key, token or secret appears anywhere in this
+file, and none may ever be added to it.
+================================================================================
+
+
+================================================================================
+1. WHAT THIS IS, AND WHY IT EXISTS
+================================================================================
+
+Audio-to-Text used to transcribe with exactly one engine: `AudioTranscriber`
+shelled out to whisper.cpp and there was no abstraction behind it.
+
+The driver is accuracy on order calls. Whisper mishears domain vocabulary —
+"wonton" comes back as "one ton" — and there was no mechanism to tell it
+otherwise. Deepgram's Nova-3 model accepts *Keyterm Prompting*: a list of terms
+to bias recognition toward. That is the feature being bought.
+
+So the transcription engine is now selectable:
+
+  - a GLOBAL DEFAULT, changed by an administrator on /admin/order58/store-audio;
+  - a PER-UPLOAD OVERRIDE on each store's audio page;
+  - the chosen provider COPIED ONTO THE JOB at enqueue and never re-read.
+
+Whisper remains the default and the regression baseline. A deployment that does
+nothing — sets no key, changes no setting — behaves exactly as it did before.
+
+
+================================================================================
+2. THE SHAPE OF IT, IN ONE DIAGRAM
+================================================================================
+
+  upload request (web tier)
+     |
+     |  validates, resolves provider, REFUSES an unconfigured one,
+     |  writes the provider onto every job row, enqueues, returns.
+     |  NO ffmpeg. NO whisper. NO HTTP to Deepgram. Ever.
+     v
+  audio_transcription_jobs.transcription_provider   <- the record, not a guess
+     |
+     v
+  kf:audio:worker  (console tier)
+     |
+     v
+  AudioTranscriber                     ...... the orchestrator
+     |
+     +-- 1. TranscriberResolver->for($job->transcriptionProvider())
+     |
+     +-- 2. normalizer->assertAvailable()   ffmpeg present?
+     +-- 3. engine->assertReady()           LOCAL CONFIG ONLY. No socket.
+     |          |
+     |          +-- fails here => this ONE job FAILS, nothing was spent,
+     |              the worker claims the next job as normal.
+     |
+     +-- 4. AudioNormalizer -> ffmpeg -> 16 kHz mono PCM WAV
+     |
+     +-- 5. engine->recognise(TranscriptionRequest)
+     |          |
+     |          +-- WhisperEngine   -> whisper.cpp, local
+     |          +-- DeepgramEngine  -> HTTPS POST, the only network call
+     |
+     +-- 6. $onWorkspaceReady($wav, $result)
+     |          transcript COMMITTED here, before diarization starts
+     |
+     v
+  UNCHANGED FROM HERE DOWN:
+    SherpaOnnxSpeakerDiarizer -> SpeakerTranscriptAligner -> DialogueActDetector
+    -> SpeakerRoleMapper -> the five publish gates -> review/correction layer
+
+Steps 2 and 3 strictly precede step 4. See section 7.
+
+
+================================================================================
+3. FILES
+================================================================================
+
+New — the port and its values (Domain):
+  src/AudioToText/Domain/TranscriptionProvider.php
+      enum: Whisper='WHISPER', Deepgram='DEEPGRAM'.
+  src/AudioToText/Domain/Transcription/TranscriptionEngineInterface.php
+      provider(), isAvailable(), assertReady(), recognise().
+  src/AudioToText/Domain/Transcription/TranscriptionRequest.php
+      wavPath, keyterms, languageOverride (the future seam; unused today).
+  src/AudioToText/Domain/Transcription/DeepgramKeyterms.php
+      sanitising + both limits + exact query-pair encoding.
+  src/AudioToText/Domain/Transcription/AudioTranscriptionResult.php
+      MOVED here from Infrastructure/. Fields unchanged.
+  src/AudioToText/Domain/AudioToTextSettingsRepositoryInterface.php
+
+New — the engines (Infrastructure, console tier only):
+  src/AudioToText/Infrastructure/Transcription/AudioNormalizer.php
+  src/AudioToText/Infrastructure/Transcription/WhisperEngine.php
+  src/AudioToText/Infrastructure/Transcription/DeepgramEngine.php
+  src/AudioToText/Infrastructure/DbAudioToTextSettingsRepository.php
+
+New — selection and web:
+  src/AudioToText/Application/TranscriberResolver.php
+  src/AudioToText/Application/TranscriberNotRegistered.php
+  src/AudioToText/Application/Settings/DeepgramSettings.php
+  src/AudioToText/Web/Settings/DefaultProviderAction.php
+
+New — the Order58 side (see section 17 on module isolation):
+  src/Order58/Domain/AudioProviderDefaultInterface.php
+  src/Order58/Infrastructure/DbAudioProviderDefault.php
+
+New — migration:
+  src/Migration/M260915100000AddTranscriptionProvider.php
+
+Changed:
+  src/AudioToText/Infrastructure/AudioTranscriber.php   orchestrator only now
+  src/AudioToText/Application/AudioToTextSettings.php   validation split
+  src/AudioToText/Application/Settings/TranscriptionSettings.php  whisperProblems()
+  src/AudioToText/Application/TranscriptionQueue.php    provider threading
+  src/AudioToText/Console/AudioTranscriptionWorkerCommand.php  passes provider
+  src/AudioToText/Domain/TranscriptionJob.php           + transcriptionProvider()
+  src/AudioToText/Domain/TranscriptionJobRepositoryInterface.php
+  src/AudioToText/Infrastructure/DbTranscriptionJobRepository.php
+  src/AudioToText/Domain/AudioConversationChild.php
+  src/AudioToText/Infrastructure/DbAudioConversationRepository.php
+  src/AudioToText/Domain/AudioTranscriptionException.php   + 4 factories
+  src/AudioToText/Web/Job/Store/{Action,template}.php
+  src/AudioToText/Web/Job/template.php
+  src/AudioToText/Web/Job/Conversion/template.php
+  src/AudioToText/Web/AudioToTextRoute.php
+  src/Order58/Web/StoreAudio/{Action,template}.php
+  assets/main/admin.js    the settings-dialog open/close handler
+  assets/main/admin.css   .page-header__actions and .a2t-settings
+  src/Environment.php, config/common/params.php,
+  config/common/di/audio-to-text.php, config/common/di/order58.php,
+  config/common/routes.php, .env.example
+
+
+================================================================================
+4. WHAT DEEPGRAM DOES NOT DO
+================================================================================
+
+This is the most important section in the file. Deepgram replaces ONE step.
+
+  NOT speaker diarization.  Sherpa ONNX keeps that job, locally. The request
+                            carries no `diarize` parameter. The whole review UI,
+                            the role mapper and the five publish gates are built
+                            around the local diarizer's output and are untouched.
+  NOT entity detection.     No `detect_entities`.
+  NOT summarization.        No `summarize`.
+  NOT redaction.            No `redact`.
+  NOT utterance grouping.   No `utterances`.
+  NOT alignment.            The aligner is local and unchanged.
+  NOT correction learning.  There is still NO mechanism that learns from manual
+                            corrections. Keyterms are configuration, typed by a
+                            human into .env. A future feature may derive them
+                            from corrections; it does not exist.
+  NOT knowledge/rules-aware. Deepgram never sees a knowledge base, a document, a
+                            rule, a chat message or a store profile. Audio-to-
+                            Text still depends on no other business module, and
+                            ModuleIsolationTest still enforces it.
+  NOT an OpenAI path.       Unrelated to the OpenAI Responses API, vector stores,
+                            Store Chat, Rule Chat or Agent Chat. None changed.
+
+A test asserts the absence of the first five parameters on the outgoing URI:
+  tests/Unit/AudioToText/DeepgramEngineTest.php
+      ::testNoDiarizationOrExtraAnalysisIsEverRequested
+
+
+================================================================================
+5. PROVIDER INDEPENDENCE — THE FLAW THAT WAS FIXED
+================================================================================
+
+BEFORE. `AudioToTextSettings::problems()` checked ffmpeg, ffprobe, the whisper
+binary AND the whisper model. A non-empty result makes the worker exit DATAERR
+before claiming any job. So a machine that had never installed whisper.cpp could
+not drain a queue of Deepgram jobs — the worker refused to start at all. One
+provider's health was every provider's health.
+
+AFTER, three tiers:
+
+  A. WORKER STARTUP  -  AudioToTextSettings::problems()
+     ffmpeg, ffprobe, temp dir, the timeout/duration ratio, foreign locks, and
+     the diarization checks already gated behind diarization->enabled.
+     NO transcription provider is checked here, and that is deliberate: anything
+     listed here stops the whole queue, which is right for ffmpeg (every job
+     needs it — the diarizer consumes its output too) and wrong for an engine.
+
+  B. STARTUP WARNINGS  -  AudioToTextSettings::warnings()
+     One line per unready provider, so an operator sees it on every tick without
+     the queue stalling. Verified live:
+
+       $ php ./yii kf:audio:worker --once      # WHISPER_MODEL pointed at nothing
+       note: Whisper (local) is not ready, so jobs queued for it will fail
+             (other providers are unaffected): WHISPER_MODEL: "..." is not a
+             readable file.
+       Audio transcription worker started (pid ..., 1 thread, single job).
+       No queued jobs.
+       Done.
+
+     The worker STARTED and drained the queue. That is the fix.
+
+  C. PER-PROVIDER READINESS  -  one definition each
+       TranscriptionSettings::whisperProblems()   binary executable, model readable
+       DeepgramSettings::problems()               key, base URL, model, language,
+                                                  keyterm COUNT
+     Consulted by WhisperEngine::assertReady() and DeepgramEngine::assertReady(),
+     and by the web tier for "may I offer this provider?". One definition, two
+     readers — and the web tier never names an engine class.
+
+NET EFFECT
+  A missing whisper model  -> Whisper jobs fail. Deepgram jobs run. Worker runs.
+  A missing Deepgram key   -> Deepgram jobs fail. Whisper jobs run. Worker runs.
+  Neither                  -> Worker still starts, warns about both.
+
+Pinned by tests/Unit/AudioToText/ProviderIndependenceTest.php.
+
+
+================================================================================
+6. READINESS IS LOCAL. NO NETWORK CALL FROM A WEB REQUEST.
+================================================================================
+
+`isAvailable()` and `assertReady()` inspect local configuration ONLY. Neither
+may open a socket. The Deepgram key is NOT verified by calling Deepgram.
+
+Two reasons, both load-bearing:
+
+  1. The upload page asks this question on every render and every POST. A
+     network round trip there would make an upload wait on a third party.
+  2. A provider outage would be reported to an administrator as "not
+     configured", sending them to check a key that was perfectly fine.
+
+A credential this server holds but Deepgram rejects surfaces as an HTTP 401 in
+`recognise()`, inside the worker, where it belongs.
+
+ENFORCED STRUCTURALLY, not by convention:
+  tests/Unit/AudioToText/WebTierCannotRunWhisperTest.php bans these substrings
+  in any file under a /Web/ path anywhere in src/:
+
+      AudioTranscriber, TranscriptionEngine, WhisperEngine, DeepgramEngine,
+      AudioNormalizer, SpeakerDiarizer, SpeakerSeparationService, ProcessRunner,
+      proc_open, shell_exec, passthru, whisper-cli, popen, system(
+
+  Comments are stripped before the scan, so the ban is on code, not prose.
+  `DeepgramEngine` is on that list for the same reason `AudioTranscriber` always
+  was: it blocks on a remote service, and an upload request must enqueue and
+  return.
+
+Also asserted directly: DeepgramEngineTest::testReadinessDoesNotCallDeepgram
+hands the engine an HTTP client that THROWS if it is called at all, then calls
+assertReady() and isAvailable().
+
+
+================================================================================
+7. ORDERING — assertReady() RUNS BEFORE FFMPEG
+================================================================================
+
+In AudioTranscriber::transcribeFile(), in this order:
+
+    $engine = $this->engines->for($provider);
+    $this->normalizer->assertAvailable();   // ffmpeg present?
+    $engine->assertReady();                 // provider configured?
+    ... only now: readable-source check, workspace, ffmpeg, recognise
+
+A job queued for a provider this machine cannot run therefore costs:
+  - no ffmpeg process,
+  - no temporary workspace,
+  - no CPU beyond a few filesystem stats.
+
+It fails with a message an administrator can act on, and the worker continues.
+
+Asserted by TranscriberOrderingTest::testAnUnreadyEngineFailsBeforeFfmpegRuns
+and ::testAnUnreadyEngineCreatesNoWorkspace. Those tests point FFMPEG_BINARY at
+a script that records its own argv; the assertion is that the file it would have
+written DOES NOT EXIST.
+
+
+================================================================================
+8. THE REQUEST, EXACTLY
+================================================================================
+
+  POST https://api.deepgram.com/v1/listen?<query>
+  Authorization: Token <key>
+  Content-Type: audio/wav
+  <body: the normalised 16 kHz mono PCM WAV>
+
+QUERY PARAMETERS — these three, always, and keyterms conditionally:
+
+  model=<DEEPGRAM_MODEL>              default nova-3
+  language=<DEEPGRAM_LANGUAGE>        default multi
+  smart_format=true|false             default true
+  keyterm=<term>                      REPEATED, once per term; only when the
+                                      list is non-empty AND the model is Nova-3
+
+Nothing else. The reason for each:
+
+  model         Nova-3 is the model that supports Keyterm Prompting, which is
+                the entire reason for using Deepgram here.
+  language      A deployment decision. See section 9.
+  smart_format  Punctuation, capitalisation and number formatting. Worth having
+                because the engine prefers each word's `punctuated_word`, so the
+                token stream a reviewer edits matches the transcript they were
+                shown. Order calls are full of quantities and prices.
+  keyterm       The feature being bought. See section 10.
+
+
+================================================================================
+9. LANGUAGE — A DEPLOYMENT DECISION, NOT A PROJECT FACT
+================================================================================
+
+`DEEPGRAM_LANGUAGE` is configurable and defaults to `multi`. NOTHING in the code
+or in this document asserts which languages this installation's recordings
+contain. That is for whoever deploys it to know.
+
+  en      Single-language English, INCLUDING strong accent variation. Accent
+          variation alone is NOT a reason to choose multi — a single-language
+          model handles accents, and it is cheaper.
+  multi   Genuinely multilingual audio, or code-switching within one call.
+
+Nova-3 multilingual is $0.0052/min pre-recorded; Nova-3 monolingual is
+$0.0043/min. Keyterm Prompting adds $0.0013/min, so multilingual with keyterms
+is $0.0065/min. (Prices as published on 2026-09-15; confirm before budgeting.)
+
+NO PER-UPLOAD LANGUAGE CONTROL EXISTS. That was deliberately left out.
+`TranscriptionRequest` already carries `?string $languageOverride = null`, and
+`DeepgramEngine::queryString()` already prefers it over the configured default:
+
+    ['language', $request->languageOverride ?? $deepgram->language],
+
+Nothing fills it today. Adding a per-upload selector later means populating that
+field — no change to the engine, the port, or the orchestrator.
+
+Whisper is unaffected: WhisperEngine passes `-l auto` and detects per recording.
+
+
+================================================================================
+10. KEYTERMS — SANITISING, THE TWO LIMITS, AND THE EXACT ENCODING
+================================================================================
+
+10.1 WHERE THEY COME FROM
+
+  DEEPGRAM_KEYTERMS in .env, comma-separated. Split in
+  config/common/di/audio-to-text.php (assembly is that file's job; params.php
+  only carries values), then handed to DeepgramKeyterms::fromList().
+
+  QUOTE THE VALUE IN .env. Multi-word terms contain spaces and an unquoted
+  space makes the whole .env file unparseable — the application will not boot:
+
+      DEEPGRAM_KEYTERMS="wonton, lo mein, General Tso"
+
+  This was found the hard way during verification.
+
+10.2 SANITISING  (DeepgramKeyterms::fromList)
+
+  - each term trimmed;
+  - empty terms dropped   (a trailing comma would otherwise send `keyterm=`);
+  - exact duplicates dropped, ORDER PRESERVED, CASE-SENSITIVELY
+    ("Wonton" and "wonton" are two hints, not a duplicate — case matters to
+    the model).
+
+10.3 THE TWO LIMITS, AND WHY ONLY ONE IS ENFORCED HERE
+
+  Deepgram documents at most 100 keyterms within a 500-token budget. Those two
+  numbers are NOT equally knowable from this side.
+
+  +----------------+-------------------------+--------------------------------+
+  | Limit          | How we can check it     | What we do                     |
+  +----------------+-------------------------+--------------------------------+
+  | 100 keyterms   | count() after           | EXACT AND BLOCKING. >100 is a  |
+  |                | sanitising — an exact   | Deepgram readiness failure and |
+  |                | property of the list    | a startup warning. No request  |
+  |                |                         | is built.                      |
+  +----------------+-------------------------+--------------------------------+
+  | 500 tokens     | a whitespace WORD count | WARNING ONLY. NEVER BLOCKS.    |
+  |                | — NOT a token count     | The request is sent anyway.    |
+  +----------------+-------------------------+--------------------------------+
+
+  DEEPGRAM IS THE AUTHORITY ON THE TOKEN BUDGET.
+
+  We have no officially compatible tokenizer. A whitespace word count is neither
+  exact nor reliably conservative in either direction — subword tokenizers
+  generally emit MORE tokens than words. Refusing a valid configuration because
+  a rough local counter disagreed with it would be worse than sending the
+  request and letting the provider decide.
+
+  So `DeepgramKeyterms::estimatedTokens()` feeds `budgetWarning()` and nothing
+  else, and the warning says so in as many words:
+
+      "DEEPGRAM_KEYTERMS is roughly N words, above Deepgram's 500-token budget.
+       This is an estimate, not a token count — Deepgram decides, and will
+       answer 400 if the request really is too long. Transcription is not
+       blocked."
+
+  When the budget really is exceeded, Deepgram answers HTTP 400, and that maps
+  to a safe failure of THAT ONE JOB via
+  `AudioTranscriptionException::deepgramRejected()`, with Deepgram's own message
+  recorded as the technical detail (redacted — see section 13).
+
+  Asserted by:
+    DeepgramKeytermsTest::testAnOverBudgetEstimateWarnsButIsNeverAProblem
+    DeepgramEngineTest::testAnOverBudgetKeytermSetStillSendsTheRequest
+    ProviderIndependenceTest::testAnOverBudgetKeytermEstimateWarnsWithoutMakingDeepgramUnready
+
+10.4 THE ENCODING — REPEATED KEYS, AND WHY http_build_query() IS WRONG
+
+  Deepgram expects the key REPEATED:
+
+      ?model=nova-3&language=multi&smart_format=true
+      &keyterm=wonton&keyterm=lo%20mein&keyterm=General%20Tso
+
+  PHP cannot produce that from an array:
+
+      http_build_query(['keyterm' => ['a','b']])  ->  keyterm%5B0%5D=a&keyterm%5B1%5D=b
+          Deepgram reads a parameter literally named "keyterm[0]".
+      ['keyterm' => 'a', 'keyterm' => 'b']        ->  only "b" survives.
+      'a,b' comma-joined                          ->  not the format at all.
+
+  So DeepgramKeyterms::toQueryPairs() returns a LIST OF PAIRS —
+  [['keyterm','wonton'], ['keyterm','lo mein']] — which preserves the
+  repetition, and DeepgramEngine::queryString() encodes them explicitly with
+  rawurlencode() and joins with '&'.
+
+  THE TEST INSPECTS THE FINAL OUTGOING REQUEST URI, not the input array. That
+  distinction is the whole point: the bug appears only at the last step.
+    DeepgramEngineTest::testKeytermsAreRepeatedQueryParametersOnTheFinalUri
+  asserts the three repeated keys, the percent-encoded space, exactly three
+  occurrences of "keyterm=", and the ABSENCE of both "keyterm[" and a comma-
+  joined form.
+
+10.5 NOVA-3 ONLY
+
+  Keyterm Prompting is a Nova-3 feature. Sending it to an older model is a
+  REJECTED REQUEST, not a silent no-op. So DeepgramSettings::supportsKeyterms()
+  checks `str_starts_with($model, 'nova-3')`, and a deployment pinned to an
+  older model simply transcribes without hints — with a startup warning saying
+  so — rather than failing every job.
+
+
+================================================================================
+11. THE RESPONSE, AND HOW IT IS MAPPED
+================================================================================
+
+DeepgramEngine is the ONLY class in this project that knows Deepgram's JSON.
+
+  transcript  <- results.channels[0].alternatives[0].transcript
+                 Trimmed. Empty or whitespace-only => "No speech was detected
+                 in that recording." (the same message Whisper's empty result
+                 produces).
+
+  tokens      <- results.channels[0].alternatives[0].words[]
+                 text  : punctuated_word ?? word
+                         `punctuated_word` is preferred so the token stream a
+                         reviewer edits matches the transcript they were shown.
+                 timing: Deepgram reports FLOAT SECONDS; TranscriptToken is
+                         INTEGER MILLISECONDS, because that is what the diarizer
+                         and the aligner already use.
+                             (int) round($start * 1000)
+                         The conversion happens at this boundary so no other
+                         class has to know two units exist.
+
+  language    <- results.channels[0].detected_language IF PRESENT, else NULL.
+                 NEVER an echo of the configured value. The badge on the page
+                 says what was DETECTED; repeating the request back would make a
+                 setting look like a finding. Present when language=multi asked
+                 Deepgram to detect one; absent when the language was pinned.
+
+MISSING WORDS ARE AN ERROR, NOT AN EMPTY SUCCESS. A 200 carrying a transcript
+but no `words[]` throws. COMMON mode has nothing to align without them, and a
+transcript stored with no timings would silently lose speaker separation while
+looking as though it had worked.
+
+
+================================================================================
+12. FAILURE MODES — EVERY ONE FAILS ONE JOB, SAFELY
+================================================================================
+
+Nothing below can stop the worker, corrupt a transcript, or affect another job.
+
+  HTTP 401 / 403   deepgramRejected()
+                   user: "Deepgram rejected the credentials for this server. An
+                          administrator needs to check the Deepgram
+                          configuration."
+  HTTP 429         "Deepgram is rate-limiting this server ... Try again shortly."
+  HTTP 5xx         "Deepgram is temporarily unavailable ... Try again shortly."
+  any other 4xx    "Deepgram could not transcribe this recording."
+                   (this is where an over-budget keyterm 400 lands)
+  transport fail   deepgramUnreachable()  - DNS, TLS, refused, timeout.
+                   Deliberately DISTINCT from a refusal: the operator's next
+                   move differs — check the network, not the key.
+  malformed JSON   deepgramUnreadable()
+  no channels      deepgramUnreadable()
+  no alternatives  deepgramUnreadable()
+  no words[]       deepgramUnreadable()
+  empty transcript emptyTranscript()  - "No speech was detected ..."
+  not configured   providerNotConfigured()  - raised in assertReady(), BEFORE
+                   ffmpeg. Names the provider to the user; the missing setting
+                   goes to the log only.
+
+EVERY exception carries TWO messages, and the split is enforced by the type:
+  getMessage()       -> the page and the `error_message` column. No path, no
+                        exit code, no stderr, no setting name.
+  technicalDetail()  -> the log. May contain all of those.
+
+
+================================================================================
+13. THE API KEY — WHERE IT IS, AND WHERE IT CAN NEVER BE
+================================================================================
+
+STORAGE
+  .env only, as DEEPGRAM_API_KEY. Declared in src/Environment.php SPEC with
+  'secret' => true, so Environment::describe() masks it.
+  NEVER in the database. The settings table stores a provider NAME, nothing else.
+  NEVER written by a web request. No code path writes .env.
+
+IN MEMORY
+  Wrapped in App\Shared\Domain\ValueObject\SecretValue the moment it leaves
+  configuration (config/common/di/audio-to-text.php). SecretValue cannot be
+  printed, serialised, var_dump'd or json_encode'd back into a readable form.
+
+REVEALED EXACTLY TWICE, both inside DeepgramEngine:
+  1. building the Authorization header;
+  2. seeding a SecretRedactor — and the second exists to protect the first.
+
+WHY THE REDACTOR
+  A failed request's body is quoted into the log so an operator can diagnose it.
+  That body is written by a third party. It is not this code's place to assume
+  what a remote service will or will not echo back, so the body is redacted
+  BEFORE it is truncated (SecretRedactor::redactAndTruncate, in that order, so a
+  secret straddling the cut cannot survive as a fragment), capped at 500 bytes.
+
+  This was not hypothetical caution: the test below FAILED on first run against
+  an earlier implementation that logged the body verbatim, which is why the
+  redactor is there.
+
+NEVER APPEARS IN
+  logs, HTML, error messages, exception messages (either half), stack traces,
+  the database, test output, or this document.
+
+ASSERTED BY
+  DeepgramEngineTest::testTheApiKeyNeverAppearsInAnyFailureMessage
+      four failure paths x three renderings (getMessage, technicalDetail,
+      (string) $e).
+  DeepgramEngineTest::testTheKeyIsNotRecoverableFromTheSettingsObject
+      print_r and json_encode of the settings object.
+
+NO CLIENT-SIDE DEEPGRAM CALL EXISTS. The browser never receives a key, a token,
+a signed URL or a Deepgram endpoint. CSP here is `script-src 'self'` and this
+feature ships no JavaScript at all.
+
+
+================================================================================
+14. CONFIGURATION
+================================================================================
+
+The chain is unchanged and has one source of truth:
+
+  src/Environment.php (SPEC: default, type, range)   <- THE source of truth
+      -> .env                                           this deployment
+      -> config/common/params.php                       transport only
+      -> config/common/di/audio-to-text.php             assembly only
+      -> DeepgramSettings (readonly)
+
+  +--------------------------+------------------+-----------------------------+
+  | Variable                 | Default          | Notes                       |
+  +--------------------------+------------------+-----------------------------+
+  | DEEPGRAM_API_KEY         | '' (secret)      | blank = Deepgram cannot be  |
+  |                          |                  | selected. Whisper unaffected|
+  | DEEPGRAM_BASE_URL        | https://api.     | absolute http(s), and it    |
+  |                          | deepgram.com/    | must carry NO query string  |
+  |                          | v1/listen        | (the engine appends its own)|
+  | DEEPGRAM_MODEL           | nova-3           | keyterms need nova-3*       |
+  | DEEPGRAM_LANGUAGE        | multi            | see section 9               |
+  | DEEPGRAM_SMART_FORMAT    | true             |                             |
+  | DEEPGRAM_TIMEOUT         | 120  (1..7200)   | HTTP timeout, seconds       |
+  | DEEPGRAM_KEYTERMS        | ''               | comma-separated, QUOTE IT   |
+  +--------------------------+------------------+-----------------------------+
+
+The HTTP client is its own Guzzle instance (config/common/di/audio-to-text.php)
+with `http_errors => false`, following the Order58 client precedent: PSR-18 then
+returns a response for every status and only a genuine transport failure throws,
+which is exactly the distinction section 12 depends on.
+
+
+================================================================================
+15. DATABASE
+================================================================================
+
+ONE migration, ADDITIVE ONLY, NO BACKFILL:
+  src/Migration/M260915100000AddTranscriptionProvider.php
+
+  CREATE TABLE audio_to_text_settings (
+      id                             TINYINT UNSIGNED NOT NULL,
+      default_transcription_provider VARCHAR(16) NOT NULL DEFAULT 'WHISPER',
+      updated_at                     DATETIME NOT NULL,
+      updated_by_admin_id            BIGINT NULL,
+      PRIMARY KEY (id),
+      FOREIGN KEY (updated_by_admin_id) REFERENCES admin_users (id)
+          ON DELETE RESTRICT ON UPDATE RESTRICT,
+      CHECK (id = 1),
+      CHECK (default_transcription_provider IN ('WHISPER','DEEPGRAM'))
+  ) ENGINE=InnoDB;
+  -- seeded with one row: id 1, 'WHISPER'
+
+  ALTER TABLE audio_transcription_jobs
+      ADD COLUMN transcription_provider VARCHAR(16) NULL AFTER source_role,
+      ADD CONSTRAINT ... CHECK (transcription_provider IS NULL
+                                OR transcription_provider IN ('WHISPER','DEEPGRAM'));
+
+  Single row + CHECK (id = 1) copies audio_worker_heartbeat.
+  Nullable column + NULL-OR-IN CHECK copies source_role.
+
+  NULL MEANS WHISPER. No existing row was rewritten — every job that predates
+  provider selection was produced by whisper.cpp, so a backfill would write a
+  value that is already implied, recording a "decision" nobody made.
+
+  THE LEGACY RULE LIVES IN EXACTLY ONE PLACE:
+      TranscriptionJob::transcriptionProvider()
+          return $this->transcriptionProviderOrNull ?? TranscriptionProvider::Whisper;
+  so no query and no template carries a `?? 'WHISPER'`.
+
+  down() REFUSES rather than destroys, the house rule: it throws if any job has
+  transcription_provider = 'DEEPGRAM', because that column is the only record of
+  it and dropping it would make those transcripts read as Whisper output — a
+  quiet falsification, not a visible loss. A database that has only run Whisper
+  reverts cleanly.
+
+VERIFIED AFTER APPLYING:
+  audio_to_text_settings : 1 row, 'WHISPER', updated_by_admin_id NULL
+  audio_transcription_jobs: 28 rows, 0 with a non-NULL transcription_provider
+
+
+================================================================================
+16. THE DEFAULT IS A DEFAULT, NOT A POLICY
+================================================================================
+
+The global setting decides ONE thing: what the upload form preselects.
+
+The provider is COPIED ONTO THE JOB at enqueue (TranscriptionQueue) and NEVER
+re-read. The worker uses `$job->transcriptionProvider()`.
+
+If the worker read the setting instead, a Whisper transcript would start
+claiming Deepgram the moment an administrator flipped a radio button. The stored
+value is a RECORD, not a preference.
+
+Both children of a SEPARATE (Customer + Agent) upload share ONE provider: it is
+one call recorded twice, and transcribing its halves with different engines
+would make the two sides incomparable for no gain.
+
+Asserted by
+tests/Integration/AudioToText/TranscriptionProviderPersistenceTest.php
+  ::testChangingTheGlobalDefaultLeavesQueuedJobsAlone
+  ::testBothChildrenOfAPairShareOneProvider
+
+
+================================================================================
+17. MODULE ISOLATION — HOW AN ORDER58 PAGE HOSTS AN AUDIO SETTING
+================================================================================
+
+The rule (tests/Unit/AudioToText/ModuleIsolationTest.php):
+  - no file under src/AudioToText/ may contain App\Order58, App\Chat, App\Rules,
+    App\KnowledgeBase, App\Document, App\Agent, App\Ai, App\Reports, App\Worker;
+  - no file under src/ OUTSIDE src/AudioToText/ may contain App\AudioToText;
+  - comments are NOT stripped for this check.
+
+The setting is shown on /admin/order58/store-audio because that is where an
+administrator already is when thinking about store audio. That page is in
+Order58 and may not name the Audio-to-Text module. Resolved exactly as the
+existing DbStoreAudioCounts precedent resolves the same problem:
+
+  READING   src/Order58/Domain/AudioProviderDefaultInterface.php  (Order58's own
+            port) + src/Order58/Infrastructure/DbAudioProviderDefault.php, a
+            plain Query against the `audio_to_text_settings` TABLE.
+            A table name is not a namespace.
+
+  WRITING   the form POSTs to an Audio-to-Text-owned route addressed BY ROUTE
+            NAME: 'audio-to-text.settings.default-provider'.
+            A route name is not a namespace.
+            The handler, src/AudioToText/Web/Settings/DefaultProviderAction.php,
+            owns all the validation — so the rules about which providers exist
+            and which are configured live in exactly one module.
+
+  DUPLICATION, NAMED HONESTLY: DbAudioProviderDefault carries its own literal
+  map of provider value => label, mirroring the enum, because importing the enum
+  is exactly what is forbidden. It is the same kind of mirror as the table name,
+  and it is backstopped by the column's CHECK constraint.
+
+  THE DIALOG'S MARKUP lives in the Order58 template and its behaviour in
+  assets/main/admin.js, both using `a2t`-prefixed classes and data attributes. A
+  CSS class and a data attribute are not namespaces either, and keeping the
+  prefix is what satisfies the two ModuleIsolationTest rules that police audio
+  CSS selectors and audio DOM queries.
+
+Nothing about the isolation rules was relaxed. Both tests still pass.
+
+
+================================================================================
+18. THE USER INTERFACE
+================================================================================
+
+There are exactly TWO places a provider is chosen, and the interface keeps them
+visibly distinct:
+
+  GLOBAL (the default for future uploads, across every store)
+     /admin/order58/store-audio
+        -> [Transcription settings]  button, in the page header
+           -> modal
+              -> "Default transcription provider"
+                 -> Save default   (POST audio-to-text.settings.default-provider)
+
+  PER UPLOAD (this recording only)
+     /audio-to-text/store/{sourceId}
+        -> "Transcription provider" in the COMMON form
+        -> "Transcription provider" in the SEPARATE form
+           both preselected from the global default
+           either may be overridden for that one upload
+
+18.1  /admin/order58/store-audio  — the global default, in a dialog
+
+  A "Transcription settings" button sits in `.page-header__actions` beside "All
+  conversions". The name is specific on purpose: it governs speech-to-text and
+  nothing else on the page is configurable, so "Settings" or "Audio settings"
+  would both be vaguer than the thing deserves.
+
+  It opens a native <dialog> holding the label, the select, the hint "Choose
+  which provider should be selected automatically for new audio uploads", and
+  Cancel / Save default.
+
+  WHY A DIALOG, NOT A CARD. It was an inline card first. The card was permanent,
+  three times the height of the control it held, and it pushed the store picker
+  — what an administrator actually came to this page for — down the screen, to
+  configure something that changes once a quarter.
+
+  WHY IT STILL WORKS WITHOUT JAVASCRIPT. The trigger is a real <a href> pointing
+  at this page with `?settings=1`, which the server answers by printing the
+  dialog with `open`. `admin.js` intercepts the same click and calls showModal()
+  instead. Cancel is likewise a real link back to the page without the parameter.
+  This is the pattern the chat report drill-downs already use, and it matters
+  here more than there: this is the ONLY way to change the one global setting, so
+  a script-less browser losing it would lose the feature.
+
+  showModal() is what provides Escape, the backdrop and the focus trap — none of
+  that is hand-written. A click on the dialog element itself is a backdrop hit
+  and closes it.
+
+  BOTH providers are listed here whether configured or not: this is where an
+  administrator decides what the installation should use, and hiding an option
+  would leave no way to discover that it exists. An unconfigured choice is
+  REFUSED on POST, with the reason. The form submits on a button, never on
+  change — the CSP is `script-src 'self'` so no inline handler is possible, and a
+  select that saved silently would be worse anyway.
+
+18.2  /audio-to-text/store/{sourceId}  — the per-upload choice
+
+  A "Transcription provider" select in BOTH upload forms, rendered from one
+  shared closure so the two cannot drift apart. The id differs per form so each
+  <label for> stays valid on a page showing both.
+
+  THE FIELD IS ALWAYS RENDERED. It used to disappear when only one provider was
+  usable, which was wrong twice over: an administrator could not see which engine
+  their upload would use, and a broken install was indistinguishable from a
+  single-provider one.
+
+  EVERY provider appears every time. One this machine cannot run is shown
+  `disabled` and suffixed "— Not configured", with a plain line below the field:
+
+      Deepgram is not currently configured on this server.
+
+  That sentence names the provider and never the setting behind it — which key
+  or path is missing is the operator's business and belongs in the log.
+
+  `disabled` on an option is a courtesy, not the control. The server refuses an
+  unusable provider whatever is posted (section 6 and `Action::provider()`), so a
+  tampered form fails before a byte is stored.
+
+  Under the field, always:
+
+      Global default: Whisper (local).  This choice applies only to this upload.
+
+  WHEN THE GLOBAL DEFAULT CANNOT RUN — the stored setting says Deepgram and the
+  key has since been removed — the page does NOT hide the field, does NOT fail,
+  and above all does NOT rewrite the setting. It preselects the first provider
+  that can run and says so:
+
+      The global default is Deepgram (cloud), which is not available on this
+      server, so another provider is selected for this upload. The global
+      setting has not been changed.
+
+  Preselecting the broken one instead would need a `disabled` option to be
+  `selected`, which browsers still submit, and would leave the form in a state
+  that cannot succeed. Silently repairing the global setting from an upload page
+  would hide a real configuration problem behind a page view.
+
+  PAGE COPY. This page used to say "Everything is transcribed on this server —
+  nothing is sent to an external service." That stopped being true the moment
+  Deepgram became selectable, and a false privacy claim is worse than no claim,
+  so it now reads:
+
+      Upload call recordings for this store. New uploads use the configured
+      default transcription provider unless you choose another one.
+
+18.3  Elsewhere
+
+Job detail and conversion pages
+  A "Transcribed by" row beside "Language" — Whisper or Deepgram.
+
+Store conversions table
+  AudioConversationChild carries the resolved provider, read in
+  DbAudioConversationRepository::childrenFor().
+
+18.4  Assets
+
+  assets/main/admin.js   the settings-dialog open/close handler, at the end of
+                         the file. Every DOM query in it is `a2t`-scoped, which
+                         ModuleIsolationTest enforces.
+  assets/main/admin.css  `.page-header__actions` (generic, and therefore outside
+                         the a2t block), plus `.a2t-settings` for the dialog's
+                         width and for positioning the no-JavaScript `open`
+                         fallback, which a plain <dialog> would otherwise render
+                         in the document flow rather than centred.
+
+  No inline <script> and no inline style anywhere: `script-src 'self';
+  style-src 'self'` would silently drop both.
+
+
+================================================================================
+19. TESTS
+================================================================================
+
+NO TEST MAKES A LIVE DEEPGRAM CALL. Every Deepgram response in the suite is a
+fixture handed to a doubled PSR-18 client. No paid request is ever issued.
+
+New:
+  tests/Unit/AudioToText/TranscriptionProviderTest.php          storage values,
+        the NULL-means-Whisper rule, no-silent-default decoding
+  tests/Unit/AudioToText/DeepgramKeytermsTest.php               sanitising, the
+        exact 100 limit, the advisory 500 estimate, query pairs
+  tests/Unit/AudioToText/DeepgramEngineTest.php            (35 tests) the final
+        outgoing URI, response mapping, every failure mode, key secrecy
+  tests/Unit/AudioToText/ProviderIndependenceTest.php            section 5
+  tests/Unit/AudioToText/TranscriberOrderingTest.php             section 7, plus
+        the ffmpeg argv asserted against a real ProcessRunner
+  tests/Integration/AudioToText/TranscriptionProviderPersistenceTest.php
+        real MySQL: the column, the CHECK, paired children, the default
+  tests/Web/AudioToTextProviderCest.php                    (25 tests) the served
+        application: the settings dialog (present, closed by default, opened by
+        its href with NO JavaScript, CSRF-protected, refused without a token),
+        the inline card's absence, the provider field ALWAYS rendered in both
+        forms, an unusable provider shown disabled rather than omitted, the
+        global-default-is-unavailable case, both refusal paths, and the settings
+        row left untouched by an upload
+  tests/Support/RecordingHttpClient.php                     captures the request
+
+Deliberately updated (and why):
+  ModuleIsolationTest          + the new migration to the scanned list,
+                               + audio_to_text_settings to the allowed tables.
+                               Otherwise the new migration is silently unscanned.
+  WebTierCannotRunWhisperTest  + TranscriptionEngine, WhisperEngine,
+                               DeepgramEngine, AudioNormalizer.
+                               After the split the new class names must inherit
+                               the same ban; this is what enforces "Deepgram is
+                               never called from a web request".
+
+Results after implementation:
+  Unit         1,270 tests / 3,683 assertions   OK   (was 1,190 / 3,526)
+  Integration    311 tests / 1,065 assertions   OK
+  Web            240 tests / 1,060 assertions   6 failures, ALL PRE-EXISTING
+                 (ChatSourcesCest x2, ChatReportsCest x2, RuleListPageCest,
+                  RuleReadinessCest — reproduced on a clean tree with the branch
+                  stashed; unrelated to audio)
+  Psalm          8 errors, ALL PRE-EXISTING (Chat, Document). None in new code.
+  php-cs-fixer   clean except one pre-existing drift in
+                 src/AudioToText/Web/Job/Original/template.php, left alone.
+
+
+================================================================================
+20. MANUAL VERIFICATION PERFORMED
+================================================================================
+
+  1. ./yii migrate:up                    applied; table created and seeded;
+                                         28 existing jobs untouched, all NULL.
+  2. Worker with WHISPER_MODEL missing   STARTED, warned about Whisper only,
+                                         drained the queue. This is the section
+                                         5 fix, observed.
+  3. Default changed to Deepgram         through the MODAL; both upload forms
+                                         then preselected Deepgram.
+  4. Per-upload override to Whisper      job queued WHISPER; global still
+                                         DEEPGRAM; the next fresh upload page
+                                         preselected Deepgram again.
+  5. Reverse override                    job queued DEEPGRAM; global still
+                                         WHISPER.
+  6. Job page                            showed "Transcribed by: Deepgram".
+  7. Upload POST                         audio_to_text_settings.updated_at
+                                         unchanged — an upload never writes the
+                                         global setting.
+  8. Global default = DEEPGRAM with      the field stayed visible in both forms,
+     no key configured                   Deepgram showed disabled and labelled,
+                                         Whisper was preselected, the page said
+                                         the global default was unavailable, and
+                                         the stored setting was NOT rewritten.
+
+  Steps 3-6 needed a configured key, so a PLACEHOLDER value was put in .env for
+  the duration and removed afterwards. No real credential was used and no
+  request reached Deepgram: the web tier makes no provider call by design
+  (section 6), and no worker was run against a Deepgram job.
+
+  Before every database-touching run:
+      SELECT id, original_filename, status FROM audio_transcription_jobs
+       WHERE status IN ('QUEUED','PROCESSING');
+  returned zero rows, so no real queued work was at risk. The database was left
+  with the same 28 job rows it started with and the default back at WHISPER.
+
+
+================================================================================
+21. OPERATING IT
+================================================================================
+
+TO ENABLE DEEPGRAM
+  1. Create a key at https://console.deepgram.com/ -> API Keys.
+  2. Put it in .env as DEEPGRAM_API_KEY. Never commit it.
+  3. Decide DEEPGRAM_LANGUAGE (section 9). `en` is cheaper if the audio is
+     single-language, accents notwithstanding.
+  4. Optionally set DEEPGRAM_KEYTERMS — QUOTED (section 10.1).
+  5. Restart PHP-FPM so the web tier re-reads .env.
+  6. Open /admin/order58/store-audio -> Transcription settings, and set the
+     default. Or leave it on Whisper and let people choose per upload — the
+     field is on both upload forms either way.
+
+  Until step 5 the provider shows as "Deepgram (cloud) — Not configured" on the
+  upload forms and cannot be made the default. That is the readiness check
+  reading local configuration, not a failed call to Deepgram (section 6).
+
+TO DISABLE IT
+  Set the default back to Whisper. Optionally blank DEEPGRAM_API_KEY, which
+  removes it from the upload forms entirely. Jobs already queued for Deepgram
+  will still try to use it; blanking the key makes them fail cleanly with
+  "not configured" — no other job is affected.
+
+COST CONTROL
+  There is no per-request budget cap in this implementation. Cost is bounded by
+  who can upload (administrators only, behind the existing auth gate) and by
+  AUDIO_TRANSCRIPTION_MAX_DURATION. If a hard cap is wanted, it belongs beside
+  the existing queue limits, not inside the engine.
+
+WHAT TO WATCH
+  Worker startup notes name any unready provider on every tick.
+  A Deepgram failure appears in the job's `error_message` (user-facing half) and
+  in the log with the HTTP status and the redacted body.
+
+
+================================================================================
+22. WHAT IS DELIBERATELY NOT DONE, AND WHERE IT WOULD GO
+================================================================================
+
+  Correction learning / automatic vocabulary
+      NOT IMPLEMENTED, and out of scope by instruction. When it is built it
+      should produce a DeepgramKeyterms instance and put it on the
+      TranscriptionRequest — the object and the field already exist. Nothing in
+      the engine needs to change.
+
+  Per-upload language
+      NOT IMPLEMENTED. `TranscriptionRequest::$languageOverride` is the seam and
+      DeepgramEngine already prefers it (section 9).
+
+  Per-store provider or per-store keyterms
+      NOT IMPLEMENTED. The setting is global. A per-store column would go on the
+      Order58 store mirror or on audio_conversations, and would be read at
+      enqueue — the same place the global default is read now.
+
+  Deepgram diarization
+      NOT IMPLEMENTED and not wanted (section 4).
+
+  Streaming / real-time
+      NOT IMPLEMENTED. The queue is batch and deliberately so.
+
+  A third provider
+      Add a case to TranscriptionProvider, an engine implementing
+      TranscriptionEngineInterface, a branch in AudioToTextSettings::
+      providerProblems()/providerIsUsable(), a line in the DI resolver, and a
+      value to the two CHECK constraints plus DbAudioProviderDefault::CHOICES.
+      TranscriberResolver throws rather than falling back if an engine is
+      missing, and a unit test asserts every case resolves — a silent fallback
+      would transcribe with the wrong engine and record it as the right one.
+
+================================================================================
+END
+================================================================================

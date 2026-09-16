@@ -260,6 +260,30 @@ final class Environment
         // without this tolerance a third of all tokens were attributed to nobody. Measured attribution
         // by token duration: 74% at 0ms, 95% at 1000ms, 99% at 1500ms, flat thereafter.
         'AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS' => ['type' => 'int', 'default' => 1500, 'min' => 0, 'max' => 10000],
+
+        // Audio to Text — Deepgram, the optional cloud transcription provider. Speech-to-text ONLY:
+        // speaker separation stays with the local diarizer above. Leaving the key blank simply means
+        // Deepgram cannot be selected; Whisper is unaffected, and the worker starts either way.
+        'DEEPGRAM_API_KEY' => ['type' => 'string', 'default' => '', 'secret' => true],
+        'DEEPGRAM_BASE_URL' => ['type' => 'string', 'default' => 'https://api.deepgram.com/v1/listen'],
+        // Keyterm Prompting below requires a Nova-3 model; an older model transcribes without hints.
+        'DEEPGRAM_MODEL' => ['type' => 'string', 'default' => 'nova-3'],
+        // A DEPLOYMENT decision, not a property of this project. `multi` handles code-switching within a
+        // call; a single-language value such as `en` is cheaper and handles accent variation perfectly
+        // well on its own. See docs/server/deepgram_flow.txt.
+        'DEEPGRAM_LANGUAGE' => ['type' => 'string', 'default' => 'multi'],
+        // Punctuation, capitalisation and number formatting. Worth having: the token stream a reviewer
+        // edits then matches the transcript they were shown.
+        'DEEPGRAM_SMART_FORMAT' => ['type' => 'bool', 'default' => true],
+        // Spoken numbers as digits: "twenty five" -> "25". Deepgram's own default is false, and that is
+        // kept here — `smart_format` above already formats numbers for English, so this is the narrower
+        // switch to reach for only when a real recording shows it still needed.
+        'DEEPGRAM_NUMERALS' => ['type' => 'bool', 'default' => false],
+        'DEEPGRAM_TIMEOUT' => ['type' => 'int', 'default' => 120, 'min' => 1, 'max' => 7200],
+        // Comma-separated recognition hints — terms the model would otherwise mishear ("wonton" as
+        // "one ton"). Trimmed and de-duplicated before use. Deepgram accepts at most 100 of them within
+        // a 500-token budget; the count is checked here, the budget is Deepgram's to enforce.
+        'DEEPGRAM_KEYTERMS' => ['type' => 'string', 'default' => ''],
     ];
 
     /** @var array<string, bool|float|int|string> */

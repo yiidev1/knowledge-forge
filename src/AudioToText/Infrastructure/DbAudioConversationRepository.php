@@ -11,6 +11,7 @@ use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -170,6 +171,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'original_filename',
                 'duration_seconds',
                 'error_message',
+                'transcription_provider',
             ])
             ->from(self::JOBS)
             ->where(['conversation_id' => $conversationIds])
@@ -197,6 +199,10 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 (string) $row['original_filename'],
                 $row['duration_seconds'] === null ? null : (float) $row['duration_seconds'],
                 $this->nullableString($row['error_message'] ?? null),
+                // NULL — a job queued before providers were selectable — resolves to Whisper here, so
+                // no template downstream has to know the legacy case existed.
+                TranscriptionProvider::fromStorage($this->nullableString($row['transcription_provider'] ?? null))
+                    ?? TranscriptionProvider::Whisper,
             );
         }
 

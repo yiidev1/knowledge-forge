@@ -7,6 +7,7 @@ namespace App\Tests\Support\Fake\AudioToText;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -41,6 +42,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
+        ?TranscriptionProvider $transcriptionProvider = null,
     ): string {
         if ($this->created >= $this->failAfter) {
             throw new RuntimeException('Simulated failure writing child ' . ($this->created + 1) . '.');
@@ -57,6 +59,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
             $expiresAt,
             $conversationId,
             $sourceRole,
+            $transcriptionProvider,
         );
     }
 

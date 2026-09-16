@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
 use App\AudioToText\Domain\Speaker\ReviewedTurn;
@@ -189,13 +190,24 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                      <?= $mergeAttr($turn->mergeWithNext, 'data-a2t-merge-next') ?>>
                     <div class="a2t-bubble">
                         <span class="a2t-turn__who"><?= Html::encode($turn->label) ?></span>
-                        <span class="a2t-turn__text" data-a2t-text><?= Html::encode($turn->text) ?></span>
+                        <?php
+                        // Display only, and ONLY while this is still the machine's own text — a saved
+                        // correction is shown exactly as the administrator wrote it.
+                        //
+                        // `data-a2t-raw` carries the underlying value because admin.js reads this node
+                        // when Cancel restores the editor. Without it the rendered price would be
+                        // written back into the textarea and saved as a human correction on the next
+                        // press of Save, which is precisely what must never happen.
+                        $shown = SpokenPrice::formatUnlessReviewed($turn->text, $page->isReviewed);
+                ?>
+                        <span class="a2t-turn__text" data-a2t-text
+                              data-a2t-raw="<?= Html::encode($turn->text) ?>"><?= Html::encode($shown) ?></span>
                         <?php if ($range !== null || $delay !== null || $turn->edited || $turn->approx): ?>
                             <span class="a2t-turn__meta">
                                 <?php if ($range !== null): ?>
                                     <span class="a2t-turn__time"<?= $turn->approx
-                                        ? ' title="Approximate: this boundary was set by hand, so both halves keep the original turn\'s timing."'
-                                        : '' ?>><?= Html::encode($range) ?></span>
+                                                        ? ' title="Approximate: this boundary was set by hand, so both halves keep the original turn\'s timing."'
+                                                        : '' ?>><?= Html::encode($range) ?></span>
                                 <?php endif; ?>
                                 <?php if ($delay !== null): ?>
                                     <span class="a2t-turn__delay"><?= Html::encode($delay) ?></span>
@@ -207,15 +219,15 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                         <?php endif; ?>
 
                         <?php
-                        // Both controls in one group on the message's own side: the handle first, the
-                        // pencil behind it. They do nothing without JavaScript, so they stay hidden
-                        // until the script announces itself — the plain forms below are the only
-                        // controls when it does not.
-                        //
-                        // The handle is a button rather than a decorative span so it is reachable by
-                        // keyboard and announces itself; the script drives it with pointer events,
-                        // which cover mouse, pen and touch through one path where HTML5
-                        // drag-and-drop would leave touch unsupported.
+                                        // Both controls in one group on the message's own side: the handle first, the
+                                        // pencil behind it. They do nothing without JavaScript, so they stay hidden
+                                        // until the script announces itself — the plain forms below are the only
+                                        // controls when it does not.
+                                        //
+                                        // The handle is a button rather than a decorative span so it is reachable by
+                                        // keyboard and announces itself; the script drives it with pointer events,
+                                        // which cover mouse, pen and touch through one path where HTML5
+                                        // drag-and-drop would leave touch unsupported.
                 ?>
                         <span class="a2t-turn__tools" data-a2t-tools hidden>
                             <button class="a2t-iconbtn a2t-iconbtn--grip" type="button" data-a2t-grip

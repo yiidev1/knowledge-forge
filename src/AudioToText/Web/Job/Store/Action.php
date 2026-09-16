@@ -11,9 +11,11 @@ use App\AudioToText\Application\TranscriptionQueue;
 use App\AudioToText\Application\WorkerHealthService;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
+use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\Auth\Application\CurrentAdmin;
 use App\Shared\Application\Time\AppTimeZone;
@@ -31,6 +33,7 @@ use function is_string;
 use function max;
 use function min;
 use function number_format;
+use function sprintf;
 
 /**
  * One store's audio page (GET and POST /audio-to-text/store/{sourceId}): upload here, and see what
@@ -74,6 +77,7 @@ final readonly class Action
         private TranscriptionQueue $queue,
         private WorkerHealthService $workerHealth,
         private AudioToTextSettings $settings,
+        private AudioToTextSettingsRepositoryInterface $settingsRepository,
         private CurrentAdmin $currentAdmin,
         private Redirect $redirect,
         private AppTimeZone $appTimeZone,
@@ -90,6 +94,14 @@ final readonly class Action
         }
 
         $mode = ConversationMode::Common;
+
+        // The stored global default, read once per request so the page shows what is configured now
+        // rather than what was configured at deploy time. **Never reassigned**: the forms report it as
+        // "Global default: …", and an upload must not be able to make that line lie.
+        $globalDefault = $this->settingsRepository->defaultProvider();
+
+        // What the selects preselect, which is not always the global default — see preselected().
+        $provider = $this->preselected($globalDefault);
         $errors = [];
 
         if ($request->getMethod() === Method::POST && !$store->active) {
@@ -107,6 +119,11 @@ final readonly class Action
 
             [$errors, $files] = $this->collect($request, $mode);
 
+            [$provider, $providerError] = $this->provider($body, $provider);
+            if ($providerError !== null) {
+                $errors['transcription_provider'] = [$providerError];
+            }
+
             if ($errors === []) {
                 try {
                     $conversationId = $this->queue->enqueueConversation(
@@ -114,6 +131,7 @@ final readonly class Action
                         $store->sourceId,
                         $files,
                         $this->currentAdmin->get()->id(),
+                        $provider,
                     );
 
                     // To the conversion, not back to this page. For a common upload that redirects on
@@ -159,7 +177,128 @@ final readonly class Action
                 'retentionHours' => $this->settings->transcription->retentionHours(),
                 'combinedLimitLabel' => $this->megabytes($this->separateValidator->aggregateLimitBytes()),
                 'appTimeZone' => $this->appTimeZone,
+                // What the selects preselect: the resolved default on a GET, or what was posted on a
+                // rejected POST, so a failed submission does not silently reset the choice.
+                'provider' => $provider,
+                // EVERY provider, always, whether this machine can run it or not. An unusable one is
+                // shown disabled and labelled rather than omitted: a field that disappears leaves an
+                // administrator with no way to see what the choice even was, and no way to tell a
+                // one-provider install from a broken one.
+                'providerChoices' => TranscriptionProvider::all(),
+                // Which of them can actually run here. LOCAL configuration only — nothing in this
+                // request path opens a socket to a provider. See provider() below.
+                'providerUsable' => $this->providerUsability(),
+                // The stored setting, reported as-is. Shown even when it names a provider that cannot
+                // currently run, because silently substituting another one would hide a real problem.
+                'globalDefault' => $globalDefault,
             ]);
+    }
+
+    /**
+     * Which provider the two selects start on.
+     *
+     * Normally the global default. The exception is the case worth getting right: the default names a
+     * provider this machine cannot currently run — a key removed, a model deleted since it was chosen.
+     *
+     * Preselecting it anyway would put the form in a state that cannot be submitted, and would need a
+     * disabled option to be `selected`, which browsers still submit. So the first provider that *can*
+     * run is preselected instead, and the template says plainly that the configured default is
+     * unavailable.
+     *
+     * **The stored setting is not touched.** An upload page is not the place to silently rewrite a
+     * global configuration decision; the operator fixes the provider or changes the default
+     * deliberately.
+     *
+     * With nothing usable at all the global default is kept, the form cannot be submitted, and the
+     * template explains why — which is more honest than preselecting an arbitrary broken option.
+     */
+    private function preselected(TranscriptionProvider $globalDefault): TranscriptionProvider
+    {
+        if ($this->settings->providerIsUsable($globalDefault)) {
+            return $globalDefault;
+        }
+
+        foreach (TranscriptionProvider::all() as $provider) {
+            if ($this->settings->providerIsUsable($provider)) {
+                return $provider;
+            }
+        }
+
+        return $globalDefault;
+    }
+
+    /**
+     * Every provider, and whether this machine can run it, keyed by storage value.
+     *
+     * Computed once per render rather than per option: each answer is a handful of filesystem stats
+     * and both upload forms ask the same question.
+     *
+     * **Local configuration only.** No provider's API is contacted to answer this — see the class
+     * docblock and {@see provider()}.
+     *
+     * @return array<string, bool>
+     */
+    private function providerUsability(): array
+    {
+        $usable = [];
+
+        foreach (TranscriptionProvider::all() as $provider) {
+            $usable[$provider->value] = $this->settings->providerIsUsable($provider);
+        }
+
+        return $usable;
+    }
+
+    /**
+     * The provider for this upload, and why it was refused if it was.
+     *
+     * Three outcomes, and they are deliberately distinct:
+     *
+     *  - **No field posted.** An older form, or a browser that dropped it. The global default stands;
+     *    this is not an error.
+     *  - **A value that is not a provider.** A tampered or stale form. Refused, because
+     *    `fromStorage()` returns null rather than defaulting and silently accepting Whisper for a
+     *    request that asked for something else would report success for a choice nobody made.
+     *  - **A real provider this server cannot run.** Refused *before* anything is stored or queued,
+     *    with the reason. Checking it here rather than letting the worker discover it saves a recording
+     *    from being uploaded, converted and then failed for a condition that was knowable at the click.
+     *
+     * The readiness check is {@see AudioToTextSettings::providerIsUsable()} — **local configuration
+     * only.** Nothing in this request path opens a socket to a provider: an upload must not wait on a
+     * third party, and a provider outage must not be reported to an administrator as a misconfiguration.
+     *
+     * @param mixed $body the parsed request body, in whatever shape it arrived
+     *
+     * @return array{TranscriptionProvider, string|null}
+     */
+    private function provider(mixed $body, TranscriptionProvider $default): array
+    {
+        $posted = is_array($body) && is_string($body['transcription_provider'] ?? null)
+            ? (string) $body['transcription_provider']
+            : null;
+
+        if ($posted === null || $posted === '') {
+            return [$default, null];
+        }
+
+        $provider = TranscriptionProvider::fromStorage($posted);
+
+        if ($provider === null) {
+            return [$default, 'Choose one of the listed transcription providers.'];
+        }
+
+        if (!$this->settings->providerIsUsable($provider)) {
+            return [
+                $default,
+                sprintf(
+                    '%s is not configured on this server yet, so it cannot be used for this recording. '
+                        . 'Choose another provider, or ask an administrator to finish setting it up.',
+                    $provider->label(),
+                ),
+            ];
+        }
+
+        return [$provider, null];
     }
 
     /**

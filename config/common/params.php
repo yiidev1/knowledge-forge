@@ -117,6 +117,19 @@ return [
         'boundaryToleranceMs' => Environment::int('AUDIO_DIARIZATION_BOUNDARY_TOLERANCE_MS'),
     ],
 
+    // Transport only, as everywhere in this file: the raw keyterm string is split and sanitised where
+    // the settings object is assembled, not here.
+    'app/audio-deepgram' => [
+        'apiKey' => Environment::string('DEEPGRAM_API_KEY'),
+        'baseUrl' => Environment::string('DEEPGRAM_BASE_URL'),
+        'model' => Environment::string('DEEPGRAM_MODEL'),
+        'language' => Environment::string('DEEPGRAM_LANGUAGE'),
+        'smartFormat' => Environment::bool('DEEPGRAM_SMART_FORMAT'),
+        'numerals' => Environment::bool('DEEPGRAM_NUMERALS'),
+        'timeoutSeconds' => Environment::int('DEEPGRAM_TIMEOUT'),
+        'keyterms' => Environment::string('DEEPGRAM_KEYTERMS'),
+    ],
+
     'app/pdf' => [
         'minCharsPerPage' => Environment::int('PDF_MIN_TEXT_CHARS_PER_PAGE'),
         'probeMaxBytes' => Environment::int('PDF_TEXT_PROBE_MAX_BYTES'),
