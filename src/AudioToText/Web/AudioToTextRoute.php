@@ -58,6 +58,16 @@ final class AudioToTextRoute
     public const JOB_ORIGINAL = 'audio-to-text.job.original';
 
     /**
+     * The uploaded recording itself, streamed so it can be played in the browser.
+     *
+     * Named for the *recording*, not the transcript page above it: this one serves the bytes a person
+     * uploaded, which nothing else in this application does. It reads through
+     * {@see QueuedAudioStorage::retainedPathFor()} rather than composing a path of its own, so the
+     * `source.<ext>` name pattern that guards every other reader guards this one too.
+     */
+    public const JOB_ORIGINAL_FILE = 'audio-to-text.job.original.file';
+
+    /**
      * Speaker correction. One route per operation rather than one endpoint dispatching on a field, so
      * the route name, the audited operation and the button a person pressed all say the same thing.
      */

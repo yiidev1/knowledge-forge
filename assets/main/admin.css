@@ -2080,39 +2080,46 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     overflow-wrap: anywhere;
 }
 
-/* One line item: a name, its details underneath, and a state or action on the right.
+/* One subject inside a step: a titled head with its state, then its facts, then its controls.
    This replaces the four-column table the first step used to draw. A table earns its keep when values
-   line up across many rows and get compared down a column; here there are one or two rows and nothing
-   to compare, and the table's fixed columns were what forced the horizontal scrollbar that cut the last
-   header off. A flex row cannot overflow, so the state is always visible. */
-.a2t-row {
+   line up across many rows and get compared down a column; here there are one or two subjects and
+   nothing to compare, and the table's fixed columns were what forced the horizontal scrollbar that cut
+   the last header off. A block cannot overflow sideways, so the state badge is always visible.
+
+   A separate Customer/Agent pair puts two of these in one card rather than two cards, so the page stays
+   three steps long however many recordings a call has. */
+.a2t-block + .a2t-block {
+    margin-top: 1.1rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--border);
+}
+.a2t-block__head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    padding: .65rem 0;
-    border-bottom: 1px solid var(--border);
+    margin-bottom: .75rem;
 }
-.a2t-row:last-child { border-bottom: 0; }
-/* `min-width: 0` so the name can ellipsis instead of pushing the badge off the row — a flex item
+/* `min-width: 0` so the name can ellipsis instead of pushing the badge out of the row — a flex item
    defaults to its content width, which is exactly the overflow being fixed here. */
-.a2t-row__main { min-width: 0; }
-.a2t-row__name {
-    display: block;
-    font-size: .92rem;
+.a2t-block__name {
+    min-width: 0;
+    font-size: .95rem;
     font-weight: 600;
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.a2t-row__meta {
-    display: block;
-    margin-top: .15rem;
-    font-size: .8rem;
-    color: var(--text-faint);
+.a2t-block__head .a2t-badge { flex: 0 0 auto; }
+
+/* The controls that end a block. Kept on their own line so a button is never mistaken for a value. */
+.a2t-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .6rem;
+    margin: .8rem 0 0;
 }
-.a2t-row .btn, .a2t-row .a2t-badge { flex: 0 0 auto; }
 
 /* A short aside: the page's own voice, distinct from a value. Smaller than body text because it is
    read once and then ignored. */
@@ -2121,14 +2128,6 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     font-size: .82rem;
     color: var(--text-faint);
     line-height: 1.5;
-}
-
-/* One generated output inside the step-3 card. A separate pair puts two of these in one card rather
-   than two cards, so the page stays three steps long however many recordings a call has. */
-.a2t-output + .a2t-output {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
 }
 
 /* Button first, then the cost. The price of pressing belongs beside the button, not in a paragraph

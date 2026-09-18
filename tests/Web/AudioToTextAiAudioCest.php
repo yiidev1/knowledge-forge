@@ -19,7 +19,14 @@ use function gmdate;
 use function implode;
 use function json_encode;
 use function random_bytes;
+use function dirname;
+use function file_put_contents;
+use function is_dir;
+use function mkdir;
+use function pack;
 use function str_repeat;
+use function strlen;
+use function substr;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -117,7 +124,7 @@ final class AudioToTextAiAudioCest
 
         $I->seeResponseCodeIs(200);
         $I->see('AI training audio');
-        $I->see('Conversion summary');
+        $I->see('Audio Conversion Details');
         // The promise the whole feature rests on, stated on the page rather than only in a docblock.
         $I->see('Nothing is summarised, reworded or re-priced.');
     }
@@ -135,25 +142,42 @@ final class AudioToTextAiAudioCest
 
         $I->seeElement('.a2t-flow');
         $I->seeNumberOfElements('.a2t-flow__step', 3);
-        $I->see('How this call became AI audio');
         $I->see('Step 1');
         $I->see('Step 2');
         $I->see('Step 3');
     }
 
     /**
-     * The original recording is described but not offered as a player.
+     * The uploaded recording is offered as a player, pointed at the route that streams it.
      *
-     * No route serves it, so a player would be a control that cannot work. The page says so instead of
-     * rendering something that would silently fail.
+     * The page is about "this recording became that reading", which cannot be checked by ear unless both
+     * are playable. The `src` is asserted rather than merely the element, because a player pointed at
+     * nothing looks identical to a working one until somebody presses play.
      */
-    public function theOriginalRecordingIsDescribedRatherThanFakedAsAPlayer(WebTester $I): void
+    public function theOriginalRecordingIsOfferedAsAPlayer(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage($this->pageUrl());
 
         $I->see('call.wav');
-        $I->see('no endpoint that serves it');
+        $I->seeElement('audio[src="' . $this->originalFileUrl() . '"]');
+        $I->seeElement('a[href="' . $this->originalFileUrl() . '?download=1"]');
+    }
+
+    /** A recording the server no longer holds gets no player, rather than one that cannot work. */
+    public function aRecordingThatWasNotRetainedOffersNoOriginalPlayer(WebTester $I): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['retained_audio_path' => null],
+            ['public_id' => $this->jobPublicId],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->dontSeeElement('audio[src="' . $this->originalFileUrl() . '"]');
+        $I->see('no longer stored on the server');
     }
 
     /** A mixed recording offers one output. The per-role extracts are not part of this phase. */
@@ -173,8 +197,9 @@ final class AudioToTextAiAudioCest
         $I->amOnPage($this->pageUrl());
 
         $I->see('Not generated');
-        // No player, because there is nothing to play. An empty <audio> element would look broken.
-        $I->dontSeeElement('audio');
+        // No *generated* player, because there is nothing to play. The original's player is a different
+        // element and is expected here — asserting on the src is what keeps the two apart.
+        $I->dontSeeElement('audio[src*="ai-audio/file"]');
     }
 
     /** The cost is shown before the click, not discovered after it. */
@@ -220,6 +245,96 @@ final class AudioToTextAiAudioCest
         $this->signIn($I);
         $I->amOnPage($this->fileUrl($this->jobPublicId));
         $I->seeResponseCodeIs(404);
+    }
+
+    // ------------------------------------------------------------------ the original recording's bytes
+
+    /** The bytes served are the bytes on disk — the assertion a status code alone would not make. */
+    public function theOriginalRecordingIsServedInFull(WebTester $I): void
+    {
+        [$directory, $bytes] = $this->writeRetainedRecording();
+
+        try {
+            $this->signIn($I);
+            $I->amOnPage($this->originalFileUrl());
+
+            $I->seeResponseCodeIs(200);
+            Assert::assertSame($bytes, $I->grabPageSource());
+        } finally {
+            $this->removeRetainedRecording($directory);
+        }
+    }
+
+    /**
+     * A range is answered with a 206 and exactly those bytes.
+     *
+     * Safari opens an `<audio>` element with `Range: bytes=0-1` and will not play a source that answers
+     * 200, so this is what makes the player work at all rather than a refinement of it.
+     */
+    public function aByteRangeOfTheOriginalIsAnsweredWithJustThoseBytes(WebTester $I): void
+    {
+        [$directory, $bytes] = $this->writeRetainedRecording();
+
+        try {
+            $this->signIn($I);
+            $I->haveHttpHeader('Range', 'bytes=0-3');
+            $I->amOnPage($this->originalFileUrl());
+
+            $I->seeResponseCodeIs(206);
+            // 'RIFF', and proof the emitter's rewind did not restart the stream at byte zero and run on.
+            Assert::assertSame(substr($bytes, 0, 4), $I->grabPageSource());
+        } finally {
+            $I->deleteHeader('Range');
+            $this->removeRetainedRecording($directory);
+        }
+    }
+
+    /** A range past the end is corrected with the true length, not guessed at. */
+    public function anUnsatisfiableRangeOfTheOriginalIs416(WebTester $I): void
+    {
+        [$directory, $bytes] = $this->writeRetainedRecording();
+
+        try {
+            $this->signIn($I);
+            $I->haveHttpHeader('Range', 'bytes=' . (strlen($bytes) + 10) . '-');
+            $I->amOnPage($this->originalFileUrl());
+
+            $I->seeResponseCodeIs(416);
+        } finally {
+            $I->deleteHeader('Range');
+            $this->removeRetainedRecording($directory);
+        }
+    }
+
+    /** No row, no file, and a job that retained nothing all answer the same way. */
+    public function everyWayOfAskingForAnAbsentOriginalIs404(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        // Unknown job.
+        $I->amOnPage($this->originalFileUrl(bin2hex(random_bytes(16))));
+        $I->seeResponseCodeIs(404);
+
+        // Known job, column set, but nothing on disk.
+        $I->amOnPage($this->originalFileUrl());
+        $I->seeResponseCodeIs(404);
+
+        // Known job that retained nothing at all.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['retained_audio_path' => null],
+            ['public_id' => $this->jobPublicId],
+        )->execute();
+
+        $I->amOnPage($this->originalFileUrl());
+        $I->seeResponseCodeIs(404);
+    }
+
+    public function aGuestCannotReachTheOriginalRecording(WebTester $I): void
+    {
+        $I->resetCookie(self::SESSION_COOKIE);
+        $I->amOnPage($this->originalFileUrl());
+        $I->seeCurrentUrlEquals('/login');
     }
 
     public function anOutputTypeThisRecordingCannotProduceIs404(WebTester $I): void
@@ -477,5 +592,43 @@ final class AudioToTextAiAudioCest
     private function fileUrl(string $jobPublicId): string
     {
         return '/audio-to-text/job/' . $jobPublicId . '/ai-audio/file';
+    }
+
+    private function originalFileUrl(?string $jobPublicId = null): string
+    {
+        return '/audio-to-text/job/' . ($jobPublicId ?? $this->jobPublicId) . '/original/file';
+    }
+
+    /**
+     * Put real bytes where the endpoint will look for them, and answer with what they are.
+     *
+     * A RIFF/WAVE header plus a little silence: enough that the response can be checked byte for byte,
+     * small enough to live in a test. Written under the served application's own runtime tree, because
+     * the point is to exercise the real resolver rather than a stub of it.
+     *
+     * @return array{0: string, 1: string} the directory to remove afterwards, and the bytes written
+     */
+    private function writeRetainedRecording(): array
+    {
+        $directory = dirname(__DIR__, 2) . '/runtime/audio-to-text/recordings/' . $this->jobPublicId;
+
+        if (!is_dir($directory)) {
+            mkdir($directory, 0o775, true);
+        }
+
+        $samples = str_repeat("\0", 512);
+        $bytes = 'RIFF' . pack('V', 36 + strlen($samples)) . 'WAVEfmt '
+            . pack('VvvVVvv', 16, 1, 1, 8000, 16000, 2, 16)
+            . 'data' . pack('V', strlen($samples)) . $samples;
+
+        file_put_contents($directory . '/source.wav', $bytes);
+
+        return [$directory, $bytes];
+    }
+
+    private function removeRetainedRecording(string $directory): void
+    {
+        @unlink($directory . '/source.wav');
+        @rmdir($directory);
     }
 }

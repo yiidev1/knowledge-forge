@@ -426,6 +426,13 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/original')
                 ->action(AudioToText\Job\Original\Action::class)
                 ->name(AudioToTextRoute::JOB_ORIGINAL),
+            // The uploaded recording itself, streamed so the AI audio page can play it beside the
+            // reading made from it. Resolves its path through `QueuedAudioStorage::retainedPathFor()`,
+            // which re-validates the stored `source.<ext>` name, so this route composes no path of its
+            // own. Behind the same administrator gate as everything else in this group.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/original/file')
+                ->action(AudioToText\Job\Original\File\Action::class)
+                ->name(AudioToTextRoute::JOB_ORIGINAL_FILE),
 
             // Speaker correction. One route per operation rather than one endpoint dispatching on a
             // field, so the route, the audited operation and the button pressed all say the same thing.

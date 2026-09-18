@@ -90,6 +90,17 @@ foreach ($page->rows as $countRow) {
         $generatedCount++;
     }
 }
+
+// Whether the uploaded recording is still on disk is a property of the job row, and step 1 walks the
+// conversation's *children*, which carry no path. Indexed by public id rather than by position: a mixed
+// call has one of each, a Customer/Agent pair has two, and nothing guarantees the two lists are ordered
+// alike. A child with no entry simply gets no player, which is the same honest answer as before.
+$retainedOriginals = [];
+foreach ($page->rows as $countRow) {
+    if ($countRow->job->hasRetainedRecording()) {
+        $retainedOriginals[$countRow->job->publicId] = true;
+    }
+}
 ?>
 <div class="page-header">
     <div>
@@ -119,7 +130,7 @@ foreach ($page->rows as $countRow) {
 
 <?php // ---- Summary --------------------------------------------------------------------------------?>
 <div class="card">
-    <h2 class="card__title">Conversion summary</h2>
+    <h2 class="card__title">Audio Conversion Details</h2>
 
     <dl class="a2t-summary">
         <div><dt>Store</dt><dd><?= Html::encode($store->name ?? 'No store') ?></dd></div>
@@ -132,9 +143,9 @@ foreach ($page->rows as $countRow) {
 
     <?php
     // The whole feature in one strip. Three steps, each carrying its own state, so the stage this call
-    // has reached is readable at a glance without opening anything below.
+    // has reached is readable at a glance without opening anything below. It carries no heading of its
+    // own: three numbered boxes reading 1-2-3 do not need to be told they are a sequence.
 ?>
-    <h3 class="a2t-subheading">How this call became AI audio</h3>
     <ol class="a2t-flow">
         <li class="a2t-flow__step a2t-flow__step--done">
             <span class="a2t-flow__n">1</span>
@@ -155,8 +166,8 @@ foreach ($page->rows as $countRow) {
     </ol>
 
     <p class="a2t-note">
-        The audio is read from this call's transcript exactly as it stands, including every correction an
-        administrator has saved. Nothing is summarised, reworded or re-priced.
+        Read from this call's transcript exactly as it stands, including every saved correction.
+        Nothing is summarised, reworded or re-priced.
     </p>
 </div>
 
@@ -165,32 +176,53 @@ foreach ($page->rows as $countRow) {
     <h2 class="card__title"><span class="a2t-step">Step 1</span> Original audio</h2>
 
     <?php foreach ($children as $child): ?>
-        <div class="a2t-row">
-            <div class="a2t-row__main">
-                <span class="a2t-row__name" title="<?= Html::encode($child->originalFilename) ?>">
+        <div class="a2t-block">
+            <div class="a2t-block__head">
+                <span class="a2t-block__name" title="<?= Html::encode($child->originalFilename) ?>">
                     <?= Html::encode($child->originalFilename) ?>
                 </span>
-                <span class="a2t-row__meta">
-                    <?= Html::encode($child->sourceRole->label()) ?>
-                    &middot; <?= Html::encode($duration($child->durationSeconds)) ?>
+                <?php // JobStatus has no badge helper; the rest of the module lowercases the case name.?>
+                <span class="a2t-badge a2t-badge--<?= Html::encode(strtolower($child->status->value)) ?>">
+                    <?= Html::encode($child->status->label()) ?>
                 </span>
             </div>
-            <?php // JobStatus has no badge helper; the rest of the module lowercases the case name.?>
-            <span class="a2t-badge a2t-badge--<?= Html::encode(strtolower($child->status->value)) ?>">
-                <?= Html::encode($child->status->label()) ?>
-            </span>
+
+            <dl class="a2t-summary">
+                <div><dt>File name</dt><dd><?= Html::encode($child->originalFilename) ?></dd></div>
+                <div><dt>Type</dt><dd><?= Html::encode($conversation->mode->label()) ?></dd></div>
+                <div><dt>Duration</dt><dd><?= Html::encode($duration($child->durationSeconds)) ?></dd></div>
+                <div><dt>Uploaded date</dt><dd><?= Html::encode($localTime($conversation->createdAt)) ?></dd></div>
+            </dl>
+
+            <?php if (isset($retainedOriginals[$child->publicId])): ?>
+                <?php
+                $originalUrl = $urlGenerator->generate(
+                    AudioToTextRoute::JOB_ORIGINAL_FILE,
+                    ['publicId' => $child->publicId],
+                );
+                ?>
+                <div class="a2t-player">
+                    <?php
+                    // `preload="none"` because a page with several of these would otherwise fetch many
+                    // megabytes nobody asked to hear. The endpoint serves byte ranges, so the scrubber
+                    // works from the first seek rather than after a whole download.
+                ?>
+                    <audio class="a2t-player__control" controls preload="none"
+                           src="<?= Html::encode($originalUrl) ?>"></audio>
+                    <a class="btn btn--sm" href="<?= Html::encode($originalUrl . '?download=1') ?>">Download</a>
+                </div>
+            <?php else: ?>
+                <?php
+                // No player rather than a control that cannot work: the recording was not retained, or
+                // has been collected under the retention window, so there are no bytes to serve.
+                ?>
+                <p class="a2t-note">
+                    This recording is no longer stored on the server, so it cannot be played or
+                    downloaded. The AI reading of it is in step 3.
+                </p>
+            <?php endif; ?>
         </div>
     <?php endforeach; ?>
-
-    <?php
-// Said plainly rather than shown as a player that cannot work. Serving the original recording needs a
-// route and an action this change deliberately does not add, and a Play button that 404s would be a
-// worse answer than a sentence.
-?>
-    <p class="a2t-note">
-        Play and download are not offered here: the recording is kept on this server, but there is
-        no endpoint that serves it yet. The AI reading of it is in step 3.
-    </p>
 </div>
 
 <?php // ---- Step 2: the transcript -------------------------------------------------------------?>
@@ -220,24 +252,42 @@ foreach ($page->rows as $countRow) {
         $editedAt = $source?->lastEditedAt;
         $editedBy = $source?->lastEditedBy;
         ?>
-        <div class="a2t-row">
-            <div class="a2t-row__main">
-                <span class="a2t-row__name"><?= Html::encode($sourceTitle) ?></span>
-                <span class="a2t-row__meta">
+        <div class="a2t-block">
+            <div class="a2t-block__head">
+                <span class="a2t-block__name">
+                    <?= Html::encode($sourceTitle) ?>
                     <?php if ($row->sourceLabel() !== null): ?>
-                        <?= Html::encode($row->sourceLabel()) ?> &middot;
-                    <?php endif; ?>
-                    Revision <?= $revision ?>
-                    <?php if ($editedAt !== null): ?>
-                        &middot; edited <?= Html::encode($localTime($editedAt)) ?>
-                        <?= $editedBy === null ? '' : 'by ' . Html::encode($editedBy) ?>
+                        &mdash; <?= Html::encode($row->sourceLabel()) ?>
                     <?php endif; ?>
                 </span>
+                <span class="a2t-badge a2t-badge--<?= Html::encode(strtolower($job->status->value)) ?>">
+                    <?= Html::encode($job->status->label()) ?>
+                </span>
             </div>
+
+            <dl class="a2t-summary">
+                <div><dt>Provider</dt><dd><?= Html::encode($job->transcriptionProvider()->label()) ?></dd></div>
+                <div><dt>Source</dt><dd><?= Html::encode($sourceTitle) ?></dd></div>
+                <div><dt>Revision</dt><dd><?= $revision ?></dd></div>
+                <div>
+                    <dt>Last edited</dt>
+                    <dd>
+                        <?php if ($editedAt === null): ?>
+                            &mdash;
+                        <?php else: ?>
+                            <?= Html::encode($localTime($editedAt)) ?>
+                            <?= $editedBy === null ? '' : 'by ' . Html::encode($editedBy) ?>
+                        <?php endif; ?>
+                    </dd>
+                </div>
+            </dl>
+
             <?php if ($hasText): ?>
-                <a class="btn btn--sm" href="#<?= Html::encode($modalId) ?>">View transcript</a>
+                <p class="a2t-actions">
+                    <a class="btn btn--primary btn--sm" href="#<?= Html::encode($modalId) ?>">View transcript</a>
+                </p>
             <?php else: ?>
-                <span class="a2t-badge a2t-badge--idle">No text yet</span>
+                <p class="a2t-note">No transcript text has been produced for this recording yet.</p>
             <?php endif; ?>
         </div>
 
@@ -336,34 +386,41 @@ foreach ($page->rows as $countRow) {
             ['publicId' => $row->job->publicId],
         );
         ?>
-        <div class="a2t-output">
-            <div class="a2t-row">
-                <div class="a2t-row__main">
-                    <span class="a2t-row__name"><?= Html::encode($row->title()) ?></span>
-                    <span class="a2t-row__meta">
-                        <?php if ($row->isPlayable() && $rendition !== null): ?>
-                            <?php
-                            $voices = array_values(array_filter([
-                                $rendition->modelCustomer,
-                                $rendition->modelAgent,
-                            ]));
-                            ?>
-                            <?= Html::encode($rendition->provider) ?>
-                            <?php if ($voices !== []): ?>
-                                &middot; <?= Html::encode(implode(', ', $voices)) ?>
-                            <?php endif; ?>
-                            &middot; <?= number_format($rendition->characterCount ?? 0) ?> characters
-                            &middot; <?= Html::encode($fileSize($rendition->fileBytes)) ?>
-                            &middot; <?= Html::encode($localTime($rendition->generatedAt)) ?>
-                        <?php else: ?>
-                            <?= Html::encode($row->sourceLabel() ?? 'Read from the transcript above') ?>
-                        <?php endif; ?>
-                    </span>
-                </div>
+        <div class="a2t-block">
+            <div class="a2t-block__head">
+                <span class="a2t-block__name"><?= Html::encode($row->title()) ?></span>
                 <span class="a2t-badge a2t-badge--<?= Html::encode($row->state->badgeModifier()) ?>">
                     <?= Html::encode($row->state->label()) ?>
                 </span>
             </div>
+
+            <?php if ($row->isPlayable() && $rendition !== null): ?>
+                <?php
+                $voices = array_values(array_filter([
+                    $rendition->modelCustomer,
+                    $rendition->modelAgent,
+                ]));
+                ?>
+                <dl class="a2t-summary">
+                    <?php
+                    // The column stores the provider as a constant (`DEEPGRAM`). Cased for reading here
+                    // rather than in the domain, where the stored value is the value and shouting is the
+                    // point — this is the only place it is shown to a person.
+                ?>
+                    <div><dt>Provider</dt><dd><?= Html::encode(ucfirst(strtolower($rendition->provider))) ?></dd></div>
+                    <div>
+                        <dt>Voice<?= count($voices) > 1 ? 's' : '' ?></dt>
+                        <dd><?= $voices === [] ? '—' : Html::encode(implode(', ', $voices)) ?></dd>
+                    </div>
+                    <div><dt>Characters</dt><dd><?= number_format($rendition->characterCount ?? 0) ?></dd></div>
+                    <div><dt>Size</dt><dd><?= Html::encode($fileSize($rendition->fileBytes)) ?></dd></div>
+                    <div><dt>Generated date</dt><dd><?= Html::encode($localTime($rendition->generatedAt)) ?></dd></div>
+                    <div>
+                        <dt>Requested by</dt>
+                        <dd><?= Html::encode($rendition->requestedByUsername ?? 'Automatically') ?></dd>
+                    </div>
+                </dl>
+            <?php endif; ?>
 
             <?php if ($row->state === AiAudioState::Stale): ?>
                 <div class="alert alert--warning" role="status">
@@ -378,8 +435,8 @@ foreach ($page->rows as $countRow) {
             <?php if ($row->state === AiAudioState::Failed && $rendition !== null && $rendition->errorMessage !== null): ?>
                 <div class="alert alert--error" role="alert">
                     <?php
-                    // Already redacted on the way into the column: a response body is written by a third
-                    // party, and this one is rendered on a page.
+                // Already redacted on the way into the column: a response body is written by a third
+                // party, and this one is rendered on a page.
                 ?>
                     <p>
                         <?= Html::encode($rendition->errorMessage) ?>
