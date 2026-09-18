@@ -1892,3 +1892,46 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 }
 /* Said out loud, not hidden in a tooltip. */
 .a2t-turn__merge-why { font-size: .74rem; color: var(--text-muted); max-width: 26rem; line-height: 1.4; }
+
+/* ---------------------------------------------------------------- AI training audio
+   Every selector here stays under the `a2t-` prefix: this stylesheet is shared with the whole admin
+   panel, and `ModuleIsolationTest` fails the build for an unprefixed one appended at the end. */
+
+/* The upload opt-in. A checkbox and its wording on one line, so the cost sits next to the choice. */
+.a2t-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: .5rem;
+    font-size: .92rem;
+    cursor: pointer;
+}
+.a2t-checkbox input { margin-top: .2rem; flex: 0 0 auto; }
+.a2t-checkbox input:disabled { cursor: not-allowed; }
+.a2t-checkbox input:disabled + span { color: var(--text-faint); }
+
+/* Playable, but the transcript has moved on. Warning rather than error: the audio is still there and
+   still plays — it is simply no longer a reading of what the transcript now says. */
+.a2t-badge--stale {
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+}
+
+/* Nothing has been attempted. Deliberately quiet: it is a starting state, not a problem. */
+.a2t-badge--idle {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-faint);
+}
+
+.a2t-player { margin: .9rem 0; }
+/* Full width so the scrubber is usable on a long recording, which is the whole point of serving
+   byte ranges for it. */
+.a2t-player__control { width: 100%; max-width: 40rem; display: block; }
+
+.a2t-subheading {
+    font-size: .95rem;
+    font-weight: 600;
+    margin: 1.1rem 0 .4rem;
+    color: var(--text-muted);
+}

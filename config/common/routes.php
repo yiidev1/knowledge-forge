@@ -365,6 +365,12 @@ return [
             Route::get('/audio-to-text/conversion/{publicId:[0-9a-f]{32}}')
                 ->action(AudioToText\Job\Conversion\Action::class)
                 ->name(AudioToTextRoute::CONVERSION),
+            // Clean AI training audio for one call. Addressed by the conversion because a Customer +
+            // Agent pair is one call and both sides belong on one page; the actions below are addressed
+            // by the job, which is what a rendition and its file hang off.
+            Route::get('/audio-to-text/conversion/{publicId:[0-9a-f]{32}}/ai-audio')
+                ->action(AudioToText\Conversion\AiAudio\Action::class)
+                ->name(AudioToTextRoute::CONVERSION_AI_AUDIO),
             // Declared before the /job/{publicId} routes so the literal segment is unambiguous.
             Route::get('/audio-to-text/jobs')
                 ->action(AudioToText\Job\Index\Action::class)
@@ -380,6 +386,19 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/download')
                 ->action(AudioToText\Job\Download\Action::class)
                 ->name(AudioToTextRoute::JOB_DOWNLOAD),
+
+            // AI training audio. POST only for the generation, because it spends money: it carries CSRF
+            // and the transcript digest the page was rendered from, so a stale tab buys nothing. The
+            // action enqueues and returns — no provider is contacted in a web request, and
+            // `WebTierCannotRunWhisperTest` makes that structural rather than a convention.
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/ai-audio/generate')
+                ->action(AudioToText\Job\AiAudio\Generate\Action::class)
+                ->name(AudioToTextRoute::JOB_AI_AUDIO_GENERATE),
+            // The generated file itself, the only route in this application that streams audio. Behind
+            // the same administrator gate as everything else in this group.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/ai-audio/file')
+                ->action(AudioToText\Job\AiAudio\File\Action::class)
+                ->name(AudioToTextRoute::JOB_AI_AUDIO_FILE),
             // The conversation on its own, and where every View link in the conversions list points.
             // A job with nothing to read — still queued, failed, or never speaker-separated — is
             // redirected to the detail page above rather than 404'd, because that page explains why.

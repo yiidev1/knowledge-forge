@@ -58,6 +58,17 @@ final class WebTierCannotRunWhisperTest extends TestCase
         'AudioNormalizer',
         'SpeakerDiarizer',
         'SpeakerSeparationService',
+        // Text-to-speech, here for exactly the reason `DeepgramEngine` is. Generating audio for a long
+        // call is dozens of sequential requests to a paid third party; doing that inside a web request
+        // would hold a PHP worker for minutes and hand the administrator a timeout instead of audio.
+        // This is what makes "the Generate button cannot synchronously call Deepgram" a property of the
+        // build rather than a convention.
+        //
+        // The page still needs to know whether AI audio can be generated at all. It asks the *settings*
+        // (`TtsSettings::problems()`), which inspect local configuration and cannot open a socket.
+        'SpeechSynthesizer',
+        'FfmpegPcmEncoder',
+        'TtsRenditionGenerator',
         'ProcessRunner',
         'proc_open',
         'shell_exec',

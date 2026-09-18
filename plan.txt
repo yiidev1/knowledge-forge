@@ -1,0 +1,657 @@
+# AI Training Audio — Deepgram Text-to-Speech
+
+## Context
+
+New agents cannot always understand the original caller: heavy accent, poor line, background noise.
+The transcript is already there and, after correction, it is already *right*. What is missing is a way
+to **hear** it cleanly. So this feature re-speaks an existing transcript with two stable synthetic
+voices — one for the Customer, one for the Agent — and stores the result beside the original recording
+as clearly-labelled training material.
+
+Three things this is **not**:
+
+- **Not voice cloning.** Two voices, configured once in `.env`, identical on every call.
+- **Not a rewrite.** No LLM, no summarising, no "cleaning up" a product name, quantity, address or price.
+- **Not automatic re-spending.** Generated audio is pinned to the exact transcript it was made from.
+  When that transcript later changes, the page says so and offers a button. It never silently re-buys.
+
+Inspection is complete. Every decision below is anchored to code that exists today, and the design
+review that followed it changed six of them — those are called out where they occur.
+
+---
+
+## Scope: one output per upload shape
+
+| Upload | Output generated | Not in this phase |
+|---|---|---|
+| **COMMON** (one mixed recording) | one **MIXED** file, two voices, chronological | Customer-only / Agent-only |
+| **SEPARATE** (Customer + Agent files) | one **CUSTOMER** file and one **AGENT** file, never merged | a merged MIXED file |
+
+**Every job produces exactly one rendition**, decided entirely by its `source_role`. That is the
+smallest thing that meets the requirement and it keeps Deepgram spend, database rows and page controls
+to one per recording. It also removes a whole class of cost bug: MIXED and CUSTOMER+AGENT contain the
+same words, so generating both would bill the same text twice.
+
+`TtsOutputType::availableFor(ConversationMode, SourceRole): list<TtsOutputType>` is the single place
+this matrix lives, so adding role-only output from a COMMON conversion later is one method plus one
+template branch — nothing in the schema, worker, storage or cost logic assumes one type per job.
+Unavailable types render **no control at all**; where a reason is worth giving, the page states it as
+prose.
+
+### Why a separate pair can never be merged
+
+`src/AudioToText/Web/Job/Conversion/Action.php:38-41`:
+
+> Two files recorded independently carry no synchronisation this application can trust — no shared
+> clock, no common start — so interleaving them into one thread would mean inventing an ordering.
+
+Confirmed in the pipeline: a SEPARATE child is never diarized
+(`AudioTranscriptionWorkerCommand.php:294` returns early for a provided role), so `speaker_segments`
+and `speaker_separation_status` are NULL and there are no timestamps to interleave on. A standing
+invariant, not a phase-1 shortcut.
+
+---
+
+## What the inspection found, and what it forces
+
+### The canonical transcript already has one owner
+
+`EffectiveConversationReader::for($job)` is the application's existing authority — reviewed segments
+and reviewed texts when `reviewed_segments IS NOT NULL`, the machine layer otherwise, with an
+`isReviewed` flag. TTS reads through it and nothing else. That is what makes a correction from
+"one ton" to "wonton" come out of the speaker as **wonton**.
+
+### `>>` speaker markers are in the stored text and would be read aloud
+
+`SpeakerMarkers` is explicit that it is **display only** — `ConversationView` strips markers at render,
+while `speaker_segments`, `reviewed_segments` and `transcript` keep them. Sending `$utterance->text`
+untouched would make Deepgram pronounce a marker at every turn.
+
+So the pipeline is: `SpeakerMarkers::strip()` → `TranscriptText::toValidUtf8()` → drop turns that are
+empty or whitespace-only → **then** hash, **then** chunk, **then** send. Exactly one code path produces
+the text that is hashed and the text that is sent, so the two can never disagree. "Verbatim" means
+verbatim from that point: no added or removed spaces, no punctuation normalisation, no case change, no
+price, quantity or product-name rewriting.
+
+### `SpokenPrice` is deliberately **not** applied
+
+The display layer rewrites `$43 and 45` to `$43.45` for unreviewed machine text only. TTS does not use
+it: the instruction is verbatim, a price is on the named do-not-change list, and coupling the digest to
+a display rule would make a change to that rule invalidate every generated file.
+
+### `rolesConfirmed()` is **false for every SEPARATE child** — the obvious gate would break the feature
+
+`markCompletedWithProvidedRole()` writes `speaker_separation_status => null` and never sets
+`roles_confirmed_at` ("Every separation column stays NULL. Nothing was inferred, so nothing is
+claimed"). `TranscriptionJob::rolesConfirmed()` therefore returns false for both children of every
+separate upload. Writing the gate as `$job->rolesConfirmed()` — the natural reading of "roles are
+published" — would silently disable AI audio for the entire SEPARATE case.
+
+**The predicate is, in these words:**
+
+```php
+$job->sourceRole?->isProvided() === true || $job->rolesConfirmed()
+```
+
+It lives in one place (`TtsGenerationService::rolesAreKnown()`) and has its own named unit test.
+
+For a COMMON recording the gate is real: `ConversationView::from()` shows "Customer"/"Agent" only when
+roles are published, and choosing a *Customer voice* is the same assertion as printing the word, louder
+— audio carries no "unconfirmed" styling. A MIXED file cannot even be built without knowing which voice
+each turn takes.
+
+### One job per two minutes is the entire STT budget
+
+`AudioTranscriptionWorkerCommand` runs `--once` under a systemd timer every 2 minutes and `break`s
+after at most one job (lines 176, 198, 213, 230), under `flock` on `runtime/audio-to-text/worker.lock`.
+Putting TTS in that loop would make a TTS job *consume a transcription slot* — STT throughput halves
+the moment anyone uses this feature. Hence a dedicated worker, timer and lock. Details under
+**Console**, including the CPU/IO budget, because a second unit that ignores the first one's quota is
+not actually a load-conscious design.
+
+### TTS configuration must **not** enter `AudioToTextSettings::problems()`
+
+That method's own docblock warns: "A non-empty result stops the worker before it claims anything, so
+anything listed here takes the whole queue down." `AudioTranscriptionWorkerCommand::reportConfiguration()`
+returns `ExitCode::DATAERR` on it. A typo in `DEEPGRAM_TTS_URL` would therefore stop **all
+transcription**.
+
+TTS readiness lives in its own `TtsSettings::problems()`, consulted only by the TTS worker and the AI
+Audio page — the shape `DeepgramSettings::problems()` already has, for the same reason.
+
+### Generated files get their own tree, because `recordings/` holds the only copy of the original
+
+`QueuedAudioStorage::retain()` is a **move**, not a copy: after completion,
+`recordings/<jobPublicId>/source.<ext>` is the sole surviving copy of the upload. Writing chunk files
+and merge scratch next to it means one prefix or glob bug destroys an unrecoverable recording. It is
+also a directory whose deletion is flat and non-recursive (`removeDirectoryUnder()` unlinks files then
+`@rmdir()`s), so a stray subdirectory would make `removeRetained()` a permanent silent no-op and
+quietly disable retention for that conversation.
+
+**Generated audio therefore lives in a third sibling tree: `runtime/audio-to-text/ai-audio/<jobPublicId>/`.**
+`TranscriptionSettings` gains `aiAudioDirectory()` beside `jobsDirectory()` and `recordingsDirectory()`,
+and **`GeneratedAudioStorage` prepares its own tree** rather than being added to
+`QueuedAudioStorage::prepareBaseDirectories()` — that method runs at STT worker startup and throws
+`temporaryDirectoryNotWritable` on failure, so adding an entry there would give the transcription queue a
+new way to refuse to start. Zero touch is worth more than the shared line. Nothing in this feature ever
+opens, renames or deletes a path under `recordings/`, and `GeneratedAudioStorage` cannot name `source.*`
+by construction.
+
+Because no existing sweep knows about this tree, the **TTS worker runs its own housekeeping**: remove
+an `ai-audio/<publicId>/` directory whose job row is gone (mirroring `sweepOrphanedRecordings()`), and
+remove age-gated work-prefixed files whose rendition is not currently `GENERATING` — a worker killed
+by `TimeoutStartSec`, OOM or a deploy otherwise leaks chunk files with nothing to collect them.
+
+### There is no file-serving route in this application yet, and the emitter rewinds the body
+
+Nothing under `src/` streams binary content to a browser. `Yiisoft\PsrEmitter\SapiEmitter::emitBody()`
+calls `$body->rewind()` before emitting, so a Range implemented as "open the file, `fseek()`, set
+`Content-Range`" is rewound to byte 0 and streamed to EOF — wrong bytes, and a length contradicting
+`Content-Length`. The body must be a `GuzzleHttp\Psr7\LimitStream` (already a direct dependency), whose
+`rewind()` returns to the range offset and whose `getSize()`/`eof()` respect the end.
+
+The Document module is the pattern for the rest, but **a pattern to copy, not a class to import**:
+`ModuleIsolationTest` lists `App\Document` among `FORBIDDEN_MODULES`.
+
+### Deepgram TTS, verified against current documentation
+
+```
+POST https://api.deepgram.com/v1/speak?model=aura-2-thalia-en&encoding=linear16&container=none&sample_rate=24000
+Authorization: Token <key>
+Content-Type: application/json
+
+{"text":"…"}
+```
+
+**Aura models cap at 2,000 characters and return 413 beyond it** — chunking is mandatory. Default
+voices `aura-2-thalia-en` (Customer) and `aura-2-arcas-en` (Agent), both on Deepgram's customer-service
+list, both `.env` values.
+
+The existing `DEEPGRAM_API_KEY` is reused. If its project is not entitled to `/v1/speak` the response
+is 401/403, handled as "not permitted" with no key material in the message.
+
+### `container=none` instead of `wav`, and MP3 output
+
+Requesting **raw PCM** rather than WAV deletes an entire class of failure. A `container=wav` response is
+streamed, so its RIFF/`data` sizes are placeholders rather than true lengths, and an ffmpeg concat-demuxer
+pass over such files needs `-safe 0`, a list file, bit-identical stream parameters, and an `anullsrc`
+silence file that defaults to **stereo** and must be pinned to `cl=mono` or it mismatches every chunk.
+
+Instead: chunks come back as raw `s16le` mono at the configured rate; inter-turn silence is
+`str_repeat("\0", (int) ($gapMs * $rate * 2 / 1000))`; concatenation is `fwrite` in PHP — **unit-testable
+with no ffmpeg at all** — and there is exactly one ffmpeg invocation at the end:
+
+```
+ffmpeg -nostdin -hide_banner -loglevel error -y -threads 1 \
+       -f s16le -ar <rate> -ac 1 -i <work>.raw \
+       -c:a libmp3lame -b:a 64k <work>.mp3
+```
+
+MP3 also fixes a size problem: linear16/24 kHz/mono is 48,000 bytes/s, so at the configured
+`AUDIO_TRANSCRIPTION_MAX_DURATION=300` one WAV rendition is ≈14 MB, and `AUDIO_TRANSCRIPTION_RETENTION_SECONDS=0`
+means *keep forever* on the root filesystem. MP3 at 64 kbps is ≈20× smaller. Post-conditions copied from
+`AudioNormalizer::normalise()`: check `timedOut`, `isSuccessful()`, **and** a non-trivial output size.
+
+`DEEPGRAM_TTS_OUTPUT_FORMAT` selects `mp3` (default) or `wav`, and the TTS worker's configuration report
+verifies the chosen encoder is present **before** claiming work, so a missing `libmp3lame` is an
+early clear message rather than a failure after the money is spent.
+
+---
+
+## Database
+
+Migration `src/Migration/M260917100000CreateAudioTtsRenditions.php`, in the raw-SQL + CHECK style of
+`M260915100000AddTranscriptionProvider`, with a `down()` that **refuses** while generated audio exists.
+
+```sql
+CREATE TABLE `audio_tts_renditions` (
+  `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `job_id`              BIGINT UNSIGNED NOT NULL,
+  `output_type`         VARCHAR(16)  NOT NULL,  -- MIXED | CUSTOMER | AGENT
+  `status`              VARCHAR(16)  NOT NULL,  -- QUEUED | GENERATING | READY | FAILED
+  `attempt_token`       CHAR(32)     NOT NULL,  -- rotated on every enqueue; the worker's write CAS
+  `requested_hash`      CHAR(64)     NOT NULL,  -- transcript this attempt targets
+  `file_name`           VARCHAR(64)  NULL,      -- last SUCCESSFUL file; survives a failed retry
+  `file_hash`           CHAR(64)     NULL,      -- transcript that file was actually made from
+  `file_render_key`     VARCHAR(160) NULL,      -- voice + format + chunking the file was made with
+  `file_bytes`          BIGINT UNSIGNED NULL,
+  `character_count`     INT UNSIGNED NULL,      -- billed characters, for cost audit
+  `request_count`       INT UNSIGNED NULL,      -- chunks sent, for cost audit
+  `provider`            VARCHAR(16)  NOT NULL,  -- DEEPGRAM
+  `model_customer`      VARCHAR(64)  NULL,
+  `model_agent`         VARCHAR(64)  NULL,
+  `attempts`            SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `error_message`       VARCHAR(255) NULL,      -- operator-safe, redacted before it is stored
+  `requested_by_admin_id` BIGINT NULL,          -- NULL = queued automatically
+  `created_at`          DATETIME NOT NULL,
+  `updated_at`          DATETIME NOT NULL,
+  `generating_since`    DATETIME NULL,          -- set at claim, cleared at terminal; drives stale sweep
+  `generated_at`        DATETIME NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `ux_audio_tts_renditions_job_type` (`job_id`, `output_type`),
+  KEY `ix_audio_tts_renditions_queue` (`status`, `id`),
+  CONSTRAINT `fk_audio_tts_renditions_job` FOREIGN KEY (`job_id`)
+    REFERENCES `audio_transcription_jobs` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_audio_tts_renditions_type`   CHECK (`output_type` IN ('MIXED','CUSTOMER','AGENT')),
+  CONSTRAINT `chk_audio_tts_renditions_status` CHECK (`status` IN ('QUEUED','GENERATING','READY','FAILED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+ALTER TABLE `audio_conversations`
+  ADD COLUMN `generate_ai_audio` TINYINT(1) NOT NULL DEFAULT 0 AFTER `mode`;
+```
+
+`generating_since` rather than reusing `updated_at`, which is ambiguous. `ON DELETE CASCADE` matches
+`audio_segment_revisions`. The unique key permits all three types so the extension in **Scope** needs no
+migration. **No credential is ever stored** — `provider`/`model_*` record *what was used*, as
+`transcription_provider` and `speaker_separation_method` already do.
+
+The new conversation column requires three enumerated edits in
+`src/AudioToText/Infrastructure/DbAudioConversationRepository.php` (`baseQuery()`'s explicit select
+list, `create()`) and `src/AudioToText/Domain/AudioConversation.php` (constructor), plus
+`TranscriptionQueue`.
+
+`ModuleIsolationTest::testAudioToTextMigrationsOnlyTouchTheirOwnTables()` is extended to cover the new
+migration, adding `audio_tts_renditions` and `audio_conversations` to its allow-list — it currently
+enumerates neither the conversations migration nor its table, so this **tightens** the test. Deliberate,
+not discovered in CI.
+
+### The two hashes and the render key
+
+`review_count` is an optimistic-lock counter, not a content version — a REVERT increments it while
+restoring identical text, `CONFIRM_ROLES` increments it while changing no wording. Using it would
+produce false "stale" banners that cost money to clear.
+
+`TtsSourceDigest` hashes **only the transcript material**, after the strip/validate/drop pipeline above,
+framed with `json_encode([...], JSON_THROW_ON_ERROR)` over `[version, outputType, [[role, text], …]]`.
+Framing matters: the obvious `implode("\n", …)` is **not injective** — one turn containing a newline and
+a role prefix collides with two turns. Excluded: `review_count`, timestamps, `isReviewed`.
+
+`file_render_key` separately records voice models, sample rate, gap, output format and `max_chars` —
+everything that changes the produced audio without changing the words. A mismatch there says *"generated
+with a different voice setting"* and offers Regenerate; it does **not** say the transcript is stale,
+because it isn't. Chunk boundaries affect prosody, so `max_chars` belongs here rather than nowhere.
+
+| Condition | Page state |
+|---|---|
+| no row | Not generated |
+| `status IN (QUEUED, GENERATING)` | Queued / Generating |
+| `status=READY`, `file_hash` = current, render key = current | **Ready** |
+| `status=READY`, `file_hash` ≠ current | **Stale** — "Transcript changed after this audio was generated." + Regenerate |
+| `status=READY`, hash current but render key ≠ current | Ready, "generated with a different voice setting" + Regenerate |
+| `status=FAILED`, `file_name IS NULL` | Failed + Try again |
+| `status=FAILED`, `file_name IS NOT NULL` | Failed, **previous audio still playable** |
+
+Both the page and the worker compute the current hash through the **same Application-layer class**;
+neither duplicates the rule, and `TtsSettings` opens no socket to answer it.
+
+---
+
+## When generation is queued
+
+The upload checkbox sets `audio_conversations.generate_ai_audio`, and that preference **stays active**
+until it can be honoured. The administrator never presses Generate for something they already asked for.
+
+| Trigger | Condition | Action |
+|---|---|---|
+| STT worker, job reaches terminal completed state | flag set, SEPARATE child | enqueue that child's CUSTOMER or AGENT rendition |
+| STT worker, same | flag set, COMMON, roles already published | enqueue MIXED |
+| STT worker, same | flag set, COMMON, `NEEDS_REVIEW` | nothing yet; the page explains why |
+| **Administrator confirms speakers** | flag set, COMMON, nothing generated yet | **enqueue MIXED — the deferred upload request being honoured** |
+| Administrator presses Generate / Regenerate | any eligible state | enqueue, attributed to that administrator |
+
+All five call the **same** `TtsGenerationService::enqueue()`. There is exactly one piece of enqueue
+logic, and it is idempotent on `(job_id, output_type)` and on `requested_hash`.
+
+The confirmation trigger lives in **`src/AudioToText/Application/ReviewConversationService::confirmRoles()`**
+— the existing service that performs the confirmation — called **after** its transaction returns, wrapped
+in `catch (Throwable)` and logged. A TTS bookkeeping failure must never fail a speaker confirmation, and
+the confirmation's own semantics (the `expectedVersion` CAS, the revision row, `ReviewRejected`,
+`ReviewConflict`) are untouched. No template performs an enqueue.
+
+The same post-commit call sits in `AudioTranscriptionWorkerCommand::process()`, strictly **after**
+`markCompleted*` and wrapped exactly the way `beat()` is. That placement is load-bearing: `process()` is
+documented as "every path out of here must end terminal", and an unwrapped DB error on the success path
+would be caught by the generic `catch (Throwable)` and mark a **successfully transcribed job FAILED**,
+discarding the transcript.
+
+**Nothing else in the transcription path changes**: no change to Whisper argv, the Deepgram STT query
+string, keyterms, diarization, alignment, `TranscriptToken`, `SpeakerTranscriptAligner`, the review
+services' behaviour, the publish gates, or `review_count` semantics.
+
+---
+
+## Configuration
+
+`src/Environment.php` SPEC — additive only. `DEEPGRAM_API_KEY` is **reused**; no second secret.
+
+| Key | Type | Default |
+|---|---|---|
+| `DEEPGRAM_TTS_URL` | string | `https://api.deepgram.com/v1/speak` |
+| `DEEPGRAM_TTS_MODEL_CUSTOMER` | string | `aura-2-thalia-en` |
+| `DEEPGRAM_TTS_MODEL_AGENT` | string | `aura-2-arcas-en` |
+| `DEEPGRAM_TTS_SAMPLE_RATE` | int | `24000` (8000–48000) |
+| `DEEPGRAM_TTS_MAX_CHARS` | int | `1900` (100–2000, the documented Aura cap) |
+| `DEEPGRAM_TTS_TIMEOUT` | int | `120` |
+| `DEEPGRAM_TTS_GAP_MS` | int | `350` (silence between turns in a MIXED file; 0 disables) |
+| `DEEPGRAM_TTS_OUTPUT_FORMAT` | string | `mp3` (or `wav`) |
+| `DEEPGRAM_TTS_MAX_ATTEMPTS` | int | `3` |
+
+Each is three mechanical edits: `Environment::SPEC` → `config/common/params.php` (a new
+`app/audio-deepgram-tts` block, transport only) → `config/common/di/audio-to-text.php`. The TTS client
+gets its own Guzzle instance with `http_errors => false` and `connect_timeout: 10`, exactly as
+`DeepgramEngine` has. `AudioToTextSettings` gains a 5th promoted property, which also means editing
+`tests/Support/AudioToTextSettingsFactory::create()` (positional construction) — the single test seam.
+
+"Usable" = API key non-empty **and** both models non-empty, via `AudioToTextSettings::ttsIsUsable()`,
+following `providerIsUsable()`. No web request opens a socket to check.
+
+---
+
+## Code
+
+Everything under `src/AudioToText/`, so module isolation is untouched and removal stays a directory
+deletion plus a few config lines.
+
+### Domain — `src/AudioToText/Domain/Tts/`
+`TtsOutputType` (with `availableFor()`) · `TtsStatus` · `TtsRendition` ·
+`TtsRenditionRepositoryInterface` · `SpeechSynthesizerInterface` · `TtsException`.
+
+### Application — `src/AudioToText/Application/Tts/`
+- **`TtsScriptBuilder`** — `TranscriptionJob` + `TtsOutputType` → ordered
+  `list<TtsUtterance{SpeakerRole, string}>`, read through `EffectiveConversationReader`, put through
+  strip → validate → drop-empty. MIXED keeps chronological order; CUSTOMER/AGENT on a SEPARATE child use
+  that job's `customer_text`/`agent_text`, falling back to `transcript`. Refuses with a named reason when
+  there is nothing to say.
+- **`TtsSourceDigest`** and **`TtsRenderKey`** — as described above.
+- **`TtsTextChunker::split(string $text, int $maxChars): list<string>`** — a **transport boundary only**.
+  `implode('', $chunks) === $text`, byte for byte. Split after a sentence terminator, else after a space,
+  else — only when a single token exceeds the cap — at a UTF-8 character boundary; boundary whitespace
+  stays with the preceding chunk rather than being consumed. Enforced by a property test.
+- **`TtsGenerationService`** — the one enqueue decision, returning
+  `AlreadyCurrent` / `AlreadyRunning` / `Queued` / `Refused(reason)`, plus `rolesAreKnown()`.
+- **`GeneratedAudioStorage`** — its own tree, its own name pattern
+  (`/^ai-(mixed|customer|agent)-[0-9a-f]{8}\.(mp3|wav)$/`), re-validating the DB value on the way out
+  because "a path assembled from a database column is not trustworthy merely because it was when
+  written". It **cannot name `source.*`**, and it never touches `recordings/`.
+- **`PcmConcatenator`** — pure PHP byte concatenation plus generated silence. No ffmpeg, fully unit-tested.
+
+### Infrastructure — `src/AudioToText/Infrastructure/Tts/`
+- **`DeepgramSpeechSynthesizer`** — one PSR-18 call per chunk, constructor-injected `ClientInterface` +
+  PSR-17 factories exactly as `DeepgramEngine` does. A `SecretRedactor` built at construction so the key
+  is revealed once and never on an error path; **redact before truncating**, the ordering
+  `DeepgramEngine::snippet()` already uses. Distinguishes 401/403, 413, 429, other 4xx, 5xx, transport
+  exception, empty body. `error_message` is rendered to an admin page, so it is redacted on the way into
+  the column as well as into the log.
+- **`FfmpegPcmEncoder`** — the single final invocation shown above, through the existing `ProcessRunner`.
+  Behind an interface so tests substitute a fake.
+- **`DbTtsRenditionRepository`** — conditional `enqueue()` (below), `claimNextQueued()`
+  (`ORDER BY id ASC`, then `UPDATE … SET status='GENERATING', generating_since=UTC_TIMESTAMP(),
+  attempts=attempts+1 WHERE id=? AND status='QUEUED'`, affected=1), terminal writes guarded by
+  `attempt_token`, and `recoverStale()`.
+
+### Console
+`src/AudioToText/Console/AudioTtsWorkerCommand.php` — `kf:audio:tts-worker`, registered in
+`config/console/commands.php`. Same shape as the transcription worker: one `--once` option with the same
+wording, `flock` held for the whole run on its own `runtime/audio-to-text/tts-worker.lock`, signal
+handling, a configuration report reading **`TtsSettings::problems()`** (never
+`AudioToTextSettings::problems()`) that exits `DATAERR`, and `--once` processing **at most one rendition**.
+
+Load discipline, because a second unit that ignores the first one's budget is not load-conscious:
+
+- it calls **`WorkerAdmissionGuard::decide()`** like the STT worker, so memory and `maxLoadPerCore`
+  pressure defers a TTS tick too;
+- it does **not** take `ForeignLockGuard` — that lock stops two projects running Whisper, and TTS runs none;
+- it does **not** write `audio_worker_heartbeat`. That table is single-row with `CHECK (id = 1)`; writing
+  it would make `WorkerHealthService` and `Web/_partial/worker-status.php` report TTS ticks as
+  transcription ticks, corrupting an existing admin surface. Phase 1 ships no TTS heartbeat and the
+  worker-status partial is unchanged.
+- unit settings mirror the STT pair (`Type=oneshot`, `User=www-data`, `Nice=15`,
+  `IOSchedulingClass=idle`, `ReadWritePaths=…/runtime`, no `EnvironmentFile=`) with a small `CPUQuota`
+  of its own and `TimeoutStartSec` sized to `maxChunks × DEEPGRAM_TTS_TIMEOUT + encode`, so a long call
+  is not SIGKILLed mid-run;
+- it runs the housekeeping described under **Generated files get their own tree**.
+
+Files: `docs/server/systemd/knowledge-forge-audio-tts-worker.{service,timer}`, timer offset from the STT one.
+
+### Web — `src/AudioToText/Web/`
+
+Routes split deliberately. The **page** is conversion-scoped, because a separate pair is one call and the
+requested layout shows both sides together. The **generate** and **file** endpoints are job-scoped,
+matching every other job route and the job-scoped table, and removing a resolution step from the
+security-sensitive endpoint.
+
+- **`Conversion/AiAudio/Action.php` + `template.php`** — GET
+  `/audio-to-text/conversion/{publicId:[0-9a-f]{32}}/ai-audio`.
+  **COMMON** → `Call information` · `Transcript source` · `Mixed AI audio` (status · player · Download ·
+  Generate/Regenerate).
+  **SEPARATE** → `Call information` · `Transcript source` · `Customer AI audio` · `Agent AI audio`, each
+  with its own status, player, Download and Generate/Regenerate.
+  *Transcript source* names which transcript is in use (Corrected, or Original machine output), the
+  revision number from `review_count`, when and by whom it was last edited, and the short hash.
+  Generated audio is labelled **AI Generated Training Audio**, states the provider, the voice model **and
+  the voice's language**, and never replaces or relabels the **Original Audio**.
+- **`Job/AiAudio/Generate/Action.php`** — POST `/audio-to-text/job/{publicId}/ai-audio/generate`, CSRF,
+  `output_type` plus an `expected_hash` hidden field so a stale tab loses rather than buying the wrong
+  thing — the idiom `review_count` already establishes on the review routes. Enqueue only; 303 back with
+  a `FlashMessages` line.
+- **`Job/AiAudio/File/Action.php`** — GET `/audio-to-text/job/{publicId}/ai-audio/file`.
+  `Content-Type: audio/mpeg` (or `audio/wav`), `Accept-Ranges: bytes` **on the 200 as well**,
+  `ETag: "<file_hash>"` with 304 support and `Cache-Control: private, max-age=0, must-revalidate` — the
+  blanket `no-store` used elsewhere would force a full re-download on every seek of a multi-megabyte file.
+  Single-range 206 via `LimitStream`; multiple ranges → serve the first or 200; suffix ranges handled;
+  `start > end`, `start >= size`, or overflow → **416 with `Content-Range: bytes */<size>`**; non-`bytes`
+  units ignored. Safari opens with `Range: bytes=0-1` and will not play a 200, so this is not optional.
+  `?download=1` switches to `Content-Disposition: attachment`. Unknown id, not-ready rendition and any
+  traversal attempt all collapse to the same 404 through `JobPageGuard` — never a 403.
+- **`Job/Store/template.php`** — one checkbox per upload form in the existing `.field` markup:
+  `Generate clean AI audio after transcription` / *"Costs money. Off by default."*, **unchecked**.
+  `Job/Store/Action.php` passes it to `TranscriptionQueue::enqueueConversation()` as a trailing
+  `bool $generateAiAudio = false`; that is the method's only production call site, and defaulting keeps
+  the ten test call sites compiling. The upload request makes **no** Deepgram call and waits on nothing.
+- **Conversions table** — one compact `AI Audio` link in the existing Actions cell. No new column.
+- `AudioToTextRoute` gains three constants; `config/common/routes.php` gains three routes inside the
+  existing `RequireAdminMiddleware` + `DomainExceptionMiddleware` group.
+- `assets/main/admin.css` gains a short block under the `.a2t-` prefix `ModuleIsolationTest` enforces —
+  badge modifiers and a player row. No new stylesheet, no framework, no inline styles. **No new
+  JavaScript**: `<audio controls>` is native and the buttons are ordinary CSRF-protected forms; if
+  status polling is wanted it reuses the existing `data-a2t-reload` attribute, which that same test
+  requires every DOM query in the block to be scoped by. `SecurityHeadersMiddleware` sets no `media-src`,
+  so it falls back to `default-src 'self'` and a same-origin player already works — **no security-header
+  change, and no `blob:` or `data:`**. `nosniff` is global, so the Content-Type must be exact.
+
+### What the blocked page says
+
+Not "not available" — name the fact, name the remedy, link to it, the way `Conversion\Action` explains
+its own refusal in prose:
+
+> AI audio is not offered for this call yet. Agent and Customer have not been confirmed, and a voice
+> reading one side would assert an attribution this page does not make.
+> **Confirm the speakers** → *(link to `AudioToTextRoute::JOB_REVIEW`)*
+
+And for a separate pair, the existing invariant in its existing words: the two recordings have no shared
+clock and no common start, so a single mixed track would mean inventing an ordering.
+
+---
+
+## Cost protection
+
+| Vector | What stops it |
+|---|---|
+| Double-click / duplicate POST | conditional enqueue (below) + `UNIQUE (job_id, output_type)`; the second is a no-op with an honest flash |
+| Refresh after POST | Post/Redirect/Get 303 (`Redirect::afterPost`) |
+| Two workers claiming one row | atomic `UPDATE … WHERE id=? AND status='QUEUED'`; affected=1 wins |
+| Two TTS workers at all | `flock` on a dedicated `tts-worker.lock` |
+| Automatic + manual at once | same row, same service; the second sees QUEUED/GENERATING and does nothing |
+| Role confirmation firing twice | same service, same idempotency |
+| Re-generating unchanged audio | `file_hash` = current **and** render key = current ⇒ refuse; button reads "Up to date" |
+| Stale tab regenerating the wrong thing | `expected_hash` hidden field, compared server-side |
+| Runaway retries | `attempts` vs `DEEPGRAM_TTS_MAX_ATTEMPTS`; past the cap, an explicit click is required |
+| Generating both MIXED and per-role for one call | out of scope this phase — one rendition per job |
+
+**The enqueue is conditional, never a naive upsert.** `INSERT … ON DUPLICATE KEY UPDATE status='QUEUED'`
+would flip a row from `GENERATING` back to `QUEUED` mid-flight; the next tick claims it and a **second
+concurrent paid generation** starts, with both workers racing to write `file_name`. So: insert, and on
+duplicate key run a conditional `UPDATE … WHERE id=? AND status NOT IN ('QUEUED','GENERATING')` that
+also rotates `attempt_token`. The worker's terminal write is `WHERE id=? AND attempt_token=?`, so a slow
+first worker can never overwrite a newer result.
+
+**A row can otherwise wedge in `GENERATING` forever**, and because the claim is `WHERE status='QUEUED'`
+it would be unreachable — including by the administrator, once the enqueue is correctly hardened. The
+TTS worker's stale sweep returns a row whose `generating_since` is past a deadline to `FAILED`, keeping
+any previous file. It **does not auto-retry**, for the reason the STT worker already gives about crashes
+mid-Whisper — here the loop would also cost money.
+
+**Acknowledged**: a mid-run failure discards chunks already paid for. A 40-chunk call that fails on chunk
+39 has been billed for 39 and produced nothing. Resumable chunk caching is deliberately out of scope this
+phase; the attempt cap bounds the exposure and the page states the character count before the click.
+
+### Replacing a file
+
+The previous file stays on disk and playable for the whole of a regeneration. Order, so a crash leaks a
+file rather than orphaning a row: assemble under a work name → `rename()` within the same directory
+(atomic) → update the row → **unlink the superseded file**. That last step is what stops generated audio
+accumulating. If it fails it does **not** fail the generation: it is logged safely and the TTS worker's
+own housekeeping collects it. Deletion targets only a name matching the generated-file pattern, in the
+`ai-audio/` tree; the original recording is unreachable from this path by construction.
+
+---
+
+## Failure behaviour
+
+Each ends with a terminal row, an operator-safe redacted `error_message`, a redacted log line, and the
+previous audio still playable if there was one: provider not configured · credentials invalid or not
+entitled to `/v1/speak` (401/403) · rate limited (429) · other 4xx · 5xx · network timeout · malformed
+or empty body · file write failure · ffmpeg missing · encoder missing · encode failure · missing
+effective transcript · roles not known · one side empty in Separate mode · duplicate enqueue · stale
+transcript · a single token longer than the character cap · a row abandoned in `GENERATING`.
+
+---
+
+## Tests
+
+**No test ever makes a paid Deepgram call.** The PSR-18 client is stubbed with canned PSR-7 responses
+using the existing `tests/Support/RecordingHttpClient.php` and the arrangement
+`tests/Unit/AudioToText/DeepgramEngineTest.php` already uses ("No test here reaches the network");
+`FfmpegPcmEncoder` is behind an interface and faked. A guard test in the spirit of
+`ProviderIndependenceTest` asserts no test path reaches a live client.
+
+**`WebTierCannotRunWhisperTest::FORBIDDEN_IN_WEB_TIER` gains the TTS synthesizer.** This is the single
+highest-value new test: it makes "the Generate button cannot synchronously call Deepgram" structural
+rather than conventional — the exact argument that list's comment already makes for `DeepgramEngine`.
+Note it strips comments but **not** template literals, so no user-facing string may contain a forbidden
+token.
+
+**Unit** — `TtsTextChunker`: `implode('', split($t)) === $t` over generated and real transcripts, plus
+split placement, a token longer than the cap, multibyte safety · `TtsSourceDigest`: stable; changes on
+any character or ordering change; **unchanged by chunking**; unchanged when only a voice model changes;
+injective framing (one turn containing a newline does not collide with two turns) · `SpeakerMarkers`
+stripped before both hashing and sending · `TtsScriptBuilder`: reviewed text wins over machine text (the
+"one ton" → "wonton" case, named) · **`rolesAreKnown()` is true for every SEPARATE child and false for an
+unconfirmed COMMON job** · `TtsOutputType::availableFor()` · `PcmConcatenator` byte-exactness and silence
+length · `DeepgramSpeechSynthesizer` against every HTTP failure shape · **the API key never appears in
+any exception, log record or `error_message`** (the regression that already bit `DeepgramEngine`).
+
+**Integration** — enqueue idempotency across all five triggers · an enqueue against a `GENERATING` row
+does **not** reset it · confirming roles on an opted-in COMMON job enqueues exactly one MIXED rendition,
+and confirming again enqueues nothing · concurrent claim (two claims, one winner) · a stale
+`attempt_token` cannot write a terminal state · the stale sweep marks `FAILED` and does not retry · a
+failed regeneration leaves the previous file playable and on disk · a successful regeneration deletes
+the superseded file and only that file · **nothing under `recordings/` is ever written or deleted by
+this feature** · staleness flips after a real review edit · cascade delete removes renditions · the
+migration's `down()` refuses while audio exists.
+
+**Web** — the upload checkbox is unchecked by default and posting it sets the flag · the page renders
+each status and shows no control for an unavailable type · Generate requires CSRF · a stale
+`expected_hash` is refused · the file route: 404 for unknown id / not-ready / traversal, 206 for
+`bytes=0-1` with the right byte, 416 with `Content-Range: bytes */N`, 304 on a matching `ETag` · no
+inline JS or CSS.
+
+**Regression** — the full suite, with Audio-to-Text and Deepgram STT called out: 1,377 unit tests must
+still pass, and Whisper argv, the Deepgram STT query string, the `TranscriptToken` leading-space
+contract, diarization, alignment and the review/publish gates must be byte-identical. Psalm stays at
+level 1 with no baseline and must gain no new errors — every `Query::one()`/`scalar()` read narrowed the
+way `DbWorkerHeartbeatRepository::read()` does.
+
+Known pre-existing failures, reported separately and not fixed here: 6 integration (Order58 sync, stuck
+`integration_sync_runs` row 1486), 6 web (ChatSources ×2, ChatReports ×2, RuleListPage, RuleReadiness),
+8 Psalm (Chat, Document), 1 style drift (`Job/Original/template.php`).
+
+---
+
+## Verification
+
+```bash
+php yii migrate:up
+./vendor/bin/codecept run Unit
+./vendor/bin/codecept run Integration
+php yii serve --port=8099 &
+./vendor/bin/codecept run Web -o "modules: config: PhpBrowser: url: http://127.0.0.1:8099"
+./vendor/bin/psalm --no-cache
+./vendor/bin/php-cs-fixer fix --dry-run --diff
+php yii kf:audio:worker --once         # STT must still start and behave identically
+php yii kf:audio:tts-worker --once     # with nothing queued, and with the provider unconfigured
+```
+
+Manual plan, against a real store with a real Deepgram key:
+
+**A.** Mixed upload, box **unchecked** → nothing queued, *Not generated*, no TTS request made.
+**B.** Mixed upload, box **checked**, roles publish automatically → one MIXED file, two distinct voices,
+chronological, without anyone pressing a button.
+**C.** Mixed upload, box **checked**, transcription lands `NEEDS_REVIEW` → nothing generated and the page
+says why; confirm the speakers on the existing Review screen → **MIXED is queued automatically**.
+Confirm again / reload → still exactly one generation.
+**D.** Customer + Agent pair, box checked → two files, one voice each, never merged; no MIXED control.
+**E.** Correct a word in Review (the "one ton" → "wonton" case), reload → **Stale**, previous audio still
+playable, nothing regenerated automatically. Regenerate → the new audio says the corrected word, the
+superseded file is gone, and the original recording is untouched.
+**F.** Double-click Generate, then refresh → one row, one generation, one charge.
+**G.** Break the key in `.env`, regenerate → failure recorded, no key material in the message, previous
+audio still plays; restore and regenerate → recovers.
+**H.** Kill the TTS worker mid-generation → the row is recovered to `FAILED` on a later tick, not
+retried automatically, and no work files remain.
+**I.** Stop the TTS timer, queue work, confirm the STT worker still transcribes at its normal rate;
+restart and confirm the backlog drains. Then verify on disk that `recordings/<id>/source.*` is
+byte-identical to before and all generated files live under `ai-audio/`.
+**J.** Seek in the browser player and confirm the scrubber works (a 206 in the network log).
+
+Docs: a new `docs/server/deepgram_tts_flow.txt` in the same house style, written from the implemented
+code after the fact, containing no credentials — a new file rather than a section in
+`deepgram_flow.txt`, whose header scopes it to "speech-to-text ONLY"; that file gains one
+cross-reference line.
+
+---
+
+## Deliverable
+
+The working feature plus the 22-section report requested: existing flow found · database found ·
+transcript model · architecture decision · server-load protection · upload UI · store table · the new
+page · mixed flow · separate flow · the Deepgram TTS request structure (no credentials) · database
+changes · files changed · stale detection · regenerate · cost protection · security · failure behaviour ·
+test results · the manual plan · regression confirmation · remaining limitations.
+
+## Stated limitations
+
+- **MIXED is unavailable for a separate Customer/Agent upload** — no shared clock, and the codebase
+  already refuses to invent one.
+- **Customer-only and Agent-only output from a COMMON recording is out of scope this phase.** The matrix
+  is one method, so it can be added without touching schema, worker, storage or cost logic.
+- **A COMMON conversion needs published speakers before any voice is assigned.** With the upload checkbox
+  set this resolves itself the moment an administrator confirms. A neutral-voice "Speaker 1 / Speaker 2"
+  rendition for unconfirmed calls was considered and deliberately not built — the requested workflow is
+  confirm-then-generate.
+- **If diarization is disabled on a deployment** (`AUDIO_DIARIZATION_ENABLED=false`, the SPEC default;
+  `true` here), a COMMON recording yields no turns, roles are never publishable, and MIXED is unavailable.
+  The page says so. Separate uploads are unaffected.
+- **"Verbatim" describes this pipeline, not Deepgram.** Aura applies its own normalisation of numbers,
+  dates, abbreviations and currency, so the spoken output will not always match the displayed characters
+  glyph for glyph. The page says so rather than promising otherwise.
+- **The voices are English** (`aura-2-*-en`). This deployment pins `DEEPGRAM_LANGUAGE=en`, but the SPEC
+  default is `multi`; a deployment that transcribes another language would get an English voice reading
+  it. The page shows the voice's language; automatic voice selection by detected language is not built.
+- Aura's 2,000-character cap means a long turn is several requests joined. The text is preserved exactly,
+  but it is not a single provider render, and chunk boundaries can affect prosody.
+- A generation that fails part-way discards chunks already billed. Bounded by the attempt cap; resumable
+  chunks are future work.
+- Audio is regenerated, never patched: correcting one word re-synthesises the whole output.
+- Prosody is synthetic. Timing, overlap and emotion from the original call are not reproduced — this is a
+  clean reading of the words, which is what it is for.

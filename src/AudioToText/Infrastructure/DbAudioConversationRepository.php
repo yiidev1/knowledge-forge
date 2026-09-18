@@ -48,6 +48,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         ConversationMode $mode,
         int $uploadedByAdminId,
         DateTimeImmutable $createdAt,
+        bool $generateAiAudio = false,
     ): int {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
@@ -55,6 +56,9 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             'mode' => $mode->value,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'created_at' => DbDateTime::format($createdAt),
+            // Written once, at upload, and never rewritten. The generation itself is decided later and
+            // elsewhere; this only records what was asked for.
+            'generate_ai_audio' => $generateAiAudio ? 1 : 0,
         ])->execute();
 
         return (int) $this->connection->getLastInsertID();
@@ -119,6 +123,33 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         return $value === null || $value === false ? null : (int) $value;
     }
 
+    public function publicIdFor(int $conversationId): ?string
+    {
+        $value = (new Query($this->connection))
+            ->select('public_id')
+            ->from(['c' => self::TABLE])
+            ->where(['c.id' => $conversationId])
+            ->limit(1)
+            ->scalar();
+
+        // `false` is a missing row. The column is NOT NULL, so anything else is a real id.
+        return $value === false || $value === null ? null : (string) $value;
+    }
+
+    public function generatesAiAudio(int $conversationId): bool
+    {
+        $value = (new Query($this->connection))
+            ->select('generate_ai_audio')
+            ->from(['c' => self::TABLE])
+            ->where(['c.id' => $conversationId])
+            ->limit(1)
+            ->scalar();
+
+        // A missing row returns false, which is also the answer: nothing to generate for a conversation
+        // that is not there.
+        return (int) ($value === false ? 0 : $value) === 1;
+    }
+
     public function deleteChildless(): int
     {
         // One statement rather than a read-then-delete loop: the set is computed and removed inside
@@ -141,6 +172,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'mode' => 'c.mode',
                 'uploaded_by_admin_id' => 'c.uploaded_by_admin_id',
                 'created_at' => 'c.created_at',
+                'generate_ai_audio' => 'c.generate_ai_audio',
                 'uploaded_by_username' => 'a.username',
             ])
             ->from(['c' => self::TABLE])
@@ -224,6 +256,9 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             $this->nullableString($row['uploaded_by_username'] ?? null),
             DbDateTime::parse((string) $row['created_at']),
             $children,
+            // MySQL hands a TINYINT back as an int or a numeric string depending on the driver's mood,
+            // so the comparison is loose on purpose rather than relying on either.
+            (int) ($row['generate_ai_audio'] ?? 0) === 1,
         );
     }
 

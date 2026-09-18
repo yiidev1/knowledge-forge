@@ -202,12 +202,44 @@ final readonly class TranscriptionSettings
     }
 
     /**
+     * The store for **generated** AI training audio — a third sibling tree, not a corner of either of the
+     * two above.
+     *
+     * It is not under `recordings/` for a reason worth stating plainly: `retain()` is a *move*, so after a
+     * job completes, `recordings/<publicId>/source.<ext>` is the only surviving copy of what was uploaded.
+     * Writing synthesised chunks and merge scratch next to it puts every one of those files one prefix
+     * bug away from an unrecoverable recording. It is also a directory whose cleanup is flat and
+     * non-recursive, so a stray subdirectory there would silently turn retention deletion into a no-op.
+     *
+     * It is not under `jobs/` either: that tree is swept by age and would collect finished audio.
+     *
+     * Because no existing sweep knows about this tree, the TTS worker brings its own — see
+     * {@see \App\AudioToText\Application\Tts\GeneratedAudioStorage}.
+     */
+    public function aiAudioDirectory(): string
+    {
+        return rtrim($this->temporaryDirectory, '/') . '/ai-audio';
+    }
+
+    /**
      * Beside `jobs/`, never inside it — the orphan sweep must not be able to delete the file that
      * guarantees single-worker operation.
      */
     public function workerLockFile(): string
     {
         return rtrim($this->temporaryDirectory, '/') . '/worker.lock';
+    }
+
+    /**
+     * The TTS worker's lock, and deliberately **not** the transcription worker's.
+     *
+     * Sharing one would be the worst of both: a text-to-speech tick would block the transcriber it was
+     * built to stay out of the way of, and a transcription tick would make every TTS tick skip. Two
+     * workers that never contend need two locks.
+     */
+    public function ttsWorkerLockFile(): string
+    {
+        return rtrim($this->temporaryDirectory, '/') . '/tts-worker.lock';
     }
 
     /**

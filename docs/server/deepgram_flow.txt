@@ -8,7 +8,11 @@ Source of truth        : the implemented code, read directly. Every file path,
                          from the source after implementation, not from a plan.
 Scope                  : speech-to-text ONLY. Nothing else about Audio-to-Text
                          changed — see section 4 for the exhaustive list of what
-                         Deepgram does NOT do.
+                         Deepgram does NOT do. Deepgram's text-to-SPEECH side is a
+                         separate feature with its own document:
+                         docs/server/deepgram_tts_flow.txt. It re-speaks a
+                         transcript that already exists and cannot affect how any
+                         recording is transcribed.
 
 CONTAINS NO CREDENTIALS. No API key, token or secret appears anywhere in this
 file, and none may ever be added to it.

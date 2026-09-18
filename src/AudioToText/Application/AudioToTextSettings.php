@@ -7,6 +7,7 @@ namespace App\AudioToText\Application;
 use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
+use App\AudioToText\Application\Settings\TtsSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
 use App\AudioToText\Domain\TranscriptionProvider;
 
@@ -45,6 +46,14 @@ final readonly class AudioToTextSettings
         public WorkerSettings $worker,
         public DiarizationSettings $diarization,
         public DeepgramSettings $deepgram,
+        /**
+         * Text-to-speech, for generating clean training audio from a transcript that already exists.
+         *
+         * Carried here so services take one settings object, exactly like the four above — but note what
+         * is **not** done with it: {@see problems()} never looks at it, and neither does anything in the
+         * transcription path. See {@see ttsIsUsable()}.
+         */
+        public TtsSettings $tts,
     ) {}
 
     /**
@@ -270,5 +279,26 @@ final readonly class AudioToTextSettings
             TranscriptionProvider::Whisper => $this->transcription->whisperIsUsable(),
             TranscriptionProvider::Deepgram => $this->deepgram->isUsable(),
         };
+    }
+
+    /**
+     * Whether AI training audio may be offered at all.
+     *
+     * Asked by the page that shows the button and by the text-to-speech worker at startup. **Local
+     * configuration only**, for the same reason {@see providerIsUsable()} gives: a page render must not
+     * make a network call, and a provider outage must not be reported to an administrator as something
+     * they should go and fix in `.env`.
+     *
+     * ## Why this is not part of {@see problems()}
+     *
+     * That method gates the transcription worker — a non-empty result and it exits before claiming
+     * anything. Text-to-speech is optional and entirely separate from turning audio into text, so a
+     * mistyped voice name has no business being able to stop every transcription on the machine. This is
+     * the same lesson `problems()` already records about the Whisper binary, applied one step further
+     * out.
+     */
+    public function ttsIsUsable(): bool
+    {
+        return $this->tts->isUsable();
     }
 }

@@ -5,6 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Application\EffectiveConversationReader;
+use App\AudioToText\Application\Tts\TtsGenerationService;
+use App\AudioToText\Application\Tts\TtsScriptBuilder;
+use App\AudioToText\Infrastructure\DbAudioConversationRepository;
+use App\Tests\Support\AudioToTextSettingsFactory;
+use App\Tests\Support\Fake\AudioToText\InMemoryTtsRenditionRepository;
+use Psr\Log\NullLogger;
 use App\AudioToText\Application\ReviewConversationService;
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
 use App\AudioToText\Domain\Exception\ReviewConflict;
@@ -71,6 +77,18 @@ final class ReviewConversationServiceTest extends Unit
             $this->revisions,
             $decoder,
             new TransactionalRunner($this->connection),
+            // AI audio is an optional extra this service notifies after a confirmation commits. It is
+            // wired with a repository that has nothing in it and a conversation lookup that answers "no
+            // audio was requested", so these tests exercise the correction rules alone — and would still
+            // pass if text-to-speech were removed entirely, which is the point of it being a post-commit
+            // notification rather than part of the transaction.
+            new TtsGenerationService(
+                new InMemoryTtsRenditionRepository(),
+                new TtsScriptBuilder($this->effective),
+                AudioToTextSettingsFactory::create(),
+            ),
+            new DbAudioConversationRepository($this->connection),
+            new NullLogger(),
         );
 
         $username = '__kf_reviewsvc_' . bin2hex(random_bytes(4)) . '__';

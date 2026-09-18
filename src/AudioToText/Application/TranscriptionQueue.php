@@ -97,6 +97,13 @@ final readonly class TranscriptionQueue
         array $files,
         int $adminUserId,
         TranscriptionProvider $provider = TranscriptionProvider::Whisper,
+        /**
+         * Whether the uploader asked for clean AI training audio afterwards.
+         *
+         * Recorded on the conversation and acted on later, by the workers — **never here.** An upload
+         * request must not wait on a speech provider, and this method is what the upload request calls.
+         */
+        bool $generateAiAudio = false,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
@@ -135,7 +142,8 @@ final readonly class TranscriptionQueue
                 $mode,
                 $adminUserId,
                 $children,
-                $provider
+                $provider,
+                $generateAiAudio
             ): string {
                 // Parent and children in one transaction: a pair whose second insert failed would
                 // otherwise leave a conversation promising two recordings and holding one.
@@ -145,7 +153,8 @@ final readonly class TranscriptionQueue
                     $mode,
                     $adminUserId,
                     $children,
-                    $provider
+                    $provider,
+                    $generateAiAudio
                 ): string {
                     $conversationId = $this->conversations->create(
                         $conversationPublicId,
@@ -153,6 +162,7 @@ final readonly class TranscriptionQueue
                         $mode,
                         $adminUserId,
                         $this->clock->now(),
+                        $generateAiAudio,
                     );
 
                     foreach ($children as $child) {

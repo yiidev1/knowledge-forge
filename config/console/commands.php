@@ -14,6 +14,11 @@ return [
     // and running it in that loop would stall document processing and Order58 sync behind it. Separate
     // command, separate lock file, separate schedule.
     'kf:audio:worker' => App\AudioToText\Console\AudioTranscriptionWorkerCommand::class,
+    // Separate from kf:audio:worker for the mirror-image reason. That one processes at most ONE job per
+    // tick, so generating speech inside it would spend a transcription slot and halve the rate at which
+    // recordings turn into text. The two do not contend either — transcription is CPU-bound, this waits
+    // on HTTPS — so they run side by side, each with its own lock file and schedule.
+    'kf:audio:tts-worker' => App\AudioToText\Console\AudioTtsWorkerCommand::class,
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,

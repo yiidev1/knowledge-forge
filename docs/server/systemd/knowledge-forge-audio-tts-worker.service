@@ -1,0 +1,96 @@
+# AI training audio (text-to-speech) worker for Knowledge Forge.
+#
+# EXAMPLE ONLY — NOT INSTALLED. Nothing in this project writes to /etc/systemd. See
+# docs/server/deepgram_tts_flow.txt for the install commands and run them yourself.
+#
+# One tick = claim at most ONE queued rendition, generate it, exit. Paired with the .timer beside this
+# file. Type=oneshot for the same reason the transcription unit is: systemd will not start a second run
+# of a unit that is still active, so a long generation delays the next tick instead of racing it.
+#
+# --- Why this is a SEPARATE unit from knowledge-forge-audio-worker ------------
+#
+# That worker processes at most one job per tick. Generating speech inside it would make a
+# text-to-speech request consume a transcription slot, so the rate at which recordings turn into text
+# would halve the moment anybody used this feature.
+#
+# The two also do not compete. Transcription is CPU-bound — one core held for ninety seconds by
+# whisper.cpp — while this is network-bound, waiting on HTTPS to Deepgram, with a single short ffmpeg
+# encode at the end. They run side by side without either noticing.
+#
+# Separate unit, separate schedule, and separate lock file: the application takes an flock on
+# runtime/audio-to-text/tts-worker.lock, never the transcription worker's worker.lock. Sharing one
+# would be the worst of both — a speech tick would block the transcriber it was built to stay out of
+# the way of, and every transcription tick would make this one skip.
+
+[Unit]
+Description=Knowledge Forge AI training audio worker (one rendition, then exit)
+Documentation=file:///var/www/html/knowledge-forge/docs/server/deepgram_tts_flow.txt
+After=network-online.target mysql.service
+Wants=network-online.target mysql.service
+
+[Service]
+Type=oneshot
+
+# www-data, for the same reason the transcription worker runs as it: the runtime tree is created mode
+# 0700 by PHP-FPM, which runs as www-data. As any other user the generated-audio directory would be
+# unwritable and every tick would fail.
+User=www-data
+Group=www-data
+
+WorkingDirectory=/var/www/html/knowledge-forge
+ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:audio:tts-worker --once
+
+# /usr/bin/php8.2 is pinned rather than /usr/bin/php: the latter is an update-alternatives symlink a
+# later PHP install could silently repoint.
+
+# MUST exceed the worst case for one rendition, which is sequential rather than parallel:
+#
+#   chunks x DEEPGRAM_TTS_TIMEOUT + one ffmpeg encode
+#
+# A five-minute call is roughly 5,000 characters, so about 3 chunks at the 1,900-character default —
+# 3 x 120s = 360s of HTTP in the worst case, plus a couple of seconds to encode. 900 leaves margin for
+# a slow provider without letting a wedged run hold the lock indefinitely.
+#
+# A SIGKILL here is survivable but not free: the row is left GENERATING and the worker's own stale
+# sweep returns it to FAILED an hour later, keeping any previous audio. The chunks already sent have
+# already been billed, which is why this ceiling is generous rather than tight.
+TimeoutStartSec=900
+
+# --- Resource ceilings (cgroup v2) ------------------------------------------
+#
+# Deliberately much smaller than the transcription unit's. This process spends almost all of its time
+# waiting on a socket; the only real work is one ffmpeg encode of a few seconds. A quarter of a core is
+# ample, and capping it is what keeps a second worker from quietly doubling the machine's audio budget.
+CPUQuota=25%
+MemoryHigh=256M
+MemoryMax=512M
+
+# Priority hints on top of the ceilings: nginx, PHP-FPM, MySQL and the transcription worker are all
+# served first. This is optional, offline work.
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# --- Logging ----------------------------------------------------------------
+#   journalctl -u knowledge-forge-audio-tts-worker -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kf-audio-tts-worker
+
+# --- Hardening --------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Writable: its own runtime tree only. Outbound HTTPS is needed, so no IP restrictions here.
+ReadWritePaths=/var/www/html/knowledge-forge/runtime
+
+# NOTE: no EnvironmentFile=. The application reads .env itself from WorkingDirectory, which is how the
+# transcription unit works too — one place for configuration, and the API key never enters a systemd
+# unit file or `systemctl show` output.
+
+[Install]
+WantedBy=multi-user.target

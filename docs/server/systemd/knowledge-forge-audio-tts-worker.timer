@@ -1,0 +1,44 @@
+# Fires the AI training audio worker every 5 minutes.
+#
+# EXAMPLE ONLY — NOT INSTALLED. See docs/server/deepgram_tts_flow.txt.
+#
+# ------------------------------------------------------------------------------
+# TO CHANGE THE SCHEDULE, EDIT OnUnitActiveSec BELOW AND NOTHING ELSE.
+#   OnUnitActiveSec=5min    every 5 minutes   (current)
+#   OnUnitActiveSec=1min    every minute      (drains a backlog faster; each tick is still ONE file)
+# Then: sudo systemctl daemon-reload && sudo systemctl restart knowledge-forge-audio-tts-worker.timer
+# No application code or configuration changes with the interval.
+# ------------------------------------------------------------------------------
+#
+# Slower than the transcription timer on purpose. AI audio is optional, and nobody is watching a
+# spinner for it the way they watch an upload — so a few minutes of latency costs nothing, while a
+# tighter interval would mean more wake-ups on a machine whose whole design is about staying out of the
+# way of nginx, PHP-FPM and MySQL.
+#
+# One tick generates one rendition, so a backlog drains at one file per interval. That is deliberate:
+# every file is a paid request to a third party, and a worker that emptied the queue as fast as it
+# could would also spend as fast as it could.
+
+[Unit]
+Description=Run the Knowledge Forge AI training audio worker every 5 minutes
+Documentation=file:///var/www/html/knowledge-forge/docs/server/deepgram_tts_flow.txt
+
+[Timer]
+Unit=knowledge-forge-audio-tts-worker.service
+
+# Offset from the transcription timer's OnBootSec=2min so the two do not start together on boot.
+OnBootSec=4min
+OnUnitActiveSec=5min
+
+# A 5-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
+AccuracySec=30s
+
+# Jitter, so this and the transcription timer do not drift into starting in the same second.
+RandomizedDelaySec=30s
+
+# Missed ticks are not made up after downtime. Queued renditions are still there and the next ordinary
+# tick collects them; replaying a backlog of timer events would only bunch up paid work for no benefit.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

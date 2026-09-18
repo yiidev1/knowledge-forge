@@ -6,6 +6,7 @@ use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
+use App\AudioToText\Application\Settings\TtsSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
 use App\AudioToText\Application\TranscriberResolver;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
@@ -16,6 +17,10 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\Transcription\DeepgramKeyterms;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
+use App\AudioToText\Domain\Tts\AudioEncoderInterface;
+use App\AudioToText\Domain\Tts\SpeechSynthesizerInterface;
+use App\AudioToText\Domain\Tts\TtsOutputFormat;
+use App\AudioToText\Domain\Tts\TtsRenditionRepositoryInterface;
 use App\AudioToText\Domain\WorkerHeartbeatRepositoryInterface;
 use App\AudioToText\Infrastructure\DbAudioToTextSettingsRepository;
 use App\AudioToText\Infrastructure\DbSegmentRevisionRepository;
@@ -28,6 +33,9 @@ use App\AudioToText\Infrastructure\Diarization\SherpaOnnxSpeakerDiarizer;
 use App\AudioToText\Infrastructure\ProcSystemResourceProbe;
 use App\AudioToText\Infrastructure\Transcription\DeepgramEngine;
 use App\AudioToText\Infrastructure\Transcription\WhisperEngine;
+use App\AudioToText\Infrastructure\Tts\DbTtsRenditionRepository;
+use App\AudioToText\Infrastructure\Tts\DeepgramSpeechSynthesizer;
+use App\AudioToText\Infrastructure\Tts\FfmpegPcmEncoder;
 use App\Shared\Domain\ValueObject\SecretValue;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Psr7\HttpFactory;
@@ -137,7 +145,36 @@ return [
         ],
     ],
 
-    // The one type every Audio-to-Text service injects. The four groups above exist for readability;
+    // Deepgram Aura text-to-speech. A separate settings object from DeepgramSettings above even though
+    // the two share a key, because the transcription worker validates its settings at startup and
+    // refuses to claim anything when they are wrong — so folding these in would let a mistyped voice
+    // name stop every transcription on the machine.
+    TtsSettings::class => [
+        '__construct()' => [
+            // The same DEEPGRAM_API_KEY, reused rather than duplicated: one secret to rotate, and a
+            // second variable holding the same value would eventually hold a different one.
+            'apiKey' => DynamicReference::to(
+                static fn(): SecretValue => new SecretValue($params['app/audio-deepgram-tts']['apiKey']),
+            ),
+            'url' => $params['app/audio-deepgram-tts']['url'],
+            'customerModel' => $params['app/audio-deepgram-tts']['customerModel'],
+            'agentModel' => $params['app/audio-deepgram-tts']['agentModel'],
+            'sampleRate' => $params['app/audio-deepgram-tts']['sampleRate'],
+            'maxCharactersPerRequest' => $params['app/audio-deepgram-tts']['maxCharactersPerRequest'],
+            'timeoutSeconds' => $params['app/audio-deepgram-tts']['timeoutSeconds'],
+            'gapMilliseconds' => $params['app/audio-deepgram-tts']['gapMilliseconds'],
+            // Decoding the configured string is assembly, which is this file's job — `params.php`
+            // carries values and does not interpret them.
+            'outputFormat' => DynamicReference::to(
+                static fn(): TtsOutputFormat => TtsOutputFormat::fromConfig(
+                    $params['app/audio-deepgram-tts']['outputFormat'],
+                ),
+            ),
+            'maxAttempts' => $params['app/audio-deepgram-tts']['maxAttempts'],
+        ],
+    ],
+
+    // The one type every Audio-to-Text service injects. The groups above exist for readability;
     // nothing outside this file depends on them individually, which is what stops a new setting from
     // rippling through constructors across the module.
     AudioToTextSettings::class => [
@@ -146,8 +183,13 @@ return [
             'worker' => Reference::to(WorkerSettings::class),
             'diarization' => Reference::to(DiarizationSettings::class),
             'deepgram' => Reference::to(DeepgramSettings::class),
+            'tts' => Reference::to(TtsSettings::class),
         ],
     ],
+
+    TtsRenditionRepositoryInterface::class => DbTtsRenditionRepository::class,
+    SpeechSynthesizerInterface::class => DeepgramSpeechSynthesizer::class,
+    AudioEncoderInterface::class => FfmpegPcmEncoder::class,
 
     AudioToTextSettingsRepositoryInterface::class => DbAudioToTextSettingsRepository::class,
 
@@ -162,6 +204,25 @@ return [
             'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
                 'connect_timeout' => 10,
                 'timeout' => $params['app/audio-deepgram']['timeoutSeconds'],
+                'http_errors' => false,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => new HttpFactory()),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => new HttpFactory()),
+        ],
+    ],
+
+    // Its own client instance again, and for the same reason: this posts a short JSON body and waits for
+    // audio, which is a different request profile from uploading a recording for transcription. Sharing
+    // one would mean one timeout serving two very different jobs.
+    //
+    // `http_errors => false` so PSR-18 returns a response for every status and only a genuine transport
+    // failure throws — the synthesizer maps a refusal and an unreachable host to different exceptions,
+    // and an operator's next move differs between them.
+    DeepgramSpeechSynthesizer::class => [
+        '__construct()' => [
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => 10,
+                'timeout' => $params['app/audio-deepgram-tts']['timeoutSeconds'],
                 'http_errors' => false,
             ])),
             'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => new HttpFactory()),

@@ -130,6 +130,23 @@ return [
         'keyterms' => Environment::string('DEEPGRAM_KEYTERMS'),
     ],
 
+    // Audio to Text — Deepgram Aura text-to-speech. A separate block from the one above because it is a
+    // separate service with a separate failure mode: the transcription worker must never read this, so
+    // nothing here may be folded into the block it validates at startup. Transport only, as everywhere
+    // in this file — the API key is the STT block's, reused rather than duplicated.
+    'app/audio-deepgram-tts' => [
+        'apiKey' => Environment::string('DEEPGRAM_API_KEY'),
+        'url' => Environment::string('DEEPGRAM_TTS_URL'),
+        'customerModel' => Environment::string('DEEPGRAM_TTS_MODEL_CUSTOMER'),
+        'agentModel' => Environment::string('DEEPGRAM_TTS_MODEL_AGENT'),
+        'sampleRate' => Environment::int('DEEPGRAM_TTS_SAMPLE_RATE'),
+        'maxCharactersPerRequest' => Environment::int('DEEPGRAM_TTS_MAX_CHARS'),
+        'timeoutSeconds' => Environment::int('DEEPGRAM_TTS_TIMEOUT'),
+        'gapMilliseconds' => Environment::int('DEEPGRAM_TTS_GAP_MS'),
+        'outputFormat' => Environment::string('DEEPGRAM_TTS_OUTPUT_FORMAT'),
+        'maxAttempts' => Environment::int('DEEPGRAM_TTS_MAX_ATTEMPTS'),
+    ],
+
     'app/pdf' => [
         'minCharsPerPage' => Environment::int('PDF_MIN_TEXT_CHARS_PER_PAGE'),
         'probeMaxBytes' => Environment::int('PDF_TEXT_PROBE_MAX_BYTES'),

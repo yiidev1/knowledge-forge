@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\AudioToText\Application;
 
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
+use App\AudioToText\Application\Tts\TtsGenerationService;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\Exception\ReviewConflict;
 use App\AudioToText\Domain\Exception\ReviewRejected;
 use App\AudioToText\Domain\JobStatus;
@@ -16,6 +18,8 @@ use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\Shared\Application\Transaction\TransactionRunnerInterface;
+use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * Applies an administrator's corrections to a conversation, and records that they did.
@@ -51,6 +55,15 @@ final readonly class ReviewConversationService
         private SegmentRevisionRepositoryInterface $revisions,
         private SpeakerSegmentsDecoder $decoder,
         private TransactionRunnerInterface $transaction,
+        /**
+         * Honouring an upload's AI-audio request once the speakers make it possible.
+         *
+         * Used by {@see confirmRoles()} alone, after its transaction commits, and every failure is
+         * swallowed. Correcting a conversation must never depend on an optional, paid extra.
+         */
+        private TtsGenerationService $aiAudio,
+        private AudioConversationRepositoryInterface $conversations,
+        private LoggerInterface $logger,
     ) {}
 
     public function moveToAgent(string $publicId, int $adminId, int $turnIndex, int $expectedVersion): void
@@ -251,6 +264,48 @@ final readonly class ReviewConversationService
                 throw ReviewConflict::versionMoved();
             }
         });
+
+        // Confirming the speakers is the moment a mixed recording's AI audio becomes possible, so this
+        // is where an upload's "generate clean AI audio" request is finally honoured. Until now no voice
+        // could be assigned without asserting a speaker the application itself declined to name.
+        //
+        // AFTER the transaction, never inside it: a queued rendition that referenced a confirmation
+        // which then rolled back would be a paid request for a state that does not exist.
+        $this->queueRequestedAiAudio($job->id);
+    }
+
+    /**
+     * Honour an upload's AI-audio request, now that it can be.
+     *
+     * Deliberately swallows everything. An administrator confirming speakers is waiting on this method,
+     * and optional audio failing to queue is not a reason to fail their confirmation or to roll back the
+     * correction they just made. It enqueues a row; it contacts no provider and spends nothing — the
+     * paid work happens in `kf:audio:tts-worker`.
+     *
+     * Idempotent through {@see TtsGenerationService::enqueue()}, so confirming, reverting and confirming
+     * again cannot stack up charges, and neither can this arriving beside the worker's own trigger.
+     */
+    private function queueRequestedAiAudio(int $jobId): void
+    {
+        try {
+            // Re-read: the confirmation has just been written, and eligibility depends on it.
+            $job = $this->jobs->findById($jobId);
+            $conversationId = $job?->conversationId;
+
+            if ($job === null || $conversationId === null) {
+                return;
+            }
+
+            $this->aiAudio->enqueueRequested(
+                $job,
+                $this->conversations->generatesAiAudio($conversationId),
+            );
+        } catch (Throwable $e) {
+            $this->logger->warning('Could not queue AI audio after speakers were confirmed.', [
+                'reason' => 'tts_enqueue_after_confirm_failed',
+                'error_message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

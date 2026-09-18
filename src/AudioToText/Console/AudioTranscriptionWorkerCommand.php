@@ -8,6 +8,7 @@ use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\ForeignLockGuard;
 use App\AudioToText\Application\QueuedAudioStorage;
 use App\AudioToText\Application\Speaker\SpeakerSeparationService;
+use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ProcessingStage;
@@ -97,6 +98,7 @@ final class AudioTranscriptionWorkerCommand extends Command
         private readonly WorkerAdmissionGuard $admission,
         private readonly ForeignLockGuard $foreignLocks,
         private readonly AudioToTextSettings $settings,
+        private readonly TtsGenerationService $aiAudio,
         private readonly LoggerInterface $logger,
     ) {
         parent::__construct();
@@ -342,6 +344,14 @@ final class AudioTranscriptionWorkerCommand extends Command
                 mb_strlen($result->text),
                 $splitLabel,
             ));
+
+            // Honour the upload's own request for clean AI audio, if there was one.
+            //
+            // Strictly AFTER the row is terminal, and swallowed whole. This method is documented as
+            // "every path out of here must end terminal", and an exception thrown here would be caught
+            // by the generic handler below and mark a job that transcribed perfectly well as FAILED —
+            // discarding a transcript over optional audio. It enqueues a row; it contacts nothing.
+            $this->queueAiAudio($job, $io);
         } catch (AudioTranscriptionException $e) {
             $this->jobs->markFailed($job->id, $e->getMessage());
             $this->logger->error('Audio transcription job failed.', [
@@ -361,6 +371,53 @@ final class AudioTranscriptionWorkerCommand extends Command
             // of it into permanent storage, so this deletes scaffolding rather than the recording; on
             // failure there is nothing worth keeping and the whole directory goes with it.
             $this->storage->remove($job->publicId);
+        }
+    }
+
+    /**
+     * Queue clean AI audio, when the upload asked for it and it can be honoured yet.
+     *
+     * A couple of database statements and no network: the paid work happens in `kf:audio:tts-worker`,
+     * which is a separate command on a separate schedule precisely so that generating speech can never
+     * consume a transcription slot.
+     *
+     * A mixed recording whose speakers came out needing review is **not** queued here, because no voice
+     * could be assigned to them honestly yet. The request is not lost — `ReviewConversationService`
+     * honours it the moment an administrator confirms the roles.
+     *
+     * Every failure is swallowed and logged. Optional audio must never cost a transcription.
+     */
+    private function queueAiAudio(TranscriptionJob $job, SymfonyStyle $io): void
+    {
+        try {
+            if ($job->conversationId === null) {
+                return;
+            }
+
+            if (!$this->conversations->generatesAiAudio($job->conversationId)) {
+                return;
+            }
+
+            // Re-read: the row this method was handed is the one claimed at the start, and everything
+            // that decides eligibility — status, the separation columns, the reviewed layer — has been
+            // written since.
+            $fresh = $this->jobs->findById($job->id);
+
+            if ($fresh === null) {
+                return;
+            }
+
+            if ($this->aiAudio->enqueueRequested($fresh, true)) {
+                $io->writeln('  queued clean AI audio.');
+            } elseif (!$this->aiAudio->rolesAreKnown($fresh)) {
+                $io->writeln('  AI audio deferred until the speakers are confirmed.');
+            }
+        } catch (Throwable $e) {
+            $this->logger->warning('Could not queue AI audio for a completed recording.', [
+                'reason' => 'tts_enqueue_failed',
+                'job_public_id' => $job->publicId,
+                'error_message' => $e->getMessage(),
+            ]);
         }
     }
 

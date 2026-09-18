@@ -38,6 +38,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var list<TranscriptionProvider> $providerChoices every provider, usable or not
  * @var array<string, bool> $providerUsable storage value => can this server run it (local check only)
  * @var TranscriptionProvider $globalDefault the stored setting, reported as-is and never rewritten here
+ * @var bool $ttsConfigured whether clean AI audio can be generated on this server at all
  */
 
 $this->setTitle($store->name . ' — audio');
@@ -143,6 +144,36 @@ $providerField = static function (string $id) use (
         . '</div>';
 };
 
+/**
+ * The AI-audio opt-in, rendered into both forms.
+ *
+ * A closure for the same reason the provider select is one: the two forms post to the same action and
+ * must offer exactly the same choice. The id differs per form so each `<label for>` stays valid on a
+ * page that renders both.
+ *
+ * **Unchecked, always.** It is not sticky and does not remember a previous upload: this spends money
+ * with a third party, and a checkbox that quietly stayed on would spend it on recordings nobody decided
+ * to spend it on. The cost is stated on the control rather than a click later.
+ *
+ * Nothing about this makes the upload wait. The preference is recorded on the conversation and acted on
+ * afterwards by a worker — no speech provider is contacted in this request.
+ */
+$aiAudioField = static function (string $id) use ($ttsConfigured): string {
+    $hint = $ttsConfigured
+        ? 'Costs money. Off by default. A clean synthetic reading of the transcript, for agents who '
+            . 'cannot follow the original recording.'
+        : 'Not configured on this server yet, so nothing would be generated.';
+
+    return '<div class="field">'
+        . '<label class="a2t-checkbox" for="' . Html::encode($id) . '">'
+        . '<input type="checkbox" id="' . Html::encode($id) . '" name="generate_ai_audio" value="1"'
+        . ($ttsConfigured ? '' : ' disabled') . '>'
+        . '<span>Generate clean AI audio after transcription</span>'
+        . '</label>'
+        . '<div class="field__hint">' . Html::encode($hint) . '</div>'
+        . '</div>';
+};
+
 $formErrors = $errors['form'] ?? [];
 ?>
 <div class="page-header">
@@ -237,6 +268,7 @@ $formErrors = $errors['form'] ?? [];
         </div>
 
         <?= $providerField('a2t-common-provider') ?>
+        <?= $aiAudioField('a2t-common-ai-audio') ?>
 
         <button class="btn btn--primary" type="submit">Convert mixed recording</button>
     </form>
@@ -285,6 +317,7 @@ $formErrors = $errors['form'] ?? [];
         </div>
 
         <?= $providerField('a2t-separate-provider') ?>
+        <?= $aiAudioField('a2t-separate-ai-audio') ?>
 
         <button class="btn btn--primary" type="submit">Convert both recordings</button>
     </form>
@@ -367,6 +400,30 @@ $formErrors = $errors['form'] ?? [];
                                     AudioToTextRoute::JOB_ORIGINAL,
                                     ['publicId' => $original->publicId],
                                 )) ?>">Original transcript</a>
+                            <?php endif; ?>
+                            <?php
+                                        // One compact link rather than a column of its own — the page behind it
+                                        // explains the state, and a status badge here would compete with the one
+                                        // that already says whether the conversion finished.
+                                        //
+                                        // Offered once anything has been transcribed. It is deliberately NOT
+                                        // conditional on whether audio exists: "not generated yet" is one of the
+                                        // things that page is for, and hiding the link until after the fact would
+                                        // leave no way to reach the button that generates it.
+                                        $anyCompleted = false;
+                    foreach ($conversation->children as $child) {
+                        if ($child->status === JobStatus::COMPLETED) {
+                            $anyCompleted = true;
+
+                            break;
+                        }
+                    }
+                    ?>
+                            <?php if ($anyCompleted): ?>
+                                <a href="<?= Html::encode($urlGenerator->generate(
+                                    AudioToTextRoute::CONVERSION_AI_AUDIO,
+                                    ['publicId' => $conversation->publicId],
+                                )) ?>">AI audio</a>
                             <?php endif; ?>
                         </td>
                     </tr>

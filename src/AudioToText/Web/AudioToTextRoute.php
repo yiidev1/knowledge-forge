@@ -33,6 +33,19 @@ final class AudioToTextRoute
     public const JOB_STATUS = 'audio-to-text.job.status';
     public const JOB_DOWNLOAD = 'audio-to-text.job.download';
 
+    /**
+     * Clean AI training audio generated from a transcript, so a new agent can hear a call they could not
+     * otherwise follow.
+     *
+     * The page is addressed by the **conversion**, because a Customer + Agent pair is one call and both
+     * sides belong on one screen. The two actions underneath are addressed by the **job**, which is what
+     * a rendition and its file actually hang off — so the endpoint that streams bytes resolves straight
+     * to the recording it is authorising, with no conversation-to-child hop in between.
+     */
+    public const CONVERSION_AI_AUDIO = 'audio-to-text.conversion.ai-audio';
+    public const JOB_AI_AUDIO_GENERATE = 'audio-to-text.job.ai-audio.generate';
+    public const JOB_AI_AUDIO_FILE = 'audio-to-text.job.ai-audio.file';
+
     /** The conversation on its own — where the conversions list's View action goes. */
     public const JOB_CONVERSATION = 'audio-to-text.job.conversation';
 

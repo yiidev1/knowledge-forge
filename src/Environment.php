@@ -284,6 +284,40 @@ final class Environment
         // "one ton"). Trimmed and de-duplicated before use. Deepgram accepts at most 100 of them within
         // a 500-token budget; the count is checked here, the budget is Deepgram's to enforce.
         'DEEPGRAM_KEYTERMS' => ['type' => 'string', 'default' => ''],
+
+        // Audio to Text — Deepgram Aura, the text-to-SPEECH side. Entirely separate from the block
+        // above: it re-speaks a transcript that already exists, and nothing here can affect how audio is
+        // transcribed. The API key is deliberately NOT duplicated — `DEEPGRAM_API_KEY` is reused, so
+        // there is one secret to rotate rather than two to forget.
+        //
+        // Leaving the models blank means AI audio simply cannot be generated. It is reported on the page
+        // that offers it and by the TTS worker alone; the transcription worker never reads any of this,
+        // because anything it validated at startup could stop the whole queue over a typo here.
+        //
+        // A full URL rather than a base, matching DEEPGRAM_BASE_URL above.
+        'DEEPGRAM_TTS_URL' => ['type' => 'string', 'default' => 'https://api.deepgram.com/v1/speak'],
+        // One stable voice per role, and they must differ or a mixed conversation is unreadable by ear.
+        // Both defaults are from Deepgram's own customer-service list. `aura-2-*-en` voices are English:
+        // a deployment transcribing another language should choose accordingly.
+        'DEEPGRAM_TTS_MODEL_CUSTOMER' => ['type' => 'string', 'default' => 'aura-2-thalia-en'],
+        'DEEPGRAM_TTS_MODEL_AGENT' => ['type' => 'string', 'default' => 'aura-2-arcas-en'],
+        'DEEPGRAM_TTS_SAMPLE_RATE' => ['type' => 'int', 'default' => 24000, 'min' => 8000, 'max' => 48000],
+        // Characters per request. Deepgram documents a 2000-character ceiling for Aura and answers 413
+        // above it, so the ceiling is the maximum rather than the default — the margin absorbs any
+        // counting disagreement without a paid round trip to discover it.
+        'DEEPGRAM_TTS_MAX_CHARS' => ['type' => 'int', 'default' => 1900, 'min' => 100, 'max' => 2000],
+        'DEEPGRAM_TTS_TIMEOUT' => ['type' => 'int', 'default' => 120, 'min' => 1, 'max' => 3600],
+        // Silence between TURNS of a mixed conversation, not between the chunks of one turn. Two people
+        // running into each other without a breath is the difference between a recording that trains and
+        // one nobody finishes. Zero disables it.
+        'DEEPGRAM_TTS_GAP_MS' => ['type' => 'int', 'default' => 350, 'min' => 0, 'max' => 5000],
+        // `mp3` or `wav`. Linear16 at 24 kHz mono is 48 kB per second and the default retention keeps
+        // audio forever; mp3 at 64 kbps is six times smaller for speech nobody is going to master from
+        // (measured: 1.5 MB against ~9 MB on a 188-second rendition). `wav` stays available.
+        'DEEPGRAM_TTS_OUTPUT_FORMAT' => ['type' => 'string', 'default' => 'mp3'],
+        // How many times a rendition may be attempted before it needs an explicit click. Every attempt
+        // is billed, so this is a spend limit rather than a reliability setting.
+        'DEEPGRAM_TTS_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 10],
     ];
 
     /** @var array<string, bool|float|int|string> */

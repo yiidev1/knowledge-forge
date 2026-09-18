@@ -34,6 +34,18 @@ final readonly class AudioConversation
         public ?string $uploadedByUsername,
         public DateTimeImmutable $createdAt,
         public array $children,
+        /**
+         * Whether the administrator asked for clean AI training audio when they uploaded.
+         *
+         * Kept on the upload rather than on a job because that is where the question was asked, and it
+         * stays true afterwards: a mixed recording whose speakers were not publishable when
+         * transcription finished has its audio generated later, the moment somebody confirms them. The
+         * preference is honoured when it *can* be, not only at the first opportunity.
+         *
+         * Defaulted so every existing construction site — including the ones in tests — keeps working,
+         * and so "off" is what an upload that never saw the checkbox means.
+         */
+        public bool $generateAiAudio = false,
     ) {}
 
     /**

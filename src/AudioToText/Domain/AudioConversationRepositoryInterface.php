@@ -26,6 +26,13 @@ interface AudioConversationRepositoryInterface
         ConversationMode $mode,
         int $uploadedByAdminId,
         DateTimeImmutable $createdAt,
+        /**
+         * Whether the uploader ticked "generate clean AI audio after transcription".
+         *
+         * Defaulted so no existing caller changes, and because "not asked" and "declined" mean the same
+         * thing here: nothing is generated and nothing is billed.
+         */
+        bool $generateAiAudio = false,
     ): int;
 
     public function findByPublicId(string $publicId): ?AudioConversation;
@@ -48,6 +55,24 @@ interface AudioConversationRepositoryInterface
      * store" — neither has a store page, so neither needs telling apart.
      */
     public function storeSourceIdFor(int $conversationId): ?int;
+
+    /**
+     * The public id of a conversation, from the numeric one a job carries.
+     *
+     * Same trade as {@see storeSourceIdFor()}: an action that knows a job and needs to redirect to its
+     * call's page should not load the conversation and its children to learn one string. Null means no
+     * such conversation.
+     */
+    public function publicIdFor(int $conversationId): ?string;
+
+    /**
+     * Whether this upload asked for clean AI audio.
+     *
+     * Narrow on purpose, like the two above: the workers ask this once per completed recording, and
+     * loading a conversation and its children to read one flag would be a query nobody needs. A missing
+     * conversation answers false, which is also the right answer.
+     */
+    public function generatesAiAudio(int $conversationId): bool;
 
     /**
      * Remove parents that have no children left.

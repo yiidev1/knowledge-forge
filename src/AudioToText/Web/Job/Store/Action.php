@@ -132,6 +132,10 @@ final readonly class Action
                         $files,
                         $this->currentAdmin->get()->id(),
                         $provider,
+                        // Recorded on the conversation and acted on later, by the workers. Nothing in
+                        // this request contacts a speech provider: an upload must not be made to wait
+                        // on a third party, and generating a long call's audio takes minutes.
+                        $this->wantsAiAudio($body) && $this->settings->ttsIsUsable(),
                     );
 
                     // To the conversion, not back to this page. For a common upload that redirects on
@@ -191,6 +195,9 @@ final readonly class Action
                 // The stored setting, reported as-is. Shown even when it names a provider that cannot
                 // currently run, because silently substituting another one would hide a real problem.
                 'globalDefault' => $globalDefault,
+                // Whether the opt-in below the provider select can do anything. LOCAL configuration
+                // only, like every other readiness question on this page — rendering it opens no socket.
+                'ttsConfigured' => $this->settings->ttsIsUsable(),
             ]);
     }
 
@@ -299,6 +306,19 @@ final readonly class Action
         }
 
         return [$provider, null];
+    }
+
+    /**
+     * Whether the uploader ticked the AI-audio box.
+     *
+     * An unchecked checkbox posts nothing at all, so absence is the "no" — which is exactly what makes
+     * the default of off reliable rather than something the form has to remember to say.
+     *
+     * @param mixed $body the parsed request body, in whatever shape it arrived
+     */
+    private function wantsAiAudio(mixed $body): bool
+    {
+        return is_array($body) && ($body['generate_ai_audio'] ?? null) !== null;
     }
 
     /**

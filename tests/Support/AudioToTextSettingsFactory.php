@@ -8,8 +8,10 @@ use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\Settings\DeepgramSettings;
 use App\AudioToText\Application\Settings\DiarizationSettings;
 use App\AudioToText\Application\Settings\TranscriptionSettings;
+use App\AudioToText\Application\Settings\TtsSettings;
 use App\AudioToText\Application\Settings\WorkerSettings;
 use App\AudioToText\Domain\Transcription\DeepgramKeyterms;
+use App\AudioToText\Domain\Tts\TtsOutputFormat;
 use App\Shared\Domain\ValueObject\SecretValue;
 
 /**
@@ -67,6 +69,20 @@ final class AudioToTextSettingsFactory
         int $deepgramTimeoutSeconds = 120,
         /** @var list<string> */
         array $deepgramKeyterms = [],
+        // Text-to-speech. Unconfigured by default for the same reason Deepgram above is: an empty key is
+        // the state of a machine that has not opted in, and no existing test is about AI audio. A test
+        // that wants it usable passes a key. Nothing here reaches the network either way — the
+        // synthesizer is an interface and every test substitutes a fake.
+        string $ttsApiKey = '',
+        string $ttsUrl = 'https://api.deepgram.com/v1/speak',
+        string $ttsCustomerModel = 'aura-2-thalia-en',
+        string $ttsAgentModel = 'aura-2-arcas-en',
+        int $ttsSampleRate = 24000,
+        int $ttsMaxCharactersPerRequest = 1900,
+        int $ttsTimeoutSeconds = 120,
+        int $ttsGapMilliseconds = 350,
+        TtsOutputFormat $ttsOutputFormat = TtsOutputFormat::Mp3,
+        int $ttsMaxAttempts = 3,
     ): AudioToTextSettings {
         return new AudioToTextSettings(
             new TranscriptionSettings(
@@ -112,6 +128,18 @@ final class AudioToTextSettingsFactory
                 numerals: $deepgramNumerals,
                 timeoutSeconds: $deepgramTimeoutSeconds,
                 keyterms: DeepgramKeyterms::fromList($deepgramKeyterms),
+            ),
+            new TtsSettings(
+                apiKey: new SecretValue($ttsApiKey),
+                url: $ttsUrl,
+                customerModel: $ttsCustomerModel,
+                agentModel: $ttsAgentModel,
+                sampleRate: $ttsSampleRate,
+                maxCharactersPerRequest: $ttsMaxCharactersPerRequest,
+                timeoutSeconds: $ttsTimeoutSeconds,
+                gapMilliseconds: $ttsGapMilliseconds,
+                outputFormat: $ttsOutputFormat,
+                maxAttempts: $ttsMaxAttempts,
             ),
         );
     }
