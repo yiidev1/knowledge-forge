@@ -1372,8 +1372,32 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-table col.a2t-col-duration { width: 6rem; }
 .a2t-table col.a2t-col-actions { width: 8.5rem; }
 
+/* The store's conversions list. Its Actions cell holds three links that must stay on one line, so it
+   is sized to fit them rather than left to take whatever is spare — which was nothing, and pushed
+   "AI audio" off the edge behind a scrollbar.
+
+   Recordings takes the slack (`width: auto` above) because a filename is the only value in this table
+   with no natural length; a long one now truncates with an ellipsis instead of widening the row. */
+.a2t-table col.a2t-col-type { width: 9rem; }
+.a2t-table col.a2t-col-row-actions { width: 17rem; }
+
+/* One line, always. `min-width` matters as well as the column width: a fixed-layout table will still
+   shrink a cell below its column when the total overflows, and this is the cell that must not. */
+.a2t-cell-actions { white-space: nowrap; min-width: 16rem; }
+
+/* Long filenames truncate rather than widen the table. `title` on the element already carries the full
+   name, so nothing is lost — it is one hover away. */
+.a2t-cell-file > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 @media (max-width: 1100px) {
     .a2t-table { table-layout: auto; min-width: 900px; }
+    /* Below this width the table scrolls in its own box anyway, so the filename may have its full
+       length back — there is no layout left to protect. */
+    .a2t-cell-file > div { overflow: visible; text-overflow: clip; white-space: normal; }
 }
 
 /* Conversation-only page: a fixed-height chat screen inside the admin shell.
@@ -1934,4 +1958,248 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     font-weight: 600;
     margin: 1.1rem 0 .4rem;
     color: var(--text-muted);
+}
+
+/* The step marker on a section heading. A chip rather than a number in the text, so the sequence reads
+   at a glance without competing with the heading it labels. */
+.a2t-step {
+    display: inline-block;
+    margin-right: .5rem;
+    padding: .1rem .5rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+/* Original audio -> transcript -> AI audio, as one strip.
+   An ordered list because it IS ordered: the sequence is the explanation, and a screen reader should
+   hear "1, 2, 3" rather than three unrelated boxes. Arrows are drawn with ::after so they are decoration
+   the list markup does not have to carry. */
+.a2t-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: stretch;
+    margin: .5rem 0 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: none;
+}
+.a2t-flow__step {
+    position: relative;
+    flex: 1 1 12rem;
+    min-width: 10rem;
+    padding: .7rem .9rem;
+    border: 1px solid var(--border);
+    border-radius: .5rem;
+    background: var(--surface-2);
+}
+/* The connector. Hidden on the last step, and on a wrapped row it simply does not appear between rows —
+   the arrow is a hint, not the structure. */
+.a2t-flow__step + .a2t-flow__step::before {
+    content: "→";
+    position: absolute;
+    left: -.62rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-faint);
+    font-size: .8rem;
+    line-height: 1;
+}
+.a2t-flow__label {
+    display: block;
+    font-size: .82rem;
+    color: var(--text-muted);
+    margin-bottom: .15rem;
+}
+.a2t-flow__state { display: block; font-weight: 600; font-size: .92rem; }
+/* A completed step is tinted, a pending one stays neutral. Colour is a second signal only — the state
+   is spelled out in words inside every box. */
+.a2t-flow__step--done {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+}
+.a2t-flow__step--done .a2t-flow__state { color: var(--success-text); }
+
+/* A filename in a definition list: long ones truncate rather than stretching the card. The full value
+   is on the element's `title`, so nothing is lost. */
+.a2t-filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 22rem;
+}
+
+/* The step number inside a flow box, so the strip reads as 1-2-3 without the list markers a `flex`
+   list would not show anyway. */
+.a2t-flow__n {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-bottom: .3rem;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: .72rem;
+    font-weight: 700;
+}
+.a2t-flow__step--done .a2t-flow__n {
+    border-color: var(--success-border);
+    color: var(--success-text);
+}
+
+/* A compact facts grid for the summary card. Auto-fit rather than the fixed flex `.a2t-meta` uses, so
+   six short pairs sit on one or two tidy rows instead of wrapping raggedly at every width. */
+.a2t-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: .75rem 1.5rem;
+    margin: 0 0 .9rem;
+}
+.a2t-summary div { display: flex; flex-direction: column; min-width: 0; }
+.a2t-summary dt {
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-faint);
+    margin-bottom: .2rem;
+}
+.a2t-summary dd {
+    margin: 0;
+    font-size: .92rem;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+/* One line item: a name, its details underneath, and a state or action on the right.
+   This replaces the four-column table the first step used to draw. A table earns its keep when values
+   line up across many rows and get compared down a column; here there are one or two rows and nothing
+   to compare, and the table's fixed columns were what forced the horizontal scrollbar that cut the last
+   header off. A flex row cannot overflow, so the state is always visible. */
+.a2t-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .65rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.a2t-row:last-child { border-bottom: 0; }
+/* `min-width: 0` so the name can ellipsis instead of pushing the badge off the row — a flex item
+   defaults to its content width, which is exactly the overflow being fixed here. */
+.a2t-row__main { min-width: 0; }
+.a2t-row__name {
+    display: block;
+    font-size: .92rem;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.a2t-row__meta {
+    display: block;
+    margin-top: .15rem;
+    font-size: .8rem;
+    color: var(--text-faint);
+}
+.a2t-row .btn, .a2t-row .a2t-badge { flex: 0 0 auto; }
+
+/* A short aside: the page's own voice, distinct from a value. Smaller than body text because it is
+   read once and then ignored. */
+.a2t-note {
+    margin: .5rem 0 0;
+    font-size: .82rem;
+    color: var(--text-faint);
+    line-height: 1.5;
+}
+
+/* One generated output inside the step-3 card. A separate pair puts two of these in one card rather
+   than two cards, so the page stays three steps long however many recordings a call has. */
+.a2t-output + .a2t-output {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+
+/* Button first, then the cost. The price of pressing belongs beside the button, not in a paragraph
+   above it that the eye skips on the way down. */
+.a2t-generate {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .6rem .9rem;
+    margin-top: .8rem;
+}
+.a2t-generate .a2t-note { margin: 0; }
+
+/* The transcript modal.
+   Opened by `:target` — an anchor sets the fragment, this rule reveals the panel — because the policy
+   here is `script-src 'self'` with no inline JavaScript. With the stylesheet gone it is an anchor jump
+   to a visible block, which is a worse experience but not a broken one. */
+.a2t-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    padding: 1.5rem;
+    align-items: center;
+    justify-content: center;
+}
+.a2t-modal:target { display: flex; }
+/* The backdrop is itself the close link, so clicking outside the panel dismisses it. */
+.a2t-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+}
+.a2t-modal__panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(46rem, 100%);
+    max-height: 85vh;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: .6rem;
+    box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45);
+}
+.a2t-modal__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+}
+.a2t-modal__title { margin: 0; font-size: 1rem; color: var(--text); }
+.a2t-modal__sub { margin: .2rem 0 0; font-size: .8rem; color: var(--text-faint); }
+.a2t-modal__close { flex: 0 0 auto; }
+/* The panel is capped and the body scrolls, so a long transcript never grows the page behind it. */
+.a2t-modal__body { overflow-y: auto; padding: 1.2rem; }
+.a2t-modal__speaker {
+    margin: 0 0 .3rem;
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-muted);
+}
+.a2t-modal__speaker + .a2t-transcript { margin-bottom: 1.2rem; }
+/* `pre-wrap` so a transcript's own line breaks survive, without a horizontal scrollbar for long lines. */
+.a2t-transcript {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: .92rem;
+    line-height: 1.7;
+    color: var(--text);
 }

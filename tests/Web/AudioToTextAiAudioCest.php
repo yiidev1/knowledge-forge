@@ -117,10 +117,43 @@ final class AudioToTextAiAudioCest
 
         $I->seeResponseCodeIs(200);
         $I->see('AI training audio');
-        $I->see('Call information');
-        $I->see('Transcript source');
+        $I->see('Conversion summary');
         // The promise the whole feature rests on, stated on the page rather than only in a docblock.
         $I->see('Nothing is summarised, reworded or re-priced.');
+    }
+
+    /**
+     * The three stages are shown as one strip, in order, each carrying its own state.
+     *
+     * This is the redesign's whole purpose: a reader who has never seen the feature can follow what
+     * produced what without being told.
+     */
+    public function thePageShowsTheOriginalToTranscriptToAiAudioFlow(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->seeElement('.a2t-flow');
+        $I->seeNumberOfElements('.a2t-flow__step', 3);
+        $I->see('How this call became AI audio');
+        $I->see('Step 1');
+        $I->see('Step 2');
+        $I->see('Step 3');
+    }
+
+    /**
+     * The original recording is described but not offered as a player.
+     *
+     * No route serves it, so a player would be a control that cannot work. The page says so instead of
+     * rendering something that would silently fail.
+     */
+    public function theOriginalRecordingIsDescribedRatherThanFakedAsAPlayer(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->see('call.wav');
+        $I->see('no endpoint that serves it');
     }
 
     /** A mixed recording offers one output. The per-role extracts are not part of this phase. */

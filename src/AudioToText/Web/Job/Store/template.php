@@ -332,6 +332,22 @@ $formErrors = $errors['form'] ?? [];
     <?php else: ?>
         <div class="a2t-table-scroll">
             <table class="table a2t-table">
+                <?php
+                // Explicit widths, following the convention the conversions list already uses. Without a
+                // colgroup, `table-layout: fixed` divides the width evenly and the Actions cell — which
+                // holds three links and must not wrap — is the one that gets squeezed off the edge.
+                //
+                // Recordings takes the slack because a filename is the only value here with no natural
+                // length; everything else is sized to its content.
+        ?>
+                <colgroup>
+                    <col class="a2t-col-text">
+                    <col class="a2t-col-type">
+                    <col class="a2t-col-when">
+                    <col class="a2t-col-status">
+                    <col class="a2t-col-duration">
+                    <col class="a2t-col-row-actions">
+                </colgroup>
                 <thead>
                     <tr>
                         <th>Recordings</th>
@@ -345,7 +361,7 @@ $formErrors = $errors['form'] ?? [];
                 <tbody>
                 <?php foreach ($conversations as $conversation): ?>
                     <?php
-                    $status = $conversation->status();
+            $status = $conversation->status();
                     $separate = $conversation->mode === ConversationMode::Separate;
                     $viewUrl = $urlGenerator->generate(
                         AudioToTextRoute::CONVERSION,
@@ -402,15 +418,15 @@ $formErrors = $errors['form'] ?? [];
                                 )) ?>">Original transcript</a>
                             <?php endif; ?>
                             <?php
-                                        // One compact link rather than a column of its own — the page behind it
-                                        // explains the state, and a status badge here would compete with the one
-                                        // that already says whether the conversion finished.
-                                        //
-                                        // Offered once anything has been transcribed. It is deliberately NOT
-                                        // conditional on whether audio exists: "not generated yet" is one of the
-                                        // things that page is for, and hiding the link until after the fact would
-                                        // leave no way to reach the button that generates it.
-                                        $anyCompleted = false;
+                                                    // One compact link rather than a column of its own — the page behind it
+                                                    // explains the state, and a status badge here would compete with the one
+                                                    // that already says whether the conversion finished.
+                                                    //
+                                                    // Offered once anything has been transcribed. It is deliberately NOT
+                                                    // conditional on whether audio exists: "not generated yet" is one of the
+                                                    // things that page is for, and hiding the link until after the fact would
+                                                    // leave no way to reach the button that generates it.
+                                                    $anyCompleted = false;
                     foreach ($conversation->children as $child) {
                         if ($child->status === JobStatus::COMPLETED) {
                             $anyCompleted = true;
