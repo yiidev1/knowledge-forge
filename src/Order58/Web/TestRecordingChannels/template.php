@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Order58\Web\TestRecordingChannels\ChannelDiagnosis;
 use App\Order58\Web\TestRecordingChannels\ChannelProbeResult;
 use App\Order58\Web\TestRecordingChannels\FixtureAvailability;
+use App\Order58\Web\TestRecordingChannels\LatestCallsResult;
 use App\Order58\Web\TestRecordingChannels\RecordingChannel;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -29,6 +30,10 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var bool $useFixtures
  * @var bool $fixturesPermitted
  * @var string $sourceLabel
+ * @var string $accountId
+ * @var string $limit
+ * @var int $maxLimit
+ * @var array{validationError: ?string, result: ?LatestCallsResult, failure: ?string}|null $latest
  * @var string $candidateDescription
  * @var array{validationError: ?string, result: ?ChannelProbeResult, diagnosis: ?ChannelDiagnosis, url: ?string, failure: ?string}|null $outcome
  */
@@ -55,6 +60,7 @@ if ($useFixtures) {
     $linkParams[FixtureAvailability::QUERY_PARAMETER] = FixtureAvailability::FIXTURE;
 }
 
+$pageUrl = $urlGenerator->generate('order58.test-recording-channels');
 $downloadBase = $urlGenerator->generate('order58.test-recording-channels.download');
 ?>
 <div class="page-header">
@@ -90,11 +96,176 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
     </p>
 </div>
 
+<?php // ---- Step 1: find a call ------------------------------------------------------------------ ?>
 <div class="card">
+    <h2 class="card__title">Latest calls</h2>
+    <pre class="source-view">GET https://order58.xrainbow.com/api/external/recording/{accountId}/latest-calls?limit={limit}</pre>
+    <p class="field__hint">
+        Optional. Look up an account's recent calls and pick one, instead of typing a session id by hand.
+        This calls the list endpoint only &mdash; it never fetches a recording.
+    </p>
+
+    <form method="get" action="<?= Html::encode($pageUrl) ?>">
+        <input type="hidden" name="load_calls" value="1">
+        <?php
+        // The channel form's values ride along, so loading a list does not discard a half-filled form
+        // below. Nothing here submits that form: only `submitted=1` does, and this carries `load_calls=1`.
+        ?>
+        <input type="hidden" name="recording_id" value="<?= Html::encode($recordingId) ?>">
+        <input type="hidden" name="merchant_id" value="<?= Html::encode($merchantId) ?>">
+        <input type="hidden" name="channel" value="<?= Html::encode($channel->value) ?>">
+        <input type="hidden" name="time" value="<?= Html::encode($time) ?>">
+        <input type="hidden" name="company" value="<?= Html::encode($company) ?>">
+        <input type="hidden" name="name" value="<?= Html::encode($name) ?>">
+        <?php if ($useFixtures): ?>
+            <input type="hidden" name="<?= Html::encode(FixtureAvailability::QUERY_PARAMETER) ?>"
+                   value="<?= Html::encode(FixtureAvailability::FIXTURE) ?>">
+        <?php endif; ?>
+
+        <div class="field">
+            <label class="field__label" for="account_id">Account ID</label>
+            <input class="field__control" type="text" inputmode="numeric" id="account_id" name="account_id"
+                   value="<?= Html::encode($accountId) ?>">
+            <?php
+            // Not merged with Merchant ID, and the reason is on the page rather than only in a docblock:
+            // the evidence for them being the same concept is mixed, and a diagnostic tool that guessed
+            // would be reporting an assumption as a fact.
+            ?>
+            <div class="field__hint">
+                The account whose calls to list. <strong>Kept separate from Merchant ID below</strong>
+                &mdash; the two have not been confirmed to be the same identifier.
+            </div>
+        </div>
+
+        <div class="field">
+            <label class="field__label" for="limit">Limit</label>
+            <input class="field__control" type="text" inputmode="numeric" id="limit" name="limit"
+                   value="<?= Html::encode($limit) ?>">
+            <div class="field__hint">1 to <?= $maxLimit ?>.</div>
+        </div>
+
+        <button class="btn" type="submit">Load Latest Calls</button>
+    </form>
+
+    <?php if ($latest !== null): ?>
+        <?php if (($latest['validationError'] ?? null) !== null): ?>
+            <div class="alert alert--error" role="alert">
+                <p><strong>Nothing was sent.</strong> <?= Html::encode($latest['validationError']) ?></p>
+            </div>
+        <?php else: ?>
+            <?php $calls = $latest['result'] ?? null; ?>
+
+            <?php if ($calls !== null): ?>
+                <h3 class="field__label">Request</h3>
+                <pre class="source-view"><?= Html::encode($calls->url) ?></pre>
+
+                <div class="alert alert--<?= $calls->diagnosis->isSuccess() ? 'success' : 'error' ?>" role="status">
+                    <p><strong><?= Html::encode($calls->diagnosis->headline) ?></strong></p>
+                    <p><?= Html::encode($calls->diagnosis->advice) ?></p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($calls !== null && $calls->hasCalls()): ?>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Call Session ID</th>
+                                <th>Call Time</th>
+                                <th>Order ID</th>
+                                <th>&nbsp;</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($calls->calls as $call): ?>
+                                <tr>
+                                    <td><code><?= Html::encode($call->callSessionId === '' ? '—' : $call->callSessionId) ?></code></td>
+                                    <td><?= Html::encode($call->shortCallTime()) ?></td>
+                                    <td><?= Html::encode($call->orderId === '' ? '—' : $call->orderId) ?></td>
+                                    <td class="table__actions">
+                                        <?php if ($call->isUsable() && $call->hasValidRecordingId()): ?>
+                                            <?php
+                                            // Pre-fills the channel form below and nothing else: it carries
+                                            // no `submitted`, so no recording is fetched until that form is
+                                            // submitted. The date is only carried when it could be read with
+                                            // certainty — see CallSummary::derivedDate().
+                                            $derived = $call->derivedDate();
+                                            $useParams = [
+                                                'recording_id' => $call->callSessionId,
+                                                'merchant_id' => $merchantId,
+                                                'channel' => $channel->value,
+                                                'time' => $derived ?? $time,
+                                                'company' => $company,
+                                                'name' => $name,
+                                                'account_id' => $accountId,
+                                                'limit' => $limit,
+                                                'load_calls' => '1',
+                                            ];
+
+                                            if ($useFixtures) {
+                                                $useParams[FixtureAvailability::QUERY_PARAMETER] = FixtureAvailability::FIXTURE;
+                                            }
+                                            ?>
+                                            <a class="btn btn--secondary btn--sm"
+                                               href="<?= Html::encode($pageUrl . '?' . http_build_query($useParams)) ?>#channel-test">
+                                                Use This Call
+                                            </a>
+                                            <?php if ($derived === null && $call->callTime !== ''): ?>
+                                                <div class="field__hint">Date not readable &mdash; Time left unchanged.</div>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="util-muted">No usable session id</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <?php if ($calls->unusableCount() > 0): ?>
+                    <p class="util-muted">
+                        <?= (int) $calls->unusableCount() ?> row(s) had no session id this page could use, and
+                        are shown above without a button rather than hidden.
+                    </p>
+                <?php endif; ?>
+
+                <p class="util-muted">
+                    Read from the response for convenience only &mdash; nothing here is saved. Selecting a
+                    call fills the form below; it does not fetch a recording.
+                </p>
+            <?php endif; ?>
+
+            <?php $preview = $calls?->bodyPreview(); ?>
+            <?php if ($preview !== null && ($calls === null || !$calls->hasCalls())): ?>
+                <h3 class="field__label">Response body</h3>
+                <pre class="source-view"><?= Html::encode($preview) ?></pre>
+            <?php endif; ?>
+
+            <?php if (($latest['failure'] ?? null) !== null): ?>
+                <div class="alert alert--error" role="alert">
+                    <p><strong>The request failed before any HTTP response arrived.</strong></p>
+                </div>
+                <pre class="source-view"><?= Html::encode($latest['failure']) ?></pre>
+            <?php endif; ?>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
+
+<?php // ---- Step 2: test a channel ---------------------------------------------------------------- ?>
+<div class="card" id="channel-test">
     <h2 class="card__title">Request</h2>
 
-    <form method="get" action="<?= Html::encode($urlGenerator->generate('order58.test-recording-channels')) ?>">
+    <form method="get" action="<?= Html::encode($pageUrl) ?>">
         <input type="hidden" name="submitted" value="1">
+        <?php
+        // Carried through so a fetch does not wipe the call list above.
+        ?>
+        <input type="hidden" name="account_id" value="<?= Html::encode($accountId) ?>">
+        <input type="hidden" name="limit" value="<?= Html::encode($limit) ?>">
+        <?php if ($latest !== null): ?>
+            <input type="hidden" name="load_calls" value="1">
+        <?php endif; ?>
 
         <div class="field">
             <label class="field__label" for="recording_id">Recording ID</label>

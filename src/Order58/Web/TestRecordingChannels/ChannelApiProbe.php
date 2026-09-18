@@ -6,10 +6,15 @@ namespace App\Order58\Web\TestRecordingChannels;
 
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\ClientInterface;
+use JsonException;
 use Psr\Http\Message\ResponseInterface;
 
+use function is_array;
+use function json_decode;
 use function strlen;
 use function substr;
+
+use const JSON_THROW_ON_ERROR;
 
 /**
  * The only outbound call this tool makes, and nothing else.
@@ -56,6 +61,51 @@ final readonly class ChannelApiProbe
     public function mapping(): ChannelRequestMapping
     {
         return $this->mapping;
+    }
+
+    /**
+     * The list of recent calls for an account — a CONFIRMED endpoint, unlike the channel mapping.
+     *
+     * The body is JSON of a few kilobytes rather than a recording, so it is read whole (still bounded by
+     * the same sampling cap) and decoded. Decoding is best-effort: a body that is not a list of call
+     * objects yields no rows and the raw response is printed instead, which is more useful than an
+     * exception.
+     */
+    public function latestCalls(LatestCallsRequest $request): LatestCallsResult
+    {
+        $url = $this->mapping->latestCallsUrl($request->accountId, $request->limit);
+        $response = $this->send($url);
+
+        [$body, ] = $this->readBounded($response);
+        $status = $response->getStatusCode();
+
+        $diagnosis = ChannelDiagnosis::forJson($status, $body);
+        $calls = [];
+
+        if ($diagnosis->isSuccess()) {
+            try {
+                /** @var mixed $decoded */
+                $decoded = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
+                $calls = CallSummary::fromDecoded($decoded);
+
+                // A valid JSON body that is not a list of calls, and an account with genuinely no recent
+                // calls, are different problems — so they get different sentences.
+                $diagnosis = $calls === []
+                    ? (is_array($decoded) ? ChannelDiagnosis::noCalls() : ChannelDiagnosis::invalidJson('the body was not a list of calls'))
+                    : $diagnosis;
+            } catch (JsonException $e) {
+                $diagnosis = ChannelDiagnosis::invalidJson($e->getMessage());
+            }
+        }
+
+        return new LatestCallsResult(
+            url: $url,
+            status: $status,
+            reason: $response->getReasonPhrase(),
+            calls: $calls,
+            diagnosis: $diagnosis,
+            rawBody: $body,
+        );
     }
 
     /**

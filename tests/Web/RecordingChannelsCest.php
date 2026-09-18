@@ -141,7 +141,19 @@ final class RecordingChannelsCest
         $this->signIn($I);
         $I->amOnPage(self::PAGE);
 
-        $I->dontSee('Result');
+        $I->dontSee('Bytes received');
+    }
+
+    /** Nothing resembling a credential reaches the rendered page — there is none to leak. */
+    public function noCredentialAppearsInTheRenderedHtml(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=10&source=fixture');
+
+        $I->dontSee('Authorization');
+        $I->dontSee('Bearer');
+        $I->dontSee('ORDER58_API_TOKEN');
+        $I->dontSee('DEEPGRAM_API_KEY');
     }
 
     // ------------------------------------------------------------------ validation stops before the wire
@@ -171,9 +183,11 @@ final class RecordingChannelsCest
 
         $I->see('Nothing was sent');
         $I->see('Recording ID is required and must be digits only');
-        // Never built into a filename, and no request was constructed from it.
+        // Never built into a filename, and no recording request was constructed from it. `/fetch/`
+        // appears only in a URL this page actually built — the static endpoint labels elsewhere on the
+        // page name `/latest-calls`, not the fetch path.
         $I->dontSee('etc/passwd.wav');
-        $I->dontSee('api/external/recording');
+        $I->dontSee('/fetch/');
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -214,6 +228,134 @@ final class RecordingChannelsCest
             . '&time=2026-03-11&company=SWCC&name=test&source=fixture');
 
         $I->see('No fixture exists');
+    }
+
+    // ------------------------------------------------------------------ latest calls
+
+    public function thePageOffersALatestCallsLookup(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->see('Latest calls');
+        $I->seeElement('input[name="account_id"]');
+        $I->seeElement('input[name="limit"]');
+        $I->see('Load Latest Calls');
+    }
+
+    /**
+     * Account ID and Merchant ID stay separate, and the page says why.
+     *
+     * The evidence that they are the same identifier is genuinely mixed, and a diagnostic tool that
+     * merged them would be reporting an assumption as a fact.
+     */
+    public function accountIdAndMerchantIdAreSeparateFields(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('input[name="account_id"]');
+        $I->seeElement('input[name="merchant_id"]');
+        $I->see('Kept separate from Merchant ID');
+    }
+
+    /** Loading the page runs no lookup, exactly as it fetches no recording. */
+    public function loadingThePageDoesNotLoadCalls(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->dontSee('Call Session ID');
+    }
+
+    public function anInvalidAccountIdIsRefusedWithoutARequest(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=abc&limit=10');
+
+        $I->see('Nothing was sent');
+        $I->see('Account ID is required');
+    }
+
+    public function anOversizedLimitIsRefusedWithoutARequest(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=99999');
+
+        $I->see('Nothing was sent');
+        $I->see('between 1 and 500');
+    }
+
+    public function theFixtureCallListRendersItsRows(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=10&source=fixture');
+
+        $I->seeResponseCodeIs(200);
+        $I->see('22342359');
+        $I->see('16438291');
+        $I->see('Use This Call');
+    }
+
+    /** A row whose call time this application cannot read says so, rather than inventing a date. */
+    public function aRowWithAnUnreadableDateSaysTheTimeIsLeftAlone(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=10&source=fixture');
+
+        $I->see('Date not readable');
+    }
+
+    /**
+     * **The point of the whole feature**: selecting a call fills the Recording ID with that call's own
+     * session id, and the three channel filenames follow it.
+     */
+    public function selectingACallPopulatesTheRecordingIdAndFilenames(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?recording_id=16438291&merchant_id=871&channel=mixed'
+            . '&time=2026-03-10&company=SWCC&name=test&account_id=871&limit=10&load_calls=1&source=fixture');
+
+        $I->seeInField('recording_id', '16438291');
+        $I->see('16438291.wav');
+        $I->see('16438291-caller.wav');
+        $I->see('16438291-callee.wav');
+    }
+
+    /** The date is carried only because it could be read from that row with certainty. */
+    public function selectingACallCarriesADerivedDateIntoTheTimeField(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=10&source=fixture');
+
+        // The link the page builds for the row whose callTime is `2026-03-10 09:41:12`.
+        $I->seeElement('a[href*="recording_id=16438291"][href*="time=2026-03-10"]');
+    }
+
+    /** Typing an id by hand still works — the lookup is an optional convenience, not a replacement. */
+    public function manualRecordingIdEntryStillWorks(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&' . $this->query() . '&source=fixture');
+
+        $I->seeInField('recording_id', self::RECORDING_ID);
+        $I->see('LOCAL FIXTURE');
+        $I->see('Valid WAV');
+    }
+
+    /** Loading calls must not fetch a recording, and fetching must not clear the list. */
+    public function theTwoActionsAreIndependent(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage(self::PAGE . '?load_calls=1&account_id=871&limit=10&source=fixture');
+        $I->see('Use This Call');
+        $I->dontSee('Valid WAV');
+
+        $I->amOnPage(self::PAGE . '?submitted=1&load_calls=1&account_id=871&limit=10&'
+            . $this->query() . '&source=fixture');
+        $I->see('Use This Call');
+        $I->see('Valid WAV');
     }
 
     // ------------------------------------------------------------------ download and play

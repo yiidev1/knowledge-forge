@@ -48,6 +48,8 @@ final readonly class Action
     private const DEFAULT_TIME = '2026-03-11';
     private const DEFAULT_COMPANY = 'SWCC';
     private const DEFAULT_NAME = 'test';
+    // The account whose recent calls to list. A SEPARATE field from Merchant ID — see runLatestCalls().
+    private const DEFAULT_ACCOUNT_ID = '871';
     // -------------------------------------------------------------------------------------------------
 
     public function __construct(
@@ -67,11 +69,19 @@ final readonly class Action
         $company = $this->text($params['company'] ?? null, self::DEFAULT_COMPANY);
         $name = $this->text($params['name'] ?? null, self::DEFAULT_NAME);
 
+        $accountId = $this->text($params['account_id'] ?? null, self::DEFAULT_ACCOUNT_ID);
+        $limit = $this->text($params['limit'] ?? null, (string) LatestCallsRequest::DEFAULT_LIMIT);
+
         $channel = RecordingChannel::fromStorage($this->text($params['channel'] ?? null)) ?? RecordingChannel::Mixed;
         $useFixtures = FixtureAvailability::isRequested($params[FixtureAvailability::QUERY_PARAMETER] ?? null);
 
-        // A bare URL shows the form and runs nothing. Only an explicit submit probes anything.
+        // A bare URL shows the form and runs nothing. Only an explicit submit probes anything, and the
+        // two actions are independent: loading calls never fetches a recording, and vice versa. That is
+        // the same separation the existing tool keeps between its two APIs.
         $submitted = ($params['submitted'] ?? null) === '1';
+        $loadCalls = ($params['load_calls'] ?? null) === '1';
+
+        $latest = $loadCalls ? $this->runLatestCalls($accountId, $limit, $useFixtures) : null;
 
         $outcome = $submitted
             ? $this->run($recordingId, $merchantId, $time, $company, $name, $channel, $useFixtures)
@@ -94,12 +104,60 @@ final readonly class Action
                 'fileName' => ChannelRecordingRequest::validate($recordingId, $merchantId, $time, $company, $name) === null
                     ? $channel->fileNameFor($recordingId)
                     : null,
+                'accountId' => $accountId,
+                'limit' => $limit,
+                'maxLimit' => LatestCallsRequest::MAX_LIMIT,
+                'latest' => $latest,
                 'useFixtures' => $useFixtures,
                 'fixturesPermitted' => FixtureAvailability::isPermitted(),
                 'sourceLabel' => FixtureAvailability::describe($useFixtures),
                 'candidateDescription' => $this->probe->mapping()->describeCandidate(),
                 'outcome' => $outcome,
             ]);
+    }
+
+    /**
+     * Load the account's recent calls, so a session id can be picked rather than typed.
+     *
+     * ## Account ID is not assumed to be Merchant ID
+     *
+     * They are kept as separate fields, deliberately. The evidence is genuinely mixed: account `871` is
+     * a store `source_id` in this database, and most `order58_agents.account_id` values are too — but
+     * `1119`, the example given for this endpoint, is not in the store mirror at all. Since the
+     * recording-fetch endpoint takes no merchant parameter either way, guessing an equivalence would buy
+     * nothing and could mislabel a field on a diagnostic page whose only job is to report facts.
+     *
+     * @return array{validationError: ?string, result: ?LatestCallsResult, failure: ?string}
+     */
+    private function runLatestCalls(string $accountId, string $limit, bool $useFixtures): array
+    {
+        $invalid = LatestCallsRequest::validate($accountId, $limit);
+
+        if ($invalid !== null) {
+            return ['validationError' => $invalid, 'result' => null, 'failure' => null];
+        }
+
+        $request = LatestCallsRequest::fromStrings($accountId, $limit);
+
+        if ($request === null) {
+            return ['validationError' => 'Invalid request.', 'result' => null, 'failure' => null];
+        }
+
+        if ($useFixtures) {
+            return ['validationError' => null, 'result' => $this->fixtures->latestCalls($request), 'failure' => null];
+        }
+
+        try {
+            return ['validationError' => null, 'result' => $this->probe->latestCalls($request), 'failure' => null];
+        } catch (Throwable $e) {
+            return [
+                'validationError' => null,
+                'result' => null,
+                // The class and message only. No trace: this page is reachable by any administrator, and
+                // a trace is internal filesystem layout.
+                'failure' => $e::class . ': ' . $e->getMessage(),
+            ];
+        }
     }
 
     /**

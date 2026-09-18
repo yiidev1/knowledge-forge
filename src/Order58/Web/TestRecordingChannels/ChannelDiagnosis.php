@@ -6,8 +6,10 @@ namespace App\Order58\Web\TestRecordingChannels;
 
 use function preg_match;
 use function sprintf;
+use function strlen;
 use function str_contains;
 use function strtolower;
+use function trim;
 
 /**
  * Turns an outcome into one sentence an operator can act on.
@@ -34,6 +36,9 @@ final readonly class ChannelDiagnosis
     public const SERVER_ERROR = 'server-error';
     public const UNEXPECTED_STATUS = 'unexpected-status';
     public const NOT_CONFIGURED = 'not-configured';
+    public const RATE_LIMITED = 'rate-limited';
+    public const INVALID_JSON = 'invalid-json';
+    public const NO_CALLS = 'no-calls';
 
     private function __construct(
         public string $kind,
@@ -99,6 +104,15 @@ final readonly class ChannelDiagnosis
                 'Either the recording does not exist for these parameters, or — for a caller/callee channel — '
                 . 'the request format has not been confirmed yet and this URL is a guess. Check which candidate '
                 . 'mapping is in use below before concluding the file is missing.',
+            );
+        }
+
+        if ($status === 429) {
+            return new self(
+                self::RATE_LIMITED,
+                'HTTP 429 — the recording API is rate limiting this server.',
+                'Too many requests in a short window. Wait a little and try again; nothing is wrong with '
+                . 'the request itself.',
             );
         }
 
@@ -180,6 +194,66 @@ final readonly class ChannelDiagnosis
             'The request failed before any HTTP response arrived.',
             'A DNS, TLS or connection-level failure. From a machine that is not whitelisted this is also what '
             . 'a silently dropped connection looks like.',
+        );
+    }
+
+    /**
+     * Classify a response that should be JSON rather than audio.
+     *
+     * Shares every non-2xx branch with {@see fromResponse()} — the statuses mean the same thing whichever
+     * endpoint returned them — and diverges only on success, where a call list is expected instead of a
+     * RIFF header. Running the WAV check against a JSON body would report "not a WAV file" for a
+     * perfectly good list of calls.
+     */
+    public static function forJson(int $status, string $body): self
+    {
+        if ($status < 200 || $status >= 300) {
+            // Reuse the shared refusal branches. The body sample is passed through so an IP allowlist
+            // rejection is still detected from the provider's own wording.
+            return self::fromResponse($status, 'application/json', $body, strlen($body));
+        }
+
+        if (trim($body) === '') {
+            return new self(
+                self::EMPTY_BODY,
+                'HTTP 200 with an empty body.',
+                'The API reported success and sent nothing at all, which is different from sending an '
+                . 'empty list. Report it to the client if it persists.',
+            );
+        }
+
+        return new self(
+            self::OK,
+            sprintf('HTTP %d — the call list was returned.', $status),
+            'Pick a call below to use its session id as the Recording ID.',
+        );
+    }
+
+    /**
+     * A 200 whose body is not the list of calls it should be.
+     *
+     * Reported rather than shown as "no calls": an unparseable body and an empty account are different
+     * problems, and telling them apart is the difference between chasing a provider bug and accepting
+     * that an account has no recent calls.
+     */
+    public static function invalidJson(string $detail): self
+    {
+        return new self(
+            self::INVALID_JSON,
+            'The recording API answered, but the body could not be read as a list of calls.',
+            'The raw response is shown below. Send it to the client if the reason is not obvious: '
+            . $detail,
+        );
+    }
+
+    /** A perfectly good response that simply contains nothing. */
+    public static function noCalls(): self
+    {
+        return new self(
+            self::NO_CALLS,
+            'The recording API returned no calls for this account.',
+            'The request worked. Either this account has no recent calls, or the limit window is too '
+            . 'small — check the account id with the client before concluding the recordings are missing.',
         );
     }
 

@@ -109,6 +109,25 @@ final readonly class ChannelRequestMapping
     }
 
     /**
+     * CONFIRMED. The list of recent calls for an account.
+     *
+     * Reproduces the request the existing, working tool already makes — `{base}/{accountId}/latest-calls
+     * ?limit={limit}` — so the two cannot drift. Nothing about this endpoint is in doubt; it is here only
+     * because this class owns every URL this tool builds, which is what the isolation test enforces.
+     *
+     * @param int $accountId already validated as a positive integer by {@see LatestCallsRequest}
+     */
+    public function latestCallsUrl(int $accountId, int $limit): string
+    {
+        return sprintf(
+            '%s/%d/latest-calls?%s',
+            $this->baseUrl,
+            $accountId,
+            http_build_query(['limit' => $limit]),
+        );
+    }
+
+    /**
      * CONFIRMED. The exact request the existing production tool makes.
      *
      * The `name` parameter's meaning is undocumented on the provider's side — the working tool defaults

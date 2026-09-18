@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\TestRecordingChannels;
 
+use function array_slice;
 use function dirname;
 use function is_file;
 use function preg_match;
@@ -79,6 +80,37 @@ final readonly class FixtureRecordingSource
         $contents = (string) @file_get_contents($path);
 
         return [substr($contents, 0, $sampleBytes), strlen($contents)];
+    }
+
+    /**
+     * A canned Latest Calls response, for local work.
+     *
+     * The rows carry the client's sample recording id alongside two that have no fixture, so the page's
+     * own handling of a selectable-but-unavailable call is exercised too rather than only the happy path.
+     * The shape is exactly what the existing working tool reads from this endpoint — `callTime`,
+     * `callSessionId`, `orderId` — and nothing is invented beyond it.
+     */
+    public function latestCalls(LatestCallsRequest $request): LatestCallsResult
+    {
+        $this->assertPermitted();
+
+        $rows = [
+            new CallSummary(self::SAMPLE_RECORDING_ID, '2026-03-11 14:23:05', '58-100234'),
+            new CallSummary('16438291', '2026-03-10 09:41:12', '58-100233'),
+            // No date this application can read: the Time field must be left alone for this one.
+            new CallSummary('18794639', 'March 9, 2026', '58-100232'),
+        ];
+
+        $rows = array_slice($rows, 0, $request->limit);
+
+        return new LatestCallsResult(
+            url: sprintf('file://%s (fixture latest-calls for account %d)', self::DIRECTORY, $request->accountId),
+            status: 200,
+            reason: 'OK (fixture)',
+            calls: $rows,
+            diagnosis: ChannelDiagnosis::forJson(200, '[]'),
+            rawBody: '',
+        );
     }
 
     /** What the page shows in place of a URL, so nobody mistakes a fixture for a real request. */
