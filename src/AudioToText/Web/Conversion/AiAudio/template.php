@@ -201,7 +201,7 @@ foreach ($page->rows as $countRow) {
                     ['publicId' => $child->publicId],
                 );
                 ?>
-                <div class="a2t-player">
+                <div class="a2t-player a2t-player--compact">
                     <?php
                     // `preload="none"` because a page with several of these would otherwise fetch many
                     // megabytes nobody asked to hear. The endpoint serves byte ranges, so the scrubber
@@ -457,7 +457,7 @@ foreach ($page->rows as $countRow) {
             <?php endif; ?>
 
             <?php if ($row->isPlayable()): ?>
-                <div class="a2t-player">
+                <div class="a2t-player a2t-player--compact">
                     <?php
                 // `preload="none"` because a page with two of these would otherwise fetch several
                 // megabytes nobody asked to hear.

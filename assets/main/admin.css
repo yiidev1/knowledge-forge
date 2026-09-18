@@ -1953,6 +1953,21 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    byte ranges for it. */
 .a2t-player__control { width: 100%; max-width: 40rem; display: block; }
 
+/* The compact variant, used where a player sits inside a step's facts rather than being the page.
+   A native `<audio>` stretched across a card reads as the card's main subject, which on the AI audio
+   page it is not — the step is about what was produced, and the player is one control within it.
+
+   A modifier rather than a change to the rule above, because `.a2t-player` is also used by the Order58
+   recording-channel test page, where the wide scrubber is the point: that page exists to inspect a
+   fetched recording and nothing else is competing for the width.
+
+   `max-width: 100%` keeps it inside the card on a narrow screen, where 340px would otherwise overflow
+   the gutter. */
+.a2t-player--compact .a2t-player__control { width: 340px; max-width: 100%; }
+/* Download sits below the player, never beside it: the control is `display: block`, and this is the
+   gap that keeps the two from reading as one widget. */
+.a2t-player--compact .btn { margin-top: .6rem; }
+
 .a2t-subheading {
     font-size: .95rem;
     font-weight: 600;
