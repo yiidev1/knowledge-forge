@@ -25,6 +25,7 @@ use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
+use App\Order58\Web\TestRecordingChannels as Order58TestRecordingChannels;
 use App\Reports\Web as Reports;
 use App\Rules\Web\Detail as RulesDetail;
 use App\Rules\Web\GlobalBase as RulesGlobalBase;
@@ -307,6 +308,21 @@ return [
             Route::get('/admin/order58/test-recording-apis/download')
                 ->action(Order58TestRecordingApis\DownloadAction::class)
                 ->name('order58.test-recording-apis.download'),
+
+            // Separate, URL-only probe of the client's SEPARATED-CHANNEL recordings (mixed / caller /
+            // callee). A new tool beside the one above rather than an extension of it: that page is in
+            // production use and must not change.
+            //
+            // Caller and callee request formats are NOT yet confirmed by the client — the unknown is
+            // isolated in ChannelRequestMapping and the page says so. Diagnostic only: reads and writes
+            // nothing, enqueues nothing, and is not linked from any navigation.
+            Route::get('/admin/order58/test-recording-channels')
+                ->action(Order58TestRecordingChannels\Action::class)
+                ->name('order58.test-recording-channels'),
+            // The only route here that hands back a file. Also serves the page's Play button, inline.
+            Route::get('/admin/order58/test-recording-channels/download')
+                ->action(Order58TestRecordingChannels\DownloadAction::class)
+                ->name('order58.test-recording-channels.download'),
 
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')
