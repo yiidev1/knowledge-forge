@@ -96,7 +96,7 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
     </p>
 </div>
 
-<?php // ---- Step 1: find a call ------------------------------------------------------------------ ?>
+<?php // ---- Step 1: find a call ------------------------------------------------------------------?>
 <div class="card">
     <h2 class="card__title">Latest calls</h2>
     <pre class="source-view">GET https://order58.xrainbow.com/api/external/recording/{accountId}/latest-calls?limit={limit}</pre>
@@ -110,7 +110,7 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
         <?php
         // The channel form's values ride along, so loading a list does not discard a half-filled form
         // below. Nothing here submits that form: only `submitted=1` does, and this carries `load_calls=1`.
-        ?>
+?>
         <input type="hidden" name="recording_id" value="<?= Html::encode($recordingId) ?>">
         <input type="hidden" name="merchant_id" value="<?= Html::encode($merchantId) ?>">
         <input type="hidden" name="channel" value="<?= Html::encode($channel->value) ?>">
@@ -127,10 +127,10 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
             <input class="field__control" type="text" inputmode="numeric" id="account_id" name="account_id"
                    value="<?= Html::encode($accountId) ?>">
             <?php
-            // Not merged with Merchant ID, and the reason is on the page rather than only in a docblock:
-            // the evidence for them being the same concept is mixed, and a diagnostic tool that guessed
-            // would be reporting an assumption as a fact.
-            ?>
+    // Not merged with Merchant ID, and the reason is on the page rather than only in a docblock:
+    // the evidence for them being the same concept is mixed, and a diagnostic tool that guessed
+    // would be reporting an assumption as a fact.
+?>
             <div class="field__hint">
                 The account whose calls to list. <strong>Kept separate from Merchant ID below</strong>
                 &mdash; the two have not been confirmed to be the same identifier.
@@ -185,11 +185,11 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
                                     <td class="table__actions">
                                         <?php if ($call->isUsable() && $call->hasValidRecordingId()): ?>
                                             <?php
-                                            // Pre-fills the channel form below and nothing else: it carries
-                                            // no `submitted`, so no recording is fetched until that form is
-                                            // submitted. The date is only carried when it could be read with
-                                            // certainty — see CallSummary::derivedDate().
-                                            $derived = $call->derivedDate();
+                                // Pre-fills the channel form below and nothing else: it carries
+                                // no `submitted`, so no recording is fetched until that form is
+                                // submitted. The date is only carried when it could be read with
+                                // certainty — see CallSummary::derivedDate().
+                                $derived = $call->derivedDate();
                                             $useParams = [
                                                 'recording_id' => $call->callSessionId,
                                                 'merchant_id' => $merchantId,
@@ -225,7 +225,7 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
 
                 <?php if ($calls->unusableCount() > 0): ?>
                     <p class="util-muted">
-                        <?= (int) $calls->unusableCount() ?> row(s) had no session id this page could use, and
+                        <?= $calls->unusableCount() ?> row(s) had no session id this page could use, and
                         are shown above without a button rather than hidden.
                     </p>
                 <?php endif; ?>
@@ -252,7 +252,7 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
     <?php endif; ?>
 </div>
 
-<?php // ---- Step 2: test a channel ---------------------------------------------------------------- ?>
+<?php // ---- Step 2: test a channel ----------------------------------------------------------------?>
 <div class="card" id="channel-test">
     <h2 class="card__title">Request</h2>
 
@@ -260,7 +260,7 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
         <input type="hidden" name="submitted" value="1">
         <?php
         // Carried through so a fetch does not wipe the call list above.
-        ?>
+?>
         <input type="hidden" name="account_id" value="<?= Html::encode($accountId) ?>">
         <input type="hidden" name="limit" value="<?= Html::encode($limit) ?>">
         <?php if ($latest !== null): ?>
@@ -279,8 +279,8 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
             <input class="field__control" type="text" inputmode="numeric" id="merchant_id" name="merchant_id"
                    value="<?= Html::encode($merchantId) ?>">
             <?php
-            // Said plainly rather than left to look like an oversight: the confirmed endpoint has no
-            // merchant parameter, so sending one would be inventing something the provider never asked for.
+    // Said plainly rather than left to look like an oversight: the confirmed endpoint has no
+    // merchant parameter, so sending one would be inventing something the provider never asked for.
 ?>
             <div class="field__hint">
                 Recorded for your reference. The confirmed recording endpoint takes no merchant parameter,
