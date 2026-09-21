@@ -8,6 +8,7 @@ use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
+use App\Tests\Support\LegacySeparateAudioUpload;
 use App\Tests\Support\WebTester;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -42,6 +43,8 @@ use const SORT_DESC;
  */
 final class AudioToTextStoreCest
 {
+    use LegacySeparateAudioUpload;
+
     private const ADMIN = '__kf_a2t_store_admin__';
     private const PASSWORD = 'AudioStorePassw0rd!secure';
     private const SESSION_COOKIE = 'KFSESSID';
@@ -139,7 +142,8 @@ final class AudioToTextStoreCest
         $I->see('no new recordings can be uploaded for it');
         // The forms are not merely disabled in the markup — they are not rendered at all.
         $I->dontSeeElement('#a2t-common-form');
-        $I->dontSeeElement('#a2t-separate-form');
+        $I->dontSeeElement('#a2t-caller-form');
+        $I->dontSeeElement('#a2t-callee-form');
     }
 
     /**
@@ -288,17 +292,22 @@ final class AudioToTextStoreCest
         $I->seeResponseCodeIs(404);
     }
 
-    public function theStorePageNamesItsStoreAndOffersBothModes(WebTester $I): void
+    public function theStorePageOffersThreeSingleRecordingCards(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
-        $I->see('One mixed recording');
-        $I->see('Separate Customer and Agent recordings');
-        $I->seeElement('input[name=customer_audio]');
-        $I->seeElement('input[name=agent_audio]');
+        $I->see('One Mixed Recording');
+        $I->see('Caller Recording');
+        $I->see('Callee Recording');
+        $I->dontSee('Separate Customer and Agent recordings');
+        foreach (['common', 'caller', 'callee'] as $card) {
+            $I->seeElement('#a2t-' . $card . '-form input[name=audio]');
+            $I->seeElement('#a2t-' . $card . '-form input[name=mode][value=COMMON]');
+            $I->seeElement('#a2t-' . $card . '-form progress');
+        }
     }
 
     // ---------------------------------------------------------------------------- common mode
@@ -317,6 +326,23 @@ final class AudioToTextStoreCest
         Assert::assertSame('COMMON', $children[0]['source_role']);
         Assert::assertSame('QUEUED', $children[0]['status']);
         Assert::assertNull($children[0]['transcript'], 'The web request must not transcribe anything.');
+    }
+
+    public function callerAndCalleeRecordingsUseTheExistingSingleFileQueue(WebTester $I): void
+    {
+        $this->signIn($I);
+        foreach (['caller', 'callee'] as $card) {
+            $I->amOnPage($this->storeUrl(self::STORE_A));
+            $I->attachFile('#a2t-' . $card . '-audio', 'kf_store_valid.wav');
+            $I->submitForm('#a2t-' . $card . '-form', []);
+            $conversation = $this->conversationsFor(self::STORE_A)[0];
+            Assert::assertSame('COMMON', $conversation['mode']);
+            $children = $this->childrenOf((int) $conversation['id']);
+            Assert::assertCount(1, $children);
+            Assert::assertSame('QUEUED', $children[0]['status']);
+            Assert::assertNull($children[0]['transcript']);
+        }
+        Assert::assertCount(2, $this->conversationsFor(self::STORE_A));
     }
 
     /**
@@ -422,10 +448,10 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->attachFile('#a2t-customer-audio', 'kf_store_valid.wav');
-        $I->attachFile('#a2t-agent-audio', 'kf_store_fake.txt');
-        $I->submitForm($this->separateForm(), []);
+        $this->postSeparateAudio($I, $this->storeUrl(self::STORE_A), [
+            'customer_audio' => 'kf_store_valid.wav',
+            'agent_audio' => 'kf_store_fake.txt',
+        ]);
 
         $I->see('Agent audio: Only .wav, .mp3, .m4a, .ogg, .webm files are supported.');
         Assert::assertSame([], $this->conversationsFor(self::STORE_A));
@@ -436,8 +462,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->submitForm($this->separateForm(), []);
+        $this->postSeparateAudio($I, $this->storeUrl(self::STORE_A));
 
         $I->see('Customer audio: Choose an audio file first.');
         $I->see('Agent audio: Choose an audio file first.');
@@ -702,11 +727,6 @@ final class AudioToTextStoreCest
         return '#a2t-common-form';
     }
 
-    private function separateForm(): string
-    {
-        return '#a2t-separate-form';
-    }
-
     private function uploadCommon(WebTester $I, int $sourceId): void
     {
         $I->amOnPage($this->storeUrl($sourceId));
@@ -716,10 +736,10 @@ final class AudioToTextStoreCest
 
     private function uploadSeparate(WebTester $I, int $sourceId): void
     {
-        $I->amOnPage($this->storeUrl($sourceId));
-        $I->attachFile('#a2t-customer-audio', 'kf_store_customer.wav');
-        $I->attachFile('#a2t-agent-audio', 'kf_store_agent.wav');
-        $I->submitForm($this->separateForm(), []);
+        $this->postSeparateAudio($I, $this->storeUrl($sourceId), [
+            'customer_audio' => 'kf_store_customer.wav',
+            'agent_audio' => 'kf_store_agent.wav',
+        ]);
     }
 
     /**

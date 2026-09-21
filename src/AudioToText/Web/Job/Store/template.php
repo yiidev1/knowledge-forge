@@ -10,6 +10,7 @@ use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextRoute;
+use App\AudioToText\Web\Job\Store\StoreAudioAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -17,6 +18,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
+ * @var Yiisoft\Assets\AssetManager $assetManager
  * @var UrlGeneratorInterface $urlGenerator
  * @var Csrf $csrf
  * @var AudioStore $store
@@ -34,12 +36,14 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $combinedLimitLabel
  * @var bool $canUpload
  * @var AppTimeZone $appTimeZone
- * @var TranscriptionProvider $provider currently selected, and what both forms preselect
+ * @var TranscriptionProvider $provider currently selected, and what all recording cards preselect
  * @var list<TranscriptionProvider> $providerChoices every provider, usable or not
  * @var array<string, bool> $providerUsable storage value => can this server run it (local check only)
  * @var TranscriptionProvider $globalDefault the stored setting, reported as-is and never rewritten here
  * @var bool $ttsConfigured whether clean AI audio can be generated on this server at all
  */
+
+$assetManager->register(StoreAudioAsset::class);
 
 $this->setTitle($store->name . ' — audio');
 $this->setParameter('breadcrumbs', [
@@ -65,12 +69,12 @@ $fieldErrors = static function (array $messages): string {
 };
 
 /**
- * The provider select, rendered into both forms.
+ * The provider select, rendered into all recording cards.
  *
- * A closure rather than two copies because the two forms post to the same action and must offer
+ * A shared renderer because all recording cards post to the same action and must offer
  * exactly the same choices — a difference between them would be a bug nobody would see until an
  * upload came back with the wrong engine. The id differs per form so each `<label for>` stays valid
- * on a page that renders both.
+ * on a page that renders all three.
  *
  * ## Always rendered, never hidden
  *
@@ -145,11 +149,11 @@ $providerField = static function (string $id) use (
 };
 
 /**
- * The AI-audio opt-in, rendered into both forms.
+ * The AI-audio opt-in, rendered into all recording cards.
  *
- * A closure for the same reason the provider select is one: the two forms post to the same action and
+ * A closure for the same reason the provider select is one: all recording cards post to the same action and
  * must offer exactly the same choice. The id differs per form so each `<label for>` stays valid on a
- * page that renders both.
+ * page that renders all three.
  *
  * **Unchecked, always.** It is not sticky and does not remember a previous upload: this spends money
  * with a third party, and a checkbox that quietly stayed on would spend it on recordings nobody decided
@@ -174,7 +178,8 @@ $aiAudioField = static function (string $id) use ($ttsConfigured): string {
         . '</div>';
 };
 
-$formErrors = $errors['form'] ?? [];
+// Keep errors readable for a submission from an older, already-open paired-upload form.
+$formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? [], $errors['agent_audio'] ?? []);
 ?>
 <div class="page-header">
     <div>
@@ -225,11 +230,8 @@ $formErrors = $errors['form'] ?? [];
 // straight here — so an inactive store keeps its page and loses only the upload. The server refuses
 // the POST regardless of what this template renders.
 //
-// When it is writable there are two forms, not one form with a JavaScript mode switch: this
-// application's content security policy is `script-src 'self'` with no inline JavaScript, and a
-// toggle that hides half a form is the kind of thing that quietly submits the wrong fields when the
-// script does not run. Each form carries its own mode, so what the administrator sees is exactly
-// what is posted.
+// Each recording card submits one file through the existing common-recording flow.
+// Independent forms also remain usable without JavaScript.
 ?>
 <?php if (!$canUpload): ?>
     <div class="alert alert--warning" role="status">
@@ -239,89 +241,107 @@ $formErrors = $errors['form'] ?? [];
         </p>
     </div>
 <?php else: ?>
-<div class="card">
-    <h2 class="card__title">One mixed recording</h2>
-    <p class="field__hint" style="margin-top: -0.5rem;">
-        A single file containing both people. The server works out who is speaking, and you can correct
-        it afterwards.
-    </p>
-
-    <form id="a2t-common-form" method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data" style="max-width: 720px;">
-        <?= $csrfField ?>
-        <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
-
-        <div class="field">
-            <label class="field__label" for="a2t-audio">Audio file</label>
-            <input
-                class="field__control<?= isset($errors['audio']) ? ' field__control--error' : '' ?>"
-                id="a2t-audio"
-                type="file"
-                name="audio"
-                accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*"
-            >
-            <?= $fieldErrors($errors['audio'] ?? []) ?>
-            <div class="field__hint">
-                <?= Html::encode($extensionList) ?> ·
-                up to <?= Html::encode($maxUploadLabel) ?> ·
-                up to <?= Html::encode($maxDurationLabel) ?> long.
-            </div>
+<section class="a2t-uploads" aria-labelledby="a2t-uploads-title">
+    <div class="a2t-uploads__heading">
+        <div>
+            <p class="a2t-uploads__eyebrow">RECORDINGS</p>
+            <h2 id="a2t-uploads-title">Audio File Upload</h2>
+            <p>Choose a recording to upload and convert to text.</p>
         </div>
-
-        <?= $providerField('a2t-common-provider') ?>
-        <?= $aiAudioField('a2t-common-ai-audio') ?>
-
-        <button class="btn btn--primary" type="submit">Convert mixed recording</button>
-    </form>
-</div>
-
-<div class="card">
-    <h2 class="card__title">Separate Customer and Agent recordings</h2>
-    <p class="field__hint" style="margin-top: -0.5rem;">
-        Two files from one call, one per person. Because you are telling us who is on each recording,
-        the server does not try to work it out — so there are no speakers to correct afterwards.
-    </p>
-
-    <form id="a2t-separate-form" method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data" style="max-width: 720px;">
-        <?= $csrfField ?>
-        <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Separate->value) ?>">
-
-        <div class="field">
-            <label class="field__label" for="a2t-customer-audio">Customer audio</label>
-            <input
-                class="field__control<?= isset($errors['customer_audio']) ? ' field__control--error' : '' ?>"
-                id="a2t-customer-audio"
-                type="file"
-                name="customer_audio"
-                accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*"
-            >
-            <?= $fieldErrors($errors['customer_audio'] ?? []) ?>
-        </div>
-
-        <div class="field">
-            <label class="field__label" for="a2t-agent-audio">Agent audio</label>
-            <input
-                class="field__control<?= isset($errors['agent_audio']) ? ' field__control--error' : '' ?>"
-                id="a2t-agent-audio"
-                type="file"
-                name="agent_audio"
-                accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*"
-            >
-            <?= $fieldErrors($errors['agent_audio'] ?? []) ?>
-            <div class="field__hint">
-                <?= Html::encode($extensionList) ?> ·
-                up to <?= Html::encode($maxUploadLabel) ?> each and
-                <?= Html::encode($combinedLimitLabel) ?> for the two together ·
-                up to <?= Html::encode($maxDurationLabel) ?> long each.
-                Both recordings are queued separately and may finish at different times.
-            </div>
-        </div>
-
-        <?= $providerField('a2t-separate-provider') ?>
-        <?= $aiAudioField('a2t-separate-ai-audio') ?>
-
-        <button class="btn btn--primary" type="submit">Convert both recordings</button>
-    </form>
-</div>
+        <span class="a2t-uploads__limit">Up to <?= Html::encode($maxUploadLabel) ?> per file</span>
+    </div>
+    <div class="a2t-uploads__grid">
+        <?php
+        $recordingCards = [
+            'common' => ['One Mixed Recording', 'Both sides of the conversation in one audio file.', 'Convert mixed recording'],
+            'caller' => ['Caller Recording', 'Upload a single audio file from the caller.', 'Convert caller recording'],
+            'callee' => ['Callee Recording', 'Upload a single audio file from the callee.', 'Convert callee recording'],
+        ];
+    ?>
+        <?php foreach ($recordingCards as $key => [$title, $description, $buttonLabel]): ?>
+            <?php
+            // The drop zone below is a <label>, not a <div>, so that clicking anywhere in the box
+            // opens the file dialog. The browser's own behaviour rather than a click handler: the
+            // CSP here is `script-src 'self'` and the upload has to keep working with scripts off,
+            // where a scripted drop zone would be dead on exactly the path with no other way to
+            // attach a file. The native button inside stays live — a label does nothing for clicks
+            // aimed at its own control, so one click still opens exactly one dialog. Its two lines
+            // of prose are aria-hidden, leaving "Audio file" as the control's accessible name.
+            $audioId = $key === 'common' ? 'a2t-audio' : 'a2t-' . $key . '-audio';
+            ?>
+            <article class="a2t-upload-card" aria-labelledby="a2t-<?= $key ?>-title">
+                <div class="a2t-upload-card__header">
+                    <span class="a2t-upload-card__icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                            <path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/>
+                        </svg>
+                    </span>
+                    <div>
+                        <h3 id="a2t-<?= $key ?>-title"><?= Html::encode($title) ?></h3>
+                        <p><?= Html::encode($description) ?></p>
+                    </div>
+                </div>
+                <form class="a2t-upload-form" data-a2t-upload id="a2t-<?= $key ?>-form" method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
+                    <?= $csrfField ?>
+                    <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
+                    <div class="field">
+                        <label class="field__label" for="<?= $audioId ?>">Audio file</label>
+                        <label class="a2t-upload-picker" for="<?= $audioId ?>">
+                            <svg class="a2t-upload-picker__icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 16V3m-4 4 4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+                            </svg>
+                            <span class="a2t-upload-picker__title" aria-hidden="true">Choose an audio file</span>
+                            <span class="a2t-upload-picker__hint" aria-hidden="true">Browse files to get started</span>
+                            <input
+                                class="a2t-upload-input<?= isset($errors['audio']) ? ' field__control--error' : '' ?>"
+                                id="<?= $audioId ?>"
+                                type="file"
+                                name="audio"
+                                accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*"
+                                aria-describedby="<?= $audioId ?>-limits"
+                            >
+                        </label>
+                        <div class="a2t-upload-file" data-a2t-file hidden></div>
+                        <?= $fieldErrors($errors['audio'] ?? []) ?>
+                        <div class="field__hint" id="<?= $audioId ?>-limits">
+                            <?= Html::encode($extensionList) ?><br>
+                            Up to <?= Html::encode($maxUploadLabel) ?> · <?= Html::encode($maxDurationLabel) ?> maximum
+                        </div>
+                    </div>
+                    <?= $providerField('a2t-' . $key . '-provider') ?>
+                    <div class="a2t-upload-card__options">
+                        <?= $aiAudioField('a2t-' . $key . '-ai-audio') ?>
+                    </div>
+                    <div class="a2t-upload-feedback" data-a2t-feedback data-a2t-state="idle" hidden>
+                        <div class="a2t-upload-feedback__heading">
+                            <strong>Recording progress</strong>
+                            <span class="a2t-upload-state" data-a2t-state-label>Ready</span>
+                        </div>
+                        <div class="a2t-upload-step" data-a2t-step="upload" data-state="pending">
+                            <div class="a2t-upload-feedback__label">
+                                <span class="a2t-upload-step__title"><span aria-hidden="true">01</span> Upload</span>
+                                <span data-a2t-upload-percent aria-hidden="true">0%</span>
+                            </div>
+                            <progress class="a2t-upload-progress" data-a2t-upload-progress max="100" value="0" aria-label="<?= Html::encode($title) ?> upload progress"></progress>
+                            <p class="a2t-upload-step__detail" data-a2t-upload-status role="status">Awaiting audio file</p>
+                        </div>
+                        <div class="a2t-upload-step" data-a2t-step="conversion" data-state="pending">
+                            <div class="a2t-upload-feedback__label">
+                                <span class="a2t-upload-step__title"><span aria-hidden="true">02</span> Conversion</span>
+                                <span data-a2t-conversion-percent aria-hidden="true">Pending</span>
+                            </div>
+                            <progress class="a2t-upload-progress" data-a2t-conversion-progress max="100" value="0" aria-label="<?= Html::encode($title) ?> conversion progress"></progress>
+                            <p class="a2t-upload-step__detail" data-a2t-conversion-status role="status">Starts after upload</p>
+                        </div>
+                        <p class="a2t-upload-error" data-a2t-upload-error role="alert" hidden></p>
+                        <a class="a2t-upload-result" data-a2t-upload-result hidden>View conversion <span aria-hidden="true">↗</span></a>
+                    </div>
+                    <button class="btn btn--primary a2t-upload-submit" type="submit"><?= Html::encode($buttonLabel) ?></button>
+                </form>
+            </article>
+        <?php endforeach; ?>
+    </div>
+</section>
 <?php endif; ?>
 
 <div class="card a2t-wide">

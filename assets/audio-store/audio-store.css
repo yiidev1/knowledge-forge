@@ -1,0 +1,152 @@
+/* Audio to Text — store recording uploads. Scoped so the conversion listing is unchanged. */
+.a2t-uploads { margin-bottom: 1.5rem; }
+.a2t-uploads__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.2rem; }
+.a2t-uploads__eyebrow { margin: 0 0 .3rem; font-size: .7rem; font-weight: 700; letter-spacing: .14em; color: var(--primary); }
+.a2t-uploads__heading h2 { margin: 0; font-size: 1.25rem; letter-spacing: -.025em; }
+.a2t-uploads__heading h2 + p { margin: .3rem 0 0; font-size: .88rem; color: var(--text-muted); }
+.a2t-uploads__limit { flex-shrink: 0; padding: .4rem .75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-muted); font-size: .75rem; }
+.a2t-uploads__grid { display: grid; grid-template-columns: repeat(3, minmax(290px, 1fr)); gap: 1.1rem; overflow-x: auto; padding: 3px 3px .75rem; }
+.a2t-upload-card { display: flex; flex-direction: column; min-width: 0; padding: 1.3rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.a2t-upload-card__header { display: flex; align-items: flex-start; gap: .8rem; min-height: 6.1rem; }
+.a2t-upload-card__icon { flex: 0 0 38px; display: grid; place-items: center; height: 38px; border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary); }
+.a2t-upload-card__icon svg { width: 21px; height: 21px; }
+.a2t-upload-card__header h3 { margin: .1rem 0 .35rem; font-size: 1rem; line-height: 1.35; }
+.a2t-upload-card__header p { margin: 0 0 1rem; color: var(--text-muted); font-size: .8rem; line-height: 1.5; }
+.a2t-upload-form { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.a2t-upload-form .field { margin-bottom: 1.15rem; min-width: 0; }
+.a2t-upload-form .field__label { font-size: .82rem; }
+.a2t-upload-form .field__hint { font-size: .75rem; line-height: 1.55; }
+.a2t-upload-form .field__control { width: 100%; min-width: 0; font-size: .85rem; border-radius: 8px; }
+/*
+ * The drop zone is a <label>, so clicking anywhere in the box opens the file dialog with no
+ * JavaScript at all.
+ *
+ * The selector is qualified up to `.a2t-upload-form .field label` on purpose: admin.css carries
+ * `.field label:not(.field__label) { display: inline-flex; gap: .5rem }` for checkbox rows, which
+ * outranks a lone class and would otherwise shrink this box to its content and space its lines out.
+ * `gap: 0` is set for the same reason — the rhythm here comes from the margins below.
+ */
+.a2t-upload-form .field label.a2t-upload-picker { display: flex; gap: 0; flex-direction: column; align-items: center; padding: 1.5rem 1rem 1.25rem; border: 1.5px dashed var(--border-strong); border-radius: 12px; background: var(--surface-2); cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+.a2t-upload-picker:hover, .a2t-upload-picker:focus-within { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 6%, var(--surface)); box-shadow: 0 2px 12px -6px color-mix(in srgb, var(--primary) 70%, transparent); }
+.a2t-upload-picker:active { border-style: solid; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+.a2t-upload-picker:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* content-box because admin.css sets `* { box-sizing: border-box }`, which would eat the padding. */
+.a2t-upload-picker__icon { box-sizing: content-box; flex: 0 0 auto; width: 22px; height: 22px; padding: .62rem; margin-bottom: .8rem; border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border)); border-radius: 50%; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary); transition: transform .15s, background .15s; }
+.a2t-upload-picker:hover .a2t-upload-picker__icon { transform: translateY(-2px); background: color-mix(in srgb, var(--primary) 17%, var(--surface)); }
+.a2t-upload-picker__title { font-size: .9rem; font-weight: 650; letter-spacing: -.01em; }
+.a2t-upload-picker__hint { margin-top: .25rem; color: var(--text-muted); font-size: .74rem; }
+/* Kept visible, not swapped for a prettier button: without JavaScript this is the only thing that
+   reports which file is attached, and the chip below is drawn by the script. */
+.a2t-upload-input { max-width: 100%; min-width: 0; margin-top: 1.1rem; color: var(--text-muted); font: inherit; font-size: .74rem; cursor: pointer; }
+.a2t-upload-input::file-selector-button { padding: .5rem 1rem; margin-right: .6rem; border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--primary) 12%, var(--surface)); color: var(--primary); font: inherit; font-size: .76rem; font-weight: 650; cursor: pointer; transition: background .15s, border-color .15s; }
+.a2t-upload-input::file-selector-button:hover { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 20%, var(--surface)); }
+/* No `display` here on purpose: the [hidden] attribute has to keep working on the empty chip. */
+.a2t-upload-file { margin-top: .6rem; padding: .55rem .7rem; border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--primary) 8%, var(--surface)); font-size: .76rem; font-weight: 600; overflow-wrap: anywhere; }
+.a2t-upload-card__options { margin-top: auto; padding: 1rem 0 0; border-top: 1px solid var(--border); }
+.a2t-upload-card__options .a2t-checkbox { align-items: flex-start; font-size: .8rem; }
+.a2t-upload-card__options input { margin-top: .3rem; accent-color: var(--primary); }
+.a2t-upload-feedback {
+    margin: .2rem 0 1rem;
+    padding: .95rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+}
+.a2t-upload-feedback__heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    margin-bottom: 1rem;
+}
+.a2t-upload-feedback__heading strong { color: var(--text); font-size: .8rem; font-weight: 650; }
+.a2t-upload-state {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    max-width: 100%;
+    padding: .2rem .5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: .67rem;
+    font-weight: 650;
+    line-height: 1.4;
+}
+.a2t-upload-state::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.a2t-upload-feedback:is([data-a2t-state="uploading"], [data-a2t-state="accepting"], [data-a2t-state="converting"]) .a2t-upload-state {
+    border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+    color: var(--primary);
+}
+.a2t-upload-feedback[data-a2t-state="complete"] { border-color: var(--success-border); }
+.a2t-upload-feedback[data-a2t-state="complete"] .a2t-upload-state { border-color: var(--success-border); background: var(--success-bg); color: var(--success-text); }
+.a2t-upload-feedback[data-a2t-state="error"] .a2t-upload-state { border-color: var(--error-border); background: var(--error-bg); color: var(--error-text); }
+.a2t-upload-feedback[data-a2t-state="reconnecting"] .a2t-upload-state { border-color: var(--warning-border); background: var(--warning-bg); color: var(--warning-text); }
+.a2t-upload-step { --a2t-progress-color: var(--primary); min-width: 0; }
+.a2t-upload-step + .a2t-upload-step { margin-top: .85rem; padding-top: .85rem; border-top: 1px solid var(--border); }
+.a2t-upload-feedback__label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .5rem;
+    margin-bottom: .5rem;
+    color: var(--text-muted);
+    font-size: .73rem;
+    font-variant-numeric: tabular-nums;
+}
+.a2t-upload-step__title { color: var(--text); font-weight: 600; }
+.a2t-upload-feedback__label > :last-child { text-align: right; }
+.a2t-upload-step[data-state="pending"] .a2t-upload-step__title { color: var(--text-muted); }
+.a2t-upload-step[data-state="active"] .a2t-upload-feedback__label > :last-child { color: var(--primary); font-weight: 650; }
+.a2t-upload-step[data-state="complete"] { --a2t-progress-color: var(--success-text); }
+.a2t-upload-step[data-state="complete"] .a2t-upload-feedback__label > :last-child { color: var(--success-text); font-weight: 650; }
+.a2t-upload-step[data-state="error"] { --a2t-progress-color: var(--error-text); }
+.a2t-upload-step[data-state="error"] .a2t-upload-feedback__label > :last-child { color: var(--error-text); }
+.a2t-upload-progress {
+    display: block;
+    appearance: none;
+    width: 100%;
+    height: 7px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+    accent-color: var(--a2t-progress-color);
+}
+.a2t-upload-progress::-webkit-progress-bar { border-radius: 999px; background: var(--border); }
+.a2t-upload-progress::-webkit-progress-value { border-radius: 999px; background: var(--a2t-progress-color); transition: width .2s ease; }
+.a2t-upload-progress::-moz-progress-bar { border-radius: 999px; background: var(--a2t-progress-color); }
+/* Conversion has no server percentage. A moving segment indicates activity without inventing one. */
+.a2t-upload-progress:indeterminate {
+    background-color: var(--border);
+    background-image: linear-gradient(90deg, transparent, var(--a2t-progress-color) 35%, var(--a2t-progress-color) 65%, transparent);
+    background-repeat: no-repeat;
+    background-size: 45% 100%;
+    background-position: -85% 0;
+    animation: a2t-upload-progress-travel 1.8s ease-in-out infinite;
+}
+.a2t-upload-progress:indeterminate::-webkit-progress-bar { background: transparent; }
+.a2t-upload-progress:indeterminate::-webkit-progress-value { background: transparent; }
+.a2t-upload-progress:indeterminate::-moz-progress-bar { background: transparent; }
+.a2t-upload-step__detail { margin: .4rem 0 0; color: var(--text-muted); font-size: .72rem; line-height: 1.5; overflow-wrap: anywhere; }
+.a2t-upload-error { margin: .8rem 0 0; padding: .65rem; border: 1px solid var(--error-border); border-radius: 6px; color: var(--error-text); background: var(--error-bg); font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
+.a2t-upload-result { display: inline-flex; align-items: center; gap: .4rem; margin-top: .85rem; color: var(--primary); font-size: .78rem; font-weight: 650; }
+.a2t-upload-result:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 2px; }
+.a2t-upload-feedback[hidden], .a2t-upload-error[hidden], .a2t-upload-result[hidden] { display: none; }
+.a2t-upload-submit { width: 100%; justify-content: center; min-height: 43px; font-size: .85rem; }
+.a2t-upload-form[aria-busy="true"] .a2t-upload-picker { opacity: .65; }
+@keyframes a2t-upload-progress-travel {
+    from { background-position: -85% 0; }
+    to { background-position: 185% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .a2t-upload-progress:indeterminate { animation: none; background-position: 50% 0; }
+    .a2t-upload-progress::-webkit-progress-value { transition: none; }
+}
+@media (max-width: 600px) {
+    .a2t-uploads__heading { align-items: flex-start; flex-direction: column; }
+    .a2t-uploads__grid { grid-template-columns: repeat(3, 100%); gap: .85rem; }
+}

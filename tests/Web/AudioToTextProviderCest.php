@@ -8,6 +8,7 @@ use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
+use App\Tests\Support\LegacySeparateAudioUpload;
 use App\Tests\Support\WebTester;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -49,6 +50,8 @@ use function unlink;
  */
 final class AudioToTextProviderCest
 {
+    use LegacySeparateAudioUpload;
+
     private const ADMIN = '__kf_a2t_provider_admin__';
     private const PASSWORD = 'AudioProviderPassw0rd!secure';
     private const SESSION_COOKIE = 'KFSESSID';
@@ -249,13 +252,13 @@ final class AudioToTextProviderCest
     // ------------------------------------------------------------------------ the upload forms
 
     /**
-     * **The field is always there, in both forms.**
+     * **The field is always there, in all three forms.**
      *
      * It used to disappear when only one provider was usable — which is the normal state of this test
      * environment. That hid which engine an upload would use, and made a broken install look identical
      * to a single-provider one.
      */
-    public function bothUploadFormsAlwaysRenderTheProviderField(WebTester $I): void
+    public function allUploadFormsAlwaysRenderTheProviderField(WebTester $I): void
     {
         $this->signIn($I);
 
@@ -263,7 +266,8 @@ final class AudioToTextProviderCest
         $I->seeResponseCodeIs(200);
 
         $I->seeElement('#a2t-common-form select[name="transcription_provider"]#a2t-common-provider');
-        $I->seeElement('#a2t-separate-form select[name="transcription_provider"]#a2t-separate-provider');
+        $I->seeElement('#a2t-caller-form select[name="transcription_provider"]#a2t-caller-provider');
+        $I->seeElement('#a2t-callee-form select[name="transcription_provider"]#a2t-callee-provider');
         $I->see('Transcription provider');
     }
 
@@ -281,7 +285,8 @@ final class AudioToTextProviderCest
         $I->amOnPage($this->storeUrl());
 
         $I->seeElement('#a2t-common-provider option[value="DEEPGRAM"][disabled]');
-        $I->seeElement('#a2t-separate-provider option[value="DEEPGRAM"][disabled]');
+        $I->seeElement('#a2t-caller-provider option[value="DEEPGRAM"][disabled]');
+        $I->seeElement('#a2t-callee-provider option[value="DEEPGRAM"][disabled]');
         $I->seeElement('#a2t-common-provider option[value="WHISPER"]:not([disabled])');
 
         $I->see('Not configured');
@@ -302,15 +307,16 @@ final class AudioToTextProviderCest
         $I->see('This choice applies only to this upload.');
     }
 
-    /** The global default is what both forms start on — the `providerIsUsable(default)` branch. */
-    public function bothFormsPreselectTheGlobalDefault(WebTester $I): void
+    /** The global default is what all three forms start on — the `providerIsUsable(default)` branch. */
+    public function allFormsPreselectTheGlobalDefault(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage($this->storeUrl());
 
         $I->seeElement('#a2t-common-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-separate-provider option[value="WHISPER"][selected]');
+        $I->seeElement('#a2t-caller-provider option[value="WHISPER"][selected]');
+        $I->seeElement('#a2t-callee-provider option[value="WHISPER"][selected]');
     }
 
     // ------------------------------------------- the default names a provider that cannot run
@@ -331,13 +337,15 @@ final class AudioToTextProviderCest
         $I->amOnPage($this->storeUrl());
         $I->seeResponseCodeIs(200);
 
-        // The field is still there, in both forms.
+        // The field is still there, in all three forms.
         $I->seeElement('#a2t-common-provider');
-        $I->seeElement('#a2t-separate-provider');
+        $I->seeElement('#a2t-caller-provider');
+        $I->seeElement('#a2t-callee-provider');
 
         // An available provider is preselected instead — the form stays submittable.
         $I->seeElement('#a2t-common-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-separate-provider option[value="WHISPER"][selected]');
+        $I->seeElement('#a2t-caller-provider option[value="WHISPER"][selected]');
+        $I->seeElement('#a2t-callee-provider option[value="WHISPER"][selected]');
         $I->dontSeeElement('#a2t-common-provider option[value="DEEPGRAM"][selected]');
 
         // And it is said out loud, naming the configured default.
@@ -450,10 +458,10 @@ final class AudioToTextProviderCest
     {
         $this->signIn($I);
 
-        $I->amOnPage($this->storeUrl());
-        $I->attachFile('#a2t-customer-audio', 'kf_provider_customer.wav');
-        $I->attachFile('#a2t-agent-audio', 'kf_provider_agent.wav');
-        $I->submitForm('#a2t-separate-form', []);
+        $this->postSeparateAudio($I, $this->storeUrl(), [
+            'customer_audio' => 'kf_provider_customer.wav',
+            'agent_audio' => 'kf_provider_agent.wav',
+        ]);
 
         Assert::assertSame(['WHISPER', 'WHISPER'], $this->queuedProviders());
     }
