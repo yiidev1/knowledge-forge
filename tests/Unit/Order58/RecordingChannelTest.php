@@ -95,28 +95,72 @@ final class RecordingChannelTest extends Unit
     }
 
     /**
-     * The currently-configured reading for a channel. **Provisional, and the test says so.**
+     * The caller URL, exactly as the client confirmed it on 21 September 2026.
      *
-     * If the client confirms a different format, this expectation changes together with the single
-     * `match` arm in ChannelRequestMapping — which is the whole point of keeping it in one place.
+     * Asserted whole rather than by fragments: the two mistakes this replaced — the suffix left out of
+     * the path, and an extension left in `name` — are both invisible unless the entire URL is compared.
      */
-    public function testTheCallerUrlFollowsTheConfiguredCandidate(): void
+    public function testTheCallerUrlMatchesTheClientsConfirmedFormat(): void
     {
         $url = (new ChannelRequestMapping())->urlFor($this->request(), RecordingChannel::Caller);
 
         $this->assertSame(
-            ChannelRequestMapping::CANDIDATE_NAME_IS_FILENAME,
-            ChannelRequestMapping::DEFAULT_CANDIDATE,
-            'This expectation matches candidate A. Update both together when the client confirms the format.',
+            'https://order58.xrainbow.com/api/external/recording/fetch/22342359-caller'
+                . '?time=2026-03-11&company=SWCC&name=22342359-caller',
+            $url,
         );
-        $this->assertStringContainsString('name=22342359-caller.wav', $url);
     }
 
-    public function testTheCalleeUrlFollowsTheConfiguredCandidate(): void
+    public function testTheCalleeUrlMatchesTheClientsConfirmedFormat(): void
     {
         $url = (new ChannelRequestMapping())->urlFor($this->request(), RecordingChannel::Callee);
 
-        $this->assertStringContainsString('name=22342359-callee.wav', $url);
+        $this->assertSame(
+            'https://order58.xrainbow.com/api/external/recording/fetch/22342359-callee'
+                . '?time=2026-03-11&company=SWCC&name=22342359-callee',
+            $url,
+        );
+    }
+
+    /** The client's own worked example, reproduced character for character. */
+    public function testTheClientsWorkedExampleIsReproducedExactly(): void
+    {
+        $request = new ChannelRecordingRequest('22359279', '871', '2026-09-16', 'SWCC', 'ignored');
+        $url = (new ChannelRequestMapping())->urlFor($request, RecordingChannel::Caller);
+
+        $this->assertSame(
+            'https://order58.xrainbow.com/api/external/recording/fetch/22359279-caller'
+                . '?time=2026-09-16&company=SWCC&name=22359279-caller',
+            $url,
+        );
+    }
+
+    /**
+     * **No extension in `name`.** The provider appends one, so a `.wav` here lands as `.wav.wav`.
+     *
+     * The regression is silent — the download succeeds, just with a wrong name — so it is pinned rather
+     * than left to review.
+     */
+    public function testTheNameParameterCarriesNoFileExtension(): void
+    {
+        $mapping = new ChannelRequestMapping();
+
+        foreach (RecordingChannel::all() as $channel) {
+            $this->assertStringNotContainsString(
+                '.wav',
+                $mapping->urlFor($this->request(), $channel),
+                $channel->value . ' must not send a file extension in any parameter.',
+            );
+        }
+    }
+
+    /** The free-text `name` field is not what addresses a channel file; the session id is. */
+    public function testTheFormsNameFieldDoesNotReachAChannelUrl(): void
+    {
+        $request = new ChannelRecordingRequest('22342359', '871', '2026-03-11', 'SWCC', 'whatever-typed');
+        $url = (new ChannelRequestMapping())->urlFor($request, RecordingChannel::Caller);
+
+        $this->assertStringNotContainsString('whatever-typed', $url);
     }
 
     /** Caller and callee must never produce the same URL as mixed, or the tool cannot tell them apart. */
@@ -161,9 +205,9 @@ final class RecordingChannelTest extends Unit
     public static function candidates(): array
     {
         return [
-            'A — name is the filename' => [ChannelRequestMapping::CANDIDATE_NAME_IS_FILENAME, 'name=22342359-caller.wav'],
-            'B — name is the channel' => [ChannelRequestMapping::CANDIDATE_NAME_IS_CHANNEL, 'name=caller'],
-            'C — id carries the suffix' => [ChannelRequestMapping::CANDIDATE_ID_CARRIES_SUFFIX, '/fetch/22342359-caller?'],
+            'confirmed — id carries the suffix' => [ChannelRequestMapping::CANDIDATE_ID_CARRIES_SUFFIX, '/fetch/22342359-caller?'],
+            'rejected — name is the filename' => [ChannelRequestMapping::CANDIDATE_NAME_IS_FILENAME, 'name=22342359-caller.wav'],
+            'rejected — name is the channel' => [ChannelRequestMapping::CANDIDATE_NAME_IS_CHANNEL, 'name=caller'],
         ];
     }
 
@@ -448,12 +492,16 @@ final class RecordingChannelTest extends Unit
 
     // ------------------------------------------------------------------ the unconfirmed mapping
 
-    /** Mixed is confirmed; the other two are not, and the page is driven by this. */
-    public function testOnlyMixedIsReportedAsConfirmed(): void
+    /** Every format is confirmed; availability per merchant is the separate fact the page shows. */
+    public function testEveryChannelFormatIsConfirmed(): void
     {
-        $this->assertTrue(RecordingChannel::Mixed->liveRetrievalIsConfirmed());
-        $this->assertFalse(RecordingChannel::Caller->liveRetrievalIsConfirmed());
-        $this->assertFalse(RecordingChannel::Callee->liveRetrievalIsConfirmed());
+        foreach (RecordingChannel::all() as $channel) {
+            $this->assertTrue($channel->liveRetrievalIsConfirmed());
+        }
+
+        $this->assertFalse(RecordingChannel::Mixed->separatedChannelsNeedAListedMerchant());
+        $this->assertTrue(RecordingChannel::Caller->separatedChannelsNeedAListedMerchant());
+        $this->assertTrue(RecordingChannel::Callee->separatedChannelsNeedAListedMerchant());
     }
 
     public function testTheConfiguredCandidateIsDescribedForTheOperator(): void

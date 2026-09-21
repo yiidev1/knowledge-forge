@@ -100,28 +100,34 @@ final class RecordingChannelsCest
         $I->seeElement('input[name="channel"][value="callee"]');
     }
 
-    /** The three filenames are shown before anything is requested, so the convention is visible. */
-    public function theGeneratedFilenamesAreShownForEachChannel(WebTester $I): void
+    /**
+     * The three request segments are shown before anything is requested, so the addressing is visible.
+     *
+     * Segments, not filenames: the channel travels in the path, and showing `.wav` names beside the
+     * radios is what previously suggested the filename was the thing being sent.
+     */
+    public function theRequestSegmentsAreShownForEachChannel(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage(self::PAGE);
 
-        $I->see('22342359.wav');
-        $I->see('22342359-caller.wav');
-        $I->see('22342359-callee.wav');
+        $I->see('22342359-caller');
+        $I->see('22342359-callee');
+        $I->dontSee('22342359-caller.wav');
     }
 
     /**
-     * The caveat is not buried. It is the single most important thing on the page, because a guessed URL
-     * that answers 200 with the mixed file would read as success.
+     * The remaining caveat is not buried: a well-formed channel request still fails for a merchant the
+     * client does not generate separated files for, and a 404 read as a mapping bug sends somebody
+     * hunting for a fault that is not there.
      */
-    public function thePageStatesThatCallerAndCalleeAreUnconfirmed(WebTester $I): void
+    public function thePageStatesThatSeparatedChannelsNeedAListedMerchant(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage(self::PAGE);
 
-        $I->see('Caller and callee retrieval is not production-ready');
-        $I->see('request format unconfirmed');
+        $I->see("Separated channels exist only for the merchants on the client's list");
+        $I->see('listed merchants only');
     }
 
     /** Merchant ID is collected but not sent, and the page says so rather than leaving it ambiguous. */
@@ -310,16 +316,15 @@ final class RecordingChannelsCest
      * **The point of the whole feature**: selecting a call fills the Recording ID with that call's own
      * session id, and the three channel filenames follow it.
      */
-    public function selectingACallPopulatesTheRecordingIdAndFilenames(WebTester $I): void
+    public function selectingACallPopulatesTheRecordingIdAndSegments(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage(self::PAGE . '?recording_id=16438291&merchant_id=871&channel=mixed'
             . '&time=2026-03-10&company=SWCC&name=test&account_id=871&limit=10&load_calls=1&source=fixture');
 
         $I->seeInField('recording_id', '16438291');
-        $I->see('16438291.wav');
-        $I->see('16438291-caller.wav');
-        $I->see('16438291-callee.wav');
+        $I->see('16438291-caller');
+        $I->see('16438291-callee');
     }
 
     /** The date is carried only because it could be read from that row with certainty. */

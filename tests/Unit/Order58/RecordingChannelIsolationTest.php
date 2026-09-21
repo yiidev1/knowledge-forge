@@ -223,16 +223,25 @@ final class RecordingChannelIsolationTest extends Unit
         }
     }
 
-    public function testOnlyMixedClaimsAConfirmedLivePath(): void
+    /**
+     * All three request formats are confirmed, but only mixed is available for every merchant.
+     *
+     * The two are separate facts and the page states them separately: a confirmed format that returns
+     * 404 for an unlisted merchant is a data gap, and reading it as a mapping error sends somebody
+     * looking for a bug that is not there.
+     */
+    public function testEveryChannelClaimsAConfirmedFormatAndOnlyMixedIsAlwaysAvailable(): void
     {
-        $this->assertTrue(RecordingChannel::Mixed->liveRetrievalIsConfirmed());
-
-        foreach ([RecordingChannel::Caller, RecordingChannel::Callee] as $channel) {
-            $this->assertFalse(
+        foreach (RecordingChannel::all() as $channel) {
+            $this->assertTrue(
                 $channel->liveRetrievalIsConfirmed(),
-                $channel->label() . ' must not claim a confirmed live path until the client supplies a real URL.',
+                $channel->label() . ' format was confirmed by the client on 21 September 2026.',
             );
         }
+
+        $this->assertFalse(RecordingChannel::Mixed->separatedChannelsNeedAListedMerchant());
+        $this->assertTrue(RecordingChannel::Caller->separatedChannelsNeedAListedMerchant());
+        $this->assertTrue(RecordingChannel::Callee->separatedChannelsNeedAListedMerchant());
     }
 
     // ------------------------------------------------------------------ fixtures cannot reach production

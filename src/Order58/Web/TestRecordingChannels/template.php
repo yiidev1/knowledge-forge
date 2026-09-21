@@ -77,22 +77,23 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
 </div>
 
 <?php
-// The single most important thing on this page. Stated before any result, because the dangerous failure
-// is not a 404 — it is a request that answers 200 with the MIXED file while the page calls it Caller.
+// Stated before any result. The request format is settled now, so what an operator needs up front is the
+// remaining reason a well-formed channel request still fails: the merchant is not on the client's list.
 ?>
-<div class="alert alert--warning" role="status">
+<div class="alert alert--info" role="status">
     <p>
-        <strong>Caller and callee retrieval is not production-ready.</strong>
-        The client has supplied a filename convention but not a working example URL, so how the external
-        API expects a separated channel to be requested is unconfirmed.
+        <strong>Separated channels exist only for the merchants on the client's list.</strong>
+        Every account has a mixed recording. Caller and callee files are generated only for listed
+        merchants, so a session id belonging to any other merchant returns nothing for those two however
+        well-formed the request is.
     </p>
     <p>
-        Mixed uses the request the existing tool already makes successfully. Caller and callee currently
-        use: <em><?= Html::encode($candidateDescription) ?></em>
+        A 404 on caller or callee therefore usually means <em>this merchant has no separated
+        channels</em>, not that the URL is wrong. Confirm the merchant is on the list before treating it
+        as a fault.
     </p>
     <p>
-        A 404 for a channel may mean the file does not exist &mdash; or that this reading of the request
-        format is wrong. Do not treat either as confirmation until the client supplies a real URL.
+        Request format: <em><?= Html::encode($candidateDescription) ?></em>
     </p>
 </div>
 
@@ -301,11 +302,19 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
             // The concrete name only for an id that would be accepted. For a refused id the
             // pattern is shown instead, rather than a name this tool would never build.
                 ?>
+                        <?php
+                // The request segment, not the filename: it is what actually goes in the URL, and
+                // showing the `.wav` name here is what led to it being sent as `name`.
+                //
+                // Without the `/fetch/` prefix on purpose. For a refused id nothing resembling a URL may
+                // appear anywhere on this page — that absence is how a test proves no request was built
+                // from a traversal attempt, and a prefix printed here would defeat it.
+                ?>
                         &mdash; <code><?= $fileName === null
-                    ? Html::encode($option->fileNameFor('{id}'))
-                    : Html::encode($option->fileNameFor($recordingId)) ?></code>
-                        <?php if (!$option->liveRetrievalIsConfirmed()): ?>
-                            <em>(request format unconfirmed)</em>
+                    ? Html::encode($option->requestSegmentFor('{id}'))
+                    : Html::encode($option->requestSegmentFor($recordingId)) ?></code>
+                        <?php if ($option->separatedChannelsNeedAListedMerchant()): ?>
+                            <em>(listed merchants only)</em>
                         <?php endif; ?>
                     </span>
                 </label>
@@ -327,8 +336,10 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
             <label class="field__label" for="name">Name</label>
             <input class="field__control" type="text" id="name" name="name" value="<?= Html::encode($name) ?>">
             <div class="field__hint">
-                Passed through for mixed. For caller/callee it may be replaced by the channel filename,
-                depending on which reading is configured above.
+                The download display name, not part of addressing the file. Passed through for mixed.
+                For caller and callee it is set to the session id plus the channel &mdash; with no
+                extension, because the provider adds one and <code>.wav.wav</code> is the result if it is
+                included here.
             </div>
         </div>
 
@@ -359,7 +370,25 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
             <div><dt>Recording ID</dt><dd class="util-mono"><?= Html::encode($recordingId) ?></dd></div>
             <div><dt>Merchant ID</dt><dd class="util-mono"><?= Html::encode($merchantId) ?></dd></div>
             <div><dt>Channel</dt><dd><?= Html::encode($channel->label()) ?></dd></div>
-            <div><dt>Generated filename</dt><dd class="util-mono"><?= $fileName === null ? '&mdash;' : Html::encode($fileName) ?></dd></div>
+            <?php
+    // What was actually sent, not a `.wav` filename. The old "Generated filename" row showed
+    // `22433929.wav` beside every result, including a caller request that transmits no filename at
+    // all — which invited exactly the question of why the URL did not contain it.
+    ?>
+            <div>
+                <dt>Path segment</dt>
+                <dd class="util-mono"><?= $fileName === null
+                    ? '&mdash;'
+                    : Html::encode($channel->requestSegmentFor($recordingId)) ?></dd>
+            </div>
+            <div>
+                <dt>Name sent</dt>
+                <dd class="util-mono"><?= $fileName === null
+                    ? '&mdash;'
+                    : Html::encode($channel === RecordingChannel::Mixed
+                        ? $name
+                        : $channel->downloadNameFor($recordingId)) ?></dd>
+            </div>
             <div><dt>Source</dt><dd><?= Html::encode($sourceLabel) ?></dd></div>
         </dl>
 

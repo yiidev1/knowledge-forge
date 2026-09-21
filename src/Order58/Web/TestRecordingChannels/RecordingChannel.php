@@ -66,19 +66,60 @@ enum RecordingChannel: string
     }
 
     /**
+     * The path segment this channel is requested by — the call session id, carrying the channel suffix.
+     *
+     * Confirmed by the client on 21 September 2026: `/fetch/22359279-caller`. The suffix belongs in the
+     * **path**, not in `name`; a bare path returns the mixed recording with a 200, which reads as
+     * success. Same validation contract as {@see fileNameFor()} — the id must already have been through
+     * {@see ChannelRecordingRequest::validate()}.
+     */
+    public function requestSegmentFor(string $recordingId): string
+    {
+        return match ($this) {
+            self::Mixed => $recordingId,
+            self::Caller => sprintf('%s-caller', $recordingId),
+            self::Callee => sprintf('%s-callee', $recordingId),
+        };
+    }
+
+    /**
+     * The `name` parameter: what the provider saves the download as.
+     *
+     * **No extension, deliberately.** The provider appends one, so passing `22359279-caller.wav` here
+     * produces `22359279-caller.wav.wav` on disk. The client called this out explicitly, and it is the
+     * reason this is a separate method from {@see fileNameFor()} rather than a reuse of it — the two
+     * strings differ by exactly the extension, which is precisely the bug.
+     */
+    public function downloadNameFor(string $recordingId): string
+    {
+        return $this->requestSegmentFor($recordingId);
+    }
+
+    /**
      * Whether retrieving this channel from the live API is a confirmed, working path.
      *
-     * **Mixed is. Caller and callee are not.** The existing, proven endpoint is addressed by call session
-     * id plus three opaque query parameters, and the client has not yet supplied a working example URL
-     * for a separated channel — so how the provider expects a caller or callee file to be asked for is
-     * genuinely unknown. See {@see ChannelRequestMapping} for the candidate readings.
+     * **All three are, since 21 September 2026.** The client supplied a worked caller URL and the format
+     * is reproduced in {@see ChannelRequestMapping}.
      *
-     * This is surfaced on the page rather than hidden, because the dangerous failure is not a 404: it is
-     * a request that quietly returns the **mixed** file while the page reports it as the caller channel.
+     * Confirmed format is not the same as available data: separated channels exist only for the
+     * merchants on the client's list, and a session id outside it has a mixed recording and nothing else.
+     * {@see separatedChannelsNeedAListedMerchant()} is what the page says about that.
      */
     public function liveRetrievalIsConfirmed(): bool
     {
-        return $this === self::Mixed;
+        return true;
+    }
+
+    /**
+     * Whether asking for this channel depends on the merchant being on the client's list.
+     *
+     * Every account has a mixed recording. Caller and callee are generated only for listed merchants, so
+     * a well-formed request for an unlisted one still fails — and an operator reading that failure needs
+     * to know it is a data question, not a URL question.
+     */
+    public function separatedChannelsNeedAListedMerchant(): bool
+    {
+        return $this !== self::Mixed;
     }
 
     public static function fromStorage(?string $value): ?self

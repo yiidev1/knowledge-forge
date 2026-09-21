@@ -10,50 +10,54 @@ use function sprintf;
 
 /**
  * ============================================================================================
- *  THE ONE UNRESOLVED THING IN THIS FEATURE. IT LIVES HERE AND NOWHERE ELSE.
+ *  EVERY URL THIS TOOL SENDS IS BUILT HERE, AND NOWHERE ELSE.
  *
- *  How a caller or callee channel is requested from the external recording API is **not yet
- *  confirmed by the client.** Every other class in this directory treats a request as an opaque
- *  URL produced by this one method, so when the client supplies a working example, exactly one
- *  `match` arm below changes and nothing else in the feature is touched.
- *
- *  Do not spread this knowledge. If a second place ever starts building these URLs, the two will
- *  disagree and the disagreement will present as "the caller channel returned the mixed file",
- *  which looks like success.
+ *  If a second place ever starts building these URLs, the two will disagree, and the disagreement
+ *  will present as "the caller channel returned the mixed file" — which looks like success.
  * ============================================================================================
  *
- * ## What IS confirmed
+ * ## The caller/callee format, confirmed by the client on 21 September 2026
  *
- * The mixed recording, because it is the request the existing, working diagnostic tool already makes
- * and which the client uses in production today:
+ * The channel is part of the **path segment**, appended to the call session id. `name` is only the
+ * download display name:
+ *
+ *   GET {base}/fetch/{callSessionId}-caller?time={time}&company={company}&name={callSessionId}-caller
+ *
+ * The client's worked example, for KONG's KITCHEN:
+ *
+ *   https://order58.xrainbow.com/api/external/recording/fetch/22359279-caller
+ *       ?time=2026-09-16&company=SWCC&name=22359279-caller
+ *
+ * Two details from that message are load-bearing and easy to get wrong:
+ *
+ *  1. **The session id in the path carries the suffix.** An earlier reading put the channel in `name`
+ *     and left the path bare. That returns the *mixed* file with a 200, which is the failure mode this
+ *     whole class exists to prevent — it reads as success.
+ *  2. **`name` carries no extension.** The provider appends one, so `name=22359279-caller.wav` lands on
+ *     disk as `22359279-caller.wav.wav`. {@see RecordingChannel::downloadNameFor()} is the single
+ *     definition and deliberately has no `.wav` in it.
+ *
+ * ## Not every merchant has these files
+ *
+ * The client supplies separated channels only for the merchants on the list they provided. A session id
+ * belonging to any other merchant has a mixed recording and no caller/callee files, so a channel request
+ * for it fails however well-formed the URL is. That is a data-availability fact, not a URL bug, and the
+ * page says so rather than leaving an operator to read a 404 as a mapping error.
+ *
+ * ## The mixed request
  *
  *   GET {base}/fetch/{callSessionId}?time={time}&company={company}&name={name}
  *
- * That shape is reproduced here byte for byte. It is deliberately **not** imported from
- * `App\Order58\Web\TestRecordingApis` — those files are frozen, and reaching into them would couple a
- * new tool to a working one that must not change.
+ * The request the existing, working diagnostic tool already makes, reproduced byte for byte. It is
+ * deliberately **not** imported from `App\Order58\Web\TestRecordingApis` — those files are frozen, and
+ * reaching into them would couple a new tool to a working one that must not change.
  *
- * ## What is NOT confirmed
+ * ## The readings that were considered and rejected
  *
- * The client has provided a **filename convention** — `22342359-caller.wav` — but the endpoint above
- * takes a call session id and three opaque parameters, with no obvious filename slot and no merchant id
- * at all. At least four readings fit the evidence:
- *
- *   A. `name` carries the filename       ?name=22342359-caller.wav
- *   B. `name` carries the channel        ?name=caller
- *   C. the path segment carries it       /fetch/22342359-caller
- *   D. a different endpoint entirely     unknown
- *
- * **A is implemented below as the provisional default**, because it is the only reading under which the
- * client's stated convention — a *filename* — is the thing actually transmitted. It is a placeholder,
- * not a conclusion. {@see RecordingChannel::liveRetrievalIsConfirmed()} reports caller and callee as
- * unconfirmed, and the page says so wherever either is selected.
- *
- * ## To resolve this
- *
- * Ask the client for one working URL for a caller or callee file. Then change {@see DEFAULT_CANDIDATE}
- * to the matching case and adjust that arm of {@see channelUrl()}. The three filename tests and the URL
- * construction tests will tell you immediately whether anything else moved.
+ * `$candidate` survives confirmation on purpose. Before the client answered, three readings fitted the
+ * evidence; {@see CANDIDATE_ID_CARRIES_SUFFIX} turned out to be right. The other two are kept because a
+ * test drives each of them, and those tests are what would catch a well-meaning edit that quietly put
+ * the channel back into `name` — the exact mistake that produced a wrong file with a 200.
  */
 final readonly class ChannelRequestMapping
 {
@@ -65,22 +69,17 @@ final readonly class ChannelRequestMapping
      */
     public const BASE_URL = 'https://order58.xrainbow.com/api/external/recording';
 
-    /**
-     * The reading used unless a caller says otherwise.
-     *
-     * **Change this one value when the client confirms the real format.** Nothing else in the feature
-     * needs editing — every other class treats a request as an opaque URL this class produced.
-     */
-    public const DEFAULT_CANDIDATE = self::CANDIDATE_NAME_IS_FILENAME;
+    /** **The format the client confirmed.** See the class docblock for their worked example. */
+    public const DEFAULT_CANDIDATE = self::CANDIDATE_ID_CARRIES_SUFFIX;
 
-    /** `?name=22342359-caller.wav` — the client's convention sent as the `name` parameter. */
+    /** `/fetch/22359279-caller` — the suffix on the path segment. **Confirmed correct.** */
+    public const CANDIDATE_ID_CARRIES_SUFFIX = 'id-carries-suffix';
+
+    /** REJECTED. `?name=22359279-caller.wav` — returns the mixed file with a 200. */
     public const CANDIDATE_NAME_IS_FILENAME = 'name-is-filename';
 
-    /** `?name=caller` — the channel word rather than the filename. */
+    /** REJECTED. `?name=caller` — returns the mixed file with a 200. */
     public const CANDIDATE_NAME_IS_CHANNEL = 'name-is-channel';
-
-    /** `/fetch/22342359-caller` — the suffix on the path segment. */
-    public const CANDIDATE_ID_CARRIES_SUFFIX = 'id-carries-suffix';
 
     /**
      * @param string $candidate which reading to use. A constructor argument rather than a hard-coded
@@ -148,16 +147,28 @@ final readonly class ChannelRequestMapping
     }
 
     /**
-     * **UNCONFIRMED.** The caller/callee request, under whichever reading this instance was given.
+     * The caller/callee request.
      *
-     * This is the one method that changes when the client answers. Each arm is written out in full
-     * rather than shared, so switching between them is a single-value edit and the difference between
-     * the readings stays visible.
+     * Each arm is written out in full rather than shared, so the difference between the confirmed format
+     * and the two rejected readings stays visible at the point where it matters.
      */
     private function channelUrl(ChannelRecordingRequest $request, RecordingChannel $channel): string
     {
         return match ($this->candidate) {
-            // A — the client's filename convention is what travels.
+            // CONFIRMED. The suffix rides on the path segment, and `name` is the display name the
+            // provider saves the download as — with no extension, or it appends a second one.
+            self::CANDIDATE_ID_CARRIES_SUFFIX => sprintf(
+                '%s/fetch/%s?%s',
+                $this->baseUrl,
+                rawurlencode($channel->requestSegmentFor($request->recordingId)),
+                http_build_query([
+                    'time' => $request->time,
+                    'company' => $request->company,
+                    'name' => $channel->downloadNameFor($request->recordingId),
+                ]),
+            ),
+
+            // REJECTED — the client's filename convention sent as `name`, path left bare.
             self::CANDIDATE_NAME_IS_FILENAME => sprintf(
                 '%s/fetch/%s?%s',
                 $this->baseUrl,
@@ -169,7 +180,7 @@ final readonly class ChannelRequestMapping
                 ]),
             ),
 
-            // B — the channel word rather than the filename.
+            // REJECTED — the channel word rather than the filename, path left bare.
             self::CANDIDATE_NAME_IS_CHANNEL => sprintf(
                 '%s/fetch/%s?%s',
                 $this->baseUrl,
@@ -181,19 +192,7 @@ final readonly class ChannelRequestMapping
                 ]),
             ),
 
-            // C — the suffix rides on the path segment.
-            self::CANDIDATE_ID_CARRIES_SUFFIX => sprintf(
-                '%s/fetch/%s?%s',
-                $this->baseUrl,
-                rawurlencode($request->recordingId . '-' . $channel->value),
-                http_build_query([
-                    'time' => $request->time,
-                    'company' => $request->company,
-                    'name' => $request->name,
-                ]),
-            ),
-
-            // D, or an unrecognised candidate. Refusing beats guessing: a wrong URL that answers 200 with the
+            // An unrecognised candidate. Refusing beats guessing: a wrong URL that answers 200 with the
             // mixed file is a worse outcome than no request at all, because it reads as success.
             default => throw new UnconfirmedChannelMapping($channel),
         };
@@ -208,12 +207,15 @@ final readonly class ChannelRequestMapping
     public function describeCandidate(): string
     {
         return match ($this->candidate) {
-            self::CANDIDATE_NAME_IS_FILENAME
-                => 'A — the channel filename is sent as the "name" query parameter.',
-            self::CANDIDATE_NAME_IS_CHANNEL
-                => 'B — the channel word ("caller" / "callee") is sent as the "name" query parameter.',
             self::CANDIDATE_ID_CARRIES_SUFFIX
-                => 'C — the channel suffix is appended to the recording id in the URL path.',
+                => 'Confirmed format — the channel suffix is appended to the session id in the URL path, '
+                    . 'and "name" is the download display name with no extension.',
+            self::CANDIDATE_NAME_IS_FILENAME
+                => 'REJECTED reading — the channel filename is sent as the "name" query parameter. '
+                    . 'This returns the mixed recording.',
+            self::CANDIDATE_NAME_IS_CHANNEL
+                => 'REJECTED reading — the channel word is sent as the "name" query parameter. '
+                    . 'This returns the mixed recording.',
             default => 'Unrecognised candidate — caller and callee requests will be refused.',
         };
     }
