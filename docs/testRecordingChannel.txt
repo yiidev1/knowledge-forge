@@ -1,0 +1,1310 @@
+==================================================
+TEST RECORDING CHANNELS - TECHNICAL DOCUMENTATION
+==================================================
+
+Written for: a developer who has never worked on this feature before.
+
+Document status : investigation + documentation only. No application code was read-modified,
+                  refactored or fixed while producing this file.
+Source of truth : the source files listed in section 4, plus git commit 9481fe6.
+Date written    : 2026-09-22
+Code state      : working tree at commit d2d6028 (this feature's files are unmodified since 9481fe6,
+                  except template.php, which was also touched by d2d6028).
+
+A note before anything else, because the task description assumed a different stack:
+
+  This project is NOT Laravel. There are no Blade views, no Vue components, no controllers in the
+  Laravel sense, no Eloquent models. It is a Yii 3 application. The "controller" is an invokable
+  action class, the "view" is a plain PHP template rendered server-side, and routing is declared in
+  config/common/routes.php. There is also NO JavaScript and NO AJAX/fetch on this page at all - see
+  section 6. Everywhere below, the Yii 3 equivalents are named explicitly.
+
+
+--------------------------------------------------
+1. OVERVIEW
+--------------------------------------------------
+
+"Test Recording Channels" is a hidden, admin-only diagnostic page. Its single job is to prove, by
+making one real HTTP request at a time, that this server can fetch a specific channel of a specific
+call recording from the client's external Order58 recording API - and to say in plain words what
+happened when it cannot.
+
+The client's telephony platform produces up to three files per recorded call:
+
+    22342359.wav          the mixed recording  (both parties in one file)
+    22342359-caller.wav   the caller's channel  (one side only)
+    22342359-callee.wav   the callee's channel  (one side only)
+
+This page lets an operator pick a call, pick one of those three channels, fire exactly one GET at
+the external API, and see: the exact URL that was sent, the HTTP status, the Content-Type, the byte
+count, whether the bytes are really a WAV file, a plain-English diagnosis, and - when it really is
+audio - an inline player and a download button.
+
+What it deliberately does NOT do (verified, and enforced by
+tests/Unit/Order58/RecordingChannelIsolationTest.php):
+
+  * it reads no database and writes no database
+  * it enqueues no job and touches no worker
+  * it saves no file anywhere
+  * it shares no code with the Order58 sync client or with the Audio-to-Text feature
+  * it sends no credential of any kind (no Bearer token, no Authorization header)
+
+It is a debugging aid bolted onto the side of the application, and it is kept that way on purpose.
+
+
+--------------------------------------------------
+2. PAGE URL
+--------------------------------------------------
+
+Page (diagnostic form + results):
+
+    http://knowledge-forge.local/admin/order58/test-recording-channels
+
+Download / inline-play endpoint (the only route that hands back bytes):
+
+    http://knowledge-forge.local/admin/order58/test-recording-channels/download
+
+Both are GET-only, both sit inside the admin route group, and neither is linked from any navigation
+menu - they are URL-only. A sibling, older tool lives at /admin/order58/test-recording-apis; this
+page links across to it with the "Original recording API test" button, but shares no code with it.
+
+
+--------------------------------------------------
+3. PURPOSE OF THE TEST RECORDING CHANNELS PAGE
+--------------------------------------------------
+
+Three concrete purposes, in the order an operator meets them:
+
+  (a) Find a call. The "Latest calls" card lists an account's recent calls from the external API so
+      a real call session id can be picked rather than typed from memory.
+
+  (b) Test one channel of one call. The "Request" card builds exactly one URL and sends exactly one
+      GET, then reports everything about the answer.
+
+  (c) Prove the bytes are the right thing. The dangerous failure here is NOT a 404. It is a request
+      that returns HTTP 200 with the MIXED recording while the page claims it is the caller channel.
+      That reads as success, gets believed, and is only caught later by somebody listening to a
+      training file and hearing two voices where they expected one. Almost every design decision in
+      this feature exists to make that specific failure impossible or visible.
+
+
+--------------------------------------------------
+4. FILES INVOLVED
+--------------------------------------------------
+
+All application files live in one directory:  src/Order58/Web/TestRecordingChannels/
+
+-- Routing ---------------------------------------------------------------------------------------
+
+config/common/routes.php
+    Purpose : declares both routes, inside the admin group.
+    Lines   : 319-325 (the two Route::get definitions); line 28 imports the namespace as
+              `Order58TestRecordingChannels`.
+    Group   : Group::create() at line 64, with ->middleware(RequireAdminMiddleware::class) and
+              ->middleware(DomainExceptionMiddleware::class). That is where the admin-only
+              protection comes from; there is no per-action auth check.
+
+-- The page ("controller" + "view") --------------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/Action.php
+    Purpose : the page action (GET /admin/order58/test-recording-channels). Reads query params,
+              validates, optionally performs one or two outbound calls, renders the template.
+    Methods : __invoke()          entry point; reads every query parameter and applies defaults
+              runLatestCalls()    the "Load Latest Calls" path
+              run()               validate-then-fetch for the channel probe
+              runLive()           builds the URL, calls the probe, catches transport failures
+              runFixture()        answers from a local sample file (dev/test only)
+              outcome()           shapes the result array the template reads
+              text()              trims a scalar query param, falls back to a default
+    Constants (the only place the pre-filled form values are defined):
+              DEFAULT_RECORDING_ID = FixtureRecordingSource::SAMPLE_RECORDING_ID = '22342359'
+              DEFAULT_MERCHANT_ID  = '871'
+              DEFAULT_TIME         = '2026-03-11'
+              DEFAULT_COMPANY      = 'SWCC'
+              DEFAULT_NAME         = 'test'
+              DEFAULT_ACCOUNT_ID   = '871'
+
+src/Order58/Web/TestRecordingChannels/template.php
+    Purpose : the whole page. Plain PHP + Yii Html helper. Two GET forms, a results card, an
+              <audio> element and a Download link. No JavaScript.
+    Notable : line 103 prints the latest-calls endpoint shape for the operator;
+              lines 109-149 the "Latest calls" form; lines 260-362 the channel form;
+              lines 365-463 the Result card; lines 437-452 build the play/download URLs.
+
+-- URL construction (the heart of the feature) ---------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/ChannelRequestMapping.php
+    Purpose : EVERY outbound URL this tool sends is built here and nowhere else. This is the file
+              that was corrected yesterday.
+    Methods : urlFor()              picks mixed vs channel
+              mixedUrl()            the mixed request
+              channelUrl()          the caller/callee request (a match over the candidate readings)
+              latestCallsUrl()      the call-list request
+              describeCandidate()   one sentence shown on the page saying which reading is in use
+    Constants:
+              BASE_URL                    = 'https://order58.xrainbow.com/api/external/recording'
+              DEFAULT_CANDIDATE           = CANDIDATE_ID_CARRIES_SUFFIX   <- the confirmed format
+              CANDIDATE_ID_CARRIES_SUFFIX = 'id-carries-suffix'           (confirmed)
+              CANDIDATE_NAME_IS_FILENAME  = 'name-is-filename'            (REJECTED, kept for tests)
+              CANDIDATE_NAME_IS_CHANNEL   = 'name-is-channel'             (REJECTED, kept for tests)
+
+src/Order58/Web/TestRecordingChannels/RecordingChannel.php
+    Purpose : the three-value enum (mixed / caller / callee) and the single definition of every
+              channel-derived string.
+    Methods : label()                             'Mixed' | 'Caller' | 'Callee'
+              fileNameFor($id)                    '<id>.wav' | '<id>-caller.wav' | '<id>-callee.wav'
+              requestSegmentFor($id)              '<id>'     | '<id>-caller'     | '<id>-callee'
+              downloadNameFor($id)                delegates to requestSegmentFor() - NO extension
+              liveRetrievalIsConfirmed()          returns true for all three (since 2026-09-21)
+              separatedChannelsNeedAListedMerchant()  true for caller/callee, false for mixed
+              fromStorage(), all()
+    Note    : requestSegmentFor() and downloadNameFor() were ADDED yesterday. fileNameFor() is the
+              older method and is now used only for the local download filename and the fixture
+              lookup - not for addressing the live file. See section 11.
+
+-- Request value objects and validation -----------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/ChannelRecordingRequest.php
+    Purpose : the five values a recording request needs, and the ONE definition of what makes them
+              safe to send. Both the page and the download endpoint validate through it.
+    Methods : validate() (static, returns the first problem or null), isNumericId(),
+              isCalendarDate(), isSafeText()
+    Rules   : recording id  -> digits only, 1..20 digits, anchored \A..\z
+              merchant id   -> digits only, 1..20 digits (collected, NOT sent - see section 10)
+              time          -> a REAL calendar date in YYYY-MM-DD (2026-02-31 is rejected)
+              company, name -> non-empty, <= 100 chars, no control characters
+
+src/Order58/Web/TestRecordingChannels/LatestCallsRequest.php
+    Purpose : the two values the call-list request needs.
+    Methods : validate(), fromStrings(), positiveInt()
+    Rules   : account id -> \A\d{1,9}\z and > 0 ; limit -> positive, MAX_LIMIT = 500,
+              DEFAULT_LIMIT = 10
+
+-- The HTTP client --------------------------------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/ChannelApiProbe.php
+    Purpose : the only class that opens a socket. Guzzle, unauthenticated GET.
+    Methods : urlFor()        delegates to the mapping
+              mapping()       exposes the mapping so the page can describe the candidate
+              latestCalls()   call list; reads the body, decodes JSON best-effort
+              inspect()       diagnostic fetch; body measured and sampled, never kept whole
+              open()          download fetch; body left unread so it can be streamed
+              send()          the actual Guzzle call
+              readBounded()   reads the whole body for an honest byte count, keeps first 8192 bytes
+    Settings: connect_timeout 10s, timeout 60s, headers ['Accept' => 'application/json'],
+              http_errors => false, allow_redirects => true, stream => true
+              SAMPLE_BYTES = 8192, READ_CHUNK_BYTES = 8192
+
+-- Result / verdict objects ------------------------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/ChannelProbeResult.php
+    Purpose : what came back, reduced to what an HTML page may safely print.
+    Methods : isSuccessful(), isPlayable(), sizeLabel(), textPreview()
+    Note    : carries only Content-Type, Content-Disposition and Content-Length by name - a full
+              header dump is deliberately avoided.
+
+src/Order58/Web/TestRecordingChannels/ChannelDiagnosis.php
+    Purpose : turns an outcome into one headline + one piece of advice an operator can act on.
+    Methods : fromResponse(), fromTransportFailure(), forJson(), invalidJson(), noCalls(),
+              notConfigured(), isSuccess(), isFailure(), looksLikeIpRejection()
+    Kinds   : ok, ip-not-whitelisted, forbidden, unauthorized, not-found, timeout,
+              connection-failed, empty-body, not-audio, truncated, server-error,
+              unexpected-status, not-configured, rate-limited, invalid-json, no-calls
+
+src/Order58/Web/TestRecordingChannels/WavSignature.php
+    Purpose : decides whether the bytes are really a WAV, from the BYTES not the Content-Type.
+    Methods : inspect(), contentTypeLooksLikeAudio(), littleEndianSize()
+    Rules   : needs 'RIFF' at offset 0 AND 'WAVE' at offset 8 (HEADER_BYTES = 12);
+              MINIMUM_PLAUSIBLE_BYTES = 44; compares the declared RIFF size + 8 against the bytes
+              actually received to catch a truncated transfer.
+
+src/Order58/Web/TestRecordingChannels/CallSummary.php
+    Purpose : one row of the latest-calls response.
+    Fields  : callSessionId, callTime, orderId  (only these three - nothing is invented)
+    Methods : fromArray(), fromDecoded(), isUsable(), hasValidRecordingId(), derivedDate(),
+              shortCallTime()
+
+src/Order58/Web/TestRecordingChannels/LatestCallsResult.php
+    Purpose : the decoded call list plus the raw body for diagnostics.
+    Methods : selectableCalls(), hasCalls(), unusableCount(), bodyPreview()
+
+-- The download endpoint ---------------------------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/DownloadAction.php
+    Purpose : GET /admin/order58/test-recording-channels/download. Re-runs the SAME request through
+              the SAME URL builder and the SAME validation, and streams the bytes to the browser.
+    Methods : __invoke(), fromLive(), fromFixture(), deliver(), diagnostic(), snippet(), clean(),
+              text()
+    Constants: MAX_ERROR_SNIPPET_BYTES = 4096, HEADER_PEEK_BYTES = 64
+
+-- Local fixtures (development only) ----------------------------------------------------------------
+
+src/Order58/Web/TestRecordingChannels/FixtureAvailability.php
+    Purpose : the gate that decides whether local sample files may be used instead of the live API.
+    Methods : isPermitted(), isRequested(), describe()
+    Rules   : BOTH must hold - APP_ENV is dev or test (positive allow-list, never "!== prod"), AND
+              the request carries ?source=fixture. There is no sticky setting and no default.
+
+src/Order58/Web/TestRecordingChannels/FixtureRecordingSource.php
+    Purpose : serves the three sample WAVs from tests/_data/recording-channels/.
+    Methods : pathFor(), read(), latestCalls(), describe(), assertPermitted(), directory()
+    Const   : SAMPLE_RECORDING_ID = '22342359', DIRECTORY = 'tests/_data/recording-channels'
+
+src/Order58/Web/TestRecordingChannels/FixturesNotPermitted.php
+    Purpose : the exception thrown if a fixture is reached for outside dev/test.
+
+src/Order58/Web/TestRecordingChannels/UnconfirmedChannelMapping.php
+    Purpose : thrown when the candidate reading is unrecognised, so NO request is built.
+              Refusing beats guessing - see section 12.
+
+-- Tests (not part of the runtime, but the best executable description of the behaviour) --------------
+
+tests/Unit/Order58/RecordingChannelTest.php          filenames, URL construction, probe behaviour
+tests/Unit/Order58/RecordingChannelIsolationTest.php keeps the tool isolated; asserts the mapping
+                                                     lives in one file only
+tests/Unit/Order58/LatestCallsTest.php               the call-list parsing
+tests/Web/RecordingChannelsCest.php                  end-to-end page behaviour
+
+-- Dependency injection -------------------------------------------------------------------------------
+
+There is NO DI configuration for any of these classes. A grep of config/ finds only routes.php.
+They are autowired by the Yii container from their constructor signatures: ChannelApiProbe's
+constructor defaults (`?ClientInterface $httpClient = null`, `ChannelRequestMapping $mapping = new
+ChannelRequestMapping()`) mean production gets the real Guzzle client and the confirmed mapping,
+while tests can inject a Guzzle mock handler and any candidate they like.
+
+
+--------------------------------------------------
+5. COMPLETE REQUEST FLOW
+--------------------------------------------------
+
+There are three distinct flows. They are independent: loading calls never fetches a recording, and
+fetching a recording never reloads the call list unless the form carried load_calls=1 through.
+
+FLOW A - open the page (no probing)
+
+  browser GET /admin/order58/test-recording-channels
+    -> RequireAdminMiddleware (admin group, config/common/routes.php:64-66)
+    -> Action::__invoke()
+         reads query params, applies the DEFAULT_* constants for anything missing
+         $submitted = ($params['submitted'] ?? null) === '1'   -> false
+         $loadCalls = ($params['load_calls'] ?? null) === '1'  -> false
+         $latest = null ; $outcome = null
+    -> renders template.php with the form pre-filled
+    -> NOTHING is sent anywhere. A bare URL never probes.
+
+FLOW B - "Load Latest Calls"  (submits load_calls=1)
+
+  browser GET ...?load_calls=1&account_id=871&limit=10&<channel form values carried along>
+    -> Action::__invoke() -> Action::runLatestCalls()
+    -> LatestCallsRequest::validate()      invalid -> validationError, nothing sent
+    -> LatestCallsRequest::fromStrings()
+    -> (fixtures?) FixtureRecordingSource::latestCalls()
+       (live)      ChannelApiProbe::latestCalls()
+                     -> ChannelRequestMapping::latestCallsUrl()
+                     -> ChannelApiProbe::send()  ... GET {base}/{accountId}/latest-calls?limit={n}
+                     -> readBounded() -> ChannelDiagnosis::forJson()
+                     -> json_decode(..., depth 32, JSON_THROW_ON_ERROR)
+                     -> CallSummary::fromDecoded()
+    -> LatestCallsResult
+    -> template prints the URL, the diagnosis, and a table of calls with a "Use This Call" link.
+       That link is a plain GET back to this same page carrying recording_id (and a derived date,
+       when one could be read with certainty). It carries NO submitted=1, so selecting a call
+       fetches nothing.
+
+FLOW C - "Test / Fetch Recording"  (submits submitted=1)
+
+  browser GET ...?submitted=1&recording_id=22447829&merchant_id=871&channel=callee
+                 &time=2026-03-11&company=SWCC&name=test&account_id=871&limit=10
+    -> Action::__invoke() -> Action::run()
+    -> ChannelRecordingRequest::validate(recordingId, merchantId, time, company, name)
+         invalid -> outcome['validationError'], NOTHING is sent, no URL is even built
+    -> new ChannelRecordingRequest(...)
+    -> Action::runLive()  (or runFixture() when ?source=fixture and env is dev/test)
+         -> ChannelApiProbe::urlFor() -> ChannelRequestMapping::urlFor()
+              mixed  -> mixedUrl()
+              caller
+              callee -> channelUrl()   <- the confirmed format
+            (throws UnconfirmedChannelMapping if the candidate is unrecognised; nothing is sent)
+         -> ChannelApiProbe::inspect()
+              -> send() (Guzzle GET, no auth, streamed)
+              -> readBounded()  (whole body counted, first 8192 bytes kept)
+              -> WavSignature::inspect()
+              -> ChannelDiagnosis::fromResponse(status, contentType, sample, totalBytes)
+         -> ChannelProbeResult
+         (any Throwable from the transport is caught here and turned into
+          ChannelDiagnosis::fromTransportFailure() + a "Class: message" details block)
+    -> template prints: Recording ID, Merchant ID, Channel, Path segment, Name sent, Source,
+       the exact request URL, the diagnosis, status/Content-Type/bytes/Content-Length/Valid WAV,
+       and - only when $result->isPlayable() - the <audio> player and the Download button.
+
+FLOW D - play or download (a separate request, made by the browser)
+
+  browser GET /admin/order58/test-recording-channels/download?recording_id=...&channel=callee
+              &time=...&company=...&name=...&merchant_id=...[&disposition=inline][&source=fixture]
+    -> DownloadAction::__invoke()
+         channel unknown            -> 400 text/plain diagnostic
+         ChannelRecordingRequest::validate() fails -> 400 text/plain diagnostic
+    -> DownloadAction::fromLive()
+         -> ChannelApiProbe::urlFor()   (same builder as the page - cannot drift)
+         -> ChannelApiProbe::open()     (same GET, body left unread)
+         -> non-2xx                 -> 502 text/plain with the diagnosis + upstream snippet
+         -> peek first 64 bytes, WavSignature::inspect()
+         -> not a WAV               -> 502 text/plain ("the body is not a WAV file")
+         -> deliver(): the peeked head is put back in front of the stream, and the response is
+            Content-Type: audio/wav
+            X-Content-Type-Options: nosniff
+            Cache-Control: no-store, private
+            Content-Disposition: inline|attachment; filename="<id>-callee.wav"
+            Content-Length: <size>  (when known)
+
+
+--------------------------------------------------
+6. FRONTEND FLOW
+--------------------------------------------------
+
+There is no frontend framework here, and this is worth stating plainly because the task description
+expected one:
+
+  * No Blade, no Vue, no React.
+  * No JavaScript at all - template.php contains no <script> tag and registers no asset bundle.
+  * No AJAX, no fetch(), no XMLHttpRequest.
+  * No CSRF token: both routes are GET-only and read-only.
+
+Everything is plain HTML:
+
+  1. Two independent <form method="get"> elements, both posting back to the page's own URL.
+     - Form 1 ("Latest calls") carries a hidden load_calls=1 plus hidden copies of every channel-
+       form value, so loading a list does not wipe a half-filled form below (template.php:109-124).
+     - Form 2 ("Request") carries a hidden submitted=1 plus hidden account_id/limit (and load_calls
+       when a list is already on screen), so fetching a recording does not wipe the call list
+       (template.php:260-269).
+  2. The channel is a set of three radio buttons named `channel`, values mixed / caller / callee.
+     Each label shows the concrete path segment that channel would use, e.g. `22447829-callee`
+     (template.php:294-321). For an invalid recording id it shows the pattern `{id}-callee`
+     instead, so no URL-like string is ever printed for input that was refused.
+  3. "Use This Call" in the calls table is an ordinary <a href> back to the page with
+     recording_id pre-filled and #channel-test as the fragment.
+  4. Playback is the browser's native element:
+         <audio class="a2t-player__control" controls preload="none" src="<download URL>?...&disposition=inline">
+     The src is SAME-ORIGIN - it points at this application's own download route, never at
+     order58.xrainbow.com. So the external host, and any future credential, never reach the browser.
+     preload="none" means nothing is fetched until the operator presses play.
+  5. "Download" is an ordinary <a href> to the same route without disposition=inline, which makes
+     it an attachment.
+
+
+--------------------------------------------------
+7. BACKEND FLOW
+--------------------------------------------------
+
+Step by step, with the real names:
+
+  1. Routing. config/common/routes.php lines 319-325 map the two URLs to
+     Order58TestRecordingChannels\Action::class and ...\DownloadAction::class. Both are inside the
+     admin Group (line 64) carrying RequireAdminMiddleware and DomainExceptionMiddleware.
+
+  2. Parameter reading. Action::__invoke() calls Action::text() on each query parameter. text()
+     returns the trimmed scalar, or the supplied default when the value is absent, non-scalar or
+     empty. This is why a bare page load shows 22342359 / 871 / 2026-03-11 / SWCC / test.
+
+  3. Channel resolution. RecordingChannel::fromStorage($params['channel']) ?? RecordingChannel::Mixed
+     - an unknown channel silently becomes Mixed on the PAGE. (The DOWNLOAD endpoint is stricter: an
+     unknown channel there is a 400, because that route hands over bytes.)
+
+  4. Fixture gate. FixtureAvailability::isRequested($params['source']) - true only when APP_ENV is
+     dev or test AND source=fixture is on this very request.
+
+  5. Validation before anything goes on the wire. ChannelRecordingRequest::validate() returns the
+     first problem as a sentence, or null. On a problem the action returns immediately with
+     validationError set; no URL is constructed, so the page cannot even display one.
+
+  6. URL construction. ChannelApiProbe::urlFor() -> ChannelRequestMapping::urlFor(). This is the
+     only place a URL is built. RecordingChannelIsolationTest asserts that no other file in the
+     directory builds channel strings.
+
+  7. The call. ChannelApiProbe::send() - Guzzle, GET, no Authorization header, http_errors disabled
+     (so a 403/404 is data to report, not an exception), redirects followed, body streamed.
+
+  8. Bounded reading. ChannelApiProbe::readBounded() reads the WHOLE body to get an honest byte
+     count but keeps only the first 8192 bytes. The honest count is what catches a truncated
+     download - a file that has a perfectly valid header and is cut short.
+
+  9. Verdicts. WavSignature::inspect() answers "is this a WAV, and is it complete?" from the bytes.
+     ChannelDiagnosis::fromResponse() turns status + content type + sample + size into a headline
+     and an action. Neither of them ever echoes a header, a token or a credential.
+
+ 10. Rendering. The template decides nothing; every verdict arrives already settled.
+
+
+--------------------------------------------------
+8. EXTERNAL ORDER58 API INTEGRATION
+--------------------------------------------------
+
+Host / base URL (ChannelRequestMapping::BASE_URL):
+
+    https://order58.xrainbow.com/api/external/recording
+
+Authentication: NONE. No Bearer token, no API key, no Authorization header, no cookie. The only
+header sent is `Accept: application/json` (ChannelApiProbe::send()). The endpoint is gated on the
+provider's side by an IP ALLOWLIST - this server's public IP has to be whitelisted by the client.
+That is why ChannelDiagnosis has a dedicated `ip-not-whitelisted` verdict, detected from the
+provider's own wording in the 403 body (`403 Forbidden - IP not authorized: <address>`) rather than
+assumed from the status code.
+
+Timeouts: connect 10s, total 60s. Redirects are followed. HTTP error statuses do NOT throw.
+
+Nothing is cached, retried or persisted. One page submit = one outbound GET.
+
+
+--------------------------------------------------
+9. API ENDPOINTS
+--------------------------------------------------
+
+ENDPOINT 1 - latest calls for an account
+----------------------------------------
+  Method        : GET
+  URL           : {BASE_URL}/{accountId}/latest-calls?limit={limit}
+  Built in      : ChannelRequestMapping::latestCallsUrl(int $accountId, int $limit)
+  Called from   : ChannelApiProbe::latestCalls(), from Action::runLatestCalls()
+  Query params  : limit (int, 1..500, page default 10) - built with http_build_query
+  Path params   : accountId (positive int, <= 9 digits)
+  Headers       : Accept: application/json
+  Auth          : none
+  Body          : none (GET)
+  Example       : https://order58.xrainbow.com/api/external/recording/871/latest-calls?limit=10
+  Expected resp : a JSON array of call objects. Only three fields are read, because only three are
+                  known to exist: callTime, callSessionId, orderId (CallSummary::fromArray()).
+  Parsing       : ChannelDiagnosis::forJson(status, body) first; then, on success,
+                  json_decode($body, true, 32, JSON_THROW_ON_ERROR) and CallSummary::fromDecoded().
+                  A JsonException becomes ChannelDiagnosis::invalidJson(). Valid JSON that is not a
+                  list of calls becomes invalidJson() too; a valid but empty array becomes
+                  ChannelDiagnosis::noCalls(). Those are deliberately different messages.
+  Used for      : the table of calls, each with a "Use This Call" link that pre-fills the channel
+                  form's Recording ID (and Time, when CallSummary::derivedDate() can read one).
+  Errors        : any non-2xx routes through the shared branches of ChannelDiagnosis::fromResponse();
+                  a transport failure is caught in Action::runLatestCalls() and shown as
+                  "Class: message" with no stack trace.
+  Channel note  : this endpoint knows nothing about channels.
+
+ENDPOINT 2 - fetch a MIXED recording
+------------------------------------
+  Method        : GET
+  URL           : {BASE_URL}/fetch/{recordingId}?time={time}&company={company}&name={name}
+  Built in      : ChannelRequestMapping::mixedUrl()
+  Called from   : ChannelApiProbe::inspect() (page) and ChannelApiProbe::open() (download)
+  Path params   : recordingId - the call session id, rawurlencode()d
+  Query params  : time, company, name - all http_build_query()d
+  Headers/auth  : Accept: application/json ; no credential
+  Example       : https://order58.xrainbow.com/api/external/recording/fetch/22447829
+                  ?time=2026-03-11&company=SWCC&name=test
+  Expected resp : the WAV bytes. The live endpoint answers Content-Type: application/octet-stream
+                  for perfectly good audio, which is why Content-Type is reported but never used as
+                  the verdict (WavSignature class docblock).
+  Parsing       : body counted whole, first 8192 bytes sampled, WavSignature::inspect(),
+                  ChannelDiagnosis::fromResponse().
+  Used for      : the result card, the inline player, the download.
+  Channel note  : `name` here is passed through from the form EXACTLY as the operator typed it
+                  (default "test"). It is not derived and not used for addressing.
+
+ENDPOINT 3 - fetch a CALLER or CALLEE recording   (the format fixed yesterday)
+-----------------------------------------------------------------------------
+  Method        : GET
+  URL           : {BASE_URL}/fetch/{recordingId}-caller?time={time}&company={company}
+                  &name={recordingId}-caller
+                  (and the same with -callee)
+  Built in      : ChannelRequestMapping::channelUrl(), arm CANDIDATE_ID_CARRIES_SUFFIX
+  Called from   : ChannelApiProbe::inspect() and ChannelApiProbe::open()
+  Path params   : rawurlencode($channel->requestSegmentFor($request->recordingId))
+                  -> "22447829-callee"
+  Query params  : time      = the form's Time field, verbatim
+                  company   = the form's Company field, verbatim
+                  name      = $channel->downloadNameFor($request->recordingId) -> "22447829-callee"
+                              NOTE: this OVERRIDES whatever the operator typed in the Name field,
+                              and carries NO .wav extension.
+  Headers/auth  : Accept: application/json ; no credential
+  Example       : https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+                  ?time=2026-03-11&company=SWCC&name=22447829-callee
+  Expected resp : the WAV bytes of that one channel.
+  Parsing/usage : identical to endpoint 2 - the tool treats the response the same way whichever
+                  channel was asked for. That sameness is deliberate: the ONLY difference between a
+                  mixed and a caller request is the URL.
+  Errors        : a 404 here most often means this merchant has no separated channels at all (see
+                  section 23), not that the URL is wrong.
+
+
+--------------------------------------------------
+10. REQUEST PARAMETERS AND THEIR SOURCES
+--------------------------------------------------
+
+Taking the example the task asked about:
+
+    https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+        ?time=2026-03-11&company=SWCC&name=22447829-callee
+
+  {BASE_URL} = https://order58.xrainbow.com/api/external/recording
+      Source : ChannelRequestMapping::BASE_URL, a hard-coded constant. Not an env var, not a
+               setting, not a database row. Confirmed: a grep finds this host only in
+               ChannelRequestMapping.php (this tool), in the older TestRecordingApis tool, and in
+               the page template's informational <pre> line.
+
+  /fetch/22447829-callee   -> the path segment
+      "22447829"  is the CALL SESSION ID. It comes from the Recording ID form field
+                  (query param recording_id). An operator either types it, or clicks "Use This
+                  Call" in the Latest calls table, which copies CallSummary::$callSessionId
+                  verbatim - never derived, never generated, never substituted with a merchant id
+                  (CallSummary class docblock). It is validated as digits-only before use.
+      "-callee"   is appended by RecordingChannel::requestSegmentFor(), chosen by the `channel`
+                  radio button. For Mixed the segment is the bare id with no suffix.
+      Encoding    : rawurlencode() is applied to the whole segment.
+
+  time=2026-03-11
+      Source : the Time form field (query param `time`), default Action::DEFAULT_TIME = '2026-03-11'.
+               Validated by ChannelRecordingRequest as a real YYYY-MM-DD calendar date.
+               It can also be pre-filled by "Use This Call", but only when
+               CallSummary::derivedDate() could read a real date from the *start* of the provider's
+               callTime string; otherwise the operator's Time value is left untouched and the page
+               says "Date not readable - Time left unchanged."
+               NOTE: 2026-03-11 being both the example date and the page's default is a
+               coincidence of the default, not a derivation from the recording id.
+
+  company=SWCC
+      Source : the Company form field (query param `company`), default
+               Action::DEFAULT_COMPANY = 'SWCC'. Free text, max 100 chars, passed through verbatim.
+               Its meaning on the provider's side is not documented anywhere in this project.
+
+  name=22447829-callee
+      Source : for CALLER and CALLEE this is NOT the form's Name field. It is computed by
+               RecordingChannel::downloadNameFor($recordingId), which delegates to
+               requestSegmentFor() - i.e. session id + channel suffix, with NO .wav extension.
+               For MIXED it IS the form's Name field verbatim (default "test").
+      Meaning: the provider's download display name. It does not address the file. The provider
+               appends the extension itself, which is why no .wav is sent (see section 11).
+
+  merchant_id (e.g. 871)
+      Source : the Merchant ID form field. It is validated and displayed, and it is NOT SENT to the
+               API - the confirmed recording endpoint has no merchant parameter. The page states
+               this on the field itself (template.php:286-289) so it does not look like an
+               oversight. It does ride along in the page's own links (including the download URL),
+               but never onto the outbound request.
+
+  account_id / limit
+      Source : the Latest calls form only. They address endpoint 1 and never appear in a fetch URL.
+
+  source=fixture
+      Source : typed by the operator (or the dev-only checkbox). Dev/test only. Diverts everything
+               to local sample files and labels the page accordingly.
+
+  submitted=1 / load_calls=1 / disposition=inline
+      Source : hidden inputs and generated links in template.php. They control this application's
+               own behaviour and are never forwarded to the provider.
+
+
+--------------------------------------------------
+11. RECORDING NAMING / IDENTIFIER LOGIC
+--------------------------------------------------
+
+Three different strings are derived from one recording id, and keeping them apart is the whole
+lesson of yesterday's fix. All three live in RecordingChannel.php and nowhere else.
+
+  method                     mixed          caller                callee
+  -------------------------------------------------------------------------------------
+  requestSegmentFor($id)     22447829       22447829-caller       22447829-callee
+  downloadNameFor($id)       22447829       22447829-caller       22447829-callee
+  fileNameFor($id)           22447829.wav   22447829-caller.wav   22447829-callee.wav
+
+  requestSegmentFor()  -> goes in the URL PATH. This is how the file is addressed.
+  downloadNameFor()    -> goes in the `name` QUERY PARAMETER (caller/callee only). Display name.
+                          Currently identical to requestSegmentFor(), but it is a separate method
+                          on purpose: they answer different questions, and if the provider ever
+                          changes one, only that one moves.
+  fileNameFor()        -> used in THREE places, none of them the live URL:
+                            1. DownloadAction::deliver() - the Content-Disposition filename this
+                               application gives the browser;
+                            2. FixtureRecordingSource::pathFor()/describe() - the local sample file
+                               name;
+                            3. Action::__invoke()'s `$fileName` variable, which is used only as a
+                               "did validation pass?" flag for the template.
+                          It also still appears inside the REJECTED CANDIDATE_NAME_IS_FILENAME arm
+                          of ChannelRequestMapping::channelUrl(), which production never takes.
+
+Why downloadNameFor() has no extension: the provider appends one. Sending
+`name=22447829-caller.wav` produces `22447829-caller.wav.wav` on the recipient's disk. The client
+called this out explicitly; the commit message records it, and the separate method exists so the
+two strings cannot be accidentally unified again.
+
+Safety: RecordingChannel::fileNameFor() and requestSegmentFor() cannot refuse bad input, so their
+docblocks state - and a test asserts - that every id reaching them has already passed
+ChannelRecordingRequest::validate(). Digits-only makes `../`, absolute paths, NUL bytes, quotes,
+newlines and separators structurally impossible rather than filtered afterwards.
+
+
+--------------------------------------------------
+12. MIXED AUDIO BEHAVIOUR
+--------------------------------------------------
+
+  * Request: {BASE_URL}/fetch/{id}?time=..&company=..&name={whatever the Name field says}
+  * The path segment is the bare call session id - no suffix.
+  * `name` is passed through untouched; the page's default is the literal string "test".
+  * This is the request shape the older, already-working tool (src/Order58/Web/TestRecordingApis)
+    makes, reproduced here byte for byte. It is deliberately NOT imported from that directory: those
+    files are frozen and guarded by their own isolation test, and reaching into them would couple a
+    working production tool to a new diagnostic one.
+  * Every account has a mixed recording. RecordingChannel::separatedChannelsNeedAListedMerchant()
+    returns false for Mixed and true for the other two, and the page uses that to print
+    "(listed merchants only)" beside caller and callee.
+  * A bare `/fetch/{id}` request returns the MIXED file with HTTP 200. This is exactly why the old
+    behaviour was so dangerous: a caller request that left the path bare got a 200 and a valid WAV,
+    which reads as success (see sections 15-18).
+
+
+--------------------------------------------------
+13. CALLER AUDIO BEHAVIOUR
+--------------------------------------------------
+
+  Selected by : the `caller` radio button -> RecordingChannel::Caller
+  Path segment: requestSegmentFor() -> "{id}-caller"
+  name param  : downloadNameFor()   -> "{id}-caller"   (no extension, overrides the Name field)
+  URL         : {BASE_URL}/fetch/{id}-caller?time={time}&company={company}&name={id}-caller
+  Example     : https://order58.xrainbow.com/api/external/recording/fetch/22447829-caller
+                ?time=2026-03-11&company=SWCC&name=22447829-caller
+  Availability: only for merchants on the client's list. For any other merchant the caller file does
+                not exist and the request 404s however well-formed it is.
+  Download    : the browser receives it as 22447829-caller.wav (fileNameFor(), set by this
+                application in Content-Disposition, ignoring whatever the upstream sent).
+
+
+--------------------------------------------------
+14. CALLEE AUDIO BEHAVIOUR
+--------------------------------------------------
+
+Identical to caller in every respect, with the suffix `-callee`:
+
+  URL         : {BASE_URL}/fetch/{id}-callee?time={time}&company={company}&name={id}-callee
+  Example     : https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+                ?time=2026-03-11&company=SWCC&name=22447829-callee
+  Download    : delivered to the browser as 22447829-callee.wav
+
+An important non-behaviour, documented in the RecordingChannel class docblock: caller and callee are
+NOT mapped to Customer and Agent. Nothing in this application knows the direction of an Order58 call,
+and there is no stored call-direction field anywhere, so the page reports the provider's own words -
+Mixed, Caller, Callee - rather than presenting a guess as a fact.
+
+
+--------------------------------------------------
+15. YESTERDAY'S ISSUE
+--------------------------------------------------
+
+("Yesterday" = Monday 21 September 2026. Fix committed at 15:37:12 +0530 as 9481fe6, "Use the
+client's confirmed caller/callee recording URL format".)
+
+The symptom: asking for the caller or callee channel returned the MIXED recording. The API answered
+HTTP 200 with a complete, valid WAV file, so every check on this page passed and the result card
+reported success - while the bytes were both parties in one file, not one side.
+
+The state of the code before the fix (from `git show 9481fe6`):
+
+  * ChannelRequestMapping::DEFAULT_CANDIDATE was CANDIDATE_NAME_IS_FILENAME.
+  * That arm built:
+        {BASE_URL}/fetch/{recordingId}                      <- BARE path, no suffix
+            ?time=..&company=..&name={recordingId}-caller.wav
+  * RecordingChannel had no requestSegmentFor() and no downloadNameFor(); only fileNameFor().
+  * RecordingChannel::liveRetrievalIsConfirmed() returned false for caller and callee, and the page
+    displayed the caller/callee format as "not confirmed" - the reading really was a placeholder
+    chosen from four candidates (A: name is filename, B: name is the channel word, C: the path
+    segment carries the suffix, D: a different endpoint entirely), with A picked as provisional.
+  * The result card showed "Generated filename: <id>.wav" beside every result, including channel
+    requests that transmit no filename at all.
+
+
+--------------------------------------------------
+16. ROOT CAUSE
+--------------------------------------------------
+
+The channel suffix was being put in the WRONG PART OF THE URL.
+
+The provider addresses a recording by its PATH SEGMENT. The `name` query parameter is only the
+download display name - it does not select anything. So the old request:
+
+  * asked for `/fetch/22447829` - which is the address of the MIXED file;
+  * decorated it with `name=22447829-caller.wav`, which the provider used only to name the download.
+
+The provider therefore did exactly what it was asked: it returned the mixed recording, with a 200,
+named "caller". Nothing in the response distinguished it from a correct answer - same status, same
+Content-Type, same RIFF/WAVE header, same plausible size - which is why it could not be caught by
+any of the page's own checks and had to be caught by the client telling us the right URL.
+
+A second, smaller defect rode along: even when `name` was used as a display name, it was being sent
+WITH a .wav extension, and the provider appends its own, so downloads landed as
+`22447829-caller.wav.wav`.
+
+Root cause in one sentence: the application inferred the caller/callee request format from a
+filename convention the client had supplied, rather than from a worked example URL, and picked the
+reading that put the channel in `name` while leaving the addressing path bare.
+
+
+--------------------------------------------------
+17. FIX APPLIED
+--------------------------------------------------
+
+Commit 9481fe6 (2026-09-21 15:37 +0530), files changed:
+
+    src/Order58/Web/TestRecordingChannels/ChannelRequestMapping.php   130 +-
+    src/Order58/Web/TestRecordingChannels/RecordingChannel.php         55 +-
+    src/Order58/Web/TestRecordingChannels/template.php                 63 +-
+    tests/Unit/Order58/RecordingChannelIsolationTest.php               21 +-
+    tests/Unit/Order58/RecordingChannelTest.php                        84 +-
+    tests/Web/RecordingChannelsCest.php                                33 +-
+
+What changed, precisely:
+
+  1. ChannelRequestMapping::DEFAULT_CANDIDATE
+       was : self::CANDIDATE_NAME_IS_FILENAME
+       now : self::CANDIDATE_ID_CARRIES_SUFFIX
+
+  2. The CANDIDATE_ID_CARRIES_SUFFIX arm of channelUrl() was rewritten. Before the fix that arm
+     existed but built the suffix inline (`rawurlencode($request->recordingId . '-' . $channel->value)`)
+     and passed the form's `name` through. After the fix it uses the two new enum methods:
+         rawurlencode($channel->requestSegmentFor($request->recordingId))
+         'name' => $channel->downloadNameFor($request->recordingId)
+
+  3. RecordingChannel gained requestSegmentFor() and downloadNameFor() (section 11), so the
+     "address" string and the "display name" string each have exactly one definition.
+
+  4. liveRetrievalIsConfirmed() now returns true for all three channels, and a new method
+     separatedChannelsNeedAListedMerchant() was added to express the remaining real constraint -
+     caller/callee files exist only for merchants on the client's list.
+
+  5. The two old readings were kept as REJECTED constants, with their doc comments changed to say
+     they return the mixed recording. They are retained because a test drives each one; those tests
+     are what would catch a future edit that quietly puts the channel back into `name`.
+
+  6. The page was updated: the "unconfirmed format" warning became a "separated channels exist only
+     for listed merchants" notice; the radio labels now show the PATH SEGMENT rather than the .wav
+     filename (template.php:305-315 explains that showing the .wav name "is what led to it being
+     sent as `name`"); and the result card's "Generated filename" row became two rows, "Path
+     segment" and "Name sent".
+
+Why it fixed the problem: the request now addresses a DIFFERENT RESOURCE. `/fetch/22447829-callee`
+is a different path from `/fetch/22447829`, so the provider resolves it to the callee file instead
+of the mixed one. The fix is not a parsing change or a response-handling change - the response
+handling was always correct; it was faithfully reporting a file that had been correctly delivered
+for the wrong request.
+
+Verification recorded in the commit message (not re-run while writing this document): the built
+caller URL matches the client's example character for character; a live download returned a file
+distinct from the mixed one (different MD5, different audio levels, same duration - as two channels
+of one call should be); Order58 unit tests 242 pass, RecordingChannelsCest 30 pass, Psalm and
+php-cs-fixer unchanged.
+
+
+--------------------------------------------------
+18. BEFORE VS AFTER - CALLER/CALLEE FIX
+--------------------------------------------------
+
+OLD FLOW (before 9481fe6)
+-------------------------
+  What request was generated, for recording 22447829, channel = caller?
+
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829
+          ?time=2026-03-11&company=SWCC&name=22447829-caller.wav
+
+  What identifier/name was passed?
+      path segment : 22447829            (the bare session id - the MIXED file's address)
+      name         : 22447829-caller.wav (a filename, sent as a display name, with an extension)
+
+  Why did that result in mixed audio?
+      Because the provider selects the file by PATH. `/fetch/22447829` is the mixed recording, so
+      that is what came back - HTTP 200, valid RIFF/WAVE, plausible size. `name` never selected
+      anything; it only labelled the download. The page then reported that mixed file as the caller
+      channel. The extra .wav also produced `...-caller.wav.wav` on disk.
+
+NEW FLOW (current code)
+-----------------------
+  What request is generated now?
+
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829-caller
+          ?time=2026-03-11&company=SWCC&name=22447829-caller
+
+      and for the callee:
+
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+          ?time=2026-03-11&company=SWCC&name=22447829-callee
+
+      while mixed is unchanged:
+
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829
+          ?time=2026-03-11&company=SWCC&name=test
+
+  What identifier/name is passed?
+      path segment : RecordingChannel::requestSegmentFor() -> 22447829-caller / 22447829-callee
+      name         : RecordingChannel::downloadNameFor()   -> 22447829-caller / 22447829-callee
+                     (no .wav, and it replaces the Name field for these two channels)
+
+  How are caller and callee differentiated?
+      Only by the suffix on the path segment: `-caller` vs `-callee`. Everything else about the two
+      requests, and about how the response is handled, is identical.
+
+  Why does the new request return the correct channel?
+      Because it asks for a different resource. The suffix is part of the address, so the provider
+      resolves `/fetch/22447829-callee` to the callee file. Confirmed against the client's own
+      worked example (for KONG's KITCHEN):
+
+          https://order58.xrainbow.com/api/external/recording/fetch/22359279-caller
+              ?time=2026-09-16&company=SWCC&name=22359279-caller
+
+
+--------------------------------------------------
+19. REAL EXAMPLE - RECORDING 22447829
+--------------------------------------------------
+
+Inputs: recording id 22447829, date 2026-03-11, company SWCC, merchant 871, channel = callee.
+
+  1. UI. The operator opens /admin/order58/test-recording-channels. Action::__invoke() fills the
+     form from the DEFAULT_* constants. They type 22447829 into Recording ID (or press "Load Latest
+     Calls" for account 871 and press "Use This Call" on the row whose callSessionId is 22447829,
+     which links back with recording_id=22447829 and, if CallSummary::derivedDate() could read one,
+     time=<that date>). They select the Callee radio. The label beside it already reads
+     `22447829-callee`, which is literally the path segment that will be sent.
+
+  2. Frontend request. Pressing "Test / Fetch Recording" submits form 2 as a plain GET:
+
+         /admin/order58/test-recording-channels?submitted=1&account_id=871&limit=10
+             &recording_id=22447829&merchant_id=871&channel=callee
+             &time=2026-03-11&company=SWCC&name=test
+
+     No JavaScript is involved.
+
+  3. Backend route. config/common/routes.php:319-321 -> Order58TestRecordingChannels\Action, behind
+     RequireAdminMiddleware.
+
+  4. Action. Action::__invoke() reads the params; `submitted=1` so Action::run() is called.
+     ChannelRecordingRequest::validate('22447829','871','2026-03-11','SWCC','test') returns null
+     (all valid), so `new ChannelRecordingRequest(...)` is constructed and Action::runLive() runs.
+
+  5. Identifier transformation. ChannelApiProbe::urlFor() -> ChannelRequestMapping::urlFor() sees a
+     non-mixed channel and calls channelUrl(), which takes the CANDIDATE_ID_CARRIES_SUFFIX arm:
+
+         path : rawurlencode(RecordingChannel::Callee->requestSegmentFor('22447829'))
+                  = "22447829-callee"
+         query: http_build_query([
+                    'time'    => '2026-03-11',
+                    'company' => 'SWCC',
+                    'name'    => RecordingChannel::Callee->downloadNameFor('22447829'),
+                ])
+                  = "time=2026-03-11&company=SWCC&name=22447829-callee"
+
+     Note that the form's name=test is discarded for this channel, and merchant_id=871 is not sent.
+
+  6. External request. ChannelApiProbe::inspect() -> send():
+
+         GET https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+             ?time=2026-03-11&company=SWCC&name=22447829-callee
+         Accept: application/json
+         (no Authorization header)
+
+  7. Response. readBounded() counts every byte and keeps the first 8192. WavSignature::inspect()
+     checks 'RIFF' + 'WAVE' and compares the declared size to the bytes received.
+     ChannelDiagnosis::fromResponse() produces the headline, e.g.
+     "HTTP 200 - a complete WAV file was returned."
+
+  8. Frontend. The result card prints:
+         Recording ID  22447829
+         Merchant ID   871
+         Channel       Callee
+         Path segment  22447829-callee
+         Name sent     22447829-callee
+         Source        LIVE API - a real request to the external recording service.
+         Request       <the full URL above>
+         HTTP status / Content-Type / Bytes received / Content-Length / Valid WAV
+
+  9. Playback. Because the diagnosis is `ok`, ChannelProbeResult::isPlayable() is true and the page
+     renders:
+
+         <audio controls preload="none"
+                src="/admin/order58/test-recording-channels/download?recording_id=22447829
+                     &merchant_id=871&time=2026-03-11&company=SWCC&name=test&channel=callee
+                     &disposition=inline">
+
+     Pressing play makes the browser hit DownloadAction, which re-validates everything, rebuilds the
+     SAME external URL through the SAME mapping, re-checks the RIFF/WAVE header on the first 64
+     bytes, and only then streams the body out with Content-Type: audio/wav and
+     Content-Disposition: inline; filename="22447829-callee.wav".
+
+
+--------------------------------------------------
+20. CALLER REQUEST EXAMPLE
+--------------------------------------------------
+
+  Page request:
+      /admin/order58/test-recording-channels?submitted=1&recording_id=22447829&merchant_id=871
+          &channel=caller&time=2026-03-11&company=SWCC&name=test
+
+  Outbound request:
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829-caller
+          ?time=2026-03-11&company=SWCC&name=22447829-caller
+
+  Download URL served by this application:
+      /admin/order58/test-recording-channels/download?recording_id=22447829&merchant_id=871
+          &time=2026-03-11&company=SWCC&name=test&channel=caller
+
+  Filename the browser receives:  22447829-caller.wav
+
+
+--------------------------------------------------
+21. CALLEE REQUEST EXAMPLE
+--------------------------------------------------
+
+  Outbound request:
+      GET https://order58.xrainbow.com/api/external/recording/fetch/22447829-callee
+          ?time=2026-03-11&company=SWCC&name=22447829-callee
+
+  (This is exactly the URL quoted in the task description, and it matches what the current code
+  builds, parameter for parameter and in this order: time, company, name.)
+
+  Filename the browser receives:  22447829-callee.wav
+
+
+--------------------------------------------------
+22. API RESPONSE HANDLING
+--------------------------------------------------
+
+Recording responses (endpoints 2 and 3), in ChannelApiProbe::inspect():
+
+  * The body is streamed and read in 8192-byte chunks. EVERY byte is counted; only the first 8192
+    are retained. A multi-megabyte recording never reaches the HTML and is never written to disk.
+  * WavSignature::inspect(sample, totalBytes) decides:
+      - 0 bytes                      -> "The response body was empty."
+      - < 12 bytes                   -> "Too short to contain a WAV header."
+      - no 'RIFF' at offset 0        -> not a WAV
+      - 'RIFF' but no 'WAVE' at 8    -> a RIFF file but not audio (AVI/WebP also start with RIFF)
+      - < 44 bytes                   -> valid header, far too small to hold audio
+      - received < declared size + 8 -> valid header but TRUNCATED
+      - otherwise                    -> valid, complete WAV
+  * Content-Type is recorded and displayed but never decides anything: the live endpoint sends
+    application/octet-stream for real audio.
+  * ChannelDiagnosis::fromResponse() turns (status, contentType, sample, totalBytes) into a headline
+    and advice - see section 23 for the branches.
+  * ChannelProbeResult::textPreview() prints the body ONLY when it is not a WAV (an error page or a
+    JSON refusal), control characters stripped, capped at 2000 characters.
+
+Call-list responses (endpoint 1), in ChannelApiProbe::latestCalls():
+
+  * ChannelDiagnosis::forJson() first; on success json_decode(depth 32, JSON_THROW_ON_ERROR).
+  * CallSummary::fromDecoded() takes only array items and reads only callSessionId, callTime,
+    orderId. A row with no session id, or one that would fail the digits-only rule, is still SHOWN
+    in the table but gets no "Use This Call" button, and LatestCallsResult::unusableCount() tells
+    the operator how many such rows there were.
+
+Download responses, in DownloadAction::fromLive():
+
+  * Only the first 64 bytes are peeked for the RIFF/WAVE check, then put back in front of the stream
+    so the browser gets the whole file.
+  * The upstream Content-Disposition is deliberately IGNORED - it is a hint from an external server,
+    and this tool knows exactly what it asked for.
+
+
+--------------------------------------------------
+23. ERROR HANDLING AND FALLBACKS
+--------------------------------------------------
+
+THE HEADLINE ANSWER: there is NO fallback to mixed audio. Anywhere. If a caller or callee request
+fails, it is reported as a failure. The tool never retries with a bare path, never substitutes the
+mixed file, and never silently degrades. This is a deliberate design rule, stated in
+ChannelRequestMapping's class docblock and in UnconfirmedChannelMapping, and it is why the
+UnconfirmedChannelMapping exception exists: refusing to build a URL beats guessing one, because a
+guess that answers 200 with the mixed file reads as success.
+
+Diagnosis branches (ChannelDiagnosis::fromResponse):
+
+  401  unauthorized        -> the endpoint is IP-gated and sends no credential, so a 401 means the
+                              provider changed how it authenticates. Ask the client.
+  403  ip-not-whitelisted  -> only when the body matches the provider's allowlist wording
+                              (looksLikeIpRejection(): /\bip\b[^\n]{0,40}\b(not authoriz|not allow|
+                              whitelist|allowlist)/i or the reverse order). Advice: send the client
+                              this server's public IP.
+  403  forbidden           -> a 403 whose body does NOT look like an allowlist rejection: about this
+                              recording, not this server.
+  404  not-found           -> the file is not there for these parameters.
+  429  rate-limited        -> wait and retry.
+  408  timeout             -> transient.
+  >=500 server-error       -> the provider's side.
+  other non-2xx            -> unexpected-status, raw response shown.
+  200 + 0 bytes            -> empty-body, explicitly called a failure ("an empty file saved as .wav
+                              would look like a working download and play silence").
+  200 + not a WAV          -> not-audio, with the body preview.
+  200 + truncated WAV      -> truncated. This is the ONE non-success verdict that is treated as a
+                              caveat rather than an outright failure (ChannelDiagnosis::isFailure()
+                              excludes it), so the page styles it as a warning.
+  200 + complete WAV       -> ok. Only this state makes the player and Download button appear
+                              (ChannelProbeResult::isPlayable() === diagnosis->isSuccess()).
+
+Transport failures (no HTTP response at all - DNS, TLS, refused connection, client timeout) are
+caught inside Action::runLive() / Action::runLatestCalls() and turned into
+ChannelDiagnosis::fromTransportFailure() plus a "Class: message" details block. The exception class
+and message only - never a stack trace, because this page is reachable by any administrator and a
+trace is internal filesystem layout. Catching locally also means no other route's error behaviour
+changes.
+
+Validation failures never reach the network: the page shows "Nothing was sent." and the offending
+rule, and no URL is displayed at all.
+
+What happens when a channel-specific recording is unavailable: the provider answers 404 and the page
+shows the not-found diagnosis. The page's standing notice (template.php:83-98) explains the most
+likely reason first:
+
+    "Separated channels exist only for the merchants on the client's list. Every account has a mixed
+     recording. Caller and callee files are generated only for listed merchants, so a session id
+     belonging to any other merchant returns nothing for those two however well-formed the request
+     is. A 404 on caller or callee therefore usually means THIS MERCHANT HAS NO SEPARATED CHANNELS,
+     not that the URL is wrong."
+
+On the download route the same situations produce plain-text diagnostics rather than a file:
+  400 - unknown channel, or a value the form would have rejected
+  501 - the channel mapping is unconfirmed (unreachable with the current DEFAULT_CANDIDATE)
+  502 - upstream non-2xx, upstream transport failure, or a 2xx whose body is not a WAV
+Plain text on purpose: whatever went wrong, the browser must not be told to save it as a .wav.
+
+
+--------------------------------------------------
+24. IMPORTANT IMPLEMENTATION NOTES
+--------------------------------------------------
+
+  1. One URL builder. ChannelRequestMapping is the only place any URL is constructed, and
+     RecordingChannelIsolationTest enforces it. If a second place ever starts building them, the two
+     will disagree and the disagreement will present as "the caller channel returned the mixed
+     file", which looks like success.
+
+  2. The rejected readings are kept on purpose. CANDIDATE_NAME_IS_FILENAME and
+     CANDIDATE_NAME_IS_CHANNEL still exist, are still exercised by tests, and are documented as
+     REJECTED. They are the regression guard against someone putting the channel back into `name`.
+
+  3. Merchant ID is never sent. It is validated and displayed only. The confirmed endpoint has no
+     merchant parameter.
+
+  4. Account ID and Merchant ID are deliberately separate fields. Action::runLatestCalls()'s
+     docblock records why: account 871 is a store source_id in this database and most
+     order58_agents.account_id values are too, but 1119 - the example given for the latest-calls
+     endpoint - is not in the store mirror at all. Guessing an equivalence would mislabel a field on
+     a page whose only job is to report facts.
+
+  5. Caller/callee are NOT Customer/Agent. See section 14.
+
+  6. Fixtures cannot activate silently or in production. Two independent conditions, plus a second
+     refusal inside FixtureRecordingSource::assertPermitted(). The environment check is a positive
+     allow-list (dev or test), never "!== prod", so an unrecognised APP_ENV falls through to the
+     live API - the safe direction.
+
+  7. Digits-only ids are a security property, not a formality. They make traversal structurally
+     impossible in both the URL path and the fixture filesystem path. Regexes are anchored with
+     \A..\z rather than ^..$ because $ also matches before a trailing newline.
+
+  8. No response headers are echoed wholesale. Only Content-Type, Content-Disposition and
+     Content-Length are kept by name. A header dump is a standing invitation to print something a
+     provider decides to start sending.
+
+  9. STALE COMMENTS (documentation-only observation; NOT changed by this task). Three places still
+     describe the pre-fix world:
+        - Action.php class docblock: "Caller and callee do not have a confirmed request format ...
+          the client has supplied a filename convention but no working example URL". This is no
+          longer true; the format was confirmed on 2026-09-21.
+        - ChannelDiagnosis::fromResponse(), the 404 advice: "for a caller/callee channel - the
+          request format has not been confirmed yet and this URL is a guess". Also no longer true.
+          The page's own standing notice gives the correct explanation.
+        - ChannelDiagnosis::notConfigured() and the 501 branch of DownloadAction remain reachable
+          only if DEFAULT_CANDIDATE is changed to an unrecognised value, which it currently is not.
+     These are comment/UX-text inconsistencies, not behavioural defects. The URLs built are correct.
+
+ 10. RecordingChannel::liveRetrievalIsConfirmed() is no longer called anywhere in src/. Its only
+     remaining callers are RecordingChannelTest and RecordingChannelIsolationTest. Confirmed by grep.
+
+
+--------------------------------------------------
+25. TESTING / VERIFICATION STEPS
+--------------------------------------------------
+
+Manual, against the live API (requires this server's IP to be on the client's allowlist):
+
+  1. Open http://knowledge-forge.local/admin/order58/test-recording-channels as an administrator.
+  2. Optional: set Account ID and press "Load Latest Calls". Pick a row with "Use This Call".
+  3. Set Recording ID, Time (YYYY-MM-DD), Company. Select "Mixed". Press "Test / Fetch Recording".
+     Expect: "HTTP 200 - a complete WAV file was returned", and a Request line ending in
+     /fetch/<id>?time=...&company=...&name=<whatever you typed>.
+  4. Select "Caller" and submit again. The Request line must now read /fetch/<id>-caller and
+     name=<id>-caller. The "Path segment" and "Name sent" rows must both show <id>-caller.
+  5. Repeat for "Callee".
+  6. Play each of the three, or download them. A correct result: the caller and callee files are
+     the same duration as the mixed one but are NOT byte-identical to it or to each other. Comparing
+     MD5 sums of the three downloads is the quickest proof that the channel suffix is really
+     selecting different files - that is the check recorded in commit 9481fe6.
+  7. Negative check: if caller/callee 404 while mixed succeeds, confirm with the client whether that
+     merchant is on the separated-channels list before treating it as a code fault.
+
+Without the allowlist (local development):
+
+  8. Tick "Answer from local fixture files instead of the external API" (or add ?source=fixture).
+     APP_ENV must be dev or test. The page will say "LOCAL FIXTURE - no external request was made."
+     Fixtures exist for recording id 22342359 only, in tests/_data/recording-channels/.
+
+Automated:
+
+  9. tests/Unit/Order58/RecordingChannelTest.php asserts, among other things, the exact client URL:
+         https://order58.xrainbow.com/api/external/recording/fetch/22359279-caller
+             ?time=2026-09-16&company=SWCC&name=22359279-caller
+     and that each candidate reading produces its own URL shape.
+ 10. tests/Unit/Order58/RecordingChannelIsolationTest.php keeps the tool isolated and the mapping in
+     one file.
+ 11. tests/Unit/Order58/LatestCallsTest.php and tests/Web/RecordingChannelsCest.php cover the call
+     list and the page end to end.
+     (These suites were NOT re-run while producing this document; the pass counts quoted in section
+     17 are from the commit message.)
+
+
+--------------------------------------------------
+26. GIT HISTORY / DIFF FINDINGS
+--------------------------------------------------
+
+Commits touching this feature (git log --follow on ChannelRequestMapping.php):
+
+  631e5d3  2026-09-18 13:04  "test customer and agent audio"                    - feature created
+  780a9ba  2026-09-18 14:30  "changes chanlle test api"                         - iteration
+  9481fe6  2026-09-21 15:37  "Use the client's confirmed caller/callee recording URL format"  <- THE FIX
+  d2d6028  2026-09-21 17:29  "audio to text pages chanegs"                      - also touched
+                                                                                  template.php
+
+The fix commit's own message is the clearest account of the change and is reproduced here in full
+because it is the primary evidence for sections 15-18:
+
+    Use the client's confirmed caller/callee recording URL format
+
+    The client confirmed on 21 Sep 2026 that the channel belongs in the path
+    segment, not the name parameter:
+
+      /fetch/22359279-caller?time=2026-09-16&company=SWCC&name=22359279-caller
+
+    Three corrections, each verified against their worked example:
+
+    1. The session id in the path carries the -caller / -callee suffix. The
+       previous reading left the path bare and put the channel in `name`, which
+       returns the MIXED recording with a 200 - a failure that reads as success.
+
+    2. `name` is only the download display name and carries no extension. The
+       provider appends one, so name=...-caller.wav landed on disk as
+       ...-caller.wav.wav.
+
+    3. Separated channels exist only for merchants on the client's list. Every
+       account has a mixed recording, so a 404 on caller/callee is usually a data
+       gap rather than a malformed URL. The page now says so instead of claiming
+       the request format is unconfirmed.
+
+    The result card showed "Generated filename: <id>.wav" beside every result,
+    including channel requests that transmit no filename at all. It now shows the
+    path segment and the name actually sent.
+
+    Verified: the built caller URL matches the client's example character for
+    character, and a live download returns a distinct file from the mixed one
+    (different MD5, different audio levels, same duration - as two channels of one
+    call should be).
+
+    Order58 unit 242 pass, RecordingChannelsCest 30 pass, Psalm and php-cs-fixer
+    unchanged.
+
+    Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+Key diff hunks (git show 9481fe6):
+
+  - public const DEFAULT_CANDIDATE = self::CANDIDATE_NAME_IS_FILENAME;
+  + public const DEFAULT_CANDIDATE = self::CANDIDATE_ID_CARRIES_SUFFIX;
+
+  In channelUrl(), the arm that is now first:
+  -            self::CANDIDATE_NAME_IS_FILENAME => sprintf(
+  -                rawurlencode($request->recordingId),
+  -                    'name' => $channel->fileNameFor($request->recordingId),
+  +            self::CANDIDATE_ID_CARRIES_SUFFIX => sprintf(
+  +                rawurlencode($channel->requestSegmentFor($request->recordingId)),
+  +                    'name' => $channel->downloadNameFor($request->recordingId),
+
+  And in the pre-fix version of the ID_CARRIES_SUFFIX arm, which was not the default:
+  -                rawurlencode($request->recordingId . '-' . $channel->value),
+  -                    'name' => $request->name,
+
+  RecordingChannel.php gained requestSegmentFor() and downloadNameFor(), and
+  liveRetrievalIsConfirmed() went from "Mixed is. Caller and callee are not." to "All three are,
+  since 21 September 2026."
+
+Uncommitted working-tree changes at the time of writing: none. `git status --short` showed a clean
+tree before this document was written, so everything described above is the committed state at
+d2d6028, with no pending edits to any file in src/Order58/Web/TestRecordingChannels/.
+
+
+--------------------------------------------------
+27. PREVIOUS CLAUDE CONTEXT FINDINGS
+--------------------------------------------------
+
+No previous Claude conversation transcript for the 21 September recording-channel work is available
+in this session.
+
+What IS available, and was used:
+
+  * The persistent project memory directory
+    (/home/dell/.claude/projects/-var-www-html-knowledge-forge/memory/) contains 18 memory files.
+    None of them mentions recordings, channels, caller/callee or the xrainbow API. Verified by grep.
+  * Commit 9481fe6 carries `Co-Authored-By: Claude Opus 5`, so a previous Claude session did make
+    the change, and its commit message (reproduced in section 26) is the surviving record of the
+    diagnosis and solution.
+
+Against the three questions asked:
+
+  * What issue was originally reported: recorded in the commit message as caller/callee requests
+    returning the MIXED recording with HTTP 200. The wording of the original report to the developer
+    could not be confirmed from the current source code or Git history.
+  * What diagnosis was made: the channel belonged in the path segment, not the `name` parameter;
+    plus the `.wav` double-extension on `name`.
+  * What solution was implemented: as described in section 17.
+  * Does the current source code match that solution: YES. DEFAULT_CANDIDATE is
+    CANDIDATE_ID_CARRIES_SUFFIX, channelUrl() uses requestSegmentFor() for the path and
+    downloadNameFor() for `name`, and downloadNameFor() carries no extension. Verified by reading
+    the current files, not only the diff.
+
+
+--------------------------------------------------
+28. SUMMARY
+--------------------------------------------------
+
+  * The page is a read-only, admin-only, JavaScript-free diagnostic for the client's external
+    recording API at https://order58.xrainbow.com/api/external/recording. Yii 3, not Laravel.
+
+  * Three channels: mixed (`<id>`), caller (`<id>-caller`), callee (`<id>-callee`). The suffix goes
+    in the URL PATH SEGMENT. `name` is only the provider's download display name and carries no
+    file extension.
+
+  * The mixed-audio bug: before 2026-09-21 the code left the path bare (`/fetch/<id>` - the mixed
+    file's own address) and put the channel into `?name=<id>-caller.wav`. The provider returned the
+    mixed recording with HTTP 200 and a valid WAV header, so it read as success.
+
+  * The fix (commit 9481fe6): switch ChannelRequestMapping::DEFAULT_CANDIDATE to
+    CANDIDATE_ID_CARRIES_SUFFIX and build the path from
+    RecordingChannel::requestSegmentFor(), with `name` from
+    RecordingChannel::downloadNameFor() (no extension). Different path = different resource =
+    correct channel.
+
+  * There is no fallback to mixed audio anywhere, by design. A caller/callee 404 most often means
+    the merchant is not on the client's separated-channels list.
+
+  * Every outbound URL is built in exactly one file, ChannelRequestMapping.php, and a test enforces
+    that.
+
+
+--------------------------------------------------
+APPENDIX - WHAT THIS DOCUMENTATION TASK CHANGED
+--------------------------------------------------
+
+Only this file (docs/testRecordingChannel.txt) was created/written. No PHP, template, route, config,
+test, asset or database change was made, and no migration was run, while producing it. Git history
+was consulted with read-only commands only (log, show, status).
+
+`git status --short` after this task reports exactly one entry:
+
+    ?? docs/testRecordingChannel.txt
+
+Nothing else in the working tree was added, modified or removed.
