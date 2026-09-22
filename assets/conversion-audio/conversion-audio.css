@@ -1,0 +1,159 @@
+/*
+ * One conversion's result page: uploaded audio -> conversation -> AI audio, side by side.
+ *
+ * Loaded by that page alone (see ConversionAudioAsset), and every class is prefixed `a2t-conv-`, so
+ * nothing here can reach the store's upload page or any other screen. This file arranges existing
+ * components; it redefines none of them. Cards, badges, buttons, the `.a2t-thread` bubbles and the
+ * native players all keep the styles admin.css already gives them.
+ */
+
+/* 30 / 40 / 30. The middle column is widest because a conversation needs the room and the two either
+   side are reading a handful of facts. `minmax(0, …)` because a grid track's default minimum is its
+   content, and one long filename would otherwise widen its column and push the third off the page. */
+.a2t-conv {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.4fr) minmax(0, 1.05fr);
+    gap: 1.1rem;
+    align-items: start;
+    margin-bottom: 1.5rem;
+}
+
+/* The columns are the page's existing `.card`, so they inherit its surface, border, radius and shadow.
+   Only the things a column needs are added: room to lay its own contents out, and a floor under it so
+   three cards of different lengths still read as a row rather than as a staircase. */
+.a2t-conv__col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 22rem;
+    margin-bottom: 0;
+}
+.a2t-conv__col .card__title { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; }
+
+/* One recording's block inside a column. The page already styles `.a2t-block`; in a column the two
+   halves of its head stack instead of sitting side by side, because a filename and a status badge do
+   not both fit across a third of the page. */
+.a2t-conv__col .a2t-block__head { flex-wrap: wrap; gap: .4rem; }
+.a2t-conv__col .a2t-block__name { white-space: normal; overflow-wrap: anywhere; }
+
+/* Facts in a column: one per row below about 20rem of track, two above it. The page-wide rule fits six
+   across a full-width card, which in a third of the width would be six slivers. */
+.a2t-conv__col .a2t-summary {
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: .5rem .9rem;
+}
+
+/* ---- The conversation ---------------------------------------------------------------------------
+   THE INTERNAL SCROLLBAR. A fixed ceiling, so a four-hundred-turn call is exactly as tall as a
+   four-turn one and the columns either side stay where the reader left them. The card's heading and
+   the controls under it sit outside this box and never move.
+
+   `tabindex` is on the element in the template: a scrollable region that cannot be focused cannot be
+   scrolled from the keyboard. */
+.a2t-conv-chat {
+    min-height: 12rem;
+    max-height: 27rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: .85rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-2);
+}
+.a2t-conv-chat:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* The scrollbar itself, drawn the way this application already draws every other one it owns — the
+   correction screen's thread, the conversions history and the chat composer all use exactly these
+   values. A default scrollbar is a wide grey channel with stepper arrows; beside a rounded dark card it
+   reads as a piece of the operating system that wandered in.
+
+   Firefox takes the two standard properties, WebKit and Blink take the pseudo-elements, and both are
+   given so the control looks the same in either. The thumb is drawn inside a transparent 3px border via
+   `background-clip`, which is what makes it a slim floating pill rather than a bar filling the track,
+   and it darkens on hover so it is findable without being loud while reading. */
+.a2t-conv-chat {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+}
+.a2t-conv-chat::-webkit-scrollbar { width: 11px; }
+.a2t-conv-chat::-webkit-scrollbar-track { background: transparent; }
+.a2t-conv-chat::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+}
+.a2t-conv-chat:hover::-webkit-scrollbar-thumb { background: var(--text-faint); background-clip: padding-box; }
+
+/* The bubbles are the shared thread component. The dedicated conversation page gives it 5rem of side
+   padding for a full-width screen; in a column that would leave a ribbon, so the geometry is tightened
+   and nothing else about a turn is touched. */
+.a2t-conv-chat .a2t-thread { gap: .35rem; padding: 0; }
+.a2t-conv-chat .a2t-bubble { max-width: 94%; }
+.a2t-conv-chat .a2t-turn__who { font-size: .72rem; }
+.a2t-conv-chat .a2t-turn__meta { font-size: .68rem; }
+
+/* A recording's conversation, when a call has two of them. Labelled, because two threads in one column
+   with no captions would read as one conversation that changes speaker halfway through. */
+.a2t-conv-chat__label {
+    margin: 0 0 .5rem;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+.a2t-conv-chat__group + .a2t-conv-chat__group {
+    margin-top: .9rem;
+    padding-top: .9rem;
+    border-top: 1px solid var(--border);
+}
+
+/* Nothing to show yet, said as a state rather than as a footnote. */
+.a2t-conv__empty {
+    display: grid;
+    place-items: center;
+    min-height: 10rem;
+    margin: 0;
+    padding: 1.1rem;
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 12px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: .84rem;
+    line-height: 1.6;
+    text-align: center;
+}
+
+/* The controls that close a column, pinned to its floor so three columns end level. */
+.a2t-conv__foot { margin-top: auto; padding-top: .9rem; }
+.a2t-conv__foot .a2t-actions, .a2t-conv__foot .a2t-generate { margin-top: 0; }
+
+/* A column is a third of the page, so the player and its download stack rather than sitting in a row
+   that would wrap awkwardly at this width.
+
+   `color-scheme` because a native player is drawn by the browser in its own chrome, and on a dark page
+   it arrives as a white pill — the one element that looks borrowed from somewhere else. `light dark`
+   rather than `dark`: the control then follows `prefers-color-scheme` exactly as every colour token in
+   this application already does, so it is right in both themes rather than hard-coded to one. The
+   element stays native, and no player is reimplemented. */
+.a2t-conv__col .a2t-player { margin: .8rem 0 0; }
+.a2t-conv__col .a2t-player--compact .a2t-player__control { width: 100%; }
+.a2t-conv__col .a2t-player__control { color-scheme: light dark; }
+
+/* Tablet: the conversation takes a full row of its own above the two reading columns, because it is
+   the one that suffers most from being narrow. */
+@media (max-width: 1200px) {
+    .a2t-conv { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .a2t-conv__col--chat { grid-column: 1 / -1; order: -1; }
+    .a2t-conv-chat { max-height: 26rem; }
+}
+
+/* Phone: one column, in the order the work happened. The conversation keeps its own scrollbar — a
+   stacked layout is exactly where an unbounded thread would bury everything under it. */
+@media (max-width: 760px) {
+    .a2t-conv { grid-template-columns: 100%; }
+    .a2t-conv__col--chat { grid-column: auto; order: 0; }
+    .a2t-conv__col { min-height: 0; }
+    .a2t-conv-chat { max-height: 22rem; }
+}

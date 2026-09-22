@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\AudioToText\Web\Conversion\AiAudio;
 
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Application\Tts\TtsScriptBuilder;
 use App\AudioToText\Domain\AudioConversation;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
+use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\Tts\TtsRenditionRepositoryInterface;
@@ -57,6 +59,13 @@ final readonly class Action
         private AudioToTextSettings $settings,
         private Redirect $redirect,
         private AppTimeZone $appTimeZone,
+        /**
+         * The same reader the conversation and correction pages use.
+         *
+         * Read-only, and already a dependency of this feature: the transcript shown here has to be the
+         * one the audio would be read from, which is exactly what this object answers.
+         */
+        private EffectiveConversationReader $effectiveConversations,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -98,7 +107,56 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'page' => $page,
                 'appTimeZone' => $this->appTimeZone,
+                // The conversation as turns, so the middle column can show the transcript as the
+                // exchange it was rather than as a wall of text. Keyed by job id: a Customer + Agent
+                // pair has two, and nothing guarantees the two lists are ordered alike.
+                'threads' => $this->threads($jobs),
             ]);
+    }
+
+    /**
+     * Each recording's conversation, as turns ready to render.
+     *
+     * Built from {@see EffectiveConversationReader} and {@see ConversationView} — the same two objects,
+     * called the same way, as the conversation page and the correction screen. **Nothing about who
+     * spoke is decided here**: the side a turn sits on, the name above it and whether that name may be
+     * shown at all are settled by ConversationView, so this page cannot describe a speaker differently
+     * from the page next to it.
+     *
+     * A recording with nothing to show — still queued, failed, or completed but never speaker-separated
+     * — simply has no entry, and the column says so rather than drawing an empty thread.
+     *
+     * `normalisePrices` follows the conversation page's rule: the spoken-price shorthand is rendered as
+     * a price only for uncorrected machine output. What a human edited is shown as the human left it.
+     *
+     * @param list<TranscriptionJob> $jobs
+     *
+     * @return array<int, array{turns: list<\App\AudioToText\Domain\Speaker\ConversationTurn>, normalisePrices: bool}>
+     */
+    private function threads(array $jobs): array
+    {
+        $threads = [];
+
+        foreach ($jobs as $job) {
+            $effective = $this->effectiveConversations->for($job);
+
+            if ($effective->isEmpty()) {
+                continue;
+            }
+
+            $threads[$job->id] = [
+                'turns' => ConversationView::from(
+                    $job->speakerSeparationStatus,
+                    $effective->utterances,
+                    $job->speakerRoleConfidence,
+                    $effective->hasSeparatedText(),
+                    $effective->rolesConfirmed,
+                )->turns,
+                'normalisePrices' => !$effective->isReviewed,
+            ];
+        }
+
+        return $threads;
     }
 
     /**

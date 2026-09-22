@@ -148,6 +148,81 @@ final class AudioToTextAiAudioCest
     }
 
     /**
+     * Three blocks in one row: what was uploaded, what it became, what was read back from it.
+     *
+     * The layout is loaded by this page alone, which is what keeps it off every other screen.
+     */
+    public function thePageIsThreeColumnsAndCarriesItsOwnLayout(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->seeElement('.a2t-conv');
+        $I->seeNumberOfElements('.a2t-conv__col', 3);
+        $I->seeElement('.a2t-conv__col--source');
+        $I->seeElement('.a2t-conv__col--chat');
+        $I->seeElement('.a2t-conv__col--tts');
+        $I->seeElement('link[href*="conversion-audio"]');
+    }
+
+    /**
+     * The transcript is shown as the exchange it was, inside its own scrolling area.
+     *
+     * The bubbles are the shared thread component, so this asserts that component rather than markup
+     * of its own: if the conversation page's rendering changes, this column changes with it. The
+     * scroll container is what keeps a long call from making the page long.
+     */
+    public function theTranscriptIsShownAsAScrollableConversation(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->seeElement('.a2t-conv-chat .a2t-thread');
+        $I->seeElement('.a2t-conv-chat[tabindex="0"]');
+        $I->seeNumberOfElements('.a2t-conv-chat .a2t-bubble', 2);
+        // The words themselves, drawn as turns rather than as one paragraph.
+        $I->see('Two egg foo young, no MSG.');
+        $I->see('Ready in 25 minutes.');
+    }
+
+    /** A call whose speakers were never separated says so instead of drawing an empty thread. */
+    public function aCallWithNoSeparatedSpeakersShowsAnEmptyConversation(WebTester $I): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['speaker_segments' => null, 'speaker_separation_status' => null],
+            ['public_id' => $this->jobPublicId],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->seeElement('.a2t-conv__col--chat');
+        $I->dontSeeElement('.a2t-conv-chat .a2t-bubble');
+        $I->see('No conversation has been produced for this call yet.');
+    }
+
+    /**
+     * **The store's upload page is not touched by this layout.**
+     *
+     * Asserted rather than assumed: the stylesheet is registered by the conversion page's own asset
+     * bundle, so a page that does not register it cannot receive it however the selectors are written.
+     */
+    public function theStoreUploadPageDoesNotLoadThisPagesLayout(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/store/' . self::STORE);
+
+        $I->seeResponseCodeIs(200);
+        $I->dontSeeElement('link[href*="conversion-audio"]');
+        $I->dontSeeElement('.a2t-conv');
+        // And it still offers what it always did.
+        $I->seeElement('#a2t-common-form');
+        $I->seeElement('#a2t-caller-form');
+        $I->seeElement('#a2t-callee-form');
+    }
+
+    /**
      * The uploaded recording is offered as a player, pointed at the route that streams it.
      *
      * The page is about "this recording became that reading", which cannot be checked by ear unless both

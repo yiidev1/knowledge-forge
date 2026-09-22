@@ -2,11 +2,14 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Domain\Speaker\ConversationTurn;
 use App\AudioToText\Domain\Speaker\SpeakerMarkers;
 use App\AudioToText\Domain\Tts\AiAudioState;
 use App\AudioToText\Web\AudioToTextRoute;
+use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\Conversion\AiAudio\AiAudioPage;
 use App\AudioToText\Web\Conversion\AiAudio\AiAudioRow;
+use App\AudioToText\Web\Conversion\AiAudio\ConversionAudioAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -19,13 +22,15 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * {@see AiAudioPage} before they arrive here — a template working out whether audio was stale would be
  * a second implementation of the rule that decides whether to spend money.
  *
- * ## One column, three steps, in the order they happen
+ * ## Three columns, in the order the work happened
  *
- * A summary, then the recording somebody uploaded, the text it was turned into, and the audio read back
- * from that text. That ordering *is* the explanation: a reader who has never seen this feature can
- * follow what produced what without being told. Each step is one card, and a separate Customer/Agent
- * pair puts both sides inside the step they belong to rather than repeating the step per side — three
- * cards for a call, however many recordings it has.
+ * A summary, then the recording somebody uploaded, the conversation it became, and the audio read back
+ * from that conversation — side by side on a desktop, stacked on a phone. That ordering *is* the
+ * explanation: a reader who has never seen this feature can follow what produced what without being
+ * told, which is why each column still carries its step number.
+ *
+ * A separate Customer/Agent pair puts both sides inside the column they belong to rather than
+ * repeating the column per side — three blocks for a call, however many recordings it has.
  *
  * ## The transcript opens in a modal, and the modal needs no JavaScript
  *
@@ -39,13 +44,18 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * CSRF-protected forms.
  *
  * @var Yiisoft\View\WebView $this
+ * @var Yiisoft\Assets\AssetManager $assetManager
  * @var UrlGeneratorInterface $urlGenerator
  * @var Csrf $csrf
  * @var AiAudioPage $page
+ * @var array<int, array{turns: list<ConversationTurn>, normalisePrices: bool}> $threads
  * @var AppTimeZone $appTimeZone
  */
 
 $this->setTitle('AI training audio');
+
+// The column layout, loaded by this page alone so it cannot reach any other screen.
+$assetManager->register(ConversionAudioAsset::class);
 
 $conversation = $page->conversation;
 $store = $page->store;
@@ -149,18 +159,18 @@ foreach ($page->rows as $countRow) {
     <ol class="a2t-flow">
         <li class="a2t-flow__step a2t-flow__step--done">
             <span class="a2t-flow__n">1</span>
-            <span class="a2t-flow__label">Original audio</span>
+            <span class="a2t-flow__label">Uploaded audio</span>
             <span class="a2t-flow__state">Uploaded</span>
         </li>
         <li class="a2t-flow__step a2t-flow__step--<?=
         $transcriptionStatus->badgeModifier() === 'completed' ? 'done' : 'pending' ?>">
             <span class="a2t-flow__n">2</span>
-            <span class="a2t-flow__label">Text transcript</span>
+            <span class="a2t-flow__label">Text conversation</span>
             <span class="a2t-flow__state"><?= Html::encode($transcriptionStatus->label()) ?></span>
         </li>
         <li class="a2t-flow__step a2t-flow__step--<?= $generatedCount > 0 ? 'done' : 'pending' ?>">
             <span class="a2t-flow__n">3</span>
-            <span class="a2t-flow__label">AI generated audio</span>
+            <span class="a2t-flow__label">Text to audio</span>
             <span class="a2t-flow__state"><?= $generatedCount > 0 ? 'Ready' : 'Not generated' ?></span>
         </li>
     </ol>
@@ -171,9 +181,57 @@ foreach ($page->rows as $countRow) {
     </p>
 </div>
 
-<?php // ---- Step 1: the original ---------------------------------------------------------------?>
-<div class="card">
-    <h2 class="card__title"><span class="a2t-step">Step 1</span> Original audio</h2>
+<?php if ($page->needsSpeakerConfirmation()): ?>
+    <?php
+    // Names the fact, names the remedy, links to it — rather than an unexplained disabled button.
+    ?>
+    <div class="alert alert--warning" role="status">
+        <p>
+            Agent and Customer have not been confirmed for this call, and a synthetic voice would assert
+            a speaker this page does not.
+        </p>
+        <?php
+        $blocked = null;
+    foreach ($page->rows as $candidate) {
+        if ($candidate->state === AiAudioState::Blocked) {
+            $blocked = $candidate;
+
+            break;
+        }
+    }
+    ?>
+        <?php if ($blocked !== null && $blocked->job->status->value === 'COMPLETED'): ?>
+            <p>
+                <a href="<?= Html::encode($urlGenerator->generate(
+                    AudioToTextRoute::JOB_REVIEW,
+                    ['publicId' => $blocked->job->publicId],
+                )) ?>">Confirm the speakers</a>,
+                and the audio you asked for at upload will be generated automatically.
+            </p>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
+<?php
+// ---- The three columns: the recording, the conversation, the reading of it --------------------
+//
+// One row on a desktop, one column on a phone. Each block keeps its step number, because the order is
+// what explains the feature: this audio became that conversation, which was read back as that audio.
+?>
+<?php
+// `a2t-wide` is the application's existing marker for a page that earns more than the default reading
+// width: `.content:has(.a2t-wide)` opens the column to 1600px, which is the same width the store's
+// audio page already takes. Three columns side by side are exactly the case it exists for — at the
+// default 1240px the middle one is too narrow for a conversation to read as one.
+//
+// A marker on this page's own grid, so nothing else moves: the rule only applies to a `.content` that
+// contains one.
+?>
+<div class="a2t-conv a2t-wide">
+
+<?php // ---- 1: the original --------------------------------------------------------------------?>
+<div class="card a2t-conv__col a2t-conv__col--source">
+    <h2 class="card__title"><span class="a2t-step">Step 1</span> Uploaded audio</h2>
 
     <?php foreach ($children as $child): ?>
         <div class="a2t-block">
@@ -191,15 +249,25 @@ foreach ($page->rows as $countRow) {
                 <div><dt>File name</dt><dd><?= Html::encode($child->originalFilename) ?></dd></div>
                 <div><dt>Type</dt><dd><?= Html::encode($conversation->typeLabel()) ?></dd></div>
                 <div><dt>Duration</dt><dd><?= Html::encode($duration($child->durationSeconds)) ?></dd></div>
+                <?php
+                // The order this upload was made against, when one was given. An em dash for none:
+                // most recordings have no order, and that is a normal state rather than missing data.
+        ?>
+                <div>
+                    <dt>Order ID</dt>
+                    <dd class="util-mono"><?= $conversation->orderId === null
+                ? '&mdash;'
+                : Html::encode($conversation->orderId) ?></dd>
+                </div>
                 <div><dt>Uploaded date</dt><dd><?= Html::encode($localTime($conversation->createdAt)) ?></dd></div>
             </dl>
 
             <?php if (isset($retainedOriginals[$child->publicId])): ?>
                 <?php
-                $originalUrl = $urlGenerator->generate(
-                    AudioToTextRoute::JOB_ORIGINAL_FILE,
-                    ['publicId' => $child->publicId],
-                );
+        $originalUrl = $urlGenerator->generate(
+            AudioToTextRoute::JOB_ORIGINAL_FILE,
+            ['publicId' => $child->publicId],
+        );
                 ?>
                 <div class="a2t-player a2t-player--compact">
                     <?php
@@ -225,9 +293,58 @@ foreach ($page->rows as $countRow) {
     <?php endforeach; ?>
 </div>
 
-<?php // ---- Step 2: the transcript -------------------------------------------------------------?>
-<div class="card">
-    <h2 class="card__title"><span class="a2t-step">Step 2</span> Text transcript</h2>
+<?php // ---- 2: the conversation it became ------------------------------------------------------?>
+<div class="card a2t-conv__col a2t-conv__col--chat">
+    <h2 class="card__title"><span class="a2t-step">Step 2</span> Text conversation</h2>
+
+    <?php
+    // The exchange, as the exchange. Every turn is drawn by the shared thread partial — the same one
+    // the conversation page and the correction screen render — so a speaker reads the same way
+    // wherever it appears, and this page introduces no second opinion about who was talking.
+    //
+    // The scroll is on the container below and nowhere else: the heading above it and the controls
+    // under it stay put however long the call was.
+    $anyTurns = false;
+foreach ($page->rows as $countRow) {
+    if (($threads[$countRow->job->id]['turns'] ?? []) !== []) {
+        $anyTurns = true;
+
+        break;
+    }
+}
+?>
+    <?php if ($anyTurns): ?>
+        <div class="a2t-conv-chat" tabindex="0" role="group" aria-label="Conversation">
+            <?php foreach ($page->rows as $chatRow): ?>
+                <?php
+            $chatThread = $threads[$chatRow->job->id] ?? null;
+                ?>
+                <?php if ($chatThread !== null && $chatThread['turns'] !== []): ?>
+                    <div class="a2t-conv-chat__group">
+                        <?php
+                        // Only for a pair: one recording's thread needs no caption, and a caption
+                        // there would name a side this page has not been told about.
+                    ?>
+                        <?php if ($chatRow->sourceLabel() !== null): ?>
+                            <p class="a2t-conv-chat__label"><?= Html::encode($chatRow->sourceLabel()) ?></p>
+                        <?php endif; ?>
+                        <?= $this->render(AudioToTextViews::thread(), [
+                            'turns' => $chatThread['turns'],
+                            'normalisePrices' => $chatThread['normalisePrices'],
+                        ]) ?>
+                    </div>
+                <?php endif; ?>
+            <?php endforeach; ?>
+        </div>
+    <?php else: ?>
+        <?php
+        // No turns: still converting, failed, or completed with the speakers never separated. The
+        // per-recording block below says which of those it is, so this stays one short sentence.
+        ?>
+        <p class="a2t-conv__empty">
+            No conversation has been produced for this call yet.
+        </p>
+    <?php endif; ?>
 
     <?php foreach ($page->rows as $row): ?>
         <?php
@@ -342,40 +459,9 @@ foreach ($page->rows as $countRow) {
     <?php endforeach; ?>
 </div>
 
-<?php if ($page->needsSpeakerConfirmation()): ?>
-    <?php
-    // Names the fact, names the remedy, links to it — rather than an unexplained disabled button.
-    ?>
-    <div class="alert alert--warning" role="status">
-        <p>
-            Agent and Customer have not been confirmed for this call, and a synthetic voice would assert
-            a speaker this page does not.
-        </p>
-        <?php
-        $blocked = null;
-    foreach ($page->rows as $candidate) {
-        if ($candidate->state === AiAudioState::Blocked) {
-            $blocked = $candidate;
-
-            break;
-        }
-    }
-    ?>
-        <?php if ($blocked !== null && $blocked->job->status->value === 'COMPLETED'): ?>
-            <p>
-                <a href="<?= Html::encode($urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW,
-                    ['publicId' => $blocked->job->publicId],
-                )) ?>">Confirm the speakers</a>,
-                and the audio you asked for at upload will be generated automatically.
-            </p>
-        <?php endif; ?>
-    </div>
-<?php endif; ?>
-
-<?php // ---- Step 3: the generated audio --------------------------------------------------------?>
-<div class="card">
-    <h2 class="card__title"><span class="a2t-step">Step 3</span> AI generated audio</h2>
+<?php // ---- 3: the audio read back from it ----------------------------------------------------?>
+<div class="card a2t-conv__col a2t-conv__col--tts">
+    <h2 class="card__title"><span class="a2t-step">Step 3</span> Text to audio</h2>
 
     <?php foreach ($page->rows as $row): ?>
         <?php
@@ -509,4 +595,5 @@ foreach ($page->rows as $countRow) {
             <?php endif; ?>
         </div>
     <?php endforeach; ?>
+</div>
 </div>
