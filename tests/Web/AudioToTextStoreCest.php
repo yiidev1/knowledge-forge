@@ -469,6 +469,128 @@ final class AudioToTextStoreCest
         Assert::assertSame([], $this->conversationsFor(self::STORE_A));
     }
 
+    // ----------------------------------------------- where a finished conversion opens
+
+    /**
+     * The destination a finished job opens at, named by the server on the page that waits for it.
+     *
+     * Both pollers — the upload card on the store page and the job page's own — read this one
+     * attribute instead of assembling a URL, which is what keeps the token current, the deployment
+     * prefix intact and no host written down anywhere. Asserted for all three cards, because all three
+     * go through the same flow and a regression in one would be a regression in all.
+     *
+     * @example ["common"]
+     * @example ["caller"]
+     * @example ["callee"]
+     */
+    public function aPendingJobNamesItsOwnReviewPageAsTheFinishedDestination(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, (string) $example[0]);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $token = (string) $child['public_id'];
+
+        // Still queued, so the upload lands on the detail page and the page advertises where to go
+        // once conversion succeeds. The token is this job's own — nothing is hardcoded.
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $token);
+        $I->seeElement('[data-a2t-poll][data-a2t-done="/audio-to-text/job/' . $token . '/review"]');
+    }
+
+    /**
+     * A terminal job advertises nothing, which is what stops the two pages bouncing.
+     *
+     * The completed page carries no poller and no destination: a job handed back here by /review —
+     * because it had nothing to correct — has nothing left to send it away again.
+     */
+    public function aFinishedJobPageAdvertisesNoDestinationAndNoPolling(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation((string) $child['public_id']);
+
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id']);
+        $I->seeResponseCodeIs(200);
+        $I->dontSeeElement('[data-a2t-poll]');
+        $I->dontSeeElement('[data-a2t-done]');
+    }
+
+    /**
+     * The destination itself: a completed job's review page loads, for every card.
+     *
+     * @example ["common"]
+     * @example ["caller"]
+     * @example ["callee"]
+     */
+    public function aCompletedJobsReviewPageLoadsForEveryCard(WebTester $I, \Codeception\Example $example): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, (string) $example[0]);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $token = (string) $child['public_id'];
+        $this->completeWithSeparation($token);
+
+        $I->amOnPage('/audio-to-text/job/' . $token . '/review');
+        $I->seeResponseCodeIs(200);
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $token . '/review', 'No further hop: this is the destination.');
+    }
+
+    /** A failed job is never sent to a correction screen — the error is on the detail page. */
+    public function aFailedJobIsHandedBackToItsDetailPageRatherThanToReview(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['status' => 'FAILED', 'processing_stage' => 'FAILED', 'error_message' => 'Transcription failed.'],
+            ['public_id' => $child['public_id']],
+        )->execute();
+
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id'] . '/review');
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $child['public_id']);
+        $I->see('Transcription failed.');
+        // And nothing on that page tries to send the reader anywhere: a failure is terminal.
+        $I->dontSeeElement('[data-a2t-done]');
+    }
+
+    /** A job still converting keeps the behaviour it had: the detail page, polling, no redirect. */
+    public function aProcessingJobStaysOnItsDetailPage(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['status' => 'PROCESSING', 'processing_stage' => 'TRANSCRIBING'],
+            ['public_id' => $child['public_id']],
+        )->execute();
+
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id'] . '/review');
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $child['public_id']);
+        $I->seeElement('[data-a2t-poll]');
+    }
+
+    /** The plain job route keeps working on its own — it is still where a pending job waits. */
+    public function theJobDetailRouteRemainsReachableDirectly(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id']);
+        $I->seeResponseCodeIs(200);
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $child['public_id']);
+    }
+
     // ------------------------------------------------- recording type and the optional order id
 
     /**

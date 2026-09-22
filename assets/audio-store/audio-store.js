@@ -137,7 +137,12 @@
                 error.focus();
             }
 
-            function trackConversion(statusUrl, destination, interval) {
+            function trackConversion(statusUrl, destination, interval, doneUrl) {
+                // Same-origin or not at all, the rule the status URL already follows. `destination` is
+                // the page this upload landed on and stays the fallback, so a response that somehow
+                // named an external URL changes nothing about where this ends up.
+                var finish = doneUrl && doneUrl.origin === window.location.origin ? doneUrl : destination;
+
                 uploadStep.dataset.state = 'complete';
                 progress.value = 100;
                 percent.textContent = '100%';
@@ -205,8 +210,10 @@
                                 conversionStatus.textContent = 'Conversion complete · opening result…';
                                 state('complete', 'Complete');
                                 button.textContent = 'Conversion complete';
-                                // Keep the original result destination and do not touch the listing.
-                                timer = setTimeout(function () { window.location.assign(destination.href); }, 1000);
+                                // On to the correction page for this job, and do not touch the
+                                // listing. A conversion with nothing to correct is handed back to the
+                                // detail page by that route, which is where this used to stop anyway.
+                                timer = setTimeout(function () { window.location.assign(finish.href); }, 1000);
                                 return;
                             }
                             if (data.status === 'FAILED') {
@@ -270,9 +277,17 @@
                 if (destination.origin === window.location.origin && jobPath) {
                     var pendingJob = response.querySelector('[data-a2t-poll]');
                     var statusUrl = new URL(pendingJob ? pendingJob.dataset.a2tPoll : jobPath[1] + '/status', destination);
+                    // Where a finished conversion opens: the correction page, named by the server in
+                    // `data-a2t-done` so no host, deployment prefix or job token is assembled here.
+                    // The fallback follows the same shape as the status one above, for a response that
+                    // carried no pending job — a job that finished before this ever polled.
+                    var doneUrl = new URL(
+                        pendingJob && pendingJob.dataset.a2tDone ? pendingJob.dataset.a2tDone : jobPath[1] + '/review',
+                        destination
+                    );
                     var interval = Math.max(2000, pendingJob ? parseInt(pendingJob.dataset.a2tInterval, 10) || 2000 : 2000);
                     if (statusUrl.origin === window.location.origin) {
-                        trackConversion(statusUrl, destination, interval);
+                        trackConversion(statusUrl, destination, interval, doneUrl);
                         return;
                     }
                 }

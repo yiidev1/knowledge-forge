@@ -32,6 +32,19 @@ $this->setParameter('breadcrumbs', [
 ]);
 
 $statusUrl = $urlGenerator->generate(AudioToTextRoute::JOB_STATUS, ['publicId' => $job->publicId]);
+
+/**
+ * Where a person watching this job should end up once it finishes successfully.
+ *
+ * Generated here, from the route and **this** job's public id, so the browser is never asked to
+ * assemble a URL out of string pieces and no environment's host or deployment prefix is written down
+ * anywhere. It is the same destination the conversions list's View action and the conversion page
+ * already use, so "the finished job" means one page everywhere.
+ *
+ * Safe even when there turns out to be nothing to correct: /review hands a job it cannot show back to
+ * this page, which is where the reader already was.
+ */
+$reviewUrl = $urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $job->publicId]);
 $jobsUrl = $urlGenerator->generate(AudioToTextRoute::JOBS);
 $uploadUrl = $urlGenerator->generate(AudioToTextRoute::PAGE);
 
@@ -70,6 +83,13 @@ $separation = $job->speakerSeparationStatus;
     <?php if ($job->isPending()): ?>
         data-a2t-poll="<?= Html::encode($statusUrl) ?>"
         data-a2t-interval="<?= max(2, $pollSeconds) * 1000 ?>"
+        <?php
+        // Where to go when polling reports success — never on failure, which belongs on this page
+        // where the error is. Emitted beside the poll attributes so both the upload card on the store
+        // page and this page's own poller read one server-generated URL instead of each building
+        // their own.
+        ?>
+        data-a2t-done="<?= Html::encode($reviewUrl) ?>"
     <?php endif; ?>
 >
     <div class="a2t-job__header">

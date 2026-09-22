@@ -989,9 +989,30 @@
                         stageEl.textContent = STAGE_LABELS[data.stage] || '—';
                     }
 
-                    // Terminal: reload once to render the transcript, then never poll again. The
-                    // transcript is fetched by that reload rather than sent on every tick.
-                    if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+                    // Terminal: stop polling for good, and fetch the result with one navigation rather
+                    // than sending a transcript on every tick.
+                    //
+                    // A job that finished goes on to the correction page the server named in
+                    // `data-a2t-done` — the same destination every View link in this application uses
+                    // for a finished job. A job with nothing to correct is handed straight back here by
+                    // that page, and this page no longer polls once it is terminal, so the two cannot
+                    // bounce.
+                    //
+                    // A FAILED job reloads in place instead. The error belongs on this page, and
+                    // sending somebody to a correction screen for a recording that produced no
+                    // transcript would hide it.
+                    if (data.status === 'COMPLETED') {
+                        stop();
+                        var done = root.getAttribute('data-a2t-done');
+                        if (done) {
+                            window.location.assign(done);
+                        } else {
+                            window.location.reload();
+                        }
+                        return;
+                    }
+
+                    if (data.status === 'FAILED') {
                         stop();
                         window.location.reload();
                         return;
