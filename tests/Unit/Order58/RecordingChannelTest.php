@@ -485,6 +485,89 @@ final class RecordingChannelTest extends Unit
         $this->assertNotNull(ChannelRecordingRequest::validate('22342359', '871', '2026-02-31', 'SWCC', 'test'));
     }
 
+    // ------------------------------------------------------------------ the Time rule, field by field
+
+    /**
+     * The exact set the field-level validator has to agree with.
+     *
+     * Kept as one table rather than scattered assertions because the client-side copy of this rule is
+     * written against the same list: a case added here without a matching case in
+     * `assets/recording-channels/recording-channels.js` is how the two start disagreeing, and a
+     * disagreement means the browser refuses something the server would have accepted, or waves
+     * through something it would not.
+     *
+     * @dataProvider timeValues
+     */
+    public function testTheTimeRuleAcceptsRealCalendarDatesAndNothingElse(string $time, bool $valid): void
+    {
+        $this->assertSame(
+            $valid,
+            ChannelRecordingRequest::timeError($time) === null,
+            $time === '' ? '(empty)' : $time,
+        );
+
+        // The field-level view and the whole-request view must never disagree about the same value.
+        $error = ChannelRecordingRequest::validate('22342359', '871', $time, 'SWCC', 'test');
+        $this->assertSame($valid, $error === null);
+
+        if (!$valid) {
+            $this->assertSame(ChannelRecordingRequest::TIME_FORMAT_MESSAGE, $error);
+        }
+    }
+
+    /**
+     * @return array<string, array{string, bool}>
+     */
+    public static function timeValues(): array
+    {
+        return [
+            'a real date' => ['2026-03-11', true],
+            'first of january' => ['2026-01-01', true],
+            'last of december' => ['2026-12-31', true],
+            'leap day in a leap year' => ['2024-02-29', true],
+
+            'empty' => ['', false],
+            'spaces only' => ['   ', false],
+            'text appended' => ['2026-03-11sdasdasd', false],
+            'text prepended' => ['abc2026-03-11', false],
+            'slashes' => ['2026/03/11', false],
+            'day first' => ['03-11-2026', false],
+            'unpadded month' => ['2026-3-11', false],
+            'unpadded day' => ['2026-03-1', false],
+            'month 13' => ['2026-13-01', false],
+            'month 00' => ['2026-00-10', false],
+            'february 30th' => ['2026-02-30', false],
+            'february 31st' => ['2026-02-31', false],
+            'leap day in a common year' => ['2025-02-29', false],
+            // `$`-anchored patterns match before a trailing newline; this must not slip through.
+            'newline smuggling' => ["2026-03-11\n../../etc/passwd", false],
+        ];
+    }
+
+    /** The message has one definition, so the field and the Result card cannot word it differently. */
+    public function testTheTimeMessageIsTheSameWhereverItIsReported(): void
+    {
+        $this->assertSame(
+            ChannelRecordingRequest::TIME_FORMAT_MESSAGE,
+            ChannelRecordingRequest::timeError('2026-02-31'),
+        );
+        $this->assertSame(
+            ChannelRecordingRequest::TIME_FORMAT_MESSAGE,
+            ChannelRecordingRequest::validate('22342359', '871', '2026-02-31', 'SWCC', 'test'),
+        );
+    }
+
+    /** A refused date stops the request being built at all - nothing reaches the external API. */
+    public function testAnInvalidTimeMeansNoUrlIsEverBuilt(): void
+    {
+        $this->assertNotNull(ChannelRecordingRequest::validate('22342359', '871', '2026-02-31', 'SWCC', 'test'));
+
+        // The action returns on that non-null error before constructing a ChannelRecordingRequest, so
+        // this is the whole of what "no external request" means at this level. The page-level proof -
+        // that no Request URL is even printed - is in RecordingChannelsCest.
+        $this->assertNull(ChannelRecordingRequest::timeError('2026-03-11'));
+    }
+
     public function testAControlCharacterInFreeTextIsRefused(): void
     {
         $this->assertNotNull(ChannelRecordingRequest::validate('22342359', '871', '2026-03-11', "SW\nCC", 'test'));

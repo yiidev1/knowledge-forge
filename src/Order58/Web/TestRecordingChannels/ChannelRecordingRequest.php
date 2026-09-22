@@ -39,6 +39,16 @@ final readonly class ChannelRecordingRequest
     /** Company and name are free text on the provider's side, so cap them at something sane. */
     public const MAX_TEXT_LENGTH = 100;
 
+    /**
+     * The one sentence a bad Time value produces, wherever it is reported.
+     *
+     * A constant because it is now shown in two places — the Result card after a submit, and under the
+     * field itself before one — and the page hands it to the client-side validator rather than letting
+     * JavaScript carry its own copy. Two wordings for one rule is how a form starts contradicting
+     * itself.
+     */
+    public const TIME_FORMAT_MESSAGE = 'Time is required and must be a real date in YYYY-MM-DD format.';
+
     public function __construct(
         public string $recordingId,
         public string $merchantId,
@@ -62,14 +72,30 @@ final readonly class ChannelRecordingRequest
                 => 'Recording ID is required and must be digits only.',
             !self::isNumericId($merchantId)
                 => 'Merchant ID is required and must be digits only.',
-            !self::isCalendarDate($time)
-                => 'Time is required and must be a real date in YYYY-MM-DD format.',
+            self::timeError($time) !== null
+                => self::TIME_FORMAT_MESSAGE,
             !self::isSafeText($company)
                 => sprintf('Company is required and must be at most %d characters.', self::MAX_TEXT_LENGTH),
             !self::isSafeText($name)
                 => sprintf('Name is required and must be at most %d characters.', self::MAX_TEXT_LENGTH),
             default => null,
         };
+    }
+
+    /**
+     * What is wrong with this Time value, or null when nothing is.
+     *
+     * The same rule {@see validate()} applies, reachable on its own so the page can put the message
+     * under the field that caused it instead of only in the Result card. **It changes nothing about
+     * validation** — `validate()` still refuses exactly what it refused before, in the same order, with
+     * the same sentence. This is the field-level view of a check that already existed.
+     *
+     * Note that a page may show this while `validate()` reports a different field first: the two are
+     * not in competition, and an operator with two bad values is better served by seeing both.
+     */
+    public static function timeError(string $time): ?string
+    {
+        return self::isCalendarDate($time) ? null : self::TIME_FORMAT_MESSAGE;
     }
 
     /**

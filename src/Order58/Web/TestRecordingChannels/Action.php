@@ -104,6 +104,14 @@ final readonly class Action
                 'fileName' => ChannelRecordingRequest::validate($recordingId, $merchantId, $time, $company, $name) === null
                     ? $channel->fileNameFor($recordingId)
                     : null,
+                // The Time field's own verdict, so a refused date is reported under the field that
+                // caused it rather than only in the Result card at the bottom of the page. Computed
+                // only for a submit: a form nobody has sent yet has nothing to complain about.
+                //
+                // This is a second VIEW of ChannelRecordingRequest's existing rule, never a second
+                // rule. What may be sent is still decided in run(), by validate(), below.
+                'timeError' => $submitted ? ChannelRecordingRequest::timeError($time) : null,
+                'timeErrorMessage' => ChannelRecordingRequest::TIME_FORMAT_MESSAGE,
                 'accountId' => $accountId,
                 'limit' => $limit,
                 'maxLimit' => LatestCallsRequest::MAX_LIMIT,

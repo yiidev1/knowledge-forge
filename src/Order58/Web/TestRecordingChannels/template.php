@@ -7,6 +7,7 @@ use App\Order58\Web\TestRecordingChannels\ChannelProbeResult;
 use App\Order58\Web\TestRecordingChannels\FixtureAvailability;
 use App\Order58\Web\TestRecordingChannels\LatestCallsResult;
 use App\Order58\Web\TestRecordingChannels\RecordingChannel;
+use App\Order58\Web\TestRecordingChannels\RecordingChannelsAsset;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
@@ -18,6 +19,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * verdict — and no credential exists to leak, because none is sent.
  *
  * @var Yiisoft\View\WebView $this
+ * @var Yiisoft\Assets\AssetManager $assetManager
  * @var UrlGeneratorInterface $urlGenerator
  * @var string $recordingId
  * @var string $merchantId
@@ -35,8 +37,14 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var int $maxLimit
  * @var array{validationError: ?string, result: ?LatestCallsResult, failure: ?string}|null $latest
  * @var string $candidateDescription
+ * @var string|null $timeError the Time field's own verdict after a submit, null when it was fine
+ * @var string $timeErrorMessage the one wording for a bad Time, handed to the client-side validator
  * @var array{validationError: ?string, result: ?ChannelProbeResult, diagnosis: ?ChannelDiagnosis, url: ?string, failure: ?string}|null $outcome
  */
+
+// Field-level validation for the Time input, and nothing else. The page works exactly as before
+// without it: the server refuses a bad date either way, which is what this must never be mistaken for.
+$assetManager->register(RecordingChannelsAsset::class);
 
 $this->setTitle('Recording channel test');
 $this->setParameter('breadcrumbs', [
@@ -323,8 +331,33 @@ $downloadBase = $urlGenerator->generate('order58.test-recording-channels.downloa
 
         <div class="field">
             <label class="field__label" for="time">Time</label>
-            <input class="field__control" type="text" id="time" name="time" value="<?= Html::encode($time) ?>">
-            <div class="field__hint">YYYY-MM-DD.</div>
+            <?php
+            // Deliberately still type="text". A native date picker would render the value in the
+            // browser's locale, submit an empty string for a half-typed date rather than the text the
+            // operator typed, and change how this form looks for a rule the server states as
+            // YYYY-MM-DD. What was missing was the message, not the input type.
+            //
+            // `data-time-input` is the hook the validator attaches to, and `data-time-message` carries
+            // the server's own wording so the two can never diverge. With JavaScript off none of this
+            // does anything and the server refuses a bad date exactly as before.
+?>
+            <input class="field__control<?= $timeError === null ? '' : ' field__control--error' ?>"
+                   type="text" id="time" name="time" value="<?= Html::encode($time) ?>"
+                   inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD"
+                   data-time-input
+                   data-time-message="<?= Html::encode($timeErrorMessage) ?>"
+                   aria-describedby="time-hint"
+                   aria-errormessage="time-error"
+                <?= $timeError === null ? '' : 'aria-invalid="true"' ?>>
+            <?php
+// Always rendered, hidden until there is something to say: the validator fills and unhides
+// this element rather than creating one, so the message occupies the same place whether it
+// came from the server or from the keystroke before last.
+?>
+            <div class="field__error" id="time-error"<?= $timeError === null ? ' hidden' : '' ?>><?=
+    $timeError === null ? '' : Html::encode($timeError)
+?></div>
+            <div class="field__hint" id="time-hint">YYYY-MM-DD. A real calendar date &mdash; 2026-02-31 is refused.</div>
         </div>
 
         <div class="field">

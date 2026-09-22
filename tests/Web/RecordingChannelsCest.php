@@ -196,6 +196,120 @@ final class RecordingChannelsCest
         $I->dontSee('/fetch/');
     }
 
+    // ------------------------------------------------------------------ the Time field's validation
+
+    /**
+     * The field-level message, rendered by the server.
+     *
+     * The client-side validator shows the same sentence in the same element before a submit, but this
+     * suite drives PhpBrowser, which runs no JavaScript — so what is pinned here is the half that must
+     * work without it. The markup hooks the script needs are asserted separately below.
+     */
+    public function anInvalidTimeIsReportedUnderTheFieldItself(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&recording_id=' . self::RECORDING_ID
+            . '&merchant_id=871&channel=mixed&time=2026-03-11sdasdasd&company=SWCC&name=test');
+
+        $I->see('Time is required and must be a real date in YYYY-MM-DD format.');
+        // Under the field, not only in the Result card at the bottom of the page.
+        $I->seeElement('#time-error');
+        $I->seeElement('input#time.field__control--error');
+        $I->seeElement('input#time[aria-invalid="true"]');
+    }
+
+    /**
+     * @example ["2026-03-11abc"]
+     * @example ["2026/03/11"]
+     * @example ["03-11-2026"]
+     * @example ["2026-3-11"]
+     * @example ["2026-13-01"]
+     * @example ["2026-00-10"]
+     * @example ["2026-02-31"]
+     * @example ["2025-02-29"]
+     */
+    public function anInvalidTimeNeverReachesTheExternalApi(WebTester $I, \Codeception\Example $example): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&recording_id=' . self::RECORDING_ID
+            . '&merchant_id=871&channel=mixed&time=' . urlencode((string) $example[0])
+            . '&company=SWCC&name=test');
+
+        $I->see('Nothing was sent');
+        $I->see('Time is required and must be a real date in YYYY-MM-DD format.');
+        // No URL was built, so none is printed. `/fetch/` appears on this page only in a request this
+        // action actually constructed.
+        $I->dontSee('/fetch/');
+        $I->dontSee('Bytes received');
+    }
+
+    /**
+     * An EMPTY `time` parameter is not the same thing as an empty Time field.
+     *
+     * `Action::text()` falls back to the pre-filled default whenever a query parameter is absent or
+     * blank, and has always done so for every field on this page - so `?time=` arrives at validation as
+     * `2026-03-11` and is accepted. That is existing behaviour and this change does not touch it.
+     *
+     * The empty case still matters where a user meets it: the client-side validator refuses an emptied
+     * field and blocks the submit, so the blank never round-trips in the first place. The rule itself is
+     * asserted in RecordingChannelTest::timeValues(), which has `''` and `'   '` as invalid.
+     */
+    public function anAbsentTimeParameterFallsBackToTheFormDefaultAsItAlwaysHas(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&recording_id=' . self::RECORDING_ID
+            . '&merchant_id=871&channel=mixed&time=&company=SWCC&name=test&source=fixture');
+
+        $I->dontSee('Time is required and must be a real date');
+        $I->seeElement('input#time[value="2026-03-11"]');
+    }
+
+    /** A leap day in a leap year is a real date, and is treated as one. */
+    public function aLeapDayIsAcceptedAndBehavesExactlyAsBefore(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&recording_id=' . self::RECORDING_ID
+            . '&merchant_id=871&channel=caller&time=2024-02-29&company=SWCC&name=test&source=fixture');
+
+        $I->dontSee('Time is required and must be a real date');
+        $I->dontSeeElement('input#time.field__control--error');
+        // The request still goes through the unchanged caller path.
+        $I->see('22342359-caller');
+    }
+
+    /** A valid date leaves the page exactly as it was: no error anywhere near the field. */
+    public function aValidTimeShowsNoFieldError(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?submitted=1&recording_id=' . self::RECORDING_ID
+            . '&merchant_id=871&channel=mixed&time=2026-03-11&company=SWCC&name=test&source=fixture');
+
+        $I->dontSee('Time is required and must be a real date');
+        $I->dontSeeElement('input#time.field__control--error');
+    }
+
+    /**
+     * The hooks the client-side validator attaches to.
+     *
+     * Asserted in the markup because the script itself cannot run here. If these disappear the page
+     * still works - the server refuses a bad date either way - but the field-level feedback silently
+     * stops happening, which is exactly the kind of regression nobody notices.
+     */
+    public function theTimeFieldCarriesTheHooksTheClientSideValidatorNeeds(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('input#time[data-time-input]');
+        // The server's own wording, handed to the script rather than restated in JavaScript.
+        $I->seeElement('input#time[data-time-message="Time is required and must be a real date in YYYY-MM-DD format."]');
+        $I->seeElement('input#time[aria-errormessage="time-error"]');
+        $I->seeElement('#time-error');
+        // Still a text input: a native date picker would render and submit in the browser's locale.
+        $I->seeElement('input#time[type="text"]');
+        $I->seeElement('script[src*="recording-channels"]');
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     /**
