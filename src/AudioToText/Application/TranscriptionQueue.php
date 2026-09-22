@@ -7,6 +7,7 @@ namespace App\AudioToText\Application;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
@@ -104,6 +105,22 @@ final readonly class TranscriptionQueue
          * request must not wait on a speech provider, and this method is what the upload request calls.
          */
         bool $generateAiAudio = false,
+        /**
+         * Which upload card the recording came through, recorded on the conversation for the store's
+         * history to print.
+         *
+         * **Nothing downstream reads it.** The mode still decides whether speakers are discovered, and
+         * a caller or callee recording is stored, probed and transcribed exactly like a mixed one —
+         * see {@see RecordingType}.
+         */
+        ?RecordingType $recordingType = null,
+        /**
+         * The order this upload belongs to, already validated by the caller, or null when none was
+         * given. Written with the conversation, inside the same transaction as its children, so an
+         * upload cannot end up queued with the order id lost — the workers never see it and never
+         * need to.
+         */
+        ?string $orderId = null,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
@@ -143,7 +160,9 @@ final readonly class TranscriptionQueue
                 $adminUserId,
                 $children,
                 $provider,
-                $generateAiAudio
+                $generateAiAudio,
+                $recordingType,
+                $orderId
             ): string {
                 // Parent and children in one transaction: a pair whose second insert failed would
                 // otherwise leave a conversation promising two recordings and holding one.
@@ -154,7 +173,9 @@ final readonly class TranscriptionQueue
                     $adminUserId,
                     $children,
                     $provider,
-                    $generateAiAudio
+                    $generateAiAudio,
+                    $recordingType,
+                    $orderId
                 ): string {
                     $conversationId = $this->conversations->create(
                         $conversationPublicId,
@@ -163,6 +184,8 @@ final readonly class TranscriptionQueue
                         $adminUserId,
                         $this->clock->now(),
                         $generateAiAudio,
+                        $recordingType,
+                        $orderId,
                     );
 
                     foreach ($children as $child) {

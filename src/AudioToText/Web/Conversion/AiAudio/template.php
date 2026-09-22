@@ -134,7 +134,7 @@ foreach ($page->rows as $countRow) {
 
     <dl class="a2t-summary">
         <div><dt>Store</dt><dd><?= Html::encode($store->name ?? 'No store') ?></dd></div>
-        <div><dt>Recording type</dt><dd><?= Html::encode($conversation->mode->label()) ?></dd></div>
+        <div><dt>Recording type</dt><dd><?= Html::encode($conversation->typeLabel()) ?></dd></div>
         <div><dt>Duration</dt><dd><?= Html::encode($duration($conversation->totalDurationSeconds())) ?></dd></div>
         <div><dt>Uploaded by</dt><dd><?= Html::encode($conversation->uploadedByUsername ?? '—') ?></dd></div>
         <div><dt>Uploaded</dt><dd><?= Html::encode($localTime($conversation->createdAt)) ?></dd></div>
@@ -189,7 +189,7 @@ foreach ($page->rows as $countRow) {
 
             <dl class="a2t-summary">
                 <div><dt>File name</dt><dd><?= Html::encode($child->originalFilename) ?></dd></div>
-                <div><dt>Type</dt><dd><?= Html::encode($conversation->mode->label()) ?></dd></div>
+                <div><dt>Type</dt><dd><?= Html::encode($conversation->typeLabel()) ?></dd></div>
                 <div><dt>Duration</dt><dd><?= Html::encode($duration($child->durationSeconds)) ?></dd></div>
                 <div><dt>Uploaded date</dt><dd><?= Html::encode($localTime($conversation->createdAt)) ?></dd></div>
             </dl>

@@ -469,6 +469,177 @@ final class AudioToTextStoreCest
         Assert::assertSame([], $this->conversationsFor(self::STORE_A));
     }
 
+    // ------------------------------------------------- recording type and the optional order id
+
+    /**
+     * Each card names itself, and each card offers the optional order field.
+     *
+     * The hidden input is what lets the server tell three otherwise identical submissions apart — they
+     * post the same mode, the same field names and the same file input — so its absence would silently
+     * return the history to labelling every upload "Common / Mixed".
+     */
+    public function eachCardDeclaresItsRecordingTypeAndOffersAnOptionalOrderId(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        foreach (['common' => 'MIXED', 'caller' => 'CALLER', 'callee' => 'CALLEE'] as $card => $type) {
+            $I->seeElement('#a2t-' . $card . '-form input[name=recording_type][value=' . $type . ']');
+            $I->seeElement('#a2t-' . $card . '-form input[name=order_id]');
+        }
+
+        $I->see('Optional. Example: 16513791');
+    }
+
+    /**
+     * A mixed upload with an order id: both values persisted, both shown.
+     *
+     * @example ["common", "MIXED", "Common / Mixed"]
+     * @example ["caller", "CALLER", "Caller"]
+     * @example ["callee", "CALLEE", "Callee"]
+     */
+    public function eachCardPersistsItsTypeAndOrderIdAndShowsThemInTheHistory(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, (string) $example[0], '16513791');
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertSame($example[1], $conversation['recording_type']);
+        Assert::assertSame('16513791', $conversation['order_id']);
+        // The mode is untouched: all three are still COMMON uploads with one COMMON child, which is
+        // what keeps the transcription path identical for all of them.
+        Assert::assertSame('COMMON', $conversation['mode']);
+        $children = $this->childrenOf((int) $conversation['id']);
+        Assert::assertCount(1, $children);
+        Assert::assertSame('COMMON', $children[0]['source_role']);
+        Assert::assertSame('QUEUED', $children[0]['status']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->see('Order ID');
+        $I->see('16513791');
+        $I->see((string) $example[2]);
+    }
+
+    /**
+     * The same three uploads with the field left empty: still accepted, still typed, order id NULL.
+     *
+     * @example ["common", "MIXED", "Common / Mixed"]
+     * @example ["caller", "CALLER", "Caller"]
+     * @example ["callee", "CALLEE", "Callee"]
+     */
+    public function eachCardUploadsWithoutAnOrderIdAndStoresNull(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, (string) $example[0]);
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertSame($example[1], $conversation['recording_type'], 'The card is recorded either way.');
+        Assert::assertNull($conversation['order_id'], 'No order means NULL, never 0 and never an empty string.');
+        Assert::assertCount(1, $this->childrenOf((int) $conversation['id']), 'The upload still queued.');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->see((string) $example[2]);
+        // An em dash in the Order ID cell rather than a blank one.
+        $I->see('—');
+    }
+
+    /**
+     * A refused order id stops the upload before anything exists.
+     *
+     * Not merely "the row has no order id": no conversation, no job, and therefore nothing for the
+     * worker to pick up. An upload that is half-accepted is worse than one that is refused.
+     *
+     * @example ["abc"]
+     * @example ["16513791abc"]
+     * @example ["58-100234"]
+     * @example ["-16513791"]
+     * @example ["165 13791"]
+     */
+    public function anInvalidOrderIdIsRefusedAndQueuesNothing(WebTester $I, \Codeception\Example $example): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'common', (string) $example[0]);
+
+        Assert::assertSame([], $this->conversationsFor(self::STORE_A), 'Nothing may be created.');
+        Assert::assertSame(0, $this->jobCountFor(self::STORE_A), 'Transcription must not start.');
+        $I->see('Order ID must be digits only');
+        // What was typed comes back, so a typo can be corrected rather than retyped from memory.
+        $I->seeElement('#a2t-common-form input[name=order_id][value="' . $example[0] . '"]');
+    }
+
+    /** A posted type outside the allow-list records nothing and is never stored. */
+    public function aTamperedRecordingTypeIsNeverPersisted(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
+        $I->submitForm($this->commonForm(), ['recording_type' => 'PRESIDENT']);
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertNull($conversation['recording_type'], 'Only the three known values may be stored.');
+        // The upload itself is unaffected: it is the ordinary COMMON upload it has always been.
+        Assert::assertSame('COMMON', $conversation['mode']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->see('Common / Mixed');
+    }
+
+    /** A Customer + Agent pair records no card: its mode already describes it, and still does. */
+    public function aSeparatePairRecordsNoRecordingTypeAndKeepsItsLabel(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadSeparate($I, self::STORE_A);
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertSame('SEPARATE', $conversation['mode']);
+        Assert::assertNull($conversation['recording_type']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->see('Separate Customer + Agent');
+    }
+
+    /**
+     * An upload made before either column existed still renders, and still reads as it always did.
+     *
+     * Written straight into the table with both new columns NULL, which is exactly what every one of
+     * the rows already in this database looks like.
+     */
+    public function anUploadFromBeforeTheseColumnsStillRendersUnchanged(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $this->connection->createCommand()->update(
+            '{{%audio_conversations}}',
+            ['recording_type' => null, 'order_id' => null],
+            ['store_source_id' => self::STORE_A],
+        )->execute();
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->seeResponseCodeIs(200);
+        $I->see('Common / Mixed');
+        $I->see('—');
+        $I->see('1 conversion for this store');
+    }
+
+    /** The provider choice still rides through an upload that also carries an order id. */
+    public function theProviderChoiceIsUnaffectedByTheNewFields(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'caller', '16513791');
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        $children = $this->childrenOf((int) $conversation['id']);
+
+        Assert::assertSame('WHISPER', $children[0]['transcription_provider']);
+        Assert::assertSame('CALLER', $conversation['recording_type']);
+        Assert::assertSame('16513791', $conversation['order_id']);
+    }
+
     // ----------------------------------------------------------------------- the store history
 
     /** One paired upload is one row and one count, however many jobs are underneath it. */
@@ -732,6 +903,20 @@ final class AudioToTextStoreCest
         $I->amOnPage($this->storeUrl($sourceId));
         $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
         $I->submitForm($this->commonForm(), []);
+    }
+
+    /**
+     * Upload through one named card, optionally naming an order.
+     *
+     * The card is addressed by its own form and file-input ids rather than by position, for the same
+     * reason {@see commonForm()} gives: a reordering of the three cards must not quietly change which
+     * one a test submits.
+     */
+    private function uploadCard(WebTester $I, int $sourceId, string $card, string $orderId = ''): void
+    {
+        $I->amOnPage($this->storeUrl($sourceId));
+        $I->attachFile($card === 'common' ? '#a2t-audio' : '#a2t-' . $card . '-audio', 'kf_store_valid.wav');
+        $I->submitForm('#a2t-' . $card . '-form', $orderId === '' ? [] : ['order_id' => $orderId]);
     }
 
     private function uploadSeparate(WebTester $I, int $sourceId): void

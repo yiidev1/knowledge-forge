@@ -14,6 +14,8 @@ use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\OrderId;
+use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
@@ -34,6 +36,7 @@ use function max;
 use function min;
 use function number_format;
 use function sprintf;
+use function trim;
 
 /**
  * One store's audio page (GET and POST /audio-to-text/store/{sourceId}): upload here, and see what
@@ -95,6 +98,10 @@ final readonly class Action
 
         $mode = ConversationMode::Common;
 
+        // Echoed back into the three forms so a rejected submission keeps what was typed. Empty on a
+        // GET, which is what an untouched optional field should be.
+        $orderId = '';
+
         // The stored global default, read once per request so the page shows what is configured now
         // rather than what was configured at deploy time. **Never reassigned**: the forms report it as
         // "Global default: …", and an upload must not be able to make that line lie.
@@ -124,6 +131,15 @@ final readonly class Action
                 $errors['transcription_provider'] = [$providerError];
             }
 
+            // Collected before the queue is touched, and a bad value joins the same error list every
+            // other refusal uses — so nothing is stored, no job is created and no recording is written
+            // to disk for an upload that named an order this application would not accept.
+            $orderId = $this->text($body, 'order_id');
+            $orderIdError = OrderId::validate($orderId);
+            if ($orderIdError !== null) {
+                $errors['order_id'] = [$orderIdError];
+            }
+
             if ($errors === []) {
                 try {
                     $conversationId = $this->queue->enqueueConversation(
@@ -136,6 +152,11 @@ final readonly class Action
                         // this request contacts a speech provider: an upload must not be made to wait
                         // on a third party, and generating a long call's audio takes minutes.
                         $this->wantsAiAudio($body) && $this->settings->ttsIsUsable(),
+                        // Which card this came from, and which order it belongs to. Both are recorded
+                        // on the conversation and read only by the history: the mode above is still
+                        // what decides how the recording is processed.
+                        $this->recordingType($body, $mode),
+                        OrderId::fromInput($orderId),
                     );
 
                     // To the conversion, not back to this page. For a common upload that redirects on
@@ -162,6 +183,8 @@ final readonly class Action
             ->render(__DIR__ . '/template', [
                 'store' => $store,
                 'mode' => $mode,
+                // What was typed, so a refused submission does not silently discard it.
+                'orderId' => $orderId,
                 // Drives both the forms and the notice. Read from the store, so it cannot disagree
                 // with the card that led here.
                 'canUpload' => $store->active,
@@ -319,6 +342,47 @@ final readonly class Action
     private function wantsAiAudio(mixed $body): bool
     {
         return is_array($body) && ($body['generate_ai_audio'] ?? null) !== null;
+    }
+
+    /**
+     * Which of the three upload cards this submission came from, if it said.
+     *
+     * ## Why the form carries it, and why that is still safe
+     *
+     * All three cards post to this one action with the same mode and the same field names — nothing
+     * about the request path distinguishes them — so the card has to name itself. What makes that
+     * trustworthy is not the posted string but {@see RecordingType::fromStorage()}: an **allow-list of
+     * exactly three values**, applied here, and the only route a value has into the column. `caller`,
+     * `Caller`, `anything`, an array, a missing field — none of them become a recording type, and none
+     * of them is persisted.
+     *
+     * **An unrecognised value is never an error.** It records nothing, and the upload proceeds as the
+     * plain COMMON upload it has always been: the history then reads "Common / Mixed", which is what a
+     * conversation whose card is unknown honestly is. Refusing the recording instead would let a stale
+     * open tab cost somebody their upload over a caption.
+     *
+     * A `SEPARATE` upload records nothing either — none of these three values describes a Customer +
+     * Agent pair, and its mode already does.
+     *
+     * @param mixed $body the parsed request body, in whatever shape it arrived
+     */
+    private function recordingType(mixed $body, ConversationMode $mode): ?RecordingType
+    {
+        if ($mode !== ConversationMode::Common) {
+            return null;
+        }
+
+        return RecordingType::fromStorage($this->text($body, 'recording_type'));
+    }
+
+    /**
+     * One posted text field, trimmed, or '' when it was absent or was not a scalar.
+     *
+     * @param mixed $body the parsed request body, in whatever shape it arrived
+     */
+    private function text(mixed $body, string $field): string
+    {
+        return is_array($body) && is_string($body[$field] ?? null) ? trim((string) $body[$field]) : '';
     }
 
     /**

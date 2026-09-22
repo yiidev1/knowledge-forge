@@ -67,7 +67,7 @@ $duration = static fn(?float $seconds): string => $seconds === null
         <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
             <?= Html::encode($status->label()) ?>
         </span>
-        <span class="a2t-job__stage"><?= Html::encode($conversation->mode->label()) ?></span>
+        <span class="a2t-job__stage"><?= Html::encode($conversation->typeLabel()) ?></span>
     </div>
 
     <dl class="a2t-meta">

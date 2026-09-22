@@ -10,7 +10,9 @@ use App\AudioToText\Application\TranscriptionQueue;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Infrastructure\AudioDurationProbe;
 use App\AudioToText\Infrastructure\DbAudioConversationRepository;
 use App\AudioToText\Infrastructure\DbTranscriptionJobRepository;
@@ -142,6 +144,81 @@ final class AudioConversationTest extends Unit
         self::assertCount(1, $conversation->children);
         self::assertSame(SourceRole::Common, $conversation->children[0]->sourceRole);
         self::assertSame(JobStatus::QUEUED, $conversation->children[0]->status);
+    }
+
+    /**
+     * The card and the order id survive the enqueue, which is the only place they are written.
+     *
+     * Asserted by reading the conversation back rather than by trusting the insert: the write happens
+     * inside the same transaction as the children, and a value dropped there would be lost silently —
+     * the upload would still succeed and the history would simply be wrong.
+     */
+    public function testTheRecordingTypeAndOrderIdAreStoredWithTheConversation(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('caller.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Caller,
+            '16513791',
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+
+        self::assertNotNull($conversation);
+        self::assertSame(RecordingType::Caller, $conversation->recordingType);
+        self::assertSame('Caller', $conversation->typeLabel());
+        self::assertSame('16513791', $conversation->orderId);
+        // None of it reaches the job: the worker's view of this recording is unchanged.
+        self::assertSame(SourceRole::Common, $conversation->children[0]->sourceRole);
+        self::assertSame(JobStatus::QUEUED, $conversation->children[0]->status);
+    }
+
+    /** An upload that named neither: both stay null, and the conversation reads as it always did. */
+    public function testAnUploadThatNamesNeitherStoresNull(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
+            $this->adminId,
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+
+        self::assertNotNull($conversation);
+        self::assertNull($conversation->recordingType);
+        self::assertNull($conversation->orderId);
+        self::assertSame('Common / Mixed', $conversation->typeLabel());
+    }
+
+    /** A pair can carry an order id too — one upload, one order, however many recordings. */
+    public function testASeparatePairCarriesOneOrderIdForBothRecordings(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Separate,
+            $this->storeSourceId,
+            [
+                SourceRole::Customer->value => $this->wavUpload('customer.wav'),
+                SourceRole::Agent->value => $this->wavUpload('agent.wav'),
+            ],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            null,
+            '16513791',
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+
+        self::assertNotNull($conversation);
+        self::assertSame('16513791', $conversation->orderId);
+        self::assertNull($conversation->recordingType, 'A pair is described by its mode.');
+        self::assertSame('Separate Customer + Agent', $conversation->typeLabel());
+        self::assertCount(2, $conversation->children);
     }
 
     public function testASeparateUploadCreatesOneConversationWithBothRoles(): void

@@ -1379,6 +1379,7 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    Recordings takes the slack (`width: auto` above) because a filename is the only value in this table
    with no natural length; a long one now truncates with an ellipsis instead of widening the row. */
 .a2t-table col.a2t-col-type { width: 9rem; }
+.a2t-table col.a2t-col-order { width: 7.5rem; }
 .a2t-table col.a2t-col-row-actions { width: 17rem; }
 
 /* One line, always. `min-width` matters as well as the column width: a fixed-layout table will still

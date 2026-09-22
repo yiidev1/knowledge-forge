@@ -33,6 +33,15 @@ interface AudioConversationRepositoryInterface
          * thing here: nothing is generated and nothing is billed.
          */
         bool $generateAiAudio = false,
+        /**
+         * Which upload card the recording came through, for the store's history to print.
+         *
+         * Defaulted for the same reason as the flag above: an upload that named no card is recorded as
+         * having named none, rather than being assigned one it did not come from.
+         */
+        ?RecordingType $recordingType = null,
+        /** The order this upload belongs to, already validated, or null when none was given. */
+        ?string $orderId = null,
     ): int;
 
     public function findByPublicId(string $publicId): ?AudioConversation;

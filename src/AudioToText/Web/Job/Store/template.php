@@ -7,6 +7,8 @@ use App\AudioToText\Domain\AudioConversationChild;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\OrderId;
+use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextRoute;
@@ -23,6 +25,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var Csrf $csrf
  * @var AudioStore $store
  * @var ConversationMode $mode
+ * @var string $orderId what was typed into the optional Order ID field, '' on a fresh form
  * @var array<string, list<string>> $errors
  * @var list<AudioConversation> $conversations
  * @var int $total
@@ -66,6 +69,29 @@ $fieldErrors = static function (array $messages): string {
     }
 
     return $html;
+};
+
+/**
+ * The optional Order ID field, rendered into all recording cards.
+ *
+ * A shared renderer for the same reason the provider select is one: all three cards post to the same
+ * action and must offer the same field. The id differs per form so each `<label for>` stays valid on a
+ * page that renders all three.
+ *
+ * **Optional, and it says so.** The rule is one line in {@see OrderId} and is enforced on the server;
+ * this only reports it. A rejected value is rendered back into the field rather than discarded — it is
+ * usually a typo in something the operator had to read off another screen, and making them find it
+ * again would be the worst part of the mistake.
+ */
+$orderIdField = static function (string $id) use ($orderId, $errors, $fieldErrors): string {
+    return '<div class="field">'
+        . '<label class="field__label" for="' . Html::encode($id) . '">Order ID</label>'
+        . '<input class="field__control' . (isset($errors['order_id']) ? ' field__control--error' : '')
+        . '" id="' . Html::encode($id) . '" type="text" name="order_id" inputmode="numeric"'
+        . ' autocomplete="off" value="' . Html::encode($orderId) . '">'
+        . $fieldErrors($errors['order_id'] ?? [])
+        . '<div class="field__hint">Optional. Example: 16513791</div>'
+        . '</div>';
 };
 
 /**
@@ -252,13 +278,16 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
     </div>
     <div class="a2t-uploads__grid">
         <?php
+        // The fourth entry is what each card records about itself, so the history below can say which
+        // one a recording came through. It changes nothing about the upload: all three still post one
+        // recording in COMMON mode, and the pipeline still works the speakers out for itself.
         $recordingCards = [
-            'common' => ['One Mixed Recording', 'Both sides of the conversation in one audio file.', 'Convert mixed recording'],
-            'caller' => ['Caller Recording', 'Upload a single audio file from the caller.', 'Convert caller recording'],
-            'callee' => ['Callee Recording', 'Upload a single audio file from the callee.', 'Convert callee recording'],
+            'common' => ['One Mixed Recording', 'Both sides of the conversation in one audio file.', 'Convert mixed recording', RecordingType::Mixed],
+            'caller' => ['Caller Recording', 'Upload a single audio file from the caller.', 'Convert caller recording', RecordingType::Caller],
+            'callee' => ['Callee Recording', 'Upload a single audio file from the callee.', 'Convert callee recording', RecordingType::Callee],
         ];
     ?>
-        <?php foreach ($recordingCards as $key => [$title, $description, $buttonLabel]): ?>
+        <?php foreach ($recordingCards as $key => [$title, $description, $buttonLabel, $recordingType]): ?>
             <?php
             // The drop zone below is a <label>, not a <div>, so that clicking anywhere in the box
             // opens the file dialog. The browser's own behaviour rather than a click handler: the
@@ -284,6 +313,11 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                 <form class="a2t-upload-form" data-a2t-upload id="a2t-<?= $key ?>-form" method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
                     <?= $csrfField ?>
                     <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
+                    <?php
+                    // Which card this is. The server accepts it only through RecordingType's
+                    // allow-list, so a tampered value records nothing rather than becoming a label.
+            ?>
+                    <input type="hidden" name="recording_type" value="<?= Html::encode($recordingType->value) ?>">
                     <div class="field">
                         <label class="field__label" for="<?= $audioId ?>">Audio file</label>
                         <label class="a2t-upload-picker" for="<?= $audioId ?>">
@@ -308,6 +342,7 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                             Up to <?= Html::encode($maxUploadLabel) ?> · <?= Html::encode($maxDurationLabel) ?> maximum
                         </div>
                     </div>
+                    <?= $orderIdField('a2t-' . $key . '-order-id') ?>
                     <?= $providerField('a2t-' . $key . '-provider') ?>
                     <div class="a2t-upload-card__options">
                         <?= $aiAudioField('a2t-' . $key . '-ai-audio') ?>
@@ -362,6 +397,7 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
         ?>
                 <colgroup>
                     <col class="a2t-col-text">
+                    <col class="a2t-col-order">
                     <col class="a2t-col-type">
                     <col class="a2t-col-when">
                     <col class="a2t-col-status">
@@ -371,6 +407,7 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                 <thead>
                     <tr>
                         <th>Recordings</th>
+                        <th>Order ID</th>
                         <th>Type</th>
                         <th>Uploaded at</th>
                         <th>Status</th>
@@ -401,7 +438,20 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                                 </div>
                             <?php endforeach; ?>
                         </td>
-                        <td><?= Html::encode($conversation->mode->label()) ?></td>
+                        <?php
+                        // An em dash for an upload with no order, which is most of them and is not a
+                        // fault. Never 0 or a blank cell: one looks like an order number and the other
+                        // looks like something failed to render.
+                    ?>
+                        <td class="util-mono"><?= $conversation->orderId === null
+                        ? '&mdash;'
+                        : Html::encode($conversation->orderId) ?></td>
+                        <?php
+                    // The card this came through — Common / Mixed, Caller or Callee. An upload made
+                    // before that was recorded has nothing to show and falls back to its mode's
+                    // label, which is what this column always printed.
+                    ?>
+                        <td><?= Html::encode($conversation->typeLabel()) ?></td>
                         <td><?= Html::encode($appTimeZone->format($conversation->createdAt, 'M j, Y g:i A')) ?></td>
                         <td>
                             <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
@@ -424,12 +474,12 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                         <td class="a2t-cell-actions">
                             <a href="<?= Html::encode($viewUrl) ?>">View</a>
                             <?php
-                            // The machine's own transcript, offered only where there is one to show.
-                            // A separate Customer + Agent conversion stores no segments at all — the
-                            // roles were supplied, so nothing was diarized — and an unfinished job has
-                            // not produced one yet. Offering a link that could only redirect would be
-                            // worse than not offering it.
-                            $original = !$separate ? $conversation->singleChild() : null;
+                        // The machine's own transcript, offered only where there is one to show.
+                        // A separate Customer + Agent conversion stores no segments at all — the
+                        // roles were supplied, so nothing was diarized — and an unfinished job has
+                        // not produced one yet. Offering a link that could only redirect would be
+                        // worse than not offering it.
+                        $original = !$separate ? $conversation->singleChild() : null;
                     ?>
                             <?php if ($original !== null && $original->status === JobStatus::COMPLETED): ?>
                                 <a href="<?= Html::encode($urlGenerator->generate(
@@ -438,15 +488,15 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
                                 )) ?>">Original transcript</a>
                             <?php endif; ?>
                             <?php
-                                                    // One compact link rather than a column of its own — the page behind it
-                                                    // explains the state, and a status badge here would compete with the one
-                                                    // that already says whether the conversion finished.
-                                                    //
-                                                    // Offered once anything has been transcribed. It is deliberately NOT
-                                                    // conditional on whether audio exists: "not generated yet" is one of the
-                                                    // things that page is for, and hiding the link until after the fact would
-                                                    // leave no way to reach the button that generates it.
-                                                    $anyCompleted = false;
+                                                                // One compact link rather than a column of its own — the page behind it
+                                                                // explains the state, and a status badge here would compete with the one
+                                                                // that already says whether the conversion finished.
+                                                                //
+                                                                // Offered once anything has been transcribed. It is deliberately NOT
+                                                                // conditional on whether audio exists: "not generated yet" is one of the
+                                                                // things that page is for, and hiding the link until after the fact would
+                                                                // leave no way to reach the button that generates it.
+                                                                $anyCompleted = false;
                     foreach ($conversation->children as $child) {
                         if ($child->status === JobStatus::COMPLETED) {
                             $anyCompleted = true;

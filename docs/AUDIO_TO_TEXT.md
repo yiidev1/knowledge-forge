@@ -1113,6 +1113,8 @@ CREATE TABLE `audio_conversations` (
   `public_id`            char(32) NOT NULL,          -- 32 random hex; the internal id never leaves the server
   `store_source_id`      bigint unsigned DEFAULT NULL,  -- NULL = a legacy, pre-store upload
   `mode`                 varchar(16) NOT NULL,       -- COMMON | SEPARATE
+  `recording_type`       varchar(16) DEFAULT NULL,   -- MIXED | CALLER | CALLEE; NULL = not recorded (§9.13)
+  `order_id`             varchar(32) DEFAULT NULL,   -- optional, digits only; NULL = none given (§9.13)
   `uploaded_by_admin_id` bigint NOT NULL,
   `created_at`           datetime NOT NULL,
   PRIMARY KEY (`id`),
@@ -1392,6 +1394,85 @@ action is the request-size raise in §3.
 ```bash
 mysql -e 'SELECT COUNT(*) FROM audio_transcription_jobs WHERE status IN ("QUEUED","PROCESSING")' knowledge_forge_db
 ```
+
+### 9.13 Which card, and which order — `recording_type` and `order_id`
+
+Two facts about an upload that only the upload knows. Both live on `audio_conversations`, both are
+nullable, and **neither is read by the worker**: they are recorded at enqueue and used by the store's
+history. Nothing about transcription, diarization, provider selection or AI audio changes because of
+them.
+
+#### Why caller and callee used to read "Common / Mixed"
+
+The store page offers three cards — One Mixed Recording, Caller Recording, Callee Recording — and all
+three post `mode=COMMON` with one file under `source_role=COMMON`. That is correct: whichever card is
+used, the pipeline still has to work the speakers out, so there is nothing for the mode to say. The
+consequence was that **which card had been used was stored nowhere**, and the Type column could only
+print the mode's label for every row.
+
+It is now carried explicitly, as `recording_type`. It is deliberately **not** inferred afterwards from
+a filename — `22414839-caller.wav` is a name the customer's telephony provider happened to give a
+file, and an operator can rename it.
+
+#### Recording type
+
+| Card | Posted | Stored | Type column shows |
+|---|---|---|---|
+| One Mixed Recording | `recording_type=MIXED` | `MIXED` | `Common / Mixed` |
+| Caller Recording | `recording_type=CALLER` | `CALLER` | `Caller` |
+| Callee Recording | `recording_type=CALLEE` | `CALLEE` | `Callee` |
+| Separate Customer + Agent | *(nothing)* | `NULL` | `Separate Customer + Agent` — unchanged |
+
+`RecordingType::Mixed->label()` is `'Common / Mixed'`, the same string `ConversationMode::Common`
+already used. That is what makes the change invisible to history: a mixed upload made today and a
+`COMMON` upload made before the column reads identically.
+
+**The form names the card; the enum decides whether that means anything.** All three cards reach one
+action, so the request has to carry it — but the only route into the column is
+`RecordingType::fromStorage()`, a `tryFrom` over exactly three values. A posted `caller`, `Caller`,
+`PRESIDENT` or an array records **nothing**, and an unrecognised value is not an error: the upload
+proceeds as the plain `COMMON` upload it has always been and the history says `Common / Mixed`, which
+is the truth about a conversation whose card is unknown. A stale open tab must not cost somebody their
+recording over a caption.
+
+#### Order ID
+
+Optional, on every card. `OrderId::validate()` is the whole rule: blank passes, otherwise digits only,
+up to `OrderId::MAX_DIGITS` (20). `16513791` is the known shape. A supplied value that fails is
+refused **before anything is created** — no conversation, no job, no stored file, nothing for the
+worker to pick up — and the rejected text is rendered back into the field so a typo can be corrected
+rather than retyped.
+
+It is a **reference, not a foreign key**: the Order58 mirror holds stores, agents, knowledge records
+and rules, but no orders, so there is nothing here to join to and no relationship is claimed. Stored
+`VARCHAR(32)` rather than a numeric column because it is an identifier that gets displayed, never a
+quantity — 20 digits overflows a signed `BIGINT`, and a numeric column would silently drop a leading
+zero somebody typed.
+
+Absence is stored as `NULL`, never `0` and never `''`, and the history prints an em dash. A recording
+with no order is a normal recording.
+
+#### Backward compatibility
+
+Both migrations are additive and nullable, so **no existing row was rewritten and nothing was
+back-filled**. Every conversation uploaded before them has `recording_type IS NULL` and
+`order_id IS NULL`: it falls back to its mode's label, exactly as it read before, and shows an em dash
+for the order. Writing `MIXED` across the existing rows would have invented a fact — some of them were
+caller or callee uploads that nobody recorded — so the rows say "not recorded", because that is what
+is true.
+
+Applied by `M260921100000AddConversationRecordingType` (with a `CHECK` limiting the column to the
+three values) and `M260922120000AddConversationOrderId`. Both `down()` methods refuse rather than
+destroy, following the house rule: reverting aborts if any row would lose a caller/callee marking or
+an order id that exists nowhere else.
+
+#### Tests
+
+| Suite | What it pins |
+|---|---|
+| `Unit/RecordingTypeAndOrderIdTest` | the three labels, that `MIXED` matches `ConversationMode::Common`'s wording, the allow-list refusing eight tampered values, the optional/digits-only order rule, and that a missing order is never `0` |
+| `Integration/AudioConversationTest` | both values survive the enqueue transaction, an upload naming neither stores `NULL`, and a pair carries one order id for two recordings |
+| `Web/AudioToTextStoreCest` | each card declares its type and offers the field; all three persist type and order and show them; all three upload without one; a refused order creates nothing and queues nothing; a tampered type is never persisted; a separate pair keeps its label; a pre-column row still renders |
 
 ---
 

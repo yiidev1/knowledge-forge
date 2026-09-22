@@ -10,6 +10,7 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
+use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\Shared\Infrastructure\Db\DbDateTime;
@@ -49,11 +50,19 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         int $uploadedByAdminId,
         DateTimeImmutable $createdAt,
         bool $generateAiAudio = false,
+        ?RecordingType $recordingType = null,
+        ?string $orderId = null,
     ): int {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
             'store_source_id' => $storeSourceId,
             'mode' => $mode->value,
+            // The upload card, as chosen. NULL when none was named, which is what the column means —
+            // no value is substituted here, because "mixed" is a claim and absence is not.
+            'recording_type' => $recordingType?->value,
+            // NULL rather than '' or 0 for an upload with no order: both of those are values that look
+            // like answers, and the history would have to tell them apart from a real one.
+            'order_id' => $orderId,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'created_at' => DbDateTime::format($createdAt),
             // Written once, at upload, and never rewritten. The generation itself is decided later and
@@ -170,6 +179,8 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'public_id' => 'c.public_id',
                 'store_source_id' => 'c.store_source_id',
                 'mode' => 'c.mode',
+                'recording_type' => 'c.recording_type',
+                'order_id' => 'c.order_id',
                 'uploaded_by_admin_id' => 'c.uploaded_by_admin_id',
                 'created_at' => 'c.created_at',
                 'generate_ai_audio' => 'c.generate_ai_audio',
@@ -259,6 +270,10 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             // MySQL hands a TINYINT back as an int or a numeric string depending on the driver's mood,
             // so the comparison is loose on purpose rather than relying on either.
             (int) ($row['generate_ai_audio'] ?? 0) === 1,
+            // NULL — an upload made before the cards were told apart — stays null rather than becoming
+            // MIXED, and the conversation falls back to its mode's label. See RecordingType.
+            RecordingType::fromStorage($this->nullableString($row['recording_type'] ?? null)),
+            $this->nullableString($row['order_id'] ?? null),
         );
     }
 

@@ -46,7 +46,35 @@ final readonly class AudioConversation
          * and so "off" is what an upload that never saw the checkbox means.
          */
         public bool $generateAiAudio = false,
+        /**
+         * Which upload card this came through, or null when that was never recorded.
+         *
+         * A label on the upload and nothing more — see {@see RecordingType}. Null for every
+         * conversation that predates the column, and for a separate pair, which its mode describes
+         * instead; both fall back to the mode's label in {@see typeLabel()}.
+         */
+        public ?RecordingType $recordingType = null,
+        /**
+         * The order this recording belongs to, as it was typed, or null when none was given.
+         *
+         * Optional at every layer — see {@see OrderId}. Null means "not given", which is a normal
+         * state for a recording rather than missing data.
+         */
+        public ?string $orderId = null,
     ) {}
+
+    /**
+     * What to call this upload in a list: the card it came through, or the mode it was uploaded in.
+     *
+     * One method rather than the same fallback written at each call site, so a conversation that
+     * predates {@see $recordingType} reads exactly as it always did instead of as a blank cell. The
+     * two agree for a mixed recording — both say "Common / Mixed" — which is why an old row and a new
+     * one are indistinguishable here, as they should be.
+     */
+    public function typeLabel(): string
+    {
+        return $this->recordingType?->label() ?? $this->mode->label();
+    }
 
     /**
      * The one state to show for this upload.
