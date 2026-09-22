@@ -567,6 +567,7 @@ Taking the example the task asked about:
                says "Date not readable - Time left unchanged."
                NOTE: 2026-03-11 being both the example date and the page's default is a
                coincidence of the default, not a derivation from the recording id.
+               See section 29 for the field-level validation added on 2026-09-22.
 
   company=SWCC
       Source : the Company form field (query param `company`), default
@@ -1296,15 +1297,119 @@ Against the three questions asked:
 
 
 --------------------------------------------------
+29. TIME FIELD VALIDATION (ADDED 2026-09-22)
+--------------------------------------------------
+
+FORMAT
+------
+The Time field takes exactly `YYYY-MM-DD`, zero-padded, and nothing else. `2026/03/11`,
+`03-11-2026`, `2026-3-11`, `2026-03-1` and `2026-03-11abc` are all refused.
+
+A REAL CALENDAR DATE, NOT JUST THE SHAPE
+----------------------------------------
+The value must be a date the calendar actually has. `2026-02-31` has the right shape and does not
+exist, so it is refused. Leap years follow: `2024-02-29` is valid, `2025-02-29` is not. Server-side
+this comes from `DateTimeImmutable::createFromFormat('!Y-m-d', $value)` plus a round-trip comparison
+in `ChannelRecordingRequest::isCalendarDate()`; client-side from comparing all three components back
+off a `Date` object, which catches the same rollovers without a leap-year rule of its own.
+
+FRONTEND FIELD-LEVEL VALIDATION
+-------------------------------
+Before this change the only feedback was in the Result card, after a round trip. Now the message
+appears directly under the field.
+
+  Where : assets/recording-channels/recording-channels.js, loaded by
+          src/Order58/Web/TestRecordingChannels/RecordingChannelsAsset.php, registered at the top of
+          template.php.
+  Why an external file : the content-security policy is `script-src 'self'` with no 'unsafe-inline',
+          so an inline <script> would not run. All handlers attach with addEventListener.
+  Hooks  : the input carries `data-time-input`, `aria-errormessage="time-error"` and
+          `data-time-message="<the server's own sentence>"`; the message element is
+          `<div class="field__error" id="time-error" hidden>`, always present and unhidden when
+          there is something to say.
+  Styling: the project's existing classes - `field__control--error` on the input and `field__error`
+          on the message - both already defined in assets/main/admin.css. No new CSS.
+  When   : blur and change -> judge the value and show or clear the message.
+           input           -> re-checks only once the field has already been judged, so a
+                              half-typed date is not shouted at, and a corrected one clears itself
+                              immediately.
+           submit          -> validates; if invalid, preventDefault(), keep the user on the form,
+                              show the message and focus the field.
+  Message: read from the data attribute, which the template renders from
+          `ChannelRecordingRequest::TIME_FORMAT_MESSAGE`. The wording therefore has ONE definition
+          and the field and the Result card cannot disagree.
+
+The input is still `type="text"`. A native `type="date"` was considered and rejected: it renders and
+submits in the browser's locale rather than guaranteed `YYYY-MM-DD`, turns a half-typed value into an
+empty submission, and changes the look of the form - none of which was the problem. The missing piece
+was the message, not the input type.
+
+BACKEND VALIDATION REMAINS THE SOURCE OF TRUTH
+----------------------------------------------
+`ChannelRecordingRequest::validate()` is unchanged in what it accepts, what it rejects and the
+sentence it returns. The only structural change is that its time branch now calls a new public
+`ChannelRecordingRequest::timeError(string $time): ?string`, which is the same rule reachable on its
+own so the page can put the message under the field that caused it. The client-side check cannot
+weaken it: with JavaScript off, or if the script fails to load, the form submits as it always did and
+the server refuses a bad date as it always did.
+
+Validation therefore exists at both levels:
+  frontend - fast, field-level feedback, no round trip;
+  backend  - the security boundary, still the last word before a URL is built.
+
+AN INVALID TIME PREVENTS AN EXTERNAL API REQUEST
+------------------------------------------------
+Two independent guarantees:
+  1. Client-side, the submit handler stops the form, so no request reaches this application at all.
+  2. Server-side, `Action::run()` returns on the non-null `validate()` result BEFORE constructing a
+     `ChannelRecordingRequest`, so `ChannelRequestMapping` is never called, no URL is built, and the
+     page prints no Request line. Pinned by RecordingChannelsCest, which asserts that a page
+     submitted with a bad date shows "Nothing was sent" and contains no `/fetch/`.
+
+ONE PRE-EXISTING BEHAVIOUR WORTH KNOWING
+----------------------------------------
+An ABSENT or blank `time` query parameter is not an empty Time field: `Action::text()` falls back to
+the pre-filled default (`2026-03-11`) for every field on this page, and always has. So `?time=`
+arrives at validation as the default and is accepted. A user who clears the field in the browser is
+stopped by the client-side check before that round trip can happen. This is existing behaviour and
+was not changed.
+
+NOT CHANGED BY THIS WORK
+------------------------
+ChannelRequestMapping, RecordingChannel, the caller/callee suffix rules, the external URLs, the API
+parameters, ChannelApiProbe, DownloadAction, the latest-calls flow and the routes are all untouched.
+
+TESTS
+-----
+tests/Unit/Order58/RecordingChannelTest.php
+    testTheTimeRuleAcceptsRealCalendarDatesAndNothingElse - a 18-case table covering valid dates,
+        text appended/prepended, wrong separators, wrong order, unpadded parts, month 00 and 13,
+        February 30th and 31st, the leap-year pair, empty, whitespace-only and newline smuggling.
+        Each case is asserted against BOTH timeError() and validate(), so the field-level and
+        whole-request views can never disagree.
+    testTheTimeMessageIsTheSameWhereverItIsReported
+    testAnInvalidTimeMeansNoUrlIsEverBuilt
+tests/Web/RecordingChannelsCest.php
+    anInvalidTimeIsReportedUnderTheFieldItself
+    anInvalidTimeNeverReachesTheExternalApi (8 examples)
+    anAbsentTimeParameterFallsBackToTheFormDefaultAsItAlwaysHas
+    aLeapDayIsAcceptedAndBehavesExactlyAsBefore
+    aValidTimeShowsNoFieldError
+    theTimeFieldCarriesTheHooksTheClientSideValidatorNeeds
+Note: the Web suite runs PhpBrowser, which executes no JavaScript. The browser-side behaviour is
+therefore verified by asserting the markup hooks the script binds to; the rule itself is covered by
+the unit table, and the JS mirrors that same table by design.
+
+
+--------------------------------------------------
 APPENDIX - WHAT THIS DOCUMENTATION TASK CHANGED
 --------------------------------------------------
 
-Only this file (docs/testRecordingChannel.txt) was created/written. No PHP, template, route, config,
-test, asset or database change was made, and no migration was run, while producing it. Git history
-was consulted with read-only commands only (log, show, status).
+Sections 1-28 were written as documentation only: no application code was changed while producing
+them, and git history was consulted with read-only commands (log, show, status).
 
-`git status --short` after this task reports exactly one entry:
-
-    ?? docs/testRecordingChannel.txt
-
-Nothing else in the working tree was added, modified or removed.
+Section 29 documents a later, separate change (2026-09-22): field-level validation for the Time
+field. That change touched assets/recording-channels/recording-channels.js (new),
+src/Order58/Web/TestRecordingChannels/RecordingChannelsAsset.php (new), template.php, Action.php,
+ChannelRecordingRequest.php and two test files - and nothing else. No route, config, database or
+external-API behaviour was altered.
