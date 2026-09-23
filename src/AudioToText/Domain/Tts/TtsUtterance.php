@@ -31,6 +31,15 @@ final readonly class TtsUtterance
          */
         public SpeakerRole $role,
         public string $text,
+        /**
+         * The voice that speaks this line, where the recording named one.
+         *
+         * Null for a conversation, whose voices come from the role above — that is the whole of the
+         * mixed rendition's behaviour and none of it changes. Set for a recording that holds one side
+         * of a call, where the role is the diarizer's guess about a cluster and must not choose a
+         * sound. When it is set it is the only thing that does.
+         */
+        public ?TtsVoice $voice = null,
     ) {}
 
     public function isAgent(): bool

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\AudioToText;
 
+use App\Tests\Support\Fake\AudioToText\FixedRecordingTypes;
+use App\AudioToText\Domain\RecordingType;
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
 use App\AudioToText\Application\Tts\TtsGenerationService;
@@ -32,7 +35,7 @@ final class TtsGenerationServiceTest extends TestCase
         $this->renditions = new InMemoryTtsRenditionRepository();
         $this->service = new TtsGenerationService(
             $this->renditions,
-            new TtsScriptBuilder(new EffectiveConversationReader(new SpeakerSegmentsDecoder())),
+            self::builder(),
             AudioToTextSettingsFactory::create(ttsApiKey: 'test-key'),
         );
     }
@@ -217,6 +220,20 @@ final class TtsGenerationServiceTest extends TestCase
             ],
             agentText: 'Ready in 25 minutes.',
             customerText: 'Two egg foo young.',
+        );
+    }
+
+    /**
+     * The builder, over a recording that declared no type — every existing test's subject.
+     *
+     * A declared Caller or Callee recording takes a different path through `build()`, so the type has
+     * to be stated rather than defaulted; {@see TtsSingleVoiceScriptTest} states the other value.
+     */
+    private static function builder(?RecordingType $type = null): TtsScriptBuilder
+    {
+        return new TtsScriptBuilder(
+            new EffectiveConversationReader(new SpeakerSegmentsDecoder()),
+            new RecordingVoiceReader(FixedRecordingTypes::everything($type)),
         );
     }
 }

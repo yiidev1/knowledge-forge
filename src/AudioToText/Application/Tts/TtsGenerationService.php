@@ -70,6 +70,14 @@ final readonly class TtsGenerationService
      */
     public function rolesAreKnown(TranscriptionJob $job): bool
     {
+        // A recording that declared its side answers the question this gate asks, and answers it more
+        // firmly than a confirmation could: a person said so at upload. Without this such a recording
+        // is blocked for ever — its confirmation needs a turn in both AGENT and CUSTOMER, which one
+        // person's audio may never have, so there is no action that could unblock it.
+        if ($this->scripts->voiceFor($job) !== null) {
+            return true;
+        }
+
         return $job->sourceRole?->isProvided() === true || $job->rolesConfirmed();
     }
 
@@ -108,10 +116,20 @@ final readonly class TtsGenerationService
         return TtsSourceDigest::for($outputType, $this->scripts->build($job, $outputType)->utterances);
     }
 
-    /** The voice and format settings in force now, for comparison against what a file was made with. */
-    public function currentRenderKey(TtsOutputType $outputType): string
+    /**
+     * The voice and format settings in force now, for comparison against what a file was made with.
+     *
+     * The job is optional only so the one caller that has a rendition and not its recording can still
+     * ask. Everywhere a job is available it is passed, because a single-side recording's key depends
+     * on its own voice and on neither of the two a conversation uses.
+     */
+    public function currentRenderKey(TtsOutputType $outputType, ?TranscriptionJob $job = null): string
     {
-        return TtsRenderKey::for($this->settings->tts, $outputType);
+        return TtsRenderKey::for(
+            $this->settings->tts,
+            $outputType,
+            $job === null ? null : $this->scripts->voiceFor($job),
+        );
     }
 
     public function find(TranscriptionJob $job, TtsOutputType $outputType): ?TtsRendition
@@ -170,7 +188,7 @@ final readonly class TtsGenerationService
 
         $existing = $this->renditions->findForJob($job->id, $outputType);
 
-        if ($existing !== null && $existing->isCurrent($hash, $this->currentRenderKey($outputType))) {
+        if ($existing !== null && $existing->isCurrent($hash, $this->currentRenderKey($outputType, $job))) {
             return TtsEnqueueOutcome::AlreadyCurrent;
         }
 

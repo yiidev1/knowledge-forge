@@ -27,6 +27,10 @@ KF_BASE=http://127.0.0.1:8080 ./run.sh
 next one — the corrections are real, so a suite consumes the conversation it edits. `cleanup.php`
 removes everything by its own markers and is safe to run at any time.
 
+Run `cleanup.php` before the PHP suites if you ran a single suite by hand: a queued rendition left
+behind is visible to `TtsRenditionRepositoryTest`, which sweeps abandoned rows across the table.
+`run.sh` already cleans up after itself.
+
 Nothing outside those fixtures is read or written. The store id is far outside the mirrored range,
 and the administrator is named `__kf_e2e_admin__`.
 
@@ -37,6 +41,11 @@ ends of a conversation.
 
 `page.js` — the full correction page: edit, history, selection, merge, and a real pointer drag onto
 the opposite lane's drop band.
+
+`tts.js` — Text to Audio for a recording that holds one side of a call: the modal offers all three,
+Caller generates, the rendition goes Ready, an edit makes it stale, and an ambiguous Mixed recording is
+still blocked. **No paid provider is called** — the web tier only enqueues, and `complete-tts.php`
+stands in for the worker's render with the same hash, render key and columns.
 
 `voices.js` — a recording whose type names its speaker. A Caller upload is diarized like any other, so
 its `speaker_segments` really do contain two clusters; these assert that every screen still reads it as

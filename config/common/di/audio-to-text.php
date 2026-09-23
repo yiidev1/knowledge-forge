@@ -162,6 +162,11 @@ return [
             'url' => $params['app/audio-deepgram-tts']['url'],
             'customerModel' => $params['app/audio-deepgram-tts']['customerModel'],
             'agentModel' => $params['app/audio-deepgram-tts']['agentModel'],
+            // One voice per side, for a recording that holds only one. Separate settings because
+            // Caller and Callee say who dialled while Customer and Agent say who works for the
+            // restaurant — see TtsVoice.
+            'callerModel' => $params['app/audio-deepgram-tts']['callerModel'],
+            'calleeModel' => $params['app/audio-deepgram-tts']['calleeModel'],
             'sampleRate' => $params['app/audio-deepgram-tts']['sampleRate'],
             'maxCharactersPerRequest' => $params['app/audio-deepgram-tts']['maxCharactersPerRequest'],
             'timeoutSeconds' => $params['app/audio-deepgram-tts']['timeoutSeconds'],

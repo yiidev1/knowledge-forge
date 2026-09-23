@@ -73,7 +73,16 @@ final class TtsSourceDigest
         $rows = [];
 
         foreach ($utterances as $utterance) {
-            $rows[] = [$utterance->role->value, $utterance->text];
+            // The voice where one is named, the role where it is not. Two rules rather than one
+            // because the role is what chooses a conversation's voices and the voice is what chooses
+            // a single-side recording's — and a digest has to change exactly when the sound would.
+            //
+            // Written as a two-element row in the second case so that every hash stored before this
+            // existed is still the hash this produces. A third element for everyone would have made
+            // each of them report itself stale and invited a paid regeneration of all of them.
+            $rows[] = $utterance->voice === null
+                ? [$utterance->role->value, $utterance->text]
+                : [$utterance->voice->value, $utterance->text];
         }
 
         try {

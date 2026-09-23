@@ -514,6 +514,141 @@ final class AudioToTextAiAudioCest
         Assert::assertSame(1, $this->renditionCount());
     }
 
+    // ------------------------------------------- asked for from the store page, answered in place
+
+    /**
+     * The same enqueue, reported as a sentence rather than as a new page.
+     *
+     * An administrator on a listing of twenty orders pressed a button in one cell. Sending them to
+     * that one recording's page is losing their place to tell them something that fits in a sentence,
+     * so a caller that asks for JSON is given one — and nothing about the enqueue changes.
+     */
+    public function anAjaxGenerateAnswersWithJsonAndDoesNotRedirect(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+        $hash = $I->grabAttributeFrom('input[name="expected_hash"]', 'value');
+        $token = $I->grabAttributeFrom('form[action*="ai-audio/generate"] input[name="_csrf"]', 'value');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $this->jobPublicId . '/ai-audio/generate', [
+            '_csrf' => $token,
+            'output_type' => 'MIXED',
+            'expected_hash' => $hash,
+        ]);
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+        $I->seeInSource('"queued":true');
+        // The recording, not the row it is stored under: this one really is a mixed recording, and
+        // `anAjaxGenerateNamesTheRecordingNotTheOutputType` covers the case where the two differ.
+        $I->seeInSource('"recording":"Common \/ Mixed"');
+        $I->seeInSource('Common \/ Mixed text-to-audio has been queued');
+        $I->seeInSource('"outputType":"MIXED"');
+
+        // It really enqueued, exactly once, and rendered nothing.
+        Assert::assertSame(1, $this->renditionCount());
+        Assert::assertSame('QUEUED', $this->renditionStatus());
+    }
+
+    /** And an ordinary submission still redirects to the page it was made from. */
+    public function anOrdinaryGenerateStillRedirectsToTheAiAudioPage(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        $I->submitForm('form[action*="ai-audio/generate"]', []);
+
+        $I->seeCurrentUrlEquals($this->pageUrl());
+        $I->see('has been queued');
+        $I->dontSeeInSource('"success":true');
+        Assert::assertSame(1, $this->renditionCount());
+    }
+
+    /** A second press is absorbed and says so, still without leaving the listing. */
+    public function asecondAjaxGenerateIsAbsorbedRatherThanChargedTwice(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+        $token = $I->grabAttributeFrom('form[action*="ai-audio/generate"] input[name="_csrf"]', 'value');
+        $hash = $I->grabAttributeFrom('input[name="expected_hash"]', 'value');
+
+        $post = fn(): mixed => $I->sendAjaxPostRequest(
+            '/audio-to-text/job/' . $this->jobPublicId . '/ai-audio/generate',
+            ['_csrf' => $token, 'output_type' => 'MIXED', 'expected_hash' => $hash],
+        );
+
+        $post();
+        $post();
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+        $I->seeInSource('"queued":false');
+        $I->seeInSource('is already being generated');
+        Assert::assertSame(1, $this->renditionCount(), 'Two presses, one rendition.');
+    }
+
+    /**
+     * A stale form buys nothing, and says so without leaving the page.
+     *
+     * `AlreadyCurrent` rather than an exception is the service's existing answer and is deliberate —
+     * somebody corrected the transcript in another tab, which is not an error to be alarmed by. What
+     * matters here is that the JSON path reports it the same way the page does and, above all, that
+     * **nothing was queued**: the button that was pressed was labelled with text nobody has read.
+     */
+    public function anAjaxGenerateWithAStaleHashQueuesNothing(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+        $token = $I->grabAttributeFrom('form[action*="ai-audio/generate"] input[name="_csrf"]', 'value');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $this->jobPublicId . '/ai-audio/generate', [
+            '_csrf' => $token,
+            'output_type' => 'MIXED',
+            'expected_hash' => str_repeat('f', 64),
+        ]);
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"queued":false');
+        $this->assertNoRenditionExists($I);
+    }
+
+    /** An output this recording cannot produce is refused the same way. */
+    public function anAjaxGenerateForAnImpossibleOutputIsRefusedAsData(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+        $token = $I->grabAttributeFrom('form[action*="ai-audio/generate"] input[name="_csrf"]', 'value');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $this->jobPublicId . '/ai-audio/generate', [
+            '_csrf' => $token,
+            'output_type' => 'BANJO',
+            'expected_hash' => str_repeat('a', 64),
+        ]);
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('"success":false');
+        $this->assertNoRenditionExists($I);
+    }
+
+    /**
+     * The store page's cell state comes from the server, not from the browser.
+     *
+     * Added to the group endpoint so one place computes it: the dialog redraws the cell after a
+     * generation and the watcher re-reads it while something is in flight, and neither works out what
+     * "Queued" means for itself.
+     */
+    public function theGroupOptionsCarryTheCellStateAndTheFileToPlay(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/store/' . self::STORE);
+        $options = $I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts');
+
+        $I->amOnPage($options);
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"cellState":"Not generated"');
+        $I->seeInSource('"playUrl":null');
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private function assertNoRenditionExists(WebTester $I): void

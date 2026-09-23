@@ -85,7 +85,7 @@ final readonly class AiAudioPage
 
                 $transcripts[$job->id] ??= TranscriptSource::for($job, $hash);
 
-                $state = self::state($rendition, $hash, $generation->currentRenderKey($outputType));
+                $state = self::state($rendition, $hash, $generation->currentRenderKey($outputType, $job));
                 $nothingToSay = $script->isEmpty();
 
                 $rows[] = new AiAudioRow(

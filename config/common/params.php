@@ -139,6 +139,8 @@ return [
         'url' => Environment::string('DEEPGRAM_TTS_URL'),
         'customerModel' => Environment::string('DEEPGRAM_TTS_MODEL_CUSTOMER'),
         'agentModel' => Environment::string('DEEPGRAM_TTS_MODEL_AGENT'),
+        'callerModel' => Environment::string('DEEPGRAM_TTS_MODEL_CALLER'),
+        'calleeModel' => Environment::string('DEEPGRAM_TTS_MODEL_CALLEE'),
         'sampleRate' => Environment::int('DEEPGRAM_TTS_SAMPLE_RATE'),
         'maxCharactersPerRequest' => Environment::int('DEEPGRAM_TTS_MAX_CHARS'),
         'timeoutSeconds' => Environment::int('DEEPGRAM_TTS_TIMEOUT'),

@@ -754,6 +754,90 @@
     var ttsStatus = document.querySelector('[data-a2t-tts-status]');
     var ttsMeta = document.querySelector('[data-a2t-tts-meta]');
     var ttsDialog = dialogOf(ttsForm);
+    var notice = document.querySelector('[data-a2t-notice]');
+    var ttsRow = null;     // the row the open dialog belongs to
+    var ttsUrl = null;     // that row's options endpoint, re-read after a generation
+    var ttsPoll = null;
+    var ttsBusy = false;
+
+    /** What a page load's flash would have said, for an action that deliberately did not reload. */
+    function announce(message, kind) {
+        if (!notice) {
+            return;
+        }
+        notice.className = 'a2t-notice alert alert--' + kind;
+        notice.textContent = message;
+        notice.hidden = false;
+    }
+
+    /**
+     * Redraw one row's Text to Audio cell from the server's own answer.
+     *
+     * The states and the play URL are the slot's, computed where the page computes them, so nothing
+     * here decides whether a recording is Queued or Ready — it only puts the words on screen.
+     */
+    function paintTtsCell(row, options) {
+        var cell = row ? row.querySelector('.a2t-tts-list') : null;
+
+        if (!cell) {
+            return false;
+        }
+
+        empty(cell);
+        var working = false;
+
+        options.forEach(function (option) {
+            cell.appendChild(el('span', 'a2t-tts__label', option.label));
+
+            if (option.playUrl) {
+                var play = el('button', 'a2t-play a2t-play--sm');
+                play.type = 'button';
+                play.setAttribute('data-a2t-play', option.playUrl);
+                play.setAttribute('aria-label', 'Play generated ' + option.label + ' audio');
+                play.appendChild(el('span', 'a2t-play__icon'));
+                play.firstChild.setAttribute('aria-hidden', 'true');
+                cell.appendChild(play);
+                return;
+            }
+
+            cell.appendChild(el('span', 'a2t-tts__state', option.cellState));
+
+            if (option.cellState === 'Queued' || option.cellState === 'Generating') {
+                working = true;
+            }
+        });
+
+        return working;
+    }
+
+    /**
+     * Watch a row until nothing on it is still being generated.
+     *
+     * Only while something is actually in flight, and only the one row: a listing that polled every
+     * order every few seconds would cost more than the feature is worth. The worker takes minutes on a
+     * long call, so the cap is generous and giving up leaves the page correct on its next load.
+     */
+    function watchTts(row, url) {
+        clearTimeout(ttsPoll);
+
+        var attempts = 0;
+
+        function tick() {
+            if (++attempts > 120) {
+                return;
+            }
+
+            load(url).then(function (data) {
+                if (paintTtsCell(row, data.options)) {
+                    ttsPoll = setTimeout(tick, 4000);
+                }
+            }).catch(function () {
+                // A hiccup is not worth a message: the row is right again on the next page load.
+            });
+        }
+
+        ttsPoll = setTimeout(tick, 2500);
+    }
 
     function chooseTts(option) {
         // Copied, not derived. `action`, `outputType` and `expectedHash` name the exact job, the exact
@@ -773,11 +857,15 @@
         ttsForm.action = '';
         ttsOutput.value = '';
         ttsHash.value = '';
+        // The row this belongs to, and its endpoint: both are read again after a generation, so what
+        // the dialog shows on its next open is what the server says then rather than what it said now.
+        ttsRow = button.closest('tr');
+        ttsUrl = button.getAttribute('data-a2t-tts');
         var order = button.getAttribute('data-a2t-order');
         ttsMeta.textContent = order ? 'Order ' + order : 'No order id';
         say(ttsStatus, 'Loading…');
 
-        load(button.getAttribute('data-a2t-tts')).then(function (data) {
+        load(ttsUrl).then(function (data) {
             if (!data.options.length) {
                 say(ttsStatus, 'There is nothing to generate for this order yet.');
                 return;
@@ -822,6 +910,81 @@
             ttsForm.hidden = false;
         }).catch(function (error) {
             fail(ttsStatus, error.message, function () { openTts(button); });
+        });
+    }
+
+    /**
+     * Generate without leaving the listing.
+     *
+     * The same form, the same fields, the same endpoint — asked for as JSON instead of as a page. An
+     * administrator looking at twenty orders pressed a button in one cell; sending them to that one
+     * recording's page is losing their place to tell them a sentence.
+     */
+    if (ttsForm) {
+        ttsForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            if (ttsBusy) {
+                return;
+            }
+
+            ttsBusy = true;
+            var label = ttsSubmit.textContent;
+            ttsSubmit.disabled = true;
+            ttsSubmit.textContent = 'Queuing…';
+            quiet(ttsStatus);
+
+            var row = ttsRow;
+            var url = ttsUrl;
+
+            fetch(ttsForm.action, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                },
+                // The form's own fields, so the token, the output type and the hash are exactly the
+                // ones the server put there — and the server revalidates every one of them.
+                body: new URLSearchParams(new FormData(ttsForm)).toString()
+            }).then(function (response) {
+                return response.json().then(
+                    function (data) { return data; },
+                    function () {
+                        return { success: false, message: 'The server could not confirm this request.' };
+                    }
+                );
+            }).then(function (data) {
+                ttsBusy = false;
+                ttsSubmit.disabled = false;
+                ttsSubmit.textContent = label;
+
+                if (!data.success) {
+                    // Left open on purpose: the choice is still made, and the reason is beside it.
+                    say(ttsStatus, data.message);
+                    return;
+                }
+
+                closeDialog(ttsDialog);
+                announce(data.message, data.queued ? 'success' : 'info');
+
+                // The row's own state, read back from the server rather than assumed here.
+                if (row !== null && url !== null) {
+                    load(url).then(function (fresh) {
+                        if (paintTtsCell(row, fresh.options)) {
+                            watchTts(row, url);
+                        }
+                    }).catch(function () {
+                        // The cell is right again on the next page load.
+                    });
+                }
+            }).catch(function () {
+                ttsBusy = false;
+                ttsSubmit.disabled = false;
+                ttsSubmit.textContent = label;
+                say(ttsStatus, 'Connection interrupted. Nothing was queued — try again.');
+            });
         });
     }
 

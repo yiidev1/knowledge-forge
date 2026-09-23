@@ -77,6 +77,10 @@ final class AudioToTextSettingsFactory
         string $ttsUrl = 'https://api.deepgram.com/v1/speak',
         string $ttsCustomerModel = 'aura-2-thalia-en',
         string $ttsAgentModel = 'aura-2-arcas-en',
+        // One voice per side, for a recording that holds only one. Distinct from the pair above so a
+        // test can tell which of the four a script actually selected.
+        string $ttsCallerModel = 'aura-2-andromeda-en',
+        string $ttsCalleeModel = 'aura-2-orpheus-en',
         int $ttsSampleRate = 24000,
         int $ttsMaxCharactersPerRequest = 1900,
         int $ttsTimeoutSeconds = 120,
@@ -134,6 +138,8 @@ final class AudioToTextSettingsFactory
                 url: $ttsUrl,
                 customerModel: $ttsCustomerModel,
                 agentModel: $ttsAgentModel,
+                callerModel: $ttsCallerModel,
+                calleeModel: $ttsCalleeModel,
                 sampleRate: $ttsSampleRate,
                 maxCharactersPerRequest: $ttsMaxCharactersPerRequest,
                 timeoutSeconds: $ttsTimeoutSeconds,

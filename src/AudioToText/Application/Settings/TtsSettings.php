@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\AudioToText\Application\Settings;
 
 use App\AudioToText\Domain\Tts\TtsOutputFormat;
+use App\AudioToText\Domain\Tts\TtsVoice;
 use App\Shared\Domain\ValueObject\SecretValue;
 
 use function sprintf;
@@ -38,6 +39,15 @@ final readonly class TtsSettings
          */
         public string $customerModel,
         public string $agentModel,
+        /**
+         * One voice per side, for a recording that holds only one.
+         *
+         * Not derived from the two above: Caller and Callee say who dialled, Customer and Agent say
+         * who works for the restaurant, and either party can place a call. These two may legitimately
+         * be equal to each other — they are never heard in the same file.
+         */
+        public string $callerModel,
+        public string $calleeModel,
         public int $sampleRate,
         public int $maxCharactersPerRequest,
         public int $timeoutSeconds,
@@ -99,6 +109,22 @@ final readonly class TtsSettings
         return $problems;
     }
 
+    /**
+     * Why this one voice cannot be used, or null when it can.
+     *
+     * Deliberately **not** part of {@see problems()}, which gates the feature as a whole: an unset
+     * Caller voice is a reason that one recording cannot be generated, not a reason the mixed audio
+     * everybody else is producing should stop. The modal asks per choice and says which.
+     */
+    public function voiceProblem(TtsVoice $voice): ?string
+    {
+        if ($this->modelForVoice($voice) !== '') {
+            return null;
+        }
+
+        return sprintf('The %s voice is not configured on this server.', $voice->label());
+    }
+
     public function isUsable(): bool
     {
         return $this->problems() === [];
@@ -113,6 +139,22 @@ final readonly class TtsSettings
     public function modelFor(bool $isAgent): string
     {
         return $isAgent ? $this->agentModel : $this->customerModel;
+    }
+
+    /**
+     * The model one named voice speaks with.
+     *
+     * The single authority, so a render key and the synthesiser that follows it cannot disagree about
+     * which sound a file was made with.
+     */
+    public function modelForVoice(TtsVoice $voice): string
+    {
+        return match ($voice) {
+            TtsVoice::Customer => $this->customerModel,
+            TtsVoice::Agent => $this->agentModel,
+            TtsVoice::Caller => $this->callerModel,
+            TtsVoice::Callee => $this->calleeModel,
+        };
     }
 
     /**

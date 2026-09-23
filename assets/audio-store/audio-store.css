@@ -275,6 +275,10 @@
 }
 .a2t-empty-state p { margin: 0; }
 
+/* An in-page action's answer, where a page load would otherwise have carried a flash. */
+.a2t-notice { margin: 0 0 1rem; }
+.a2t-notice[hidden] { display: none; }
+
 /* ---- Dialogs ------------------------------------------------------------------------------------
    The shell is `.source-modal` from admin.css, so these inherit the chat dialog's surface, backdrop,
    head and close treatment. Only width and the body's scrolling are set here: a transcript must scroll

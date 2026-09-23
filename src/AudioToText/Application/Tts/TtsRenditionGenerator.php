@@ -138,9 +138,10 @@ final readonly class TtsRenditionGenerator
             throw TtsException::writeFailed('the audio workspace could not be opened for writing');
         }
 
-        // Only a mixed rendition has two people in it, so only a mixed rendition needs a breath between
-        // turns. A single-role file in this phase is always one whole side of a separate recording — one
-        // utterance — so there is nothing to put a gap between anyway.
+        // A breath between turns wherever there is more than one. That is every mixed rendition, and
+        // also a single-side recording, which is one person taking several turns with real pauses
+        // between them. A per-role file from a separate upload is one whole utterance and has no
+        // boundary to place a gap at, so the condition below costs it nothing either way.
         $gap = $outputType === TtsOutputType::Mixed
             ? PcmAudio::silence($tts->gapMilliseconds, $tts->sampleRate)
             : '';
@@ -159,7 +160,14 @@ final readonly class TtsRenditionGenerator
                     // Deliberately no silence between the chunks of one turn: those splits are a
                     // transport artefact of the provider's per-request ceiling, not something the speaker
                     // did, and a pause there would be audible in the middle of a sentence.
-                    $audio = $this->synthesizer->synthesize($chunk, $tts->modelFor($utterance->isAgent()));
+                    // The voice the script named, or the role's voice where it named none. A
+                    // single-side recording carries diarizer roles that mean nothing about who spoke,
+                    // so for those the script's own answer is the only one that may be used.
+                    $model = $utterance->voice === null
+                        ? $tts->modelFor($utterance->isAgent())
+                        : $tts->modelForVoice($utterance->voice);
+
+                    $audio = $this->synthesizer->synthesize($chunk, $model);
 
                     $bytes += $this->write($handle, $audio);
                     $characters += mb_strlen($chunk, 'UTF-8');

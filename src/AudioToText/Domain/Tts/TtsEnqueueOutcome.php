@@ -43,10 +43,23 @@ enum TtsEnqueueOutcome
      */
     public function message(TtsOutputType $type): string
     {
+        return $this->messageFor($type->label());
+    }
+
+    /**
+     * The same sentence about a differently named thing.
+     *
+     * The store page names the *recording* — "Caller", "Callee", "Common / Mixed" — because that is
+     * the column an administrator pressed the button in. The output type it happens to be stored
+     * under is a fact about the renditions table and would read as a different recording entirely.
+     * One match either way, so the four outcomes cannot be worded two ways.
+     */
+    public function messageFor(string $subject): string
+    {
         return match ($this) {
-            self::Queued => $type->label() . ' has been queued. It will be generated shortly.',
-            self::AlreadyRunning => $type->label() . ' is already being generated. Nothing was queued twice.',
-            self::AlreadyCurrent => $type->label() . ' is already up to date for the current transcript.',
+            self::Queued => $subject . ' has been queued. It will be generated shortly.',
+            self::AlreadyRunning => $subject . ' is already being generated. Nothing was queued twice.',
+            self::AlreadyCurrent => $subject . ' is already up to date for the current transcript.',
             self::NotFound => 'That recording is no longer available.',
         };
     }

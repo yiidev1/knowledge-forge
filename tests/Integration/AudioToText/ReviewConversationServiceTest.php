@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Application\Tts\TtsScriptBuilder;
@@ -84,7 +85,12 @@ final class ReviewConversationServiceTest extends Unit
             // notification rather than part of the transaction.
             new TtsGenerationService(
                 new InMemoryTtsRenditionRepository(),
-                new TtsScriptBuilder($this->effective),
+                // The real repository: this suite has a database, and a recording that declared no
+                // type is exactly what these conversations are.
+                new TtsScriptBuilder(
+                    $this->effective,
+                    new RecordingVoiceReader(new DbAudioConversationRepository($this->connection)),
+                ),
                 AudioToTextSettingsFactory::create(),
             ),
             new DbAudioConversationRepository($this->connection),

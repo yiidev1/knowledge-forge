@@ -92,6 +92,13 @@ async function oneSided(page, root, name, expectedSide) {
             await t.click();
             // Wait for the render rather than guessing at it: a fixed sleep read an empty body.
             await page.waitForSelector('.a2t-transcript-dialog .a2t-turn__who', { timeout: 5000 });
+            // One order holds all three recordings, so the dialog has a tab each. Pick this one's.
+            await page.evaluate((label) => {
+                const tab = [...document.querySelectorAll('[data-a2t-transcript-tabs] .a2t-tab')]
+                    .find((b) => b.textContent.trim() === label);
+                if (tab) tab.click();
+            }, label);
+            await sleep(300);
             const meta = await page.$eval('[data-a2t-transcript-meta]', (n) => n.textContent);
             if (meta.startsWith(label)) {
                 const seen = await page.$$eval('.a2t-transcript-dialog .a2t-turn__who',

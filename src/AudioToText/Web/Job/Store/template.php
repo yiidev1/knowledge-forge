@@ -423,6 +423,13 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
     </div>
 <?php endif; ?>
 
+<?php
+// Where an in-page action reports itself. The layout renders server-side flashes above this; a
+// generation asked for from the dialog never reloads, so it says so here instead — same `.alert`
+// shell, so the two read as one thing.
+?>
+<div class="a2t-notice" data-a2t-notice role="status" aria-live="polite" hidden></div>
+
 <div class="card a2t-wide">
     <h2 class="card__title">This store's conversions</h2>
 

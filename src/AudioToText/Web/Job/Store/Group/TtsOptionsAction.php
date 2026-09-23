@@ -118,6 +118,17 @@ final readonly class TtsOptionsAction
             'label' => $slot->label(),
             'conversationPublicId' => $slot->conversationPublicId,
             'jobPublicId' => $slot->jobPublicId,
+            // What the Text to Audio column says about this recording right now, and the file to play
+            // when there is one. Both come from the same slot the page renders the cell from, so the
+            // dialog can refresh that cell after a generation without the browser working out any of
+            // it — and the polling below asks this endpoint rather than a second one.
+            'cellState' => $slot->aiAudioState()->label(),
+            'playUrl' => $slot->hasGeneratedAudio()
+                ? $this->urlGenerator->generate(
+                    AudioToTextRoute::JOB_AI_AUDIO_FILE,
+                    ['publicId' => $slot->jobPublicId],
+                )
+                : null,
             // …and the storage layer's, which the form posts back unchanged.
             'outputType' => $outputType->value,
             'action' => $this->urlGenerator->generate(
@@ -129,6 +140,10 @@ final readonly class TtsOptionsAction
         if (!$this->generation->isEligible($job)) {
             // Completed-and-roles-known is the service's own gate. Naming which half is missing is what
             // turns a greyed-out radio into something an administrator can act on.
+            //
+            // A Caller or Callee recording never reaches this branch on the roles half: it declared its
+            // side, so there is nothing to confirm. Saying so anyway would be the one wrong answer —
+            // there is no action that would clear it.
             return $base + [
                 'selectable' => false,
                 'expectedHash' => null,
@@ -136,6 +151,21 @@ final readonly class TtsOptionsAction
                 'reason' => $job->status->value === 'COMPLETED'
                     ? 'Speaker confirmation required.'
                     : 'Transcription has not finished for this recording.',
+            ];
+        }
+
+        // The one thing the service does not check: whether the voice this recording needs is
+        // configured at all. Reported per choice, because an unset Caller voice is a reason that one
+        // recording cannot be generated and not a reason to stop the mixed audio beside it.
+        $voice = $this->scripts->voiceFor($job);
+        $voiceProblem = $voice === null ? null : $this->settings->tts->voiceProblem($voice);
+
+        if ($voiceProblem !== null) {
+            return $base + [
+                'selectable' => false,
+                'expectedHash' => null,
+                'state' => 'unavailable',
+                'reason' => $voiceProblem,
             ];
         }
 
@@ -162,7 +192,7 @@ final readonly class TtsOptionsAction
         }
 
         $existing = $this->generation->find($job, $outputType);
-        $current = $existing?->isCurrent($hash, $this->generation->currentRenderKey($outputType)) === true;
+        $current = $existing?->isCurrent($hash, $this->generation->currentRenderKey($outputType, $job)) === true;
         $inFlight = $existing !== null && $existing->status->value !== 'READY' && $existing->status->value !== 'FAILED';
 
         return $base + [

@@ -8,7 +8,9 @@ use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Domain\Tts\TtsOutputType;
+use App\AudioToText\Domain\Tts\TtsVoice;
 use App\AudioToText\Domain\Tts\TtsScript;
 use App\AudioToText\Domain\Tts\TtsUtterance;
 
@@ -41,7 +43,10 @@ use App\AudioToText\Domain\Tts\TtsUtterance;
  */
 final readonly class TtsScriptBuilder
 {
-    public function __construct(private EffectiveConversationReader $effective) {}
+    public function __construct(
+        private EffectiveConversationReader $effective,
+        private RecordingVoiceReader $voices,
+    ) {}
 
     /**
      * Build the script for one output, or an empty one when there is nothing to say.
@@ -52,9 +57,61 @@ final readonly class TtsScriptBuilder
      */
     public function build(TranscriptionJob $job, TtsOutputType $outputType): TtsScript
     {
+        // Asked first, because it overrides the output type rather than refining it. A Caller
+        // recording's output type is MIXED — that is what "the complete audio for this recording"
+        // is called — but there is nothing mixed inside it, and building it as a conversation would
+        // put two synthetic voices on one person's words.
+        $voice = $this->voiceFor($job);
+
+        if ($voice !== null) {
+            return $this->singleVoice($job, $voice);
+        }
+
         return $outputType === TtsOutputType::Mixed
             ? $this->mixed($job)
             : $this->singleRole($job, $outputType === TtsOutputType::Agent ? SpeakerRole::AGENT : SpeakerRole::CUSTOMER);
+    }
+
+    /** The voice this recording declared, or null where it holds a conversation. */
+    public function voiceFor(TranscriptionJob $job): ?TtsVoice
+    {
+        return TtsVoice::forRecording($this->voices->typeFor($job));
+    }
+
+    /**
+     * One person, every turn of it, in one voice.
+     *
+     * Read through the effective reader like everything else here, so a correction and a merge are
+     * both respected — what is spoken is the conversation as it stands, once, never the machine's
+     * copy alongside it.
+     *
+     * Every turn is kept whatever role the diarizer attached to it. In a conversation an OTHER or
+     * UNKNOWN turn is dropped, because no voice could speak it without claiming something; here the
+     * claim has already been made by the person who uploaded the file, so there is nothing left to
+     * be careful about and nothing to omit.
+     */
+    private function singleVoice(TranscriptionJob $job, TtsVoice $voice): TtsScript
+    {
+        $utterances = [];
+
+        foreach ($this->effective->for($job)->utterances as $utterance) {
+            /** @var SpeakerUtterance $utterance */
+            $text = TtsSourceText::prepare($utterance->text);
+
+            if ($text !== '') {
+                $utterances[] = new TtsUtterance($utterance->role, $text, $voice);
+            }
+        }
+
+        if ($utterances !== []) {
+            return new TtsScript($utterances);
+        }
+
+        // A recording with no turns at all — nothing separated it — still has its transcript, and the
+        // reader resolves that to the reviewed text where one exists.
+        $text = TtsSourceText::prepare($job->transcript ?? '');
+
+        return new TtsScript($text === '' ? [] : [new TtsUtterance(SpeakerRole::UNKNOWN, $text, $voice)]);
     }
 
     /**

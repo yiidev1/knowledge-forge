@@ -251,15 +251,18 @@ final class AudioTtsWorkerCommand extends Command
             // Only the voices actually used are recorded, so a single-role file does not claim to have
             // been made with a voice that never spoke in it.
             $tts = $this->settings->tts;
-            $usedCustomer = $rendition->outputType !== TtsOutputType::Agent;
-            $usedAgent = $rendition->outputType !== TtsOutputType::Customer;
+            // A single-side recording used one voice of its own, so it claims neither of the two a
+            // conversation uses — the columns record what was heard, not what was configured.
+            $voice = $this->scripts->voiceFor($job);
+            $usedCustomer = $voice === null && $rendition->outputType !== TtsOutputType::Agent;
+            $usedAgent = $voice === null && $rendition->outputType !== TtsOutputType::Customer;
 
             $published = $this->renditions->markReady(
                 $rendition->id,
                 $rendition->attemptToken,
                 $result->fileName,
                 $hash,
-                $this->generation->currentRenderKey($rendition->outputType),
+                $this->generation->currentRenderKey($rendition->outputType, $job),
                 $result->fileBytes,
                 $result->characterCount,
                 $result->requestCount,

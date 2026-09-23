@@ -6,6 +6,7 @@ namespace App\AudioToText\Application\Tts;
 
 use App\AudioToText\Application\Settings\TtsSettings;
 use App\AudioToText\Domain\Tts\TtsOutputType;
+use App\AudioToText\Domain\Tts\TtsVoice;
 
 use function implode;
 use function sprintf;
@@ -42,14 +43,26 @@ final class TtsRenderKey
      * @param TtsOutputType $outputType decides which voices are involved at all, so a single-role file
      *                                  is not invalidated by a change to the other role's voice
      */
-    public static function for(TtsSettings $settings, TtsOutputType $outputType): string
-    {
+    public static function for(
+        TtsSettings $settings,
+        TtsOutputType $outputType,
+        ?TtsVoice $voice = null,
+    ): string {
         $parts = [
             'v1',
             $settings->outputFormat->value,
             sprintf('%dhz', $settings->sampleRate),
             sprintf('max%d', $settings->maxCharactersPerRequest),
         ];
+
+        if ($voice !== null) {
+            // One voice throughout, so the other three settings cannot invalidate this file. The gap
+            // still counts: a single-side recording has several turns and a breath between them.
+            $parts[] = 'voice=' . $settings->modelForVoice($voice);
+            $parts[] = sprintf('gap%d', $settings->gapMilliseconds);
+
+            return implode('|', $parts);
+        }
 
         if ($outputType === TtsOutputType::Mixed) {
             $parts[] = 'c=' . $settings->customerModel;

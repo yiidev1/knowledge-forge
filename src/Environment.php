@@ -301,6 +301,14 @@ final class Environment
         // a deployment transcribing another language should choose accordingly.
         'DEEPGRAM_TTS_MODEL_CUSTOMER' => ['type' => 'string', 'default' => 'aura-2-thalia-en'],
         'DEEPGRAM_TTS_MODEL_AGENT' => ['type' => 'string', 'default' => 'aura-2-arcas-en'],
+        // One voice per *side*, for a recording that holds only one. Separate from the two above
+        // because Caller and Callee say who dialled while Customer and Agent say who works for the
+        // restaurant, and either party can place a call. The defaults borrow the voices already
+        // configured so an existing deployment generates correctly without editing anything — a
+        // convenience about which sound to use, not a claim that a Caller is a Customer. Unlike the
+        // pair above these two may match: they are never heard in the same file.
+        'DEEPGRAM_TTS_MODEL_CALLER' => ['type' => 'string', 'default' => 'aura-2-thalia-en'],
+        'DEEPGRAM_TTS_MODEL_CALLEE' => ['type' => 'string', 'default' => 'aura-2-arcas-en'],
         'DEEPGRAM_TTS_SAMPLE_RATE' => ['type' => 'int', 'default' => 24000, 'min' => 8000, 'max' => 48000],
         // Characters per request. Deepgram documents a 2000-character ceiling for Aura and answers 413
         // above it, so the ceiling is the maximum rather than the default — the margin absorbs any

@@ -142,8 +142,14 @@ $transcribe = static function (int $conversationId) use ($c, $adminId, $now, $li
 
 $job = $transcribe($conversationId);
 
-[$callerConversation, $callerId] = $upload('CALLER', '99001133');
-[$calleeConversation, $calleeId] = $upload('CALLEE', '99001144');
+// The same order as the mixed upload above, which is how a real call arrives: one Order ID with a
+// mixed recording and each side beside it, sharing one row of the store page.
+[$callerConversation, $callerId] = $upload('CALLER', '99001122');
+[$calleeConversation, $calleeId] = $upload('CALLEE', '99001122');
+
+// A mixed recording under its own order, touched by nothing else, so a test that needs an untouched
+// eligible recording has one however many the tests before it have queued.
+[$spareConversation, $spareId] = $upload('MIXED', '99002200');
 
 echo json_encode([
     'admin' => ADMIN,
@@ -153,4 +159,6 @@ echo json_encode([
     'job' => $job,
     'callerJob' => $transcribe($callerId),
     'calleeJob' => $transcribe($calleeId),
+    'spareConversation' => $spareConversation,
+    'spareJob' => $transcribe($spareId),
 ], JSON_THROW_ON_ERROR), "\n";
