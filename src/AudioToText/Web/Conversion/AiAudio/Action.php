@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Conversion\AiAudio;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\Tts\TtsGenerationService;
@@ -66,6 +67,7 @@ final readonly class Action
          * one the audio would be read from, which is exactly what this object answers.
          */
         private EffectiveConversationReader $effectiveConversations,
+        private RecordingVoiceReader $voices,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -151,6 +153,9 @@ final readonly class Action
                     $job->speakerRoleConfidence,
                     $effective->hasSeparatedText(),
                     $effective->rolesConfirmed,
+                    // Named at upload time: a Caller recording reads as that one person,
+                    // whatever the diarizer found inside it.
+                    $this->voices->for($job),
                 )->turns,
                 'normalisePrices' => !$effective->isReviewed,
             ];

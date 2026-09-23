@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Original;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\MachineConversationReader;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStore;
@@ -44,6 +45,7 @@ final readonly class Action
         private AudioConversationRepositoryInterface $conversationRepository,
         private AudioStoreLookupInterface $stores,
         private Redirect $redirect,
+        private RecordingVoiceReader $voices,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -78,6 +80,9 @@ final readonly class Action
                     $job->speakerRoleConfidence,
                     $machine->hasSeparatedText(),
                     false,
+                    // Named at upload time: a Caller recording reads as that one person,
+                    // whatever the diarizer found inside it.
+                    $this->voices->for($job),
                 ),
                 'store' => $this->owningStore($job->conversationId),
             ])

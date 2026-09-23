@@ -53,6 +53,9 @@ final readonly class Action
                         ? $this->review->mergeWithPrevious($publicId, $adminId, $index, $version)
                         : $this->review->mergeWithNext($publicId, $adminId, $index, $version);
                 },
+                // Passed so the shared shell can answer in the modal's language when asked;
+                // an ordinary submission still gets the flash and the redirect.
+                $request,
             );
         }
 
@@ -79,6 +82,9 @@ final readonly class Action
                     $version,
                 );
             },
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\ConversationHistoryBuilder;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
@@ -48,6 +49,7 @@ final readonly class Action
         private ConversationHistoryBuilder $history,
         private AppTimeZone $appTimeZone,
         private Redirect $redirect,
+        private RecordingVoiceReader $voices,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -70,12 +72,17 @@ final readonly class Action
             return $this->redirect->toRoute(AudioToTextRoute::JOB, ['publicId' => $job->publicId]);
         }
 
+        $voice = $this->voices->for($job);
+
         $conversation = ConversationView::from(
             $job->speakerSeparationStatus,
             $effective->utterances,
             $job->speakerRoleConfidence,
             $effective->hasSeparatedText(),
             $effective->rolesConfirmed,
+            // Named at upload time: a Caller or Callee recording is one person's words, whatever
+            // the diarizer found inside it, and nothing below may offer to re-decide that.
+            $voice,
         );
 
         // The same turns the service will load when a button is pressed, so what is offered on screen
@@ -99,6 +106,7 @@ final readonly class Action
                     $turns,
                     $this->confirmedBy($revisions),
                     $this->history->build($revisions, $turns),
+                    $voice,
                 ),
                 // Page chrome, not review state, so it is passed beside ReviewPageView rather than into
                 // it — the same shape the conversion page uses.

@@ -20,7 +20,9 @@ trait LegacySeparateAudioUpload
     private function postSeparateAudio(WebTester $I, string $url, array $filenames = []): void
     {
         $I->amOnPage($url);
-        $csrfSelector = '#a2t-common-form input[type="hidden"]:not([name="mode"])';
+        // The page now has one upload form rather than three cards. The token is still a rendered
+        // hidden input inside it, which is the only thing this helper ever needed from the markup.
+        $csrfSelector = '#a2t-upload-form input[type="hidden"][name="_csrf"]';
         $csrfName = $I->grabAttributeFrom($csrfSelector, 'name');
         $csrfValue = $I->grabAttributeFrom($csrfSelector, 'value');
         $files = [];

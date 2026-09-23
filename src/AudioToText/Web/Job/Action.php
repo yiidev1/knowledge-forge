@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\Speaker\ConversationView;
@@ -29,6 +30,7 @@ final readonly class Action
         private AudioToTextSettings $settings,
         private AppTimeZone $appTimeZone,
         private EffectiveConversationReader $conversations,
+        private RecordingVoiceReader $voices,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -57,6 +59,9 @@ final readonly class Action
                     // and stood behind the labels. Without this the machine's own status would be the
                     // only arbiter, and a confirmation would change nothing a reader could see.
                     $effective->rolesConfirmed,
+                    // Named at upload time: a Caller recording reads as that one person,
+                    // whatever the diarizer found inside it.
+                    $this->voices->for($job),
                 ),
                 // The agent/customer blocks read from the same object as the turns above them, so a
                 // corrected attribution can never show in one and not the other.

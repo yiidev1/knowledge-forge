@@ -125,8 +125,9 @@ final class AudioToTextCest
         $I->amOnPage(self::STORE_URL);
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_NAME);
-        $I->see('Convert mixed recording');
-        $I->see('Convert both recordings');
+        $I->see('Add audio');
+        $I->see('Upload & Transcribe');
+        $I->see("This store's conversions");
     }
 
     /**
@@ -180,7 +181,7 @@ final class AudioToTextCest
         $this->signIn($I, self::ADMIN_A);
 
         $I->amOnPage(self::STORE_URL);
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         $I->see('Choose an audio file first.');
         Assert::assertSame(0, $this->jobCount());
@@ -192,7 +193,7 @@ final class AudioToTextCest
 
         $I->amOnPage(self::STORE_URL);
         $I->attachFile('#a2t-audio', 'kf_audio_fake.txt');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         $I->see('Only .wav, .mp3, .m4a, .ogg, .webm files are supported.');
         Assert::assertSame(0, $this->jobCount());
@@ -205,7 +206,7 @@ final class AudioToTextCest
 
         $I->amOnPage(self::STORE_URL);
         $I->attachFile('#a2t-audio', 'kf_audio_disguised.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         $I->see('That file is not audio, whatever its name says.');
         Assert::assertSame(0, $this->jobCount());
@@ -271,7 +272,8 @@ final class AudioToTextCest
         )->execute();
 
         $I->amOnPage(self::STORE_URL);
-        $I->see('Convert mixed recording');
+        // Still offered while another recording is converting: one upload does not lock the form.
+        $I->see('Add audio');
         $I->dontSee('You already have a transcription in progress');
 
         $second = $this->upload($I);
@@ -692,7 +694,7 @@ final class AudioToTextCest
     {
         $I->amOnPage(self::STORE_URL);
         $I->attachFile('#a2t-audio', 'kf_audio_valid.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         return $this->newestPublicId();
     }

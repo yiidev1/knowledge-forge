@@ -5,9 +5,10 @@ declare(strict_types=1);
 use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
-use App\AudioToText\Domain\Speaker\ReviewedTurn;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
+use App\AudioToText\Web\AudioToTextIcons;
+use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\Review\ReviewPageView;
 use App\AudioToText\Web\Job\Review\ReviewTurnView;
@@ -57,20 +58,12 @@ $pageUrl = static fn(string $route): string => $urlGenerator->generate(
 // statement that writes, so two administrators cannot both succeed from the same starting point.
 $version = static fn(): string => (string) Html::hiddenInput('expected_review_count', (string) $page->version);
 
-// Inline SVG rather than an icon font or a sprite: the CSP is `default-src 'self'` with no external
-// origins, and markup needs no request at all.
-$icon = static function (string $paths, string $label): string {
-    return '<svg class="a2t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        . 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
-        . $paths . '</svg><span class="a2t-sr">' . Html::encode($label) . '</span>';
-};
-$pencil = '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>';
-// A clock face with a hand — the icon every interface already uses for "what happened before".
-$clock = '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>';
-// Six dots, the handle everyone already reads as "drag me".
-$grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
-    . '<circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/>'
-    . '<circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>';
+// Read from the shared source rather than written out here, so the pencil on this page and the pencil
+// in the store page's Details dialog cannot drift into two slightly different pencils.
+$icon = AudioToTextIcons::svg(...);
+$pencil = AudioToTextIcons::PENCIL;
+$clock = AudioToTextIcons::CLOCK;
+$grip = AudioToTextIcons::GRIP;
 ?>
 <div class="a2t-chat a2t-review" data-a2t-review>
     <div class="a2t-chat__header">
@@ -111,7 +104,17 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
         </p>
 
         <div class="a2t-review__status">
-            <?php if ($page->confirmedAt !== null): ?>
+            <?php if ($page->voice !== null): ?>
+                <?php
+                // The upload named the speaker, so there is no separation to stand behind and no
+                // second party to assign anything to. Saying so is more useful than leaving the row
+                // empty, which would read as a question nobody had got round to answering.
+                ?>
+                <span class="a2t-review__state a2t-review__state--confirmed">
+                    This recording is the <strong><?= Html::encode($page->voice->label) ?></strong>
+                    side of the call, so every message in it is theirs.
+                </span>
+            <?php elseif ($page->confirmedAt !== null): ?>
                 <span class="a2t-review__state a2t-review__state--confirmed">
                     Roles confirmed by
                     <strong><?= Html::encode($page->confirmedByUsername ?? 'an administrator') ?></strong>
@@ -230,11 +233,13 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                         // drag-and-drop would leave touch unsupported.
                 ?>
                         <span class="a2t-turn__tools" data-a2t-tools hidden>
+                            <?php if ($page->voice === null): ?>
                             <button class="a2t-iconbtn a2t-iconbtn--grip" type="button" data-a2t-grip
                                     title="Drag to move this message to the <?= Html::encode($other->label()) ?>"><?= $icon(
                                         $grip,
                                         'Drag to move this message to the ' . $other->label(),
                                     ) ?></button>
+                            <?php endif; ?>
                             <button class="a2t-iconbtn" type="button" data-a2t-edit
                                     title="Correct the wording"><?= $icon($pencil, 'Correct the wording') ?></button>
                             <?php if ($turn->hasHistory()): ?>
@@ -301,6 +306,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                 ?>
                     <noscript>
                     <div class="a2t-turn__fallback" data-a2t-fallback>
+                        <?php if ($page->voice === null): ?>
                         <form method="post" action="<?= Html::encode($turnUrl(AudioToTextRoute::JOB_REVIEW_MOVE, $turn->index)) ?>">
                             <?= $csrfField ?><?= $version() ?>
                             <?= Html::hiddenInput('role', $other->value) ?>
@@ -308,6 +314,7 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
                                 Move to <?= Html::encode($other->label()) ?>
                             </button>
                         </form>
+                        <?php endif; ?>
 
                         <details class="a2t-turn__advanced">
                             <summary>Advanced</summary>
@@ -383,135 +390,13 @@ $grip = '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
 // confirmation is a real submit, so CSRF, the version check and the redirect are all unchanged from
 // every other control here — nothing about a move goes through a separate JSON path.
 ?>
-<dialog class="a2t-confirm" data-a2t-merge-dialog>
-    <form method="post" data-a2t-merge-form>
-        <?= $csrfField ?><?= $version() ?>
-        <input type="hidden" name="direction" data-a2t-merge-direction value="">
-        <?php
-        // Present only for a partial move. The endpoint treats their absence as "join the whole turn",
-        // so the two shapes of the same correction share one form.
-?>
-        <input type="hidden" name="selection_start" data-a2t-merge-start disabled value="">
-        <input type="hidden" name="selection_end" data-a2t-merge-end disabled value="">
-        <input type="hidden" name="selection_text" data-a2t-merge-selected disabled value="">
+<?= $this->render(AudioToTextViews::reviewConfirm(), [
+    'csrfField' => $csrfField,
+    'version' => $page->version,
+]) ?>
 
-        <h2 class="a2t-confirm__title">Merge these messages?</h2>
-
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">First</span>
-            <span class="a2t-confirm__value" data-a2t-merge-first></span>
-        </p>
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Second</span>
-            <span class="a2t-confirm__value" data-a2t-merge-second></span>
-        </p>
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Result</span>
-            <span class="a2t-confirm__value" data-a2t-merge-result></span>
-        </p>
-        <p class="a2t-confirm__note">
-            Both turns are by the same speaker in the same role, so joining them changes who said what
-            not at all — only how it is broken up. The timings become the span of the two together.
-        </p>
-
-        <div class="a2t-confirm__actions">
-            <button class="btn btn--sm" type="button" data-a2t-merge-cancel>Cancel</button>
-            <button class="btn btn--sm btn--primary" type="submit" data-a2t-merge-confirm>Confirm merge</button>
-        </div>
-    </form>
-</dialog>
-
-<dialog class="a2t-confirm" data-a2t-move-dialog>
-    <form method="post" data-a2t-move-form>
-        <?= $csrfField ?><?= $version() ?>
-        <input type="hidden" name="selection" data-a2t-move-selection value="">
-        <input type="hidden" name="hint" data-a2t-move-hint value="">
-        <input type="hidden" name="role" data-a2t-move-role value="">
-
-        <h2 class="a2t-confirm__title">Move this text?</h2>
-
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Selected</span>
-            <span class="a2t-confirm__value" data-a2t-move-preview></span>
-        </p>
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">From</span>
-            <span class="a2t-confirm__value" data-a2t-move-from></span>
-        </p>
-        <p class="a2t-confirm__row">
-            <span class="a2t-confirm__key">To</span>
-            <span class="a2t-confirm__value" data-a2t-move-to></span>
-        </p>
-        <p class="a2t-confirm__note" data-a2t-move-note hidden></p>
-
-        <div class="a2t-confirm__actions">
-            <button class="btn btn--sm" type="button" data-a2t-move-cancel>Cancel</button>
-            <button class="btn btn--sm btn--primary" type="submit" data-a2t-move-confirm>Confirm move</button>
-        </div>
-    </form>
-</dialog>
-
-<?php
-// One dialog per message that has history, rendered server-side and opened by its own icon. No fetch,
-// no endpoint, no template cloning: the page already holds the audit trail it needed for the roles
-// line, and a correction touches a handful of messages, so the markup is small. Every historical word
-// goes through Html::encode on the way in — a transcript is data, and a transcript from six revisions
-// ago is no more trustworthy than today's.
-$clock2 = static fn(int $ms): string => sprintf('%02d:%02d', intdiv($ms, 60000), intdiv($ms % 60000, 1000));
-
-$historyTurn = static function (ReviewedTurn $t) use ($clock2): string {
-    // The span as stored. A turn a person split carries its parent's range and says so with the tilde
-    // the rest of the feature already uses, rather than a number nobody measured.
-    $range = $t->startMs === 0 && $t->endMs === 0
-        ? ''
-        : ' · ' . ($t->approx ? '~' : '') . $clock2($t->startMs) . '–' . $clock2($t->endMs);
-
-    return '<p class="a2t-history__turn"><span class="a2t-history__who">'
-        . Html::encode($t->role->label() . $range)
-        . '</span><span class="a2t-history__text">' . Html::encode($t->text) . '</span></p>';
-};
-?>
-<?php foreach ($page->turns as $turn): ?>
-    <?php if (!$turn->hasHistory()): ?>
-        <?php continue; ?>
-    <?php endif; ?>
-    <dialog class="a2t-confirm a2t-history" data-a2t-history-dialog="<?= $turn->index ?>">
-        <h2 class="a2t-confirm__title">What was corrected</h2>
-        <?php foreach ($turn->history->events as $event): ?>
-            <div class="a2t-history__event">
-                <p class="a2t-history__head">
-                    <strong><?= Html::encode($event->summary()) ?></strong>
-                    <span class="a2t-history__meta">
-                        revision <?= $event->revisionNumber ?>
-                        · by <?= Html::encode($event->editedByUsername ?? 'an administrator') ?>
-                        · <?= Html::encode($appTimeZone->format($event->createdAt, 'M j, Y g:i A T')) ?>
-                    </span>
-                </p>
-
-                <?php
-                // Both sides always, and both may hold more than one message. A merge that showed only
-                // one "before" would read exactly like a text edit and misdescribe what was done.
-            ?>
-                <p class="a2t-history__label">Before</p>
-                <?php foreach ($event->before as $t): ?>
-                    <?= $historyTurn($t) ?>
-                <?php endforeach; ?>
-
-                <p class="a2t-history__label">After</p>
-                <?php foreach ($event->after as $t): ?>
-                    <?= $historyTurn($t) ?>
-                <?php endforeach; ?>
-
-                <?php if ($event->involvesSeveralTurns()): ?>
-                    <p class="a2t-confirm__note">
-                        This correction involved more than one message, so it is shown on each of them.
-                    </p>
-                <?php endif; ?>
-            </div>
-        <?php endforeach; ?>
-
-        <div class="a2t-confirm__actions">
-            <button class="btn btn--sm" type="button" data-a2t-history-close>Close</button>
-        </div>
-    </dialog>
-<?php endforeach; ?>
+<?= $this->render(AudioToTextViews::reviewHistory(), [
+    'turns' => $page->turns,
+    'appTimeZone' => $appTimeZone,
+    'voice' => $page->voice,
+]) ?>

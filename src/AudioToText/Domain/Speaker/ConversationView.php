@@ -71,7 +71,16 @@ final readonly class ConversationView
         ?float $confidence = null,
         bool $aggregateTextPresent = true,
         bool $rolesConfirmedByHuman = false,
+        ?TranscriptVoice $voice = null,
     ): self {
+        // A recording whose speaker was named at upload time answers the question this class was
+        // written to be careful about, rather than answering it better. The diarizer's clusters are
+        // still real and still stored; they are simply not two people, so none of the machinery below
+        // applies and the turns are labelled with the fact somebody supplied.
+        if ($voice !== null) {
+            return self::singleVoice($utterances, $voice, $confidence);
+        }
+
         $published = $aggregateTextPresent
             && ($status?->isPublishable() === true || $rolesConfirmedByHuman);
 
@@ -119,6 +128,39 @@ final readonly class ConversationView
     public function isEmpty(): bool
     {
         return $this->turns === [];
+    }
+
+    /**
+     * One side of a call, every turn of it.
+     *
+     * `rolesPublished` is true and every turn is `confirmed`, and both mean the same thing here: there
+     * is nothing left to establish. That is what removes the confirmation prompt and the speaker
+     * controls from every screen at once, rather than each of them checking the recording type itself.
+     *
+     * Timing is still measured between turns — a pause inside one person's recording is a real pause —
+     * but the side never alternates, because there is nobody to alternate with.
+     *
+     * @param list<SpeakerUtterance> $utterances
+     */
+    private static function singleVoice(array $utterances, TranscriptVoice $voice, ?float $confidence): self
+    {
+        $timings = ResponseTiming::forUtterances($utterances);
+        $turns = [];
+
+        foreach ($utterances as $index => $utterance) {
+            $turns[] = new ConversationTurn(
+                $voice->label,
+                SpeakerMarkers::strip($utterance->text),
+                true,
+                $voice->side,
+                $timings[$index] ?? TurnTiming::untimed(),
+                $utterance->edited,
+            );
+        }
+
+        // No hypotheses: the mapper's guess about which cluster is the agent describes a question this
+        // recording does not pose, and showing it would invite somebody to answer it.
+        return new self($turns, true, [], $confidence);
     }
 
     /**

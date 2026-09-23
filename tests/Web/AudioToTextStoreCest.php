@@ -14,9 +14,11 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function array_keys;
 use function codecept_data_dir;
 use function file_put_contents;
 use function gmdate;
+use function json_decode;
 use function json_encode;
 use function is_file;
 use function pack;
@@ -140,10 +142,10 @@ final class AudioToTextStoreCest
         $I->amOnPage($this->storeUrl(self::STORE_C));
         $I->seeResponseCodeIs(200);
         $I->see('no new recordings can be uploaded for it');
-        // The forms are not merely disabled in the markup — they are not rendered at all.
-        $I->dontSeeElement('#a2t-common-form');
-        $I->dontSeeElement('#a2t-caller-form');
-        $I->dontSeeElement('#a2t-callee-form');
+        // The form is not merely disabled in the markup — it is not rendered at all, and neither is
+        // the dialog that would hold it or the button that would open it.
+        $I->dontSeeElement($this->uploadForm());
+        $I->dontSeeElement('[data-a2t-open]');
     }
 
     /**
@@ -161,13 +163,13 @@ final class AudioToTextStoreCest
         $this->setStoreActive(self::STORE_C, true);
 
         $I->amOnPage($this->storeUrl(self::STORE_C));
-        $I->seeElement('#a2t-common-form');
+        $I->seeElement($this->uploadForm());
         $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
 
         // Order58 deactivates the store while the administrator is still looking at the form.
         $this->setStoreActive(self::STORE_C, false);
 
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm($this->uploadForm(), []);
 
         $I->see('no new recordings can be uploaded for it');
         Assert::assertSame([], $this->conversationsFor(self::STORE_C));
@@ -292,22 +294,31 @@ final class AudioToTextStoreCest
         $I->seeResponseCodeIs(404);
     }
 
-    public function theStorePageOffersThreeSingleRecordingCards(WebTester $I): void
+    /**
+     * One form in a dialog, where there were three cards side by side.
+     *
+     * What the three cards each carried, this one form still carries — the file, the COMMON mode, the
+     * progress element the upload script binds to — because the request behind it did not change. The
+     * only thing that moved is how the type is named: a radio group instead of three hidden inputs.
+     */
+    public function theStorePageOffersOneUploadFormForEveryRecordingType(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
-        $I->see('One Mixed Recording');
-        $I->see('Caller Recording');
-        $I->see('Callee Recording');
+        $I->see('Add audio');
         $I->dontSee('Separate Customer and Agent recordings');
-        foreach (['common', 'caller', 'callee'] as $card) {
-            $I->seeElement('#a2t-' . $card . '-form input[name=audio]');
-            $I->seeElement('#a2t-' . $card . '-form input[name=mode][value=COMMON]');
-            $I->seeElement('#a2t-' . $card . '-form progress');
-        }
+
+        $I->seeElement($this->uploadForm() . ' input[name=audio]');
+        $I->seeElement($this->uploadForm() . ' input[name=mode][value=COMMON]');
+        $I->seeElement($this->uploadForm() . ' progress');
+
+        // One form, not four: the three cards are gone rather than hidden.
+        $I->dontSeeElement('#a2t-common-form');
+        $I->dontSeeElement('#a2t-caller-form');
+        $I->dontSeeElement('#a2t-callee-form');
     }
 
     // ---------------------------------------------------------------------------- common mode
@@ -331,10 +342,8 @@ final class AudioToTextStoreCest
     public function callerAndCalleeRecordingsUseTheExistingSingleFileQueue(WebTester $I): void
     {
         $this->signIn($I);
-        foreach (['caller', 'callee'] as $card) {
-            $I->amOnPage($this->storeUrl(self::STORE_A));
-            $I->attachFile('#a2t-' . $card . '-audio', 'kf_store_valid.wav');
-            $I->submitForm('#a2t-' . $card . '-form', []);
+        foreach (['CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type);
             $conversation = $this->conversationsFor(self::STORE_A)[0];
             Assert::assertSame('COMMON', $conversation['mode']);
             $children = $this->childrenOf((int) $conversation['id']);
@@ -594,33 +603,39 @@ final class AudioToTextStoreCest
     // ------------------------------------------------- recording type and the optional order id
 
     /**
-     * Each card names itself, and each card offers the optional order field.
+     * The form offers every type, and the optional order field.
      *
-     * The hidden input is what lets the server tell three otherwise identical submissions apart — they
-     * post the same mode, the same field names and the same file input — so its absence would silently
-     * return the history to labelling every upload "Common / Mixed".
+     * The radio group is what lets the server tell three otherwise identical submissions apart — they
+     * post the same mode, the same field names and the same file input — so a missing value would
+     * silently return the listing to filing every upload under Mix / Common.
      */
-    public function eachCardDeclaresItsRecordingTypeAndOffersAnOptionalOrderId(WebTester $I): void
+    public function theUploadFormDeclaresEveryRecordingTypeAndOffersAnOptionalOrderId(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
-        foreach (['common' => 'MIXED', 'caller' => 'CALLER', 'callee' => 'CALLEE'] as $card => $type) {
-            $I->seeElement('#a2t-' . $card . '-form input[name=recording_type][value=' . $type . ']');
-            $I->seeElement('#a2t-' . $card . '-form input[name=order_id]');
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $I->seeElement($this->uploadForm() . ' input[name=recording_type][value=' . $type . ']');
         }
 
+        // Mixed is the default, so the commonest upload needs no choice made for it.
+        $I->seeElement($this->uploadForm() . ' input[name=recording_type][value=MIXED][checked]');
+        $I->seeElement($this->uploadForm() . ' input[name=order_id]');
         $I->see('Optional. Example: 16513791');
     }
 
     /**
-     * A mixed upload with an order id: both values persisted, both shown.
+     * An upload with an order id: both values persisted, and the recording lands in its own column.
      *
-     * @example ["common", "MIXED", "Common / Mixed"]
-     * @example ["caller", "CALLER", "Caller"]
-     * @example ["callee", "CALLEE", "Callee"]
+     * The type is no longer a word in a cell — it is *which cell*. Asserting on the column is what
+     * makes this test notice a caller recording filed under Mix / Common, which is the mistake the
+     * grouped table exists to make visible.
+     *
+     * @example ["MIXED"]
+     * @example ["CALLER"]
+     * @example ["CALLEE"]
      */
-    public function eachCardPersistsItsTypeAndOrderIdAndShowsThemInTheHistory(
+    public function anUploadPersistsItsTypeAndOrderIdAndFilesItUnderTheOrder(
         WebTester $I,
         \Codeception\Example $example,
     ): void {
@@ -628,7 +643,7 @@ final class AudioToTextStoreCest
         $this->uploadCard($I, self::STORE_A, (string) $example[0], '16513791');
 
         $conversation = $this->conversationsFor(self::STORE_A)[0];
-        Assert::assertSame($example[1], $conversation['recording_type']);
+        Assert::assertSame($example[0], $conversation['recording_type']);
         Assert::assertSame('16513791', $conversation['order_id']);
         // The mode is untouched: all three are still COMMON uploads with one COMMON child, which is
         // what keeps the transcription path identical for all of them.
@@ -640,18 +655,18 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Order ID');
-        $I->see('16513791');
-        $I->see((string) $example[2]);
+        $I->see('#16513791');
+        $this->seeRecordingInColumn($I, (string) $example[0]);
     }
 
     /**
      * The same three uploads with the field left empty: still accepted, still typed, order id NULL.
      *
-     * @example ["common", "MIXED", "Common / Mixed"]
-     * @example ["caller", "CALLER", "Caller"]
-     * @example ["callee", "CALLEE", "Callee"]
+     * @example ["MIXED"]
+     * @example ["CALLER"]
+     * @example ["CALLEE"]
      */
-    public function eachCardUploadsWithoutAnOrderIdAndStoresNull(
+    public function anUploadWithoutAnOrderIdStoresNullAndStillGetsItsOwnRow(
         WebTester $I,
         \Codeception\Example $example,
     ): void {
@@ -659,14 +674,15 @@ final class AudioToTextStoreCest
         $this->uploadCard($I, self::STORE_A, (string) $example[0]);
 
         $conversation = $this->conversationsFor(self::STORE_A)[0];
-        Assert::assertSame($example[1], $conversation['recording_type'], 'The card is recorded either way.');
+        Assert::assertSame($example[0], $conversation['recording_type'], 'The type is recorded either way.');
         Assert::assertNull($conversation['order_id'], 'No order means NULL, never 0 and never an empty string.');
         Assert::assertCount(1, $this->childrenOf((int) $conversation['id']), 'The upload still queued.');
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see((string) $example[2]);
-        // An em dash in the Order ID cell rather than a blank one.
-        $I->see('—');
+        // Said in words rather than left blank, which would read as missing data — and it is still a
+        // row of its own rather than a shared "no order" bucket.
+        $I->see('No order');
+        $this->seeRecordingInColumn($I, (string) $example[0]);
     }
 
     /**
@@ -684,13 +700,15 @@ final class AudioToTextStoreCest
     public function anInvalidOrderIdIsRefusedAndQueuesNothing(WebTester $I, \Codeception\Example $example): void
     {
         $this->signIn($I);
-        $this->uploadCard($I, self::STORE_A, 'common', (string) $example[0]);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', (string) $example[0]);
 
         Assert::assertSame([], $this->conversationsFor(self::STORE_A), 'Nothing may be created.');
         Assert::assertSame(0, $this->jobCountFor(self::STORE_A), 'Transcription must not start.');
         $I->see('Order ID must be digits only');
-        // What was typed comes back, so a typo can be corrected rather than retyped from memory.
-        $I->seeElement('#a2t-common-form input[name=order_id][value="' . $example[0] . '"]');
+        // What was typed comes back, so a typo can be corrected rather than retyped from memory —
+        // and the dialog holding it is rendered already open, because a refusal has to be visible.
+        $I->seeElement($this->uploadForm() . ' input[name=order_id][value="' . $example[0] . '"]');
+        $I->seeElement('.a2t-upload-dialog[open]');
     }
 
     /** A posted type outside the allow-list records nothing and is never stored. */
@@ -699,18 +717,21 @@ final class AudioToTextStoreCest
         $this->signIn($I);
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
-        $I->submitForm($this->commonForm(), ['recording_type' => 'PRESIDENT']);
+        $I->submitForm($this->uploadForm(), ['recording_type' => 'PRESIDENT']);
 
         $conversation = $this->conversationsFor(self::STORE_A)[0];
         Assert::assertNull($conversation['recording_type'], 'Only the three known values may be stored.');
         // The upload itself is unaffected: it is the ordinary COMMON upload it has always been.
         Assert::assertSame('COMMON', $conversation['mode']);
 
+        // A row with no recording type is a COMMON upload, which is what the Mix / Common column has
+        // always meant — read that way on the page, never written back to the database.
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see('Common / Mixed');
+        $I->see('Mix / Common');
+        $this->seeRecordingInColumn($I, 'MIXED');
     }
 
-    /** A Customer + Agent pair records no card: its mode already describes it, and still does. */
+    /** A Customer + Agent pair records no type: its mode already describes it, and still does. */
     public function aSeparatePairRecordsNoRecordingTypeAndKeepsItsLabel(WebTester $I): void
     {
         $this->signIn($I);
@@ -721,7 +742,11 @@ final class AudioToTextStoreCest
         Assert::assertNull($conversation['recording_type']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see('Separate Customer + Agent');
+        $I->see('Customer + Agent');
+        // Not relabelled into the new vocabulary: Caller and Callee are empty for this row, because
+        // nothing here ever established which of the two placed the call.
+        $I->seeElement('.a2t-orders tbody tr:first-child td:nth-child(3) .util-muted');
+        $I->seeElement('.a2t-orders tbody tr:first-child td:nth-child(4) .util-muted');
     }
 
     /**
@@ -743,16 +768,18 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->seeResponseCodeIs(200);
-        $I->see('Common / Mixed');
-        $I->see('—');
-        $I->see('1 conversion for this store');
+        // A row that predates recording types is read as the COMMON upload it is, and an upload
+        // that named no order is still a row of its own.
+        $I->see('Mix / Common');
+        $I->see('No order');
+        $I->see('1 order for this store');
     }
 
     /** The provider choice still rides through an upload that also carries an order id. */
     public function theProviderChoiceIsUnaffectedByTheNewFields(WebTester $I): void
     {
         $this->signIn($I);
-        $this->uploadCard($I, self::STORE_A, 'caller', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
 
         $conversation = $this->conversationsFor(self::STORE_A)[0];
         $children = $this->childrenOf((int) $conversation['id']);
@@ -771,9 +798,12 @@ final class AudioToTextStoreCest
         $this->uploadSeparate($I, self::STORE_A);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see('Separate Customer + Agent');
-        $I->see('1 conversion for this store');
-        Assert::assertSame(2, $this->jobCountFor(self::STORE_A), 'Two jobs, one conversion.');
+        // Its halves are Customer and Agent — roles the administrator supplied — and this application
+        // has never known which of them called whom, so they keep their own names rather than being
+        // relabelled Caller and Callee.
+        $I->see('Customer + Agent');
+        $I->see('1 order for this store');
+        Assert::assertSame(2, $this->jobCountFor(self::STORE_A), 'Two jobs, one row.');
     }
 
     public function aStoresHistoryShowsOnlyItsOwnUploads(WebTester $I): void
@@ -783,7 +813,7 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_B));
         $I->seeResponseCodeIs(200);
-        $I->see('Nothing uploaded for this store yet.');
+        $I->see('No audio recordings yet.');
         Assert::assertSame([], $this->conversationsFor(self::STORE_B));
     }
 
@@ -800,7 +830,7 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
-        $I->submitForm($this->commonForm(), ['store_id' => (string) self::STORE_B]);
+        $I->submitForm($this->uploadForm(), ['store_id' => (string) self::STORE_B]);
 
         Assert::assertCount(1, $this->conversationsFor(self::STORE_A));
         Assert::assertSame([], $this->conversationsFor(self::STORE_B));
@@ -908,17 +938,22 @@ final class AudioToTextStoreCest
      * E, F, G. The machine's own transcript is offered exactly where one exists.
      *
      * All three states are asserted in one pass because they are the same decision seen from three
-     * sides — an action that only redirects is worse than no action, so the row offers it only for a
-     * finished common conversion.
+     * sides — an action that shows nothing is worse than no action, so the row offers it only where
+     * something was actually transcribed.
+     *
+     * The action is now a control that opens a dialog rather than a link to a page, and it is
+     * addressed by the **group** rather than by one recording: a row is an order, and an order can
+     * hold a mixed, a caller and a callee recording that belong in one reading. The page it replaced
+     * is untouched and still routed — {@see theOldPerRecordingRoutesStillAnswer()} pins that.
      */
-    public function theOriginalTranscriptActionIsOfferedOnlyForACompletedCommonConversion(WebTester $I): void
+    public function theOriginalTranscriptActionIsOfferedOnlyWhereSomethingWasTranscribed(WebTester $I): void
     {
         $this->signIn($I);
 
-        // F. Common, still queued: no machine transcript yet, so no link.
+        // F. Common, still queued: no machine transcript yet, so no action.
         $this->uploadCommon($I, self::STORE_A);
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->dontSeeElement('a[href$="/original"]');
+        $I->dontSeeElement('[data-a2t-transcripts]');
 
         // E. The same conversion once the worker has finished with it.
         $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
@@ -926,15 +961,437 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Original transcript');
-        $I->seeElement('a[href="/audio-to-text/job/' . $child['public_id'] . '/original"]');
-        // Offered beside View, never instead of it.
-        $I->seeElement('a[href^="/audio-to-text/conversion/"]');
+        $I->seeElement('[data-a2t-transcripts]');
+        // Beside the way in to the corrections, never instead of it.
+        $I->seeElement('[data-a2t-details]');
 
-        // G. Separate: two independent recordings, no segments, nothing to show as one conversation.
+        // G. Separate and still queued: nothing transcribed, so nothing to read. Asserted on the
+        // control rather than on the words: the dialog shell is rendered on every load and carries
+        // the heading whether or not any row can open it.
         $this->uploadSeparate($I, self::STORE_B);
         $I->amOnPage($this->storeUrl(self::STORE_B));
-        $I->dontSeeElement('a[href$="/original"]');
-        $I->dontSee('Original transcript');
+        $I->dontSeeElement('[data-a2t-transcripts]');
+    }
+
+    /**
+     * The pages the dialogs replaced are still routed, and still answer.
+     *
+     * The store page stopped linking to them; nothing removed them. A bookmark, a pasted URL or an
+     * older tab has to keep working, and "we redesigned a listing" is not a reason for an address to
+     * start 404ing.
+     */
+    public function theOldPerRecordingRoutesStillAnswer(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        $child = $this->childrenOf((int) $conversation['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        foreach ([
+            '/audio-to-text/conversion/' . $conversation['public_id'],
+            '/audio-to-text/conversion/' . $conversation['public_id'] . '/ai-audio',
+            '/audio-to-text/job/' . $child['public_id'],
+            '/audio-to-text/job/' . $child['public_id'] . '/original',
+            '/audio-to-text/job/' . $child['public_id'] . '/review',
+            '/audio-to-text/job/' . $child['public_id'] . '/conversation',
+        ] as $path) {
+            $I->amOnPage($path);
+            $I->seeResponseCodeIs(200);
+        }
+    }
+
+    /**
+     * The group endpoints answer for their own store, and for no other.
+     *
+     * Both halves of the address arrive from a browser. A key naming one store's conversation,
+     * requested under another store's id, resolves nothing and answers 404 — the same answer a key
+     * that never existed gets, because an id that answers differently when it exists is an id that
+     * can be used to find out what exists.
+     */
+    public function aGroupKeyFromAnotherStoreIsNotFound(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $transcripts = $I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts');
+
+        // Its own store: a transcript, as data.
+        $I->amOnPage($transcripts);
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"transcripts"');
+
+        // The same key under a store it does not belong to.
+        $I->amOnPage(str_replace(
+            '/store/' . self::STORE_A . '/',
+            '/store/' . self::STORE_B . '/',
+            $transcripts,
+        ));
+        $I->seeResponseCodeIs(404);
+    }
+
+    /**
+     * A transcript with no speaker segments is still shown, as one passage.
+     *
+     * The dedicated Original *page* handles this case by redirecting away — a modal cannot, so the
+     * endpoint falls back to the machine's own flat transcript and says so by sending no segments.
+     * This is the one place the dialog deliberately differs from the page it stands beside.
+     *
+     * No speaker is invented for it. A recording whose speakers were never separated has no speakers
+     * this application knows, and filling that gap with "Speaker 1" would be a claim rather than a
+     * rendering.
+     */
+    public function anOriginalTranscriptWithNoSegmentsFallsBackToItsPlainText(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            [
+                'status' => 'COMPLETED',
+                'processing_stage' => 'COMPLETED',
+                'transcript' => 'One large pepperoni for pickup.',
+                'speaker_segments' => null,
+                'speaker_separation_status' => 'UNAVAILABLE',
+                'completed_at' => gmdate('Y-m-d H:i:s'),
+            ],
+            ['public_id' => $child['public_id']],
+        )->execute();
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('One large pepperoni for pickup.');
+        $I->seeInSource('"segments":[]');
+    }
+
+    /**
+     * The Original transcript is the machine's own, whatever has been corrected since.
+     *
+     * This is the entire distinction between the two dialogs: one shows what the transcriber produced
+     * and the other shows the version being worked on. Reading the reviewed columns here would merge
+     * them and leave an administrator no way to compare the two — which is what the page exists for.
+     */
+    public function anOriginalTranscriptNeverReturnsACorrection(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        // A correction that says something the machine never said.
+        $reviewed = json_encode([
+            ['start_ms' => 0, 'end_ms' => 2000, 'speaker' => 'A', 'role' => 'CUSTOMER',
+                'text' => 'CORRECTED BY A HUMAN', 'confidence' => 0.9, 'approx' => false],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['reviewed_segments' => $reviewed, 'review_count' => 1],
+            ['public_id' => $child['public_id']],
+        )->execute();
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('Can I get a shrimp fried rice?');
+        $I->dontSeeInSource('CORRECTED BY A HUMAN');
+
+        // And the Details dialog, which is the other half of the comparison, shows the correction.
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id'] . '/review/fragment');
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('CORRECTED BY A HUMAN');
+    }
+
+    /** A recording with neither segments nor text is offered no tab at all. */
+    public function aRecordingWithNothingTranscribedIsNotOfferedATab(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $transcripts = $I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts');
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['transcript' => null, 'speaker_segments' => null, 'customer_text' => null, 'agent_text' => null],
+            ['public_id' => $child['public_id']],
+        )->execute();
+
+        $I->amOnPage($transcripts);
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"transcripts":[]');
+    }
+
+    /**
+     * The exact field names the dialogs read.
+     *
+     * The browser cannot be unit-tested here, so this stands in for it: every key
+     * `assets/audio-store/audio-store.js` reaches for is named once, in a test that fails loudly if
+     * the server stops sending it. Without this, renaming a field would leave the endpoints green,
+     * the page green, and one dialog quietly blank.
+     */
+    public function theTranscriptsEndpointSendsWhatTheDialogReads(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame(['orderId', 'transcripts'], array_keys($payload));
+
+        /** @var list<array<string, mixed>> $transcripts */
+        $transcripts = $payload['transcripts'];
+        Assert::assertCount(1, $transcripts);
+        Assert::assertSame(
+            [
+                'type', 'label', 'conversationPublicId', 'jobPublicId', 'provider',
+                'duration', 'uploadedAt', 'segments', 'plainText',
+            ],
+            array_keys($transcripts[0]),
+        );
+
+        /** @var list<array<string, mixed>> $segments */
+        $segments = $transcripts[0]['segments'];
+        Assert::assertNotSame([], $segments);
+        // The same turn shape the Details dialog receives, because one renderer draws both.
+        Assert::assertSame(
+            ['start', 'end', 'speaker', 'speakerConfirmed', 'text', 'side', 'time', 'delay', 'edited'],
+            array_keys($segments[0]),
+        );
+        Assert::assertContains($segments[0]['side'], ['left', 'right', 'neutral']);
+        // Segments and plain text are alternatives, never both: the dialog renders one or the other.
+        Assert::assertNull($transcripts[0]['plainText']);
+    }
+
+    public function theTtsOptionsEndpointSendsWhatTheDialogReads(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->amOnPage($I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts'));
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame(['orderId', 'providerConfigured', 'options'], array_keys($payload));
+
+        /** @var list<array<string, mixed>> $options */
+        $options = $payload['options'];
+        Assert::assertCount(1, $options);
+
+        // The three the form posts back verbatim, and the three the dialog renders. The browser is
+        // never asked to work out which job or which output type a choice means.
+        foreach (['recordingType', 'label', 'conversationPublicId', 'jobPublicId', 'outputType',
+            'action', 'selectable', 'expectedHash', 'state', 'reason'] as $field) {
+            Assert::assertArrayHasKey($field, $options[0], $field . ' is read by the generate dialog.');
+        }
+
+        Assert::assertIsBool($options[0]['selectable']);
+        Assert::assertStringEndsWith('/ai-audio/generate', (string) $options[0]['action']);
+    }
+
+    /**
+     * The Text to Audio cell is a two-column grid, not a stack of wrapped phrases.
+     *
+     * The label and its state are siblings in one grid so every status starts at the same x, and both
+     * are `nowrap` so "Common / Mixed" and "Not generated" each stay on one line. Before this the
+     * column was narrow enough to break them mid-phrase, which read as two recordings where there
+     * was one.
+     */
+    public function theTextToAudioCellKeepsEachRecordingOnOneLine(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $cell = '.a2t-orders tbody tr:first-child td:nth-child(6)';
+        $I->seeElement($cell . ' .a2t-tts-list');
+        // Direct children of the grid, not wrapped in a row: the grid is what aligns the columns.
+        $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__label');
+        $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__state');
+        $I->dontSeeElement($cell . ' .a2t-tts__row');
+    }
+
+    /**
+     * Both dialogs draw the conversation with the application's own chat classes.
+     *
+     * Asserted on the scaffolding rather than on the bubbles, which JavaScript builds: `a2t-review` is
+     * what gives the Details dialog the correction page's stacked controls, margin icons and Agent
+     * tint, and `a2t-chat__scroll` is what the thread's own gutter and bubble widths hang off. A
+     * second, private chat design in this dialog is exactly what these two classes prevent.
+     *
+     * `a2t-chat` is deliberately **absent**: `.app:has(.a2t-chat)` pins the whole shell to 100vh,
+     * which is right for a page that is only a conversation and wrong for a table with a dialog over
+     * it.
+     */
+    public function theConversationDialogsReuseTheApplicationsChatLayout(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('.a2t-review-dialog [data-a2t-review-body].a2t-review');
+        $I->seeElement('.a2t-review-dialog [data-a2t-review-scroll].a2t-chat__scroll');
+        $I->seeElement('.a2t-transcript-dialog [data-a2t-transcript-scroll].a2t-chat__scroll');
+
+        // Read-only, so it must not pick up the scope that draws editing controls.
+        $I->dontSeeElement('.a2t-transcript-dialog .a2t-review');
+        $I->dontSeeElement('.a2t-review-dialog .a2t-chat');
+        $I->dontSeeElement('.a2t-transcript-dialog .a2t-chat');
+    }
+
+    /**
+     * The dialog offers the two controls the correction page offers, drawn from the same icons.
+     *
+     * Two, not three: the handle and the pencil are what that page puts beside a bubble, so a third
+     * control here would be an action this feature does not otherwise have. Split is deliberately
+     * absent — the page offers it only inside its `<noscript>` fallback, which a scripting browser
+     * never builds.
+     */
+    public function theDetailsDialogCarriesTheSameTwoControlsAsTheReviewPage(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        foreach (['move', 'edit'] as $icon) {
+            $I->seeElement('[data-a2t-iconbank] template[data-a2t-icon="' . $icon . '"]');
+        }
+
+        $I->dontSeeElement('[data-a2t-iconbank] template[data-a2t-icon="more"]');
+        $I->dontSeeElement('[data-a2t-iconbank] template[data-a2t-icon="split"]');
+    }
+
+    /**
+     * Both confirmations are the correction page's own, rendered from the shared partial.
+     *
+     * The dialog does not ask a different question before joining two messages, because it renders
+     * the same words from the same file. Its version field is left empty for the script: the dialog
+     * re-reads the conversation after every correction, so the number it must carry changes while
+     * the page under it does not.
+     */
+    public function theStorePageRendersTheSharedReviewConfirmations(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('dialog.a2t-confirm[data-a2t-move-dialog] form[data-a2t-move-form]');
+        $I->seeElement('dialog.a2t-confirm[data-a2t-merge-dialog] form[data-a2t-merge-form]');
+        $I->see('Merge these messages?');
+        $I->see('Move this text?');
+
+        $I->seeElement('[data-a2t-move-form] input[name="expected_review_count"][data-a2t-version][value=""]');
+        // A partial merge's range fields start disabled, so a whole-turn merge never sends them.
+        $I->seeElement('[data-a2t-merge-form] input[name="selection_start"][disabled]');
+    }
+
+    /**
+     * The Details trigger must not look like the correction page's root.
+     *
+     * `admin.js` finds that page by `document.querySelector('[data-a2t-review]')`. A button carrying
+     * the same bare attribute made this listing look like a correction page to that block, which
+     * would install its drag and selection handlers over a table. Named apart so it cannot recur.
+     */
+    public function theDetailsTriggerIsNotMistakenForTheCorrectionPageRoot(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->seeElement('[data-a2t-details]');
+        $I->dontSeeElement('[data-a2t-review]');
+    }
+
+    /**
+     * No dialog is rendered open on an ordinary load.
+     *
+     * A `<dialog>` with the `open` attribute is visible but **not** in the top layer: no backdrop, no
+     * centring, and it lays out as a block after the page content. The one exception is deliberate —
+     * the upload dialog reopens itself when a submission was refused, because the errors are inside
+     * it — and `anInvalidOrderIdIsRefusedAndQueuesNothing` pins that case.
+     */
+    public function noDialogIsRenderedOpenOnAnOrdinaryLoad(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->seeElement('.a2t-transcript-dialog');
+        $I->dontSeeElement('dialog[open]');
+    }
+
+    /** Every dialog closes the way the rest of this application closes a dialog. */
+    public function everyDialogClosesWithTheApplicationsCloseControl(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('.source-modal__close[aria-label="Close"]');
+        // Not an oversized button with the word on it, which is not what any other dialog here does.
+        $I->dontSeeElement('.source-modal__close.btn');
+    }
+
+    /** The generate options are store-scoped too, by the same finder and for the same reason. */
+    public function aTtsOptionsKeyFromAnotherStoreIsNotFound(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $options = $I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts');
+
+        $I->amOnPage($options);
+        $I->seeResponseCodeIs(200);
+
+        $I->amOnPage(str_replace(
+            '/store/' . self::STORE_A . '/',
+            '/store/' . self::STORE_B . '/',
+            $options,
+        ));
+        $I->seeResponseCodeIs(404);
+    }
+
+    /** A key this application could never have issued is refused before it reaches a query. */
+    public function aMalformedGroupKeyIsNotFound(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach ([
+            'order:abc',
+            'order:-1',
+            'store:16513791',
+            'conversation:' . str_repeat('z', 32),
+        ] as $key) {
+            $I->amOnPage($this->storeUrl(self::STORE_A) . '/group/' . $key . '/transcripts');
+            $I->seeResponseCodeIs(404);
+        }
     }
 
     public function anUnknownConversionLeadsToTheConversionsList(WebTester $I): void
@@ -988,9 +1445,19 @@ final class AudioToTextStoreCest
             ['public_id' => $child['public_id']],
         )->execute();
 
+        // The listing no longer prints a filename at all — a row is an order, not a file — so the
+        // place this value reaches a reader is the Details dialog, which receives it as JSON.
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see('<script>alert(1)</script>.wav');
-        $I->dontSeeElement('.a2t-cell-file script');
+        $I->dontSeeElement('script[src=""]');
+        $I->dontSee('<script>alert(1)</script>.wav');
+
+        $this->completeWithSeparation($child['public_id']);
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id'] . '/review/fragment');
+        $I->seeResponseCodeIs(200);
+        // Encoded as `\u003Cscript\u003E`, so the value cannot close the document it travels in
+        // however it is later inserted.
+        $I->dontSeeInSource('<script>');
+        $I->seeInSource('alert(1)');
     }
 
     // ---------------------------------------------------------------------------------- helpers
@@ -1009,36 +1476,67 @@ final class AudioToTextStoreCest
     }
 
     /**
-     * The forms are addressed by their own ids, not by position.
+     * The one upload form, addressed by its own id rather than by position.
      *
-     * `form:first-of-type` would keep passing while silently submitting the other mode the day the two
-     * cards are reordered on the page — and reordering them is exactly the sort of change nobody
-     * expects a test to notice.
+     * `form:first-of-type` would keep passing while silently submitting some other form the day one is
+     * added above it — and adding a form to a page is exactly the sort of change nobody expects a test
+     * to notice.
      */
-    private function commonForm(): string
+    private function uploadForm(): string
     {
-        return '#a2t-common-form';
+        return '#a2t-upload-form';
     }
+
+    /** Which column of the grouped table a recording of each type lands in. */
+    private const TYPE_COLUMN = ['MIXED' => 2, 'CALLER' => 3, 'CALLEE' => 4];
 
     private function uploadCommon(WebTester $I, int $sourceId): void
     {
-        $I->amOnPage($this->storeUrl($sourceId));
-        $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
-        $I->submitForm($this->commonForm(), []);
+        $this->uploadCard($I, $sourceId, 'MIXED');
     }
 
     /**
-     * Upload through one named card, optionally naming an order.
+     * Upload one recording of a named type, optionally naming an order.
      *
-     * The card is addressed by its own form and file-input ids rather than by position, for the same
-     * reason {@see commonForm()} gives: a reordering of the three cards must not quietly change which
-     * one a test submits.
+     * Where three cards each carried a hidden `recording_type`, one form carries a radio group — so
+     * the type is named here explicitly rather than implied by which form was submitted. Everything
+     * else the request sends is unchanged, which is the point: the pipeline behind it did not move.
      */
-    private function uploadCard(WebTester $I, int $sourceId, string $card, string $orderId = ''): void
+    private function uploadCard(WebTester $I, int $sourceId, string $type, string $orderId = ''): void
     {
         $I->amOnPage($this->storeUrl($sourceId));
-        $I->attachFile($card === 'common' ? '#a2t-audio' : '#a2t-' . $card . '-audio', 'kf_store_valid.wav');
-        $I->submitForm('#a2t-' . $card . '-form', $orderId === '' ? [] : ['order_id' => $orderId]);
+        $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
+        $fields = ['recording_type' => $type];
+
+        if ($orderId !== '') {
+            $fields['order_id'] = $orderId;
+        }
+
+        $I->submitForm($this->uploadForm(), $fields);
+    }
+
+    /**
+     * The newest row files its recording under the right column, and under no other.
+     *
+     * Both halves matter. Seeing the recording where it belongs would still pass if it also appeared
+     * in the other two columns, and a caller recording showing up under Mix / Common is precisely the
+     * confusion this table was rebuilt to end.
+     */
+    private function seeRecordingInColumn(WebTester $I, string $type): void
+    {
+        $row = '.a2t-orders tbody tr:first-child';
+
+        foreach (self::TYPE_COLUMN as $candidate => $column) {
+            $cell = $row . ' td:nth-child(' . $column . ')';
+
+            if ($candidate === $type) {
+                // Queued, so there is no audio to play yet — but the cell is occupied and says so.
+                $I->seeElement($cell . ' .a2t-slot');
+            } else {
+                // An em dash: nothing was uploaded for this side of the call.
+                $I->seeElement($cell . ' .util-muted');
+            }
+        }
     }
 
     private function uploadSeparate(WebTester $I, int $sourceId): void

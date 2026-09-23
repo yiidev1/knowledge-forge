@@ -93,7 +93,7 @@ final class AudioToTextAiAudioCest
      * The single most expensive thing this feature could get wrong is a checkbox that remembers. Every
      * upload would then quietly buy audio nobody asked for.
      */
-    public function theAiAudioOptInIsUncheckedOnBothUploadForms(WebTester $I): void
+    public function theAiAudioOptInIsUncheckedOnTheUploadForm(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/store/' . self::STORE);
@@ -102,17 +102,32 @@ final class AudioToTextAiAudioCest
         $I->see('Generate clean AI audio after transcription');
         $I->see('Costs money. Off by default.');
 
-        $I->dontSeeCheckboxIsChecked('#a2t-common-ai-audio');
-        $I->dontSeeCheckboxIsChecked('#a2t-separate-ai-audio');
+        $I->dontSeeCheckboxIsChecked('#a2t-ai-audio');
     }
 
-    public function theConversionsTableLinksToTheAiAudioPage(WebTester $I): void
+    /**
+     * The listing offers generation, and names the job and output type the server chose.
+     *
+     * The per-row link to this page is gone — a row is an order now, and an order can hold three
+     * recordings with three different answers, so the choice is made in a dialog the server fills.
+     * The page itself is untouched and still routed; {@see thePageNamesTheTranscriptItWouldRead()}
+     * loads it directly.
+     */
+    public function theConversionsTableOffersGenerationForItsOwnGroup(WebTester $I): void
     {
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/store/' . self::STORE);
 
-        $I->seeElement('a[href="' . $this->pageUrl() . '"]');
-        $I->see('AI audio');
+        $I->see('Text to Audio');
+        $options = $I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts');
+
+        $I->amOnPage($options);
+        $I->seeResponseCodeIs(200);
+        // The job and the `output_type` row are named by the server and echoed back by the form.
+        // CALLER is not CUSTOMER, and nothing in the browser is left to work that out.
+        $I->seeInSource('"jobPublicId"');
+        $I->seeInSource('"outputType"');
+        $I->seeInSource('"expectedHash"');
     }
 
     // ------------------------------------------------------------------ the page
@@ -216,10 +231,9 @@ final class AudioToTextAiAudioCest
         $I->seeResponseCodeIs(200);
         $I->dontSeeElement('link[href*="conversion-audio"]');
         $I->dontSeeElement('.a2t-conv');
-        // And it still offers what it always did.
-        $I->seeElement('#a2t-common-form');
-        $I->seeElement('#a2t-caller-form');
-        $I->seeElement('#a2t-callee-form');
+        // And it still offers what it always did, now through one form instead of three.
+        $I->seeElement('#a2t-upload-form');
+        $I->seeElement('#a2t-upload-form input[name=recording_type][value=CALLER]');
     }
 
     /**

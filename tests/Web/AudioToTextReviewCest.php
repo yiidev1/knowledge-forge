@@ -8,17 +8,20 @@ use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use Codeception\Module\PhpBrowser;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 use App\Auth\Infrastructure\NativePasswordHasher;
 
+use function array_keys;
 use function bin2hex;
 use function gmdate;
 use function json_decode;
 use function json_encode;
 use function random_bytes;
 
+use const JSON_THROW_ON_ERROR;
 use const SORT_ASC;
 
 /**
@@ -42,9 +45,15 @@ final class AudioToTextReviewCest
 
     private ConnectionInterface $connection;
     private int $adminId;
+    private PhpBrowser $browser;
 
     /** @var list<string> */
     private array $created = [];
+
+    public function _inject(PhpBrowser $browser): void
+    {
+        $this->browser = $browser;
+    }
 
     public function _before(WebTester $I): void
     {
@@ -371,6 +380,10 @@ final class AudioToTextReviewCest
         // confirmations submit. The old arrow button is gone: dragging replaced it.
         $I->seeElement('[data-a2t-turn="0"] [data-a2t-edit]');
         $I->seeElement('[data-a2t-turn="0"] [data-a2t-grip]');
+        // The icons come from the shared source the store page's Details dialog also draws from, so
+        // an empty button here would mean that dialog's controls are empty too.
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-grip] svg.a2t-icon');
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-edit] svg.a2t-icon');
         $I->dontSeeElement('[data-a2t-move]');
         $I->seeElement('[data-a2t-move-dialog] form[data-a2t-move-form]');
         $I->seeElement('[data-a2t-merge-dialog] form[data-a2t-merge-form]');
@@ -1320,6 +1333,341 @@ final class AudioToTextReviewCest
 
     // ---------------------------------------------------------------- helpers
 
+    // -------------------------------------------------------- the same corrections, asked for as data
+
+    /**
+     * The Details dialog's way in: the same route, the same service, an answer instead of a page.
+     *
+     * The dialog on the store page has no page to land on after a redirect, so it asks for the result.
+     * Nothing else changes — the correction runs through {@see ReviewConversationService} exactly as a
+     * form post does, writes the same reviewed columns and the same audit row, and bumps the same
+     * version. That is the whole of the difference, and it is asserted here against the database
+     * rather than against the response.
+     */
+    public function aCorrectionAskedForAsDataRunsTheSameWayAndReportsItself(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => '0',
+            'text' => 'Yes. For pickup or delivery?',
+        ]);
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+
+        // The same three things a form post leaves behind.
+        Assert::assertSame(1, $this->reviewCount($publicId), 'The version moved, so the next write must carry it.');
+        Assert::assertSame('EDIT_TEXT', $this->latestOperation($publicId));
+        Assert::assertSame(1, $this->revisionCount($publicId), 'One correction, one audited row.');
+        Assert::assertStringContainsString('pickup', $this->reviewedSegments($publicId));
+    }
+
+    /**
+     * A stale dialog loses, and writes nothing.
+     *
+     * The version guard is in the same statement that writes, so this is not a courtesy check the
+     * dialog could skip — it is the rule that stops two administrators overwriting each other. The
+     * dialog is told 409 and re-reads; nothing about that is a second set of rules.
+     */
+    public function aStaleVersionIsRefusedWithAConflictAndWritesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $token = $this->csrfToken($I);
+
+        // Somebody else corrected the conversation while this dialog was open.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['review_count' => 9],
+            ['public_id' => $publicId],
+        )->execute();
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            '_csrf' => $token,
+            'expected_review_count' => '0',
+            'text' => 'This must not be saved.',
+        ]);
+
+        $I->seeResponseCodeIs(409);
+        $I->seeInSource('"success":false');
+        Assert::assertSame(9, $this->reviewCount($publicId), 'The version is untouched.');
+        Assert::assertSame(0, $this->revisionCount($publicId), 'A refused correction is not audited as one.');
+        $I->dontSeeInSource('This must not be saved.');
+    }
+
+    /** A correction the domain refuses is 422, and likewise writes nothing. */
+    public function aRefusedCorrectionIsReportedAsUnprocessableAndWritesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        // An empty correction: there is no wording to save, and the domain says so.
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => '0',
+            'text' => '   ',
+        ]);
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('"success":false');
+        Assert::assertSame(0, $this->reviewCount($publicId));
+        Assert::assertSame(0, $this->revisionCount($publicId));
+    }
+
+    /**
+     * The CSRF middleware still guards it, and the dialog is not exempt.
+     *
+     * The token travels as `X-CSRF-Token` rather than as a body field, which the existing middleware
+     * already accepts — a header is not a way round the check, only a different place to put it.
+     */
+    public function aCorrectionWithoutATokenIsRefused(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            'expected_review_count' => '0',
+            'text' => 'No token.',
+        ]);
+
+        $I->seeResponseCodeIs(422);
+        Assert::assertSame(0, $this->revisionCount($publicId), 'Nothing ran.');
+    }
+
+    /**
+     * The token in a header works, and is the way the dialog actually sends it.
+     *
+     * Asserted separately from the body-field path because they are two different code paths in the
+     * middleware, and the dialog only ever uses one of them.
+     */
+    public function aCorrectionCarryingItsTokenInTheHeaderIsAccepted(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $token = $this->csrfToken($I);
+
+        $I->haveHttpHeader('X-CSRF-Token', $token);
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            'expected_review_count' => '0',
+            'text' => 'Yes. For pickup or delivery?',
+        ]);
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+        Assert::assertSame(1, $this->revisionCount($publicId));
+    }
+
+    /**
+     * An ordinary submission is untouched: still a flash, still a redirect, still the review page.
+     *
+     * This is the half of the contract that was already there, and the reason the JSON branch is a
+     * branch rather than a replacement. Every form on the review page continues to behave exactly as
+     * it did before the dialog existed.
+     */
+    public function anOrdinaryCorrectionStillRedirectsBackToTheReviewPage(WebTester $I): void
+    {
+        $publicId = $this->seed();
+        $review = '/audio-to-text/job/' . $publicId . '/review';
+
+        $this->signIn($I);
+        $I->amOnPage($review);
+
+        $this->postCorrection($I, $review . '/turn/0/text', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => '0',
+            'text' => 'Yes. For pickup or delivery?',
+        ]);
+
+        $I->seeCurrentUrlEquals($review);
+        $I->see('Wording corrected. The original transcript is unchanged.');
+        $I->dontSeeInSource('"success":true');
+        Assert::assertSame(1, $this->reviewCount($publicId));
+    }
+
+    /**
+     * The dialog reads the same view the page renders, and reads it from the same builder.
+     *
+     * Every field it publishes comes from `ReviewPageView::build()`, so what a merge is allowed to do,
+     * what a turn is called and which version the next write must carry are settled once. A second
+     * copy of any of those rules is the failure this endpoint is shaped to avoid.
+     */
+    public function theDetailsFragmentReportsWhatTheReviewPageWouldShow(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"version":0');
+        $I->seeInSource('"isReviewed":false');
+        // The first turn has nothing above it, so that direction is unavailable rather than refused.
+        $I->seeInSource('"mergePrevious":{"available":false');
+        // And the destination of a Move is named by the server, never worked out in the browser.
+        $I->seeInSource('"targetRole"');
+        $I->seeInSource('"targetLabel"');
+    }
+
+    /**
+     * The exact field names the Details dialog reads.
+     *
+     * `assets/audio-store/audio-store.js` cannot be unit-tested here, so this stands in for it: every
+     * key the dialog reaches for is named once, in a test that fails loudly if the server stops
+     * sending it. Without this, a rename would leave the endpoint green and the dialog blank.
+     */
+    public function theDetailsFragmentSendsWhatTheDialogReads(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame(
+            [
+                'version', 'isReviewed', 'rolesPublished', 'canConfirm', 'confirmBlockedReason',
+                'confirmedLine', 'voice', 'filename', 'provider', 'turns', 'urls',
+            ],
+            array_keys($payload),
+        );
+        Assert::assertSame(['full', 'confirm', 'revert', 'history'], array_keys($payload['urls']));
+
+        /** @var list<array<string, mixed>> $turns */
+        $turns = $payload['turns'];
+        Assert::assertNotSame([], $turns);
+        Assert::assertSame(
+            [
+                'index', 'label', 'confirmed', 'display', 'text', 'role', 'side', 'time', 'delay',
+                'edited', 'approx', 'hasHistory', 'canMove', 'targetRole', 'targetLabel',
+                'moveMerges', 'mergePrevious', 'mergeNext', 'urls',
+            ],
+            array_keys($turns[0]),
+        );
+        Assert::assertSame(
+            ['available', 'allowed', 'reason'],
+            array_keys($turns[0]['mergePrevious']),
+        );
+        // `move-text`, not `move`: the correction page's own move confirmation posts there, sending
+        // the whole turn as the selection, and the dialog must perform that same operation. Split is
+        // absent because the page offers it only in its <noscript> fallback.
+        Assert::assertSame(
+            ['moveText', 'text', 'merge'],
+            array_keys($turns[0]['urls']),
+        );
+        Assert::assertStringEndsWith('/move-text', (string) $turns[0]['urls']['moveText']);
+
+        // `side` is a position the domain is careful to keep free of any claim about who spoke; the
+        // label above the turn is what names a speaker.
+        Assert::assertContains($turns[0]['side'], ['left', 'right', 'neutral']);
+    }
+
+    /** It is a reading, not a writing: the fragment changes nothing it reports on. */
+    public function theDetailsFragmentWritesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+        $I->seeResponseCodeIs(200);
+
+        Assert::assertSame(0, $this->reviewCount($publicId));
+        Assert::assertSame(0, $this->revisionCount($publicId));
+        Assert::assertNull($this->rawColumns($publicId)['reviewed_segments']);
+    }
+
+    /**
+     * The revision trail, from the partial the correction page renders inline.
+     *
+     * Markup rather than data, and the same file both screens use: a revision's Before/After
+     * arrangement exists in one template, and sending the events as JSON would mean writing that
+     * template a second time in JavaScript.
+     */
+    public function theHistoryEndpointRendersTheSamePartialThePageRenders(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+
+        // Nothing corrected yet: the page shows no history dialog, and neither does the endpoint.
+        $I->dontSeeElement('[data-a2t-history-dialog]');
+        $token = $this->csrfToken($I);
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/history');
+        $I->seeResponseCodeIs(200);
+        $I->dontSeeElement('[data-a2t-history-dialog]');
+
+        $this->postCorrection($I, '/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            '_csrf' => $token,
+            'expected_review_count' => '0',
+            'text' => 'A corrected wording.',
+        ]);
+
+        // The page now carries the dialog …
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->seeElement('[data-a2t-history-dialog="0"]');
+        $I->seeElement('[data-a2t-turn="0"] [data-a2t-history]');
+
+        // … and the endpoint answers with the same one, wording and all.
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/history');
+        $I->seeResponseCodeIs(200);
+        $I->seeElement('[data-a2t-history-dialog="0"]');
+        $I->see('What was corrected');
+        $I->see('Before');
+        $I->see('After');
+        $I->see('A corrected wording.');
+        // A fragment, not a page: no layout around it.
+        $I->dontSeeElement('nav');
+    }
+
+    /** It is a reading: asking for the revision trail records nothing. */
+    public function theHistoryEndpointWritesNothing(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/history');
+        $I->seeResponseCodeIs(200);
+
+        Assert::assertSame(0, $this->reviewCount($publicId));
+        Assert::assertSame(0, $this->revisionCount($publicId));
+    }
+
+    /** And it is behind the administrator gate, like everything else here. */
+    public function theHistoryEndpointIsBehindTheAdministratorGate(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $I->resetCookie(self::SESSION_COOKIE);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/history');
+        $I->seeCurrentUrlEquals('/login');
+    }
+
+    /** A guest gets the login page, not a transcript. */
+    public function theDetailsFragmentIsBehindTheAdministratorGate(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $I->resetCookie(self::SESSION_COOKIE);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+        $I->seeCurrentUrlEquals('/login');
+    }
+
     private function signIn(WebTester $I): void
     {
         $I->resetCookie(self::SESSION_COOKIE);
@@ -1328,21 +1676,36 @@ final class AudioToTextReviewCest
         $I->seeCurrentUrlEquals('/');
     }
 
-    /** Submits the move form the way the script fills it in. */
+    /**
+     * Submits the move form the way the page submits it: an ordinary form POST.
+     *
+     * A plain POST rather than an XHR, because that is what actually happens — the drag layer fills
+     * in the hidden fields of a real `<form>` inside the confirmation dialog and lets the browser
+     * send it. Posting this as an XHR would take the JSON branch instead and quietly stop these
+     * tests exercising the Post/Redirect/Get path they were written for.
+     *
+     * PhpBrowser follows the redirect, so the client is already back on the review page with the
+     * flash rendered. Navigating again would consume it and assert against a clean page.
+     *
+     * @param array<string, string> $fields
+     */
+    private function postCorrection(WebTester $I, string $url, array $fields): void
+    {
+        $this->browser->_loadPage('POST', $url, $fields);
+    }
+
     private function moveText(WebTester $I, string $publicId, int $index, string $selection, string $role): void
     {
         $review = '/audio-to-text/job/' . $publicId . '/review';
 
         $I->amOnPage($review);
-        $I->sendAjaxPostRequest($review . '/turn/' . $index . '/move-text', [
+        $this->postCorrection($I, $review . '/turn/' . $index . '/move-text', [
             '_csrf' => $this->csrfToken($I),
             'expected_review_count' => (string) $this->reviewCount($publicId),
             'selection' => $selection,
             'role' => $role,
             'hint' => '',
         ]);
-        // PhpBrowser follows the redirect, so the client is already back on the review page with the
-        // flash rendered. Navigating again would consume it and assert against a clean page.
     }
 
     private function reviewCount(string $publicId): int

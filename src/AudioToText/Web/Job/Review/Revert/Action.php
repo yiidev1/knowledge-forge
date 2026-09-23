@@ -37,6 +37,9 @@ final readonly class Action
             $publicId,
             'Corrections discarded. This conversation is back to the system\'s original result.',
             fn() => $this->review->revert($publicId, $adminId, $version),
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 }

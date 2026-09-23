@@ -1060,6 +1060,311 @@
 })();
 
 /* ---------------------------------------------------------------------------
+   Audio to Text — the correction controls, shared.
+
+   Two screens let an administrator correct a transcript: the full page at /review, and the Details
+   dialog on a store's listing. They offer the same operations because they *are* the same operations,
+   and this is where that stops being a promise — the selection rule, the inline editor and both
+   confirmations live here, and each screen supplies its own root and its own dialogs.
+
+   What is deliberately NOT here: the drag layer. Dragging a turn measures the review page's own
+   scroll container and appends a drop band to the document body, neither of which survives inside a
+   dialog, so it stays in the page's own block below. The *operation* a completed drag performs —
+   fill the move confirmation, submit it — is here, and both screens reach it.
+
+   Every DOM query is scoped to a data-a2t- attribute, which ModuleIsolationTest enforces.
+   --------------------------------------------------------------------------- */
+window.KFReviewTurns = (function () {
+    'use strict';
+
+    /**
+     * JavaScript string offsets count UTF-16 code units, PHP's mb_substr counts codepoints, and the
+     * two disagree from the first emoji onward. Converting here rather than on the server means the
+     * number that crosses the wire means one thing.
+     */
+    function codepointsIn(text) {
+        return Array.from(text).length;
+    }
+
+    function turnOf(el) {
+        return el && el.closest ? el.closest('[data-a2t-turn]') : null;
+    }
+
+    /**
+     * The current selection, but only when it is one message's own words.
+     *
+     * A highlight that starts in one bubble and ends in another describes no single turn, and one that
+     * takes in the speaker label or the timestamp is not text anybody meant to move. Both are ignored
+     * rather than guessed at. A collapsed caret is not a selection either — which is why a plain click
+     * on a bubble does nothing on either screen.
+     */
+    function selectionInsideOneTurn() {
+        var selection = window.getSelection();
+
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+            return null;
+        }
+
+        var range = selection.getRangeAt(0);
+        var body = range.startContainer.parentElement
+            ? range.startContainer.parentElement.closest('[data-a2t-text]')
+            : null;
+
+        if (!body || !body.contains(range.startContainer) || !body.contains(range.endContainer)) {
+            return null;
+        }
+
+        var text = range.toString();
+        if (text.replace(/\s+/g, '') === '') {
+            return null; // whitespace is not a selection of anything
+        }
+
+        // How far into this turn the highlight begins, measured the same way the server will.
+        var before = range.cloneRange();
+        before.selectNodeContents(body);
+        before.setEnd(range.startContainer, range.startOffset);
+        var start = codepointsIn(before.toString());
+
+        return {
+            turn: turnOf(body),
+            start: start,
+            end: start + codepointsIn(text),
+            text: text,
+            whole: text.trim() === body.textContent.trim()
+        };
+    }
+
+    /**
+     * One message at a time carries the merge controls, and only while its words are highlighted.
+     *
+     * Driven by the selection rather than by a click, because what the buttons act on *is* the
+     * selection — offering them for a card nobody has highlighted would promise a precision the
+     * request could not carry.
+     */
+    function showControlsFor(root, picked) {
+        var all = root.querySelectorAll('[data-a2t-turn]');
+
+        for (var i = 0; i < all.length; i++) {
+            var isTarget = picked !== null && all[i] === picked.turn;
+            all[i].classList.toggle('a2t-turn--selected', isTarget);
+
+            var controls = all[i].querySelector('[data-a2t-merge-controls]');
+            if (controls) {
+                controls.hidden = !isTarget;
+            }
+        }
+
+        return picked;
+    }
+
+    /* ----------------------------------------------------------------- inline wording editor */
+
+    function openEditor(turn) {
+        var editor = turn ? turn.querySelector('[data-a2t-editor]') : null;
+        if (!editor) {
+            return;
+        }
+        turn.classList.add('a2t-turn--editing');
+        editor.hidden = false;
+        var box = editor.querySelector('[data-a2t-editor-text]');
+        if (box) {
+            box.focus();
+            box.setSelectionRange(box.value.length, box.value.length);
+        }
+    }
+
+    function closeEditor(turn) {
+        var editor = turn ? turn.querySelector('[data-a2t-editor]') : null;
+        if (!editor) {
+            return;
+        }
+        turn.classList.remove('a2t-turn--editing');
+        editor.hidden = true;
+        var box = editor.querySelector('[data-a2t-editor-text]');
+        var original = turn.querySelector('[data-a2t-text]');
+        if (box && original) {
+            /* Discard the draft, matching what Cancel promises — restoring the STORED value, not the
+               rendered one. The bubble may show a display-normalised price ("$43.45" where the stored
+               text reads "$43 and 45"), and copying that back would put it in an editable field whose
+               next Save would persist it as the administrator's own correction. */
+            var raw = original.getAttribute('data-a2t-raw');
+            box.value = raw === null ? original.textContent : raw;
+        }
+    }
+
+    /* ----------------------------------------------------------------- the two confirmations */
+
+    function moveParts(dialog, form) {
+        return {
+            dialog: dialog,
+            form: form,
+            selection: form.querySelector('[data-a2t-move-selection]'),
+            hint: form.querySelector('[data-a2t-move-hint]'),
+            role: form.querySelector('[data-a2t-move-role]'),
+            preview: dialog.querySelector('[data-a2t-move-preview]'),
+            from: dialog.querySelector('[data-a2t-move-from]'),
+            to: dialog.querySelector('[data-a2t-move-to]'),
+            note: dialog.querySelector('[data-a2t-move-note]')
+        };
+    }
+
+    function mergeParts(dialog, form) {
+        return {
+            dialog: dialog,
+            form: form,
+            direction: form.querySelector('[data-a2t-merge-direction]'),
+            first: dialog.querySelector('[data-a2t-merge-first]'),
+            second: dialog.querySelector('[data-a2t-merge-second]'),
+            result: dialog.querySelector('[data-a2t-merge-result]'),
+            start: form.querySelector('[data-a2t-merge-start]'),
+            end: form.querySelector('[data-a2t-merge-end]'),
+            selected: form.querySelector('[data-a2t-merge-selected]')
+        };
+    }
+
+    function show(dialog) {
+        if (typeof dialog.showModal === 'function') {
+            dialog.showModal();
+        } else {
+            dialog.setAttribute('open', 'open');
+        }
+    }
+
+    /** The rendered text, so a preview matches what is on screen rather than the stored markers. */
+    function shown(el) {
+        var body = el ? el.querySelector('[data-a2t-text]') : null;
+
+        return body ? body.textContent : '';
+    }
+
+    /**
+     * Fill the move confirmation for a whole turn and open it.
+     *
+     * Nothing is written until Confirm submits the form. The action is the turn's own move-text URL
+     * and the whole rendered turn is sent as the selection, which is what makes "move this message"
+     * and "move these words" one endpoint and one audited operation.
+     */
+    function openMove(root, parts, turn) {
+        var text = shown(turn);
+
+        if (text.replace(/\s+/g, '') === '') {
+            return false;
+        }
+
+        parts.selection.value = text;
+        parts.hint.value = '';
+        parts.role.value = turn.getAttribute('data-a2t-target-role') || '';
+        parts.form.setAttribute('action', turn.getAttribute('data-a2t-move-url') || '');
+
+        parts.preview.textContent = text;
+        parts.from.textContent = turn.getAttribute('data-a2t-label') || '';
+        parts.to.textContent = turn.getAttribute('data-a2t-target-label') || '';
+
+        var merges = turn.getAttribute('data-a2t-merges') === '1';
+        parts.note.hidden = !merges;
+        if (merges) {
+            parts.note.textContent = 'This turn will be joined with the neighbouring turn beside it, '
+                + 'because they will then be the same speaker and the same role.';
+        }
+
+        turn.classList.add('a2t-turn--moving');
+        show(parts.dialog);
+
+        return true;
+    }
+
+    function neighbourOf(root, turn, direction) {
+        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
+        var wanted = direction === 'previous' ? index - 1 : index + 1;
+
+        return root.querySelector('[data-a2t-turn="' + wanted + '"]');
+    }
+
+    /**
+     * Confirm a merge in one direction.
+     *
+     * Only the direction is ever sent: the server finds the neighbour itself from the turn index, so
+     * adjacency is structural rather than something a request can assert. What is shown here is a
+     * preview built from the same two turns the server will join.
+     */
+    function openMerge(root, parts, turn, direction, picked) {
+        var target = neighbourOf(root, turn, direction);
+
+        if (!target) {
+            return false;
+        }
+
+        var neighbour = shown(target);
+        var before = direction === 'previous';
+
+        // A live highlight inside this turn moves only those words. Without one the whole turn is
+        // joined, and the range fields stay disabled so the endpoint never sees them.
+        var range = picked !== null && picked !== undefined && picked.turn === turn && !picked.whole
+            ? picked
+            : null;
+        var moving = range !== null ? range.text.trim() : shown(turn);
+
+        parts.direction.value = direction;
+        parts.form.setAttribute('action', turn.getAttribute('data-a2t-merge-url') || '');
+
+        parts.start.disabled = range === null;
+        parts.end.disabled = range === null;
+        parts.selected.disabled = range === null;
+
+        if (range !== null) {
+            parts.start.value = String(range.start);
+            parts.end.value = String(range.end);
+            parts.selected.value = range.text;
+        }
+
+        // Shown in the order they will be joined, which is the order they were spoken.
+        parts.first.textContent = before ? neighbour : moving;
+        parts.second.textContent = before ? moving : neighbour;
+        parts.result.textContent = parts.first.textContent + ' ' + parts.second.textContent;
+
+        turn.classList.add('a2t-turn--moving');
+        target.classList.add('a2t-turn--moving');
+        show(parts.dialog);
+
+        return true;
+    }
+
+    /** Close one of the confirmations and clear the marks it put on the conversation. */
+    function endConfirm(root, dialog) {
+        var moving = root.querySelectorAll('[data-a2t-turn].a2t-turn--moving');
+
+        for (var i = 0; i < moving.length; i++) {
+            moving[i].classList.remove('a2t-turn--moving');
+        }
+
+        if (!dialog) {
+            return;
+        }
+
+        if (typeof dialog.close === 'function' && dialog.open) {
+            dialog.close();
+        } else {
+            dialog.removeAttribute('open');
+        }
+    }
+
+    return {
+        codepointsIn: codepointsIn,
+        turnOf: turnOf,
+        selectionInsideOneTurn: selectionInsideOneTurn,
+        showControlsFor: showControlsFor,
+        openEditor: openEditor,
+        closeEditor: closeEditor,
+        moveParts: moveParts,
+        mergeParts: mergeParts,
+        openMove: openMove,
+        openMerge: openMerge,
+        neighbourOf: neighbourOf,
+        endConfirm: endConfirm
+    };
+}());
+
+/* ---------------------------------------------------------------------------
    Audio to Text — speaker correction.
 
    Progressive enhancement over the forms that are already on the page. Nothing here builds a request:
@@ -1084,25 +1389,11 @@
     var mergeDialog = document.querySelector('[data-a2t-merge-dialog]');
     var mergeForm = mergeDialog ? mergeDialog.querySelector('[data-a2t-merge-form]') : null;
 
-    var merge = mergeDialog && mergeForm ? {
-        direction: mergeForm.querySelector('[data-a2t-merge-direction]'),
-        first: mergeDialog.querySelector('[data-a2t-merge-first]'),
-        second: mergeDialog.querySelector('[data-a2t-merge-second]'),
-        result: mergeDialog.querySelector('[data-a2t-merge-result]'),
-        start: mergeForm.querySelector('[data-a2t-merge-start]'),
-        end: mergeForm.querySelector('[data-a2t-merge-end]'),
-        selected: mergeForm.querySelector('[data-a2t-merge-selected]')
-    } : null;
-
-    var fields = {
-        selection: form.querySelector('[data-a2t-move-selection]'),
-        hint: form.querySelector('[data-a2t-move-hint]'),
-        role: form.querySelector('[data-a2t-move-role]'),
-        preview: dialog.querySelector('[data-a2t-move-preview]'),
-        from: dialog.querySelector('[data-a2t-move-from]'),
-        to: dialog.querySelector('[data-a2t-move-to]'),
-        note: dialog.querySelector('[data-a2t-move-note]')
-    };
+    // Shared with the store page's Details dialog: one selection rule, one inline editor and one
+    // pair of confirmations, in KFReviewTurns. This page supplies its own root and its own dialogs.
+    var turns = window.KFReviewTurns;
+    var moveParts = turns.moveParts(dialog, form);
+    var mergeParts = mergeDialog && mergeForm ? turns.mergeParts(mergeDialog, mergeForm) : null;
 
     // The plain forms live in <noscript>, so a scripting browser never built them — nothing to hide
     // here, only the icon controls to reveal. They are absolutely positioned, so their arrival costs
@@ -1113,94 +1404,25 @@
     }
 
     function turnOf(el) {
-        return el.closest ? el.closest('[data-a2t-turn]') : null;
+        return turns.turnOf(el);
     }
 
-    /* ----------------------------------------------------------------- inline wording editor */
-
     function openEditor(turn) {
-        var editor = turn.querySelector('[data-a2t-editor]');
-        if (!editor) {
-            return;
-        }
-        turn.classList.add('a2t-turn--editing');
-        editor.hidden = false;
-        var box = editor.querySelector('[data-a2t-editor-text]');
-        if (box) {
-            box.focus();
-            box.setSelectionRange(box.value.length, box.value.length);
-        }
+        turns.openEditor(turn);
     }
 
     function closeEditor(turn) {
-        var editor = turn.querySelector('[data-a2t-editor]');
-        if (!editor) {
-            return;
-        }
-        turn.classList.remove('a2t-turn--editing');
-        editor.hidden = true;
-        var box = editor.querySelector('[data-a2t-editor-text]');
-        var original = turn.querySelector('[data-a2t-text]');
-        if (box && original) {
-            /* Discard the draft, matching what Cancel promises — restoring the STORED value, not the
-               rendered one. The bubble may show a display-normalised price ("$43.45" where the stored
-               text reads "$43 and 45"), and copying that back would put it in an editable field whose
-               next Save would persist it as the administrator's own correction. */
-            var raw = original.getAttribute('data-a2t-raw');
-            box.value = raw === null ? original.textContent : raw;
-        }
+        turns.closeEditor(turn);
     }
 
-    /* ----------------------------------------------------------------- confirmation */
-
-    // Fills the dialog for a whole-turn move and opens it. Nothing is written until Confirm submits
-    // the form, which is a real POST — same CSRF, same review_count check, same redirect.
+    // Fills the confirmation for a whole-turn move and opens it. Nothing is written until Confirm
+    // submits the form, which is a real POST — same CSRF, same review_count check, same redirect.
     function openConfirm(turn) {
-        var textEl = turn.querySelector('[data-a2t-text]');
-        if (!textEl) {
-            return;
-        }
-
-        var text = textEl.textContent;
-        if (text.replace(/\s+/g, '') === '') {
-            return;
-        }
-
-        fields.selection.value = text;
-        fields.hint.value = '';
-        fields.role.value = turn.getAttribute('data-a2t-target-role') || '';
-        form.setAttribute('action', turn.getAttribute('data-a2t-move-url') || '');
-
-        fields.preview.textContent = text;
-        fields.from.textContent = turn.getAttribute('data-a2t-label') || '';
-        fields.to.textContent = turn.getAttribute('data-a2t-target-label') || '';
-
-        var merges = turn.getAttribute('data-a2t-merges') === '1';
-        fields.note.hidden = !merges;
-        if (merges) {
-            fields.note.textContent = 'This turn will be joined with the neighbouring turn beside it, '
-                + 'because they will then be the same speaker and the same role.';
-        }
-
-        turn.classList.add('a2t-turn--moving');
-
-        if (typeof dialog.showModal === 'function') {
-            dialog.showModal();
-        } else {
-            dialog.setAttribute('open', 'open');
-        }
+        turns.openMove(root, moveParts, turn);
     }
 
     function endMove() {
-        var moving = root.querySelectorAll('[data-a2t-turn].a2t-turn--moving');
-        for (var i = 0; i < moving.length; i++) {
-            moving[i].classList.remove('a2t-turn--moving');
-        }
-        if (typeof dialog.close === 'function' && dialog.open) {
-            dialog.close();
-        } else {
-            dialog.removeAttribute('open');
-        }
+        turns.endConfirm(root, dialog);
     }
 
     /* ----------------------------------------------------------------- drag to the other role */
@@ -1371,68 +1593,9 @@
         drag = null;
     }
 
-    function neighbourOf(turn, direction) {
-        var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
-        var wanted = direction === 'previous' ? index - 1 : index + 1;
-
-        return root.querySelector('[data-a2t-turn="' + wanted + '"]');
-    }
-
-    /**
-     * Confirm a merge in one direction.
-     *
-     * Only the direction is ever sent: the server finds the neighbour itself from the turn index, so
-     * adjacency is structural rather than something a request can assert. What is shown here is a
-     * preview built from the same two turns the server will join.
-     */
     function openMergeConfirm(turn, direction) {
-        var target = neighbourOf(turn, direction);
-
-        if (!merge || !target) {
-            return;
-        }
-
-        // The rendered text, so the preview matches what is on screen — the stored value still
-        // carries whisper's >> markers, which the page deliberately does not show.
-        var shown = function (el) {
-            var body = el.querySelector('[data-a2t-text]');
-
-            return body ? body.textContent : '';
-        };
-
-        var neighbour = shown(target);
-        var before = direction === 'previous';
-
-        // A live highlight inside this turn moves only those words. Without one — the drag path — the
-        // whole turn is joined, and the range fields stay disabled so the endpoint never sees them.
-        var picked = active !== null && active.turn === turn && !active.whole ? active : null;
-        var moving = picked !== null ? picked.text.trim() : shown(turn);
-
-        merge.direction.value = direction;
-        mergeForm.setAttribute('action', turn.getAttribute('data-a2t-merge-url') || '');
-
-        merge.start.disabled = picked === null;
-        merge.end.disabled = picked === null;
-        merge.selected.disabled = picked === null;
-
-        if (picked !== null) {
-            merge.start.value = String(picked.start);
-            merge.end.value = String(picked.end);
-            merge.selected.value = picked.text;
-        }
-
-        // Shown in the order they will be joined, which is the order they were spoken.
-        merge.first.textContent = before ? neighbour : moving;
-        merge.second.textContent = before ? moving : neighbour;
-        merge.result.textContent = merge.first.textContent + ' ' + merge.second.textContent;
-
-        turn.classList.add('a2t-turn--moving');
-        target.classList.add('a2t-turn--moving');
-
-        if (typeof mergeDialog.showModal === 'function') {
-            mergeDialog.showModal();
-        } else {
-            mergeDialog.setAttribute('open', 'open');
+        if (mergeParts !== null) {
+            turns.openMerge(root, mergeParts, turn, direction, active);
         }
     }
 
@@ -1515,75 +1678,10 @@
     // JavaScript string offsets count UTF-16 code units, PHP's mb_substr counts codepoints, and the
     // two disagree from the first emoji onward. Converting here rather than on the server means the
     // number that crosses the wire means one thing.
-    function codepointsIn(text) {
-        return Array.from(text).length;
-    }
+    var active = null; // the highlighted range, when it lies inside exactly one turn
 
-    var active = null; // { turn, start, end, text }
-
-    /**
-     * The current selection, but only when it is one message's own words.
-     *
-     * A highlight that starts in one bubble and ends in another describes no single turn, and one that
-     * takes in the speaker label or the timestamp is not text anybody meant to move. Both are ignored
-     * rather than guessed at.
-     */
-    function selectionInsideOneTurn() {
-        var selection = window.getSelection();
-
-        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-            return null;
-        }
-
-        var range = selection.getRangeAt(0);
-        var body = range.startContainer.parentElement
-            ? range.startContainer.parentElement.closest('[data-a2t-text]')
-            : null;
-
-        if (!body || !body.contains(range.startContainer) || !body.contains(range.endContainer)) {
-            return null;
-        }
-
-        var text = range.toString();
-        if (text.replace(/\s+/g, '') === '') {
-            return null; // whitespace is not a selection of anything
-        }
-
-        // How far into this turn the highlight begins, measured the same way the server will.
-        var before = range.cloneRange();
-        before.selectNodeContents(body);
-        before.setEnd(range.startContainer, range.startOffset);
-        var start = codepointsIn(before.toString());
-
-        return {
-            turn: body.closest('[data-a2t-turn]'),
-            start: start,
-            end: start + codepointsIn(text),
-            text: text,
-            whole: text.trim() === body.textContent.trim()
-        };
-    }
-
-    /**
-     * One message at a time carries the merge controls, and only while its words are highlighted.
-     *
-     * Driven by the selection rather than by a click, because what the buttons act on *is* the
-     * selection — offering them for a card nobody has highlighted would promise a precision the
-     * request could not carry.
-     */
     function showControlsFor(picked) {
-        active = picked;
-
-        var all = root.querySelectorAll('[data-a2t-turn]');
-        for (var i = 0; i < all.length; i++) {
-            var isTarget = picked !== null && all[i] === picked.turn;
-            all[i].classList.toggle('a2t-turn--selected', isTarget);
-
-            var controls = all[i].querySelector('[data-a2t-merge-controls]');
-            if (controls) {
-                controls.hidden = !isTarget;
-            }
-        }
+        active = turns.showControlsFor(root, picked);
     }
 
     function clearSelection() {
@@ -1591,7 +1689,7 @@
     }
 
     document.addEventListener('selectionchange', function () {
-        showControlsFor(selectionInsideOneTurn());
+        showControlsFor(turns.selectionInsideOneTurn());
     });
 
     /* ----------------------------------------------------------------- wiring */
@@ -1643,31 +1741,7 @@
     });
 
     function endMerge() {
-        var moving = root.querySelectorAll('[data-a2t-turn].a2t-turn--moving');
-        for (var i = 0; i < moving.length; i++) {
-            moving[i].classList.remove('a2t-turn--moving');
-        }
-        if (mergeDialog) {
-            if (typeof mergeDialog.close === 'function' && mergeDialog.open) {
-                mergeDialog.close();
-            } else {
-                mergeDialog.removeAttribute('open');
-            }
-        }
-    }
-
-    if (mergeDialog) {
-        mergeDialog.addEventListener('cancel', endMerge);
-    }
-
-    if (mergeForm) {
-        mergeForm.addEventListener('submit', function () {
-            var confirm = mergeForm.querySelector('[data-a2t-merge-confirm]');
-            if (confirm) {
-                confirm.disabled = true;
-                confirm.textContent = 'Merging…';
-            }
-        });
+        turns.endConfirm(root, mergeDialog);
     }
 
     document.addEventListener('keydown', function (event) {

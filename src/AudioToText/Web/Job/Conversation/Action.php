@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Conversation;
 
+use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\Speaker\ConversationView;
@@ -38,6 +39,7 @@ final readonly class Action
         private JobPageGuard $guard,
         private EffectiveConversationReader $conversations,
         private Redirect $redirect,
+        private RecordingVoiceReader $voices,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -68,6 +70,9 @@ final readonly class Action
                     $job->speakerRoleConfidence,
                     $effective->hasSeparatedText(),
                     $effective->rolesConfirmed,
+                    // Named at upload time: a Caller recording reads as that one person,
+                    // whatever the diarizer found inside it.
+                    $this->voices->for($job),
                 ),
                 'effective' => $effective,
             ])

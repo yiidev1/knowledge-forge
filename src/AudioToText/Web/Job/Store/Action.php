@@ -17,6 +17,7 @@ use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\Auth\Application\CurrentAdmin;
@@ -84,6 +85,14 @@ final readonly class Action
         private CurrentAdmin $currentAdmin,
         private Redirect $redirect,
         private AppTimeZone $appTimeZone,
+        /**
+         * The store's history, read as orders rather than as uploads.
+         *
+         * A repository of its own because the page's question changed: it asks "what orders does this
+         * store have" and pages over those, which the conversation repository — rightly built around
+         * one upload at a time — cannot answer without the caller grouping afterwards and paging wrong.
+         */
+        private StoreOrderGroupRepositoryInterface $groups,
     ) {}
 
     public function __invoke(#[RouteArgument] int $sourceId, ServerRequestInterface $request): ResponseInterface
@@ -98,9 +107,13 @@ final readonly class Action
 
         $mode = ConversationMode::Common;
 
-        // Echoed back into the three forms so a rejected submission keeps what was typed. Empty on a
-        // GET, which is what an untouched optional field should be.
+        // Echoed back into the form so a rejected submission keeps what was typed. Empty on a GET,
+        // which is what an untouched optional field should be.
         $orderId = '';
+
+        // Which recording the upload form is set to. Mixed unless a refused submission said otherwise,
+        // so the operator does not have to re-choose after fixing a typo.
+        $selectedType = RecordingType::Mixed;
 
         // The stored global default, read once per request so the page shows what is configured now
         // rather than what was configured at deploy time. **Never reassigned**: the forms report it as
@@ -134,6 +147,8 @@ final readonly class Action
             // Collected before the queue is touched, and a bad value joins the same error list every
             // other refusal uses — so nothing is stored, no job is created and no recording is written
             // to disk for an upload that named an order this application would not accept.
+            $selectedType = $this->recordingType($body, $mode) ?? $selectedType;
+
             $orderId = $this->text($body, 'order_id');
             $orderIdError = OrderId::validate($orderId);
             if ($orderIdError !== null) {
@@ -174,7 +189,10 @@ final readonly class Action
             }
         }
 
-        $total = $this->conversations->countForStore($store->sourceId);
+        // Counted and paged as GROUPS: twenty rows means twenty orders, however many recordings they
+        // hold between them. Paging conversations and grouping them afterwards would put half an order
+        // on one page and the rest on the next.
+        $total = $this->groups->countFor($store->sourceId);
         $pageCount = max(1, (int) ceil($total / self::PER_PAGE));
         $page = min($this->requestedPage($request), $pageCount);
 
@@ -185,11 +203,15 @@ final readonly class Action
                 'mode' => $mode,
                 // What was typed, so a refused submission does not silently discard it.
                 'orderId' => $orderId,
+                'selectedType' => $selectedType,
+                // The upload dialog opens by itself when a submission was refused — its errors are
+                // inside it — and when a reader followed the no-JS `?upload=1` link.
+                'uploadOpen' => $errors !== [] || ($request->getQueryParams()['upload'] ?? null) === '1',
                 // Drives both the forms and the notice. Read from the store, so it cannot disagree
                 // with the card that led here.
                 'canUpload' => $store->active,
                 'errors' => $errors,
-                'conversations' => $this->conversations->forStore(
+                'groups' => $this->groups->pageFor(
                     $store->sourceId,
                     self::PER_PAGE,
                     ($page - 1) * self::PER_PAGE,

@@ -2,15 +2,17 @@
 
 declare(strict_types=1);
 
-use App\AudioToText\Domain\AudioConversation;
-use App\AudioToText\Domain\AudioConversationChild;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationMode;
-use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
+use App\AudioToText\Domain\StoreOrderGroup;
+use App\AudioToText\Domain\StoreRecordingSlot;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\WorkerStatusView;
+use App\AudioToText\Web\AudioToTextIcons;
+use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\Store\StoreAudioAsset;
 use App\Shared\Application\Time\AppTimeZone;
@@ -26,8 +28,10 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var AudioStore $store
  * @var ConversationMode $mode
  * @var string $orderId what was typed into the optional Order ID field, '' on a fresh form
+ * @var RecordingType $selectedType which recording the upload form is set to
+ * @var bool $uploadOpen whether the upload dialog should render already open
  * @var array<string, list<string>> $errors
- * @var list<AudioConversation> $conversations
+ * @var list<StoreOrderGroup> $groups one row per order, newest activity first
  * @var int $total
  * @var int $page
  * @var int $pageCount
@@ -72,11 +76,10 @@ $fieldErrors = static function (array $messages): string {
 };
 
 /**
- * The optional Order ID field, rendered into all recording cards.
+ * The optional Order ID field.
  *
- * A shared renderer for the same reason the provider select is one: all three cards post to the same
- * action and must offer the same field. The id differs per form so each `<label for>` stays valid on a
- * page that renders all three.
+ * Still a closure rather than inline markup: the dialog renders it once today, and keeping the field's
+ * shape in one place is what stopped the three cards it replaced from drifting apart.
  *
  * **Optional, and it says so.** The rule is one line in {@see OrderId} and is enforced on the server;
  * this only reports it. A rejected value is rendered back into the field rather than discarded — it is
@@ -95,12 +98,10 @@ $orderIdField = static function (string $id) use ($orderId, $errors, $fieldError
 };
 
 /**
- * The provider select, rendered into all recording cards.
+ * The provider select.
  *
- * A shared renderer because all recording cards post to the same action and must offer
- * exactly the same choices — a difference between them would be a bug nobody would see until an
- * upload came back with the wrong engine. The id differs per form so each `<label for>` stays valid
- * on a page that renders all three.
+ * Unchanged from when three cards each rendered it: the options, the disabled-and-labelled treatment
+ * for a provider this machine cannot run, and the note about the global default are all as they were.
  *
  * ## Always rendered, never hidden
  *
@@ -175,11 +176,7 @@ $providerField = static function (string $id) use (
 };
 
 /**
- * The AI-audio opt-in, rendered into all recording cards.
- *
- * A closure for the same reason the provider select is one: all recording cards post to the same action and
- * must offer exactly the same choice. The id differs per form so each `<label for>` stays valid on a
- * page that renders all three.
+ * The AI-audio opt-in.
  *
  * **Unchecked, always.** It is not sticky and does not remember a previous upload: this spends money
  * with a third party, and a checkbox that quietly stayed on would spend it on recordings nobody decided
@@ -206,59 +203,217 @@ $aiAudioField = static function (string $id) use ($ttsConfigured): string {
 
 // Keep errors readable for a submission from an older, already-open paired-upload form.
 $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? [], $errors['agent_audio'] ?? []);
+
+/**
+ * A duration as a person reads it.
+ *
+ * `3:26` rather than `206.3s`: this sits inside a play control, where the number is a length of
+ * listening rather than a measurement.
+ */
+$clock = static function (?float $seconds): string {
+    if ($seconds === null || $seconds <= 0) {
+        return '--:--';
+    }
+
+    $whole = (int) round($seconds);
+
+    return sprintf('%d:%02d', intdiv($whole, 60), $whole % 60);
+};
+
+// Every address a control needs is generated here and printed into the control, never assembled in
+// the browser from an id. A deployment prefix, the router's own escaping and the shape of each route
+// are all things this side knows and the script deliberately does not — the same rule the upload
+// flow already follows with `data-a2t-done`.
+$originalUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_ORIGINAL_FILE,
+    ['publicId' => $jobPublicId],
+);
+$generatedUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_AI_AUDIO_FILE,
+    ['publicId' => $jobPublicId],
+);
+$fragmentUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_REVIEW_FRAGMENT,
+    ['publicId' => $jobPublicId],
+);
+$fullReviewUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_REVIEW,
+    ['publicId' => $jobPublicId],
+);
+$groupUrl = static fn(string $route, GroupKey $key): string => $urlGenerator->generate(
+    $route,
+    ['sourceId' => $store->sourceId, 'groupKey' => $key->value],
+);
+
+/**
+ * One recording, as a table cell.
+ *
+ * Play, and a way in. Everything else about the recording lives behind Details, because a cell one
+ * third of a column wide is not where an administrator reads a transcript.
+ *
+ * The play control is a `<button>` rather than an `<audio>` element: sixty native players on one page
+ * is sixty pieces of browser chrome and sixty preloads. One shared controller in
+ * `audio-store.js` plays them, which is also what makes "only one at a time" possible.
+ */
+$slotCellInner = static function (StoreRecordingSlot $slot) use (
+    $clock,
+    $originalUrl,
+    $fragmentUrl,
+    $fullReviewUrl
+): string {
+    $html = '<div class="a2t-slot">';
+
+    if ($slot->hasOriginalAudio) {
+        $html .= '<button class="a2t-play" type="button"'
+            . ' data-a2t-play="' . Html::encode($originalUrl($slot->jobPublicId)) . '"'
+            . ' aria-label="' . Html::encode('Play ' . $slot->label() . ' recording') . '">'
+            . '<span class="a2t-play__icon" aria-hidden="true"></span>'
+            . '<span class="a2t-play__time">' . Html::encode($clock($slot->durationSeconds)) . '</span>'
+            . '</button>';
+    }
+
+    if ($slot->isReviewable()) {
+        $html .= '<button class="a2t-slot__link" type="button"'
+            . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
+    }
+
+    return $html . '</div>';
+};
+
+$slotCell = static function (?StoreRecordingSlot $slot) use (
+    $clock,
+    $originalUrl,
+    $fragmentUrl,
+    $fullReviewUrl,
+    $slotCellInner,
+    $appTimeZone
+): string {
+    if ($slot === null) {
+        // An em dash, not a disabled button: there is nothing here, and offering a dead control would
+        // suggest otherwise.
+        return '<span class="util-muted">&mdash;</span>';
+    }
+
+    $html = '<div class="a2t-slot">';
+
+    if ($slot->hasOriginalAudio) {
+        $html .= '<button class="a2t-play" type="button"'
+            . ' data-a2t-play="' . Html::encode($originalUrl($slot->jobPublicId)) . '"'
+            . ' aria-label="' . Html::encode('Play ' . $slot->label() . ' recording') . '">'
+            . '<span class="a2t-play__icon" aria-hidden="true"></span>'
+            . '<span class="a2t-play__time">' . Html::encode($clock($slot->durationSeconds)) . '</span>'
+            . '</button>';
+    } else {
+        // Retention took the file, or it was never kept. The transcript is still there, so the row
+        // stays useful — it just cannot be listened to.
+        $html .= '<span class="a2t-slot__gone" title="This recording is no longer stored on the server">'
+            . Html::encode($clock($slot->durationSeconds)) . '</span>';
+    }
+
+    if ($slot->isReviewable()) {
+        $html .= '<button class="a2t-slot__link" type="button"'
+            . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
+    } elseif ($slot->status->value === 'FAILED') {
+        $html .= '<span class="a2t-slot__note">Failed</span>';
+    } elseif ($slot->status->value !== 'COMPLETED') {
+        $html .= '<span class="a2t-slot__note">Converting…</span>';
+    }
+
+    if ($slot->olderCount() > 0) {
+        // Nothing is hidden, only folded: every earlier recording keeps its own play, Details and
+        // transcript, rendered here and moved into the history dialog when it opens. Rendered rather
+        // than fetched because it is three short rows the page already had in hand — an endpoint for
+        // it would be a request to learn something this page already knows.
+        $html .= '<button class="a2t-slot__more" type="button"'
+            . ' data-a2t-history="' . Html::encode($slot->jobPublicId) . '">+'
+            . $slot->olderCount() . ' more</button>'
+            . '<div class="a2t-history-source" data-a2t-history-for="'
+            . Html::encode($slot->jobPublicId) . '" hidden>';
+
+        foreach ($slot->older as $older) {
+            $html .= '<div class="a2t-history-row">'
+                . '<span class="a2t-history-row__when">'
+                . Html::encode($appTimeZone->format($older->uploadedAt, 'M j, Y g:i A'))
+                . '</span>'
+                . '<span class="a2t-history-row__meta">'
+                . Html::encode($older->label() . ' · ' . $older->provider->label()
+                    . ' · ' . $older->status->label())
+                . '</span>'
+                . $slotCellInner($older)
+                . '</div>';
+        }
+
+        $html .= '</div>';
+    }
+
+    return $html . '</div>';
+};
+
+/**
+ * The generated-audio side of one recording.
+ *
+ * A play control only when there are bytes to play. Every other state is a word, because a button that
+ * cannot do anything is worse than a sentence saying why.
+ */
+$ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): string {
+    // Two grid cells rather than a row wrapper: the whole column is one grid, so every recording's
+    // status starts at the same x whatever its label is, and neither half ever wraps mid-phrase.
+    $html = '<span class="a2t-tts__label">' . Html::encode($slot->label()) . '</span>';
+
+    if ($slot->hasGeneratedAudio()) {
+        return $html
+            . '<button class="a2t-play a2t-play--sm" type="button"'
+            . ' data-a2t-play="' . Html::encode($generatedUrl($slot->jobPublicId)) . '"'
+            . ' aria-label="' . Html::encode('Play generated ' . $slot->label() . ' audio') . '">'
+            . '<span class="a2t-play__icon" aria-hidden="true"></span></button>';
+    }
+
+    return $html . '<span class="a2t-tts__state">'
+        . Html::encode($slot->aiAudioState()->label()) . '</span>';
+};
 ?>
 <div class="page-header">
     <div>
         <h1 class="page-header__title"><?= Html::encode($store->name) ?></h1>
-        <?php
-        // Provider-neutral wording. This used to promise that nothing left the server, which stopped
-        // being true the moment Deepgram became selectable — and a false privacy claim is worse than
-        // no claim. What each upload actually uses is stated on the field that decides it.
-?>
         <p class="page-header__subtitle">
-            Upload call recordings for this store. New uploads use the configured default transcription
-            provider unless you choose another one.
+            Call recordings for this store, grouped by the order they belong to.
         </p>
     </div>
-    <a class="btn" href="<?= Html::encode($urlGenerator->generate('order58.store-audio')) ?>">All stores</a>
+    <div class="page-header__actions">
+        <?php
+        // A real link, so the dialog is reachable with scripts off: the server answers `?upload=1` by
+        // rendering the dialog already open. The script upgrades the same element to `showModal()`.
+?>
+        <?php if ($canUpload): ?>
+            <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
+               data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+        <?php endif; ?>
+        <a class="btn" href="<?= Html::encode($urlGenerator->generate('order58.store-audio')) ?>">All stores</a>
+    </div>
 </div>
 
 <p class="util-muted util-mono">
-    Store #<?= $store->sourceId ?><?php if ($store->company !== null): ?> · <?= Html::encode($store->company) ?><?php endif; ?>
-    <?php if (!$store->active): ?> · <span class="badge badge--error">Source inactive</span><?php endif; ?>
+    Store #<?= $store->sourceId ?><?php if ($store->company !== null): ?> &middot; <?= Html::encode($store->company) ?><?php endif; ?>
+    <?php if (!$store->active): ?> &middot; <span class="badge badge--error">Source inactive</span><?php endif; ?>
 </p>
 
 <?php
-// Only when something is wrong. The full counters-and-worker strip belongs on the conversions list,
-// which is the technical view of the queue; here it would compete with the store's own history for
-// attention every time an administrator came to upload a file. But an administrator about to queue a
-// recording does need to know when nothing is going to pick it up.
+// Only when something is wrong. An administrator about to queue a recording needs to know when nothing
+// is going to pick it up; the full counters strip belongs on the conversions list.
 ?>
 <?php if (!$worker->isHealthy()): ?>
     <div class="alert alert--warning" role="status">
         <p>
-            <?= Html::encode($worker->label()) ?><?php if ($worker->detail() !== null): ?> — <?= Html::encode($worker->detail()) ?><?php endif; ?>
+            <?= Html::encode($worker->label()) ?><?php if ($worker->detail() !== null): ?> &mdash; <?= Html::encode($worker->detail()) ?><?php endif; ?>
         </p>
         <p>Uploads are still accepted and will be transcribed once the worker is running again.</p>
     </div>
 <?php endif; ?>
 
-<?php if ($formErrors !== []): ?>
-    <div class="alert alert--error" role="alert">
-        <?php foreach ($formErrors as $error): ?>
-            <p><?= Html::encode($error) ?></p>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
-
-<?php
-// Readable but not writable. The history has to stay reachable — the global conversions list links
-// straight here — so an inactive store keeps its page and loses only the upload. The server refuses
-// the POST regardless of what this template renders.
-//
-// Each recording card submits one file through the existing common-recording flow.
-// Independent forms also remain usable without JavaScript.
-?>
 <?php if (!$canUpload): ?>
     <div class="alert alert--warning" role="status">
         <p>
@@ -266,251 +421,120 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
             Everything already converted for it is listed below.
         </p>
     </div>
-<?php else: ?>
-<section class="a2t-uploads" aria-labelledby="a2t-uploads-title">
-    <div class="a2t-uploads__heading">
-        <div>
-            <p class="a2t-uploads__eyebrow">RECORDINGS</p>
-            <h2 id="a2t-uploads-title">Audio File Upload</h2>
-            <p>Choose a recording to upload and convert to text.</p>
-        </div>
-        <span class="a2t-uploads__limit">Up to <?= Html::encode($maxUploadLabel) ?> per file</span>
-    </div>
-    <div class="a2t-uploads__grid">
-        <?php
-        // The fourth entry is what each card records about itself, so the history below can say which
-        // one a recording came through. It changes nothing about the upload: all three still post one
-        // recording in COMMON mode, and the pipeline still works the speakers out for itself.
-        $recordingCards = [
-            'common' => ['One Mixed Recording', 'Both sides of the conversation in one audio file.', 'Convert mixed recording', RecordingType::Mixed],
-            'caller' => ['Caller Recording', 'Upload a single audio file from the caller.', 'Convert caller recording', RecordingType::Caller],
-            'callee' => ['Callee Recording', 'Upload a single audio file from the callee.', 'Convert callee recording', RecordingType::Callee],
-        ];
-    ?>
-        <?php foreach ($recordingCards as $key => [$title, $description, $buttonLabel, $recordingType]): ?>
-            <?php
-            // The drop zone below is a <label>, not a <div>, so that clicking anywhere in the box
-            // opens the file dialog. The browser's own behaviour rather than a click handler: the
-            // CSP here is `script-src 'self'` and the upload has to keep working with scripts off,
-            // where a scripted drop zone would be dead on exactly the path with no other way to
-            // attach a file. The native button inside stays live — a label does nothing for clicks
-            // aimed at its own control, so one click still opens exactly one dialog. Its two lines
-            // of prose are aria-hidden, leaving "Audio file" as the control's accessible name.
-            $audioId = $key === 'common' ? 'a2t-audio' : 'a2t-' . $key . '-audio';
-            ?>
-            <article class="a2t-upload-card" aria-labelledby="a2t-<?= $key ?>-title">
-                <div class="a2t-upload-card__header">
-                    <span class="a2t-upload-card__icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                            <path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/>
-                        </svg>
-                    </span>
-                    <div>
-                        <h3 id="a2t-<?= $key ?>-title"><?= Html::encode($title) ?></h3>
-                        <p><?= Html::encode($description) ?></p>
-                    </div>
-                </div>
-                <form class="a2t-upload-form" data-a2t-upload id="a2t-<?= $key ?>-form" method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
-                    <?= $csrfField ?>
-                    <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
-                    <?php
-                    // Which card this is. The server accepts it only through RecordingType's
-                    // allow-list, so a tampered value records nothing rather than becoming a label.
-            ?>
-                    <input type="hidden" name="recording_type" value="<?= Html::encode($recordingType->value) ?>">
-                    <div class="field">
-                        <label class="field__label" for="<?= $audioId ?>">Audio file</label>
-                        <label class="a2t-upload-picker" for="<?= $audioId ?>">
-                            <svg class="a2t-upload-picker__icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M12 16V3m-4 4 4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
-                            </svg>
-                            <span class="a2t-upload-picker__title" aria-hidden="true">Choose an audio file</span>
-                            <span class="a2t-upload-picker__hint" aria-hidden="true">Browse files to get started</span>
-                            <input
-                                class="a2t-upload-input<?= isset($errors['audio']) ? ' field__control--error' : '' ?>"
-                                id="<?= $audioId ?>"
-                                type="file"
-                                name="audio"
-                                accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*"
-                                aria-describedby="<?= $audioId ?>-limits"
-                            >
-                        </label>
-                        <div class="a2t-upload-file" data-a2t-file hidden></div>
-                        <?= $fieldErrors($errors['audio'] ?? []) ?>
-                        <div class="field__hint" id="<?= $audioId ?>-limits">
-                            <?= Html::encode($extensionList) ?><br>
-                            Up to <?= Html::encode($maxUploadLabel) ?> · <?= Html::encode($maxDurationLabel) ?> maximum
-                        </div>
-                    </div>
-                    <?= $orderIdField('a2t-' . $key . '-order-id') ?>
-                    <?= $providerField('a2t-' . $key . '-provider') ?>
-                    <div class="a2t-upload-card__options">
-                        <?= $aiAudioField('a2t-' . $key . '-ai-audio') ?>
-                    </div>
-                    <div class="a2t-upload-feedback" data-a2t-feedback data-a2t-state="idle" hidden>
-                        <div class="a2t-upload-feedback__heading">
-                            <strong>Recording progress</strong>
-                            <span class="a2t-upload-state" data-a2t-state-label>Ready</span>
-                        </div>
-                        <div class="a2t-upload-step" data-a2t-step="upload" data-state="pending">
-                            <div class="a2t-upload-feedback__label">
-                                <span class="a2t-upload-step__title"><span aria-hidden="true">01</span> Upload</span>
-                                <span data-a2t-upload-percent aria-hidden="true">0%</span>
-                            </div>
-                            <progress class="a2t-upload-progress" data-a2t-upload-progress max="100" value="0" aria-label="<?= Html::encode($title) ?> upload progress"></progress>
-                            <p class="a2t-upload-step__detail" data-a2t-upload-status role="status">Awaiting audio file</p>
-                        </div>
-                        <div class="a2t-upload-step" data-a2t-step="conversion" data-state="pending">
-                            <div class="a2t-upload-feedback__label">
-                                <span class="a2t-upload-step__title"><span aria-hidden="true">02</span> Conversion</span>
-                                <span data-a2t-conversion-percent aria-hidden="true">Pending</span>
-                            </div>
-                            <progress class="a2t-upload-progress" data-a2t-conversion-progress max="100" value="0" aria-label="<?= Html::encode($title) ?> conversion progress"></progress>
-                            <p class="a2t-upload-step__detail" data-a2t-conversion-status role="status">Starts after upload</p>
-                        </div>
-                        <p class="a2t-upload-error" data-a2t-upload-error role="alert" hidden></p>
-                        <a class="a2t-upload-result" data-a2t-upload-result hidden>View conversion <span aria-hidden="true">↗</span></a>
-                    </div>
-                    <button class="btn btn--primary a2t-upload-submit" type="submit"><?= Html::encode($buttonLabel) ?></button>
-                </form>
-            </article>
-        <?php endforeach; ?>
-    </div>
-</section>
 <?php endif; ?>
 
 <div class="card a2t-wide">
     <h2 class="card__title">This store's conversions</h2>
 
-    <?php if ($conversations === []): ?>
-        <p class="util-muted">Nothing uploaded for this store yet.</p>
+    <?php if ($groups === []): ?>
+        <?php // A short sentence and the one action that changes it, rather than an empty table.?>
+        <div class="a2t-empty-state">
+            <p>No audio recordings yet.</p>
+            <?php if ($canUpload): ?>
+                <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
+                   data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+            <?php endif; ?>
+        </div>
     <?php else: ?>
         <div class="a2t-table-scroll">
-            <table class="table a2t-table">
+            <table class="table a2t-table a2t-orders">
                 <?php
-                // Explicit widths, following the convention the conversions list already uses. Without a
-                // colgroup, `table-layout: fixed` divides the width evenly and the Actions cell — which
-                // holds three links and must not wrap — is the one that gets squeezed off the edge.
-                //
-                // Recordings takes the slack because a filename is the only value here with no natural
-                // length; everything else is sized to its content.
+                // Sized to content, with the three recording columns sharing the slack: a filename no
+                // longer appears here, so nothing in this table has an unbounded length.
         ?>
                 <colgroup>
-                    <col class="a2t-col-text">
                     <col class="a2t-col-order">
-                    <col class="a2t-col-type">
-                    <col class="a2t-col-when">
+                    <col class="a2t-col-slot">
+                    <col class="a2t-col-slot">
+                    <col class="a2t-col-slot">
                     <col class="a2t-col-status">
-                    <col class="a2t-col-duration">
+                    <col class="a2t-col-tts">
                     <col class="a2t-col-row-actions">
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>Recordings</th>
                         <th>Order ID</th>
-                        <th>Type</th>
-                        <th>Uploaded at</th>
+                        <th>Mix / Common</th>
+                        <th>Caller</th>
+                        <th>Callee</th>
                         <th>Status</th>
-                        <th>Duration</th>
+                        <th>Text to Audio</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($conversations as $conversation): ?>
-                    <?php
-            $status = $conversation->status();
-                    $separate = $conversation->mode === ConversationMode::Separate;
-                    $viewUrl = $urlGenerator->generate(
-                        AudioToTextRoute::CONVERSION,
-                        ['publicId' => $conversation->publicId],
-                    );
-                    $duration = $conversation->totalDurationSeconds();
-                    ?>
+                <?php foreach ($groups as $group): ?>
+                    <?php $status = $group->aggregateStatus(); ?>
                     <tr>
-                        <td class="a2t-cell-file">
-                            <?php foreach ($conversation->children as $child): ?>
-                                <?php /** @var AudioConversationChild $child */ ?>
-                                <div title="<?= Html::encode($child->originalFilename) ?>">
-                                    <?php if ($separate): ?>
-                                        <strong><?= Html::encode($child->sourceRole->label()) ?>:</strong>
-                                    <?php endif; ?>
-                                    <?= Html::encode($child->originalFilename) ?>
-                                </div>
-                            <?php endforeach; ?>
+                        <td>
+                            <?php if ($group->orderId !== null): ?>
+                                <span class="a2t-order-id">#<?= Html::encode($group->orderId) ?></span>
+                            <?php else: ?>
+                                <?php
+                        // An upload that named no order is still its own row — never merged
+                        // with every other order-less upload. It says so rather than showing
+                        // a blank cell that would read as missing data.
+                                ?>
+                                <span class="util-muted">No order</span>
+                            <?php endif; ?>
+                            <span class="a2t-order-when">
+                                <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
+                            </span>
                         </td>
-                        <?php
-                        // An em dash for an upload with no order, which is most of them and is not a
-                        // fault. Never 0 or a blank cell: one looks like an order number and the other
-                        // looks like something failed to render.
-                    ?>
-                        <td class="util-mono"><?= $conversation->orderId === null
-                        ? '&mdash;'
-                        : Html::encode($conversation->orderId) ?></td>
-                        <?php
-                    // The card this came through — Common / Mixed, Caller or Callee. An upload made
-                    // before that was recorded has nothing to show and falls back to its mode's
-                    // label, which is what this column always printed.
-                    ?>
-                        <td><?= Html::encode($conversation->typeLabel()) ?></td>
-                        <td><?= Html::encode($appTimeZone->format($conversation->createdAt, 'M j, Y g:i A')) ?></td>
+                        <td>
+                            <?php if ($group->isLegacySeparate()): ?>
+                                <?php
+                                // A pair uploaded before recording types existed. Its halves are
+                                // Customer and Agent — roles the administrator supplied — and this
+                                // application has never known which of them called whom, so they are
+                                // shown under their own names rather than as Caller and Callee.
+                                ?>
+                                <div class="a2t-legacy">
+                                    <span class="a2t-legacy__tag">Customer + Agent</span>
+                                    <?php foreach ($group->legacySeparate as $half): ?>
+                                        <?= $slotCell($half) ?>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php else: ?>
+                                <?= $slotCell($group->mixed) ?>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= $slotCell($group->caller) ?></td>
+                        <td><?= $slotCell($group->callee) ?></td>
                         <td>
                             <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
                                 <?= Html::encode($status->label()) ?>
                             </span>
-                            <?php foreach ($conversation->children as $child): ?>
-                                <?php if ($child->errorMessage !== null): ?>
-                                    <div class="a2t-cell-note">
-                                        <?php if ($separate): ?>
-                                            <?= Html::encode($child->sourceRole->label()) ?>:
-                                        <?php endif; ?>
-                                        <?= Html::encode($child->errorMessage) ?>
-                                    </div>
-                                <?php endif; ?>
-                            <?php endforeach; ?>
                         </td>
                         <td>
-                            <?= $duration === null ? '—' : Html::encode(number_format($duration, 1) . 's') ?>
+                            <?php $primaries = $group->primaries(); ?>
+                            <?php if ($primaries === []): ?>
+                                <span class="util-muted">&mdash;</span>
+                            <?php else: ?>
+                                <div class="a2t-tts-list">
+                                    <?php foreach ($primaries as $slot): ?>
+                                        <?= $ttsCell($slot) ?>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
                         </td>
                         <td class="a2t-cell-actions">
-                            <a href="<?= Html::encode($viewUrl) ?>">View</a>
-                            <?php
-                        // The machine's own transcript, offered only where there is one to show.
-                        // A separate Customer + Agent conversion stores no segments at all — the
-                        // roles were supplied, so nothing was diarized — and an unfinished job has
-                        // not produced one yet. Offering a link that could only redirect would be
-                        // worse than not offering it.
-                        $original = !$separate ? $conversation->singleChild() : null;
-                    ?>
-                            <?php if ($original !== null && $original->status === JobStatus::COMPLETED): ?>
-                                <a href="<?= Html::encode($urlGenerator->generate(
-                                    AudioToTextRoute::JOB_ORIGINAL,
-                                    ['publicId' => $original->publicId],
-                                )) ?>">Original transcript</a>
+                            <?php if ($group->hasAnyTranscript()): ?>
+                                <button class="a2t-slot__link" type="button"
+                                        data-a2t-transcripts="<?= Html::encode(
+                                            $groupUrl(AudioToTextRoute::STORE_GROUP_TRANSCRIPTS, $group->key),
+                                        ) ?>"
+                                        data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
+                                    Original transcript
+                                </button>
                             <?php endif; ?>
-                            <?php
-                                                                // One compact link rather than a column of its own — the page behind it
-                                                                // explains the state, and a status badge here would compete with the one
-                                                                // that already says whether the conversion finished.
-                                                                //
-                                                                // Offered once anything has been transcribed. It is deliberately NOT
-                                                                // conditional on whether audio exists: "not generated yet" is one of the
-                                                                // things that page is for, and hiding the link until after the fact would
-                                                                // leave no way to reach the button that generates it.
-                                                                $anyCompleted = false;
-                    foreach ($conversation->children as $child) {
-                        if ($child->status === JobStatus::COMPLETED) {
-                            $anyCompleted = true;
-
-                            break;
-                        }
-                    }
-                    ?>
-                            <?php if ($anyCompleted): ?>
-                                <a href="<?= Html::encode($urlGenerator->generate(
-                                    AudioToTextRoute::CONVERSION_AI_AUDIO,
-                                    ['publicId' => $conversation->publicId],
-                                )) ?>">AI audio</a>
-                            <?php endif; ?>
+                            <button class="a2t-slot__link" type="button"
+                                    data-a2t-tts="<?= Html::encode(
+                                        $groupUrl(AudioToTextRoute::STORE_GROUP_TTS_OPTIONS, $group->key),
+                                    ) ?>"
+                                    data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
+                                Generate Text to Audio
+                            </button>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -527,8 +551,8 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
         <?php endif; ?>
 
         <p class="util-muted">
-            <?= $total ?> conversion<?= $total === 1 ? '' : 's' ?> for this store, newest first.
-            A separate Customer and Agent upload counts as one.
+            <?= $total ?> order<?= $total === 1 ? '' : 's' ?> for this store, newest first.
+            Every recording of one order shares its row.
         </p>
     <?php endif; ?>
 </div>
@@ -540,3 +564,250 @@ $formErrors = array_merge($errors['form'] ?? [], $errors['customer_audio'] ?? []
         Conversions and their recordings are kept for <?= $retentionHours ?> hours, then removed.
     <?php endif; ?>
 </p>
+
+<?php // ---- The dialogs -------------------------------------------------------------------------?>
+<?php if ($canUpload): ?>
+    <?php
+    // ONE form, where there were three. The recording type it posts is a radio rather than three
+    // hidden inputs; everything else — the field names, the CSRF token, the progress hooks the upload
+    // script binds to — is exactly what the cards posted, because the pipeline behind it is unchanged.
+    //
+    // `.a2t-uploads` is load-bearing: the upload script scrapes `.a2t-uploads .field__error` to report
+    // a server-side refusal, so a field error outside that ancestor would silently become a generic
+    // "could not confirm this upload".
+    ?>
+    <dialog class="source-modal a2t-upload-dialog" id="a2t-upload-dialog" data-a2t-dialog
+            aria-labelledby="a2t-upload-title"<?= $uploadOpen ? ' open' : '' ?>>
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="a2t-upload-title">Add audio</h2>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div class="source-modal__body a2t-uploads">
+            <?php if ($formErrors !== []): ?>
+                <div class="alert alert--error" role="alert">
+                    <?php foreach ($formErrors as $error): ?>
+                        <p><?= Html::encode($error) ?></p>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <form class="a2t-upload-form" data-a2t-upload data-a2t-stay id="a2t-upload-form"
+                  method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
+                <?= $csrfField ?>
+                <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
+
+                <div class="field">
+                    <label class="field__label" for="a2t-audio">Audio file</label>
+                    <?php
+                    // A <label> wrapping the input, not a scripted drop zone: the CSP forbids inline
+                    // script and the upload has to keep working with scripts off, which is exactly the
+                    // path where a scripted picker would be dead.
+    ?>
+                    <label class="a2t-upload-picker" for="a2t-audio">
+                        <svg class="a2t-upload-picker__icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 16V3m-4 4 4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+                        </svg>
+                        <span class="a2t-upload-picker__title" aria-hidden="true">Choose an audio file</span>
+                        <span class="a2t-upload-picker__hint" aria-hidden="true">Browse files to get started</span>
+                        <input class="a2t-upload-input<?= isset($errors['audio']) ? ' field__control--error' : '' ?>"
+                               id="a2t-audio" type="file" name="audio"
+                               accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*" aria-describedby="a2t-audio-limits">
+                    </label>
+                    <div class="a2t-upload-file" data-a2t-file hidden></div>
+                    <?= $fieldErrors($errors['audio'] ?? []) ?>
+                    <div class="field__hint" id="a2t-audio-limits">
+                        <?= Html::encode($extensionList) ?><br>
+                        Up to <?= Html::encode($maxUploadLabel) ?> &middot; <?= Html::encode($maxDurationLabel) ?> maximum
+                    </div>
+                </div>
+
+                <?= $orderIdField('a2t-order-id') ?>
+
+                <div class="field">
+                    <span class="field__label">Recording type</span>
+                    <?php
+    // The one thing three cards said that one form has to say some other way. The
+    // server allow-lists whatever arrives, so this is a convenience, not the control.
+    ?>
+                    <div class="a2t-type-choice">
+                        <?php foreach (RecordingType::cases() as $type): ?>
+                            <label class="a2t-checkbox" for="a2t-type-<?= Html::encode(strtolower($type->value)) ?>">
+                                <input type="radio" name="recording_type"
+                                       id="a2t-type-<?= Html::encode(strtolower($type->value)) ?>"
+                                       value="<?= Html::encode($type->value) ?>"
+                                    <?= $type === $selectedType ? 'checked' : '' ?>>
+                                <span><?= Html::encode($type->label()) ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="field__hint">
+                        Which side of the call this file holds. Speakers are still worked out on this
+                        server for a mixed recording.
+                    </div>
+                </div>
+
+                <?= $providerField('a2t-provider') ?>
+                <?= $aiAudioField('a2t-ai-audio') ?>
+
+                <div class="a2t-upload-feedback" data-a2t-feedback data-a2t-state="idle" hidden>
+                    <div class="a2t-upload-feedback__heading">
+                        <strong>Recording progress</strong>
+                        <span class="a2t-upload-state" data-a2t-state-label>Ready</span>
+                    </div>
+                    <div class="a2t-upload-step" data-a2t-step="upload" data-state="pending">
+                        <div class="a2t-upload-feedback__label">
+                            <span class="a2t-upload-step__title"><span aria-hidden="true">01</span> Upload</span>
+                            <span data-a2t-upload-percent aria-hidden="true">0%</span>
+                        </div>
+                        <progress class="a2t-upload-progress" data-a2t-upload-progress max="100" value="0"
+                                  aria-label="Upload progress"></progress>
+                        <p class="a2t-upload-step__detail" data-a2t-upload-status role="status">Awaiting audio file</p>
+                    </div>
+                    <div class="a2t-upload-step" data-a2t-step="conversion" data-state="pending">
+                        <div class="a2t-upload-feedback__label">
+                            <span class="a2t-upload-step__title"><span aria-hidden="true">02</span> Conversion</span>
+                            <span data-a2t-conversion-percent aria-hidden="true">Pending</span>
+                        </div>
+                        <progress class="a2t-upload-progress" data-a2t-conversion-progress max="100" value="0"
+                                  aria-label="Conversion progress"></progress>
+                        <p class="a2t-upload-step__detail" data-a2t-conversion-status role="status">Starts after upload</p>
+                    </div>
+                    <p class="a2t-upload-error" data-a2t-upload-error role="alert" hidden></p>
+                    <a class="a2t-upload-result" data-a2t-upload-result hidden>View conversion <span aria-hidden="true">&#8599;</span></a>
+                </div>
+
+                <button class="btn btn--primary a2t-upload-submit" type="submit">Upload &amp; Transcribe</button>
+            </form>
+        </div>
+    </dialog>
+<?php endif; ?>
+
+<?php
+// The three read/edit dialogs are rendered empty and filled on demand: a store page must not carry
+// every transcript of every row it lists. Each one follows the shell the chat source dialog
+// established — a `<dialog>` with data hooks, no ids printed, closed by its own button or a backdrop
+// click, and filled with textContent rather than markup.
+?>
+<dialog class="source-modal a2t-review-dialog" id="a2t-review-dialog" data-a2t-dialog
+        aria-labelledby="a2t-review-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-review-title" data-a2t-review-title>Recording details</h2>
+            <p class="source-modal__meta" data-a2t-review-meta></p>
+        </div>
+        <div class="a2t-dialog__actions">
+            <?php
+            // Drag-to-move and select-to-merge measure the review page's own scroll container and
+            // cannot work in a dialog, so they stay where they work and this is the way to them.
+?>
+            <a class="btn btn--sm" data-a2t-full-editor href="#">Open full editor</a>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+        </div>
+    </div>
+    <p class="source-modal__status" data-a2t-review-status hidden></p>
+    <?php
+    // The token this dialog's corrections are sent with. A rendered input, exactly as every form on
+    // this page uses, read by the script and sent as `X-CSRF-Token` — the header the existing
+    // middleware already accepts. Nothing about the token is composed in JavaScript.
+?>
+    <div class="a2t-review-token" data-a2t-review-token hidden><?= $csrfField ?></div>
+    <?php
+    // The three icons the correction page puts beside a bubble: the handle, the pencil, and the clock
+    // on a message that has been corrected before. Rendered once and cloned per turn, from the same
+    // constants that page draws, so no SVG path is written out a second time in JavaScript.
+    //
+    // Each label is left empty and filled per turn: "Move to Customer" and "Move to Agent" are the
+    // same icon saying two different things, and which one it says is the server's decision.
+?>
+    <div class="a2t-iconbank" data-a2t-iconbank hidden>
+        <template data-a2t-icon="move"><?= AudioToTextIcons::svg(AudioToTextIcons::GRIP, '') ?></template>
+        <template data-a2t-icon="edit"><?= AudioToTextIcons::svg(AudioToTextIcons::PENCIL, '') ?></template>
+        <template data-a2t-icon="history"><?= AudioToTextIcons::svg(AudioToTextIcons::CLOCK, '') ?></template>
+    </div>
+    <?php
+    // Where the revision dialogs land. Fetched from the same partial the correction page renders
+    // inline, after every read, so a message corrected a moment ago has its clock icon and its
+    // revision without the reader reloading anything.
+?>
+    <div class="a2t-history-dialogs" data-a2t-history-host></div>
+    <?php
+    // `a2t-review` is the correction page's own scope, borrowed deliberately: it is what stacks the
+    // controls under a bubble, puts the icons in the margin on the speaker's side and tints a
+    // published Agent turn green. `a2t-chat` is **not** borrowed — `.app:has(.a2t-chat)` pins the
+    // whole shell to 100vh, which is right for a page that is only a conversation and wrong for a
+    // table with a dialog over it.
+?>
+    <div class="source-modal__body a2t-review" data-a2t-review-body hidden>
+        <div class="a2t-mnotice" data-a2t-review-notice></div>
+        <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
+    </div>
+</dialog>
+
+<dialog class="source-modal a2t-transcript-dialog" id="a2t-transcript-dialog" data-a2t-dialog
+        aria-labelledby="a2t-transcript-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-transcript-title">Original transcript</h2>
+            <p class="source-modal__meta" data-a2t-transcript-meta></p>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="a2t-tabs" role="tablist" data-a2t-transcript-tabs hidden></div>
+    <p class="source-modal__status" data-a2t-transcript-status hidden></p>
+    <?php
+    // The same bubbles, without `a2t-review`: nothing here can be corrected, so there is no margin to
+    // reserve for controls and no role to tint. That is the read-only conversation page's own layout.
+?>
+    <div class="source-modal__body" data-a2t-transcript-body hidden>
+        <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-transcript-scroll></div>
+    </div>
+</dialog>
+
+<dialog class="source-modal a2t-tts-dialog" id="a2t-tts-dialog" data-a2t-dialog
+        aria-labelledby="a2t-tts-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-tts-title">Generate Text to Audio</h2>
+            <p class="source-modal__meta" data-a2t-tts-meta></p>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+    </div>
+    <p class="source-modal__status" data-a2t-tts-status hidden></p>
+    <?php
+// A real form posting to the existing generate route. The action, the output type and the hash all
+// come from the server's own answer about this group — the browser never decides which job or
+// which output type a choice means, because the UI's Caller is not the column's CUSTOMER.
+?>
+    <form class="source-modal__body" method="post" action="" data-a2t-tts-form hidden>
+        <?= $csrfField ?>
+        <input type="hidden" name="output_type" value="" data-a2t-tts-output>
+        <input type="hidden" name="expected_hash" value="" data-a2t-tts-hash>
+        <div class="a2t-tts-options" data-a2t-tts-options></div>
+        <button class="btn btn--primary" type="submit" data-a2t-tts-submit disabled>Generate</button>
+    </form>
+</dialog>
+
+<?php
+// The same two confirmations the correction page shows, from the same partial. The dialog submits
+// them by fetch instead of following the redirect; the fields, the token and the version are
+// identical, which is what makes this the same operation rather than a second one that resembles it.
+?>
+<?= $this->render(AudioToTextViews::reviewConfirm(), [
+    'csrfField' => $csrfField,
+    'version' => null,
+]) ?>
+
+<dialog class="source-modal a2t-history-dialog" id="a2t-history-dialog" data-a2t-dialog
+        aria-labelledby="a2t-history-title">
+    <div class="source-modal__head">
+        <h2 class="source-modal__title" id="a2t-history-title">Earlier recordings</h2>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="source-modal__body" data-a2t-history-body></div>
+</dialog>

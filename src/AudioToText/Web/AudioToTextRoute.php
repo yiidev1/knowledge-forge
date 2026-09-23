@@ -25,6 +25,20 @@ final class AudioToTextRoute
     public const STORE = 'audio-to-text.store';
 
     /**
+     * One row of the store page, as data for its modals.
+     *
+     * Addressed by the **group** — a store id and a group key — rather than by a conversation, because
+     * a row *is* a group: order 16513791's mixed, caller and callee recordings are one row with one
+     * Original Transcript button behind it, and the modal opens a tab per recording.
+     *
+     * Both halves of the address arrive from a browser and neither is trusted. They resolve through
+     * {@see \App\AudioToText\Web\Job\Store\Group\StoreGroupFinder}, which carries the store predicate
+     * into the query, so a key naming another store's conversation matches no row and answers 404.
+     */
+    public const STORE_GROUP_TRANSCRIPTS = 'audio-to-text.store.group.transcripts';
+    public const STORE_GROUP_TTS_OPTIONS = 'audio-to-text.store.group.tts-options';
+
+    /**
      * One logical conversion, whether it was recorded as one mixed file or as a Customer and an Agent
      * file. This is what a row in the store history opens.
      */
@@ -72,6 +86,23 @@ final class AudioToTextRoute
      * the route name, the audited operation and the button a person pressed all say the same thing.
      */
     public const JOB_REVIEW = 'audio-to-text.job.review';
+
+    /**
+     * The same correction state as JOB_REVIEW, as data rather than as a page.
+     *
+     * The store page's Details modal has no page to measure, so it reads this and posts back to the
+     * seven routes below — the same actions, the same service, the same audit trail. A second
+     * rendering, never a second set of rules.
+     */
+    public const JOB_REVIEW_FRAGMENT = 'audio-to-text.job.review.fragment';
+
+    /**
+     * What was corrected, per message — the same partial the page renders inline.
+     *
+     * Markup rather than data, and deliberately: a revision's Before/After arrangement exists in one
+     * template, and sending the events as JSON would mean writing that template again in JavaScript.
+     */
+    public const JOB_REVIEW_HISTORY = 'audio-to-text.job.review.history';
     public const JOB_REVIEW_MOVE = 'audio-to-text.job.review.move';
     public const JOB_REVIEW_MOVE_TEXT = 'audio-to-text.job.review.move-text';
     public const JOB_REVIEW_SPLIT = 'audio-to-text.job.review.split';

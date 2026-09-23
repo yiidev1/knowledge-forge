@@ -50,6 +50,9 @@ final readonly class Action
                     default => throw ReviewRejected::unsupportedRole(),
                 };
             },
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 }

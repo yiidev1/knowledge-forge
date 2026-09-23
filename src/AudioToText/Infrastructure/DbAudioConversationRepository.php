@@ -119,6 +119,20 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             ->count();
     }
 
+    public function recordingTypeFor(int $conversationId): ?RecordingType
+    {
+        $value = (new Query($this->connection))
+            ->select('recording_type')
+            ->from(['c' => self::TABLE])
+            ->where(['c.id' => $conversationId])
+            ->limit(1)
+            ->scalar();
+
+        // The column is nullable and a missing row returns false. Both mean "no declared type", which
+        // the read model treats as a conversation — the state every pre-existing row is in.
+        return is_string($value) ? RecordingType::fromStorage($value) : null;
+    }
+
     public function storeSourceIdFor(int $conversationId): ?int
     {
         $value = (new Query($this->connection))

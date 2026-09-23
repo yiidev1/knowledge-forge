@@ -10,6 +10,7 @@ use App\AudioToText\Domain\Speaker\MergeDirection;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\Speaker\SpeakerMarkers;
 use App\AudioToText\Domain\Speaker\SplitPoint;
+use App\AudioToText\Domain\Speaker\TranscriptVoice;
 use App\AudioToText\Domain\Speaker\TurnLineage;
 use App\AudioToText\Domain\Speaker\TurnTiming;
 use App\AudioToText\Domain\SpeakerRole;
@@ -49,6 +50,13 @@ final readonly class ReviewPageView
         public ?string $confirmBlockedReason,
         /** The `review_count` every form on the page carries, and the service checks. */
         public int $version,
+        /**
+         * The speaker this whole recording is, when the upload named one.
+         *
+         * Null for a conversation, which is the case every screen was built for. When it is set there
+         * is no other speaker, so `canConfirm` is false and no turn offers a move.
+         */
+        public ?TranscriptVoice $voice = null,
     ) {}
 
     /**
@@ -60,6 +68,7 @@ final readonly class ReviewPageView
         ReviewedConversationTurns $turns,
         ?string $confirmedByUsername = null,
         array $lineages = [],
+        ?TranscriptVoice $voice = null,
     ): self {
         $views = [];
 
@@ -98,6 +107,23 @@ final readonly class ReviewPageView
         $confirmedAt = $job->rolesConfirmedAt;
         $hasBothRoles = $turns->hasBothRoles();
 
+        // A recording whose speaker was named at upload time has nothing to confirm and nowhere to
+        // move a turn to. Both controls are withheld here rather than hidden in a template, so no
+        // screen can offer an operation this recording has no meaning for.
+        if ($voice !== null) {
+            return new self(
+                $views,
+                $job->isReviewed(),
+                true,
+                $confirmedAt,
+                $confirmedAt === null ? null : $confirmedByUsername,
+                false,
+                null,
+                $job->reviewCount,
+                $voice,
+            );
+        }
+
         return new self(
             $views,
             $job->isReviewed(),
@@ -109,6 +135,7 @@ final readonly class ReviewPageView
             $confirmedAt === null && !$conversation->rolesPublished && $hasBothRoles,
             self::blockedReason($confirmedAt !== null, $conversation->rolesPublished, $hasBothRoles),
             $job->reviewCount,
+            null,
         );
     }
 

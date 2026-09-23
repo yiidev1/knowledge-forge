@@ -62,6 +62,9 @@ final readonly class Action
 
                 $this->review->moveText($publicId, $adminId, $index, $selection, $role, $hint, $version);
             },
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 }

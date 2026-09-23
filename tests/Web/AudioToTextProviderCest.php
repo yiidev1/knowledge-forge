@@ -252,22 +252,20 @@ final class AudioToTextProviderCest
     // ------------------------------------------------------------------------ the upload forms
 
     /**
-     * **The field is always there, in all three forms.**
+     * **The field is always there.**
      *
      * It used to disappear when only one provider was usable — which is the normal state of this test
      * environment. That hid which engine an upload would use, and made a broken install look identical
      * to a single-provider one.
      */
-    public function allUploadFormsAlwaysRenderTheProviderField(WebTester $I): void
+    public function theUploadFormAlwaysRendersTheProviderField(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage($this->storeUrl());
         $I->seeResponseCodeIs(200);
 
-        $I->seeElement('#a2t-common-form select[name="transcription_provider"]#a2t-common-provider');
-        $I->seeElement('#a2t-caller-form select[name="transcription_provider"]#a2t-caller-provider');
-        $I->seeElement('#a2t-callee-form select[name="transcription_provider"]#a2t-callee-provider');
+        $I->seeElement('#a2t-upload-form select[name="transcription_provider"]#a2t-provider');
         $I->see('Transcription provider');
     }
 
@@ -284,10 +282,8 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
 
-        $I->seeElement('#a2t-common-provider option[value="DEEPGRAM"][disabled]');
-        $I->seeElement('#a2t-caller-provider option[value="DEEPGRAM"][disabled]');
-        $I->seeElement('#a2t-callee-provider option[value="DEEPGRAM"][disabled]');
-        $I->seeElement('#a2t-common-provider option[value="WHISPER"]:not([disabled])');
+        $I->seeElement('#a2t-provider option[value="DEEPGRAM"][disabled]');
+        $I->seeElement('#a2t-provider option[value="WHISPER"]:not([disabled])');
 
         $I->see('Not configured');
         $I->see('Deepgram is not currently configured on this server.');
@@ -308,15 +304,13 @@ final class AudioToTextProviderCest
     }
 
     /** The global default is what all three forms start on — the `providerIsUsable(default)` branch. */
-    public function allFormsPreselectTheGlobalDefault(WebTester $I): void
+    public function theUploadFormPreselectsTheGlobalDefault(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage($this->storeUrl());
 
-        $I->seeElement('#a2t-common-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-caller-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-callee-provider option[value="WHISPER"][selected]');
+        $I->seeElement('#a2t-provider option[value="WHISPER"][selected]');
     }
 
     // ------------------------------------------- the default names a provider that cannot run
@@ -337,16 +331,12 @@ final class AudioToTextProviderCest
         $I->amOnPage($this->storeUrl());
         $I->seeResponseCodeIs(200);
 
-        // The field is still there, in all three forms.
-        $I->seeElement('#a2t-common-provider');
-        $I->seeElement('#a2t-caller-provider');
-        $I->seeElement('#a2t-callee-provider');
+        // The field is still there.
+        $I->seeElement('#a2t-provider');
 
         // An available provider is preselected instead — the form stays submittable.
-        $I->seeElement('#a2t-common-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-caller-provider option[value="WHISPER"][selected]');
-        $I->seeElement('#a2t-callee-provider option[value="WHISPER"][selected]');
-        $I->dontSeeElement('#a2t-common-provider option[value="DEEPGRAM"][selected]');
+        $I->seeElement('#a2t-provider option[value="WHISPER"][selected]');
+        $I->dontSeeElement('#a2t-provider option[value="DEEPGRAM"][selected]');
 
         // And it is said out loud, naming the configured default.
         $I->see('The global default is Deepgram (cloud), which is not available on this server');
@@ -365,7 +355,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         // The upload went through on the preselected, available provider …
         Assert::assertSame(['WHISPER'], $this->queuedProviders());
@@ -382,7 +372,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', ['transcription_provider' => 'DEEPGRAM']);
+        $I->submitForm('#a2t-upload-form', ['transcription_provider' => 'DEEPGRAM']);
 
         $I->see('is not configured on this server yet');
         Assert::assertSame([], $this->queuedProviders());
@@ -395,7 +385,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         Assert::assertSame(['WHISPER'], $this->queuedProviders());
     }
@@ -415,7 +405,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         Assert::assertSame($before, $this->storedDefault());
         Assert::assertSame($updatedBefore, $this->settingsUpdatedAt(), 'The settings row must not be touched.');
@@ -435,7 +425,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', ['transcription_provider' => 'DEEPGRAM']);
+        $I->submitForm('#a2t-upload-form', ['transcription_provider' => 'DEEPGRAM']);
 
         $I->see('is not configured on this server yet');
         Assert::assertSame([], $this->queuedProviders(), 'Nothing may be queued for a provider that cannot run.');
@@ -447,7 +437,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', ['transcription_provider' => 'GOOGLE']);
+        $I->submitForm('#a2t-upload-form', ['transcription_provider' => 'GOOGLE']);
 
         $I->see('Choose one of the listed transcription providers');
         Assert::assertSame([], $this->queuedProviders());
@@ -473,7 +463,7 @@ final class AudioToTextProviderCest
 
         $I->amOnPage($this->storeUrl());
         $I->attachFile('#a2t-audio', 'kf_provider_valid.wav');
-        $I->submitForm('#a2t-common-form', []);
+        $I->submitForm('#a2t-upload-form', []);
 
         $I->amOnPage('/audio-to-text/job/' . $this->firstJobPublicId());
         $I->see('Transcribed by');
@@ -497,7 +487,7 @@ final class AudioToTextProviderCest
         $I->amOnPage($this->storeUrl());
 
         try {
-            $I->seeElement('#a2t-common-provider option[disabled]');
+            $I->seeElement('#a2t-provider option[disabled]');
         } catch (\Throwable) {
             Assert::markTestSkipped(
                 'Every transcription provider is configured on this machine, so there is no '

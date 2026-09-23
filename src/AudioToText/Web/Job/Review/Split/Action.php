@@ -41,6 +41,9 @@ final readonly class Action
             $publicId,
             'Turn split. Both halves keep the original turn\'s approximate timing.',
             fn() => $this->review->split($publicId, $adminId, $index, $offset, $version),
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 }

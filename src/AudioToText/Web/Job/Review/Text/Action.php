@@ -41,6 +41,9 @@ final readonly class Action
             $publicId,
             'Wording corrected. The original transcript is unchanged.',
             fn() => $this->review->editText($publicId, $adminId, $index, $text, $version),
+            // Passed so the shared shell can answer in the modal's language when asked; an
+            // ordinary submission still gets the flash and the redirect.
+            $request,
         );
     }
 }

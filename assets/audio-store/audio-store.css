@@ -5,7 +5,6 @@
 .a2t-uploads__heading h2 { margin: 0; font-size: 1.25rem; letter-spacing: -.025em; }
 .a2t-uploads__heading h2 + p { margin: .3rem 0 0; font-size: .88rem; color: var(--text-muted); }
 .a2t-uploads__limit { flex-shrink: 0; padding: .4rem .75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-muted); font-size: .75rem; }
-.a2t-uploads__grid { display: grid; grid-template-columns: repeat(3, minmax(290px, 1fr)); gap: 1.1rem; overflow-x: auto; padding: 3px 3px .75rem; }
 .a2t-upload-card { display: flex; flex-direction: column; min-width: 0; padding: 1.3rem; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .a2t-upload-card__header { display: flex; align-items: flex-start; gap: .8rem; min-height: 6.1rem; }
 .a2t-upload-card__icon { flex: 0 0 38px; display: grid; place-items: center; height: 38px; border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); color: var(--primary); }
@@ -148,5 +147,297 @@
 }
 @media (max-width: 600px) {
     .a2t-uploads__heading { align-items: flex-start; flex-direction: column; }
-    .a2t-uploads__grid { grid-template-columns: repeat(3, 100%); gap: .85rem; }
+}
+
+/* ==================================================================================================
+   The store page as a list of ORDERS.
+
+   One row per order, its recordings in three columns, and everything that used to be a separate page
+   behind a dialog. What follows is only this page's layout: the dialog shell, the badges, the buttons
+   and the table frame all come from admin.css and are arranged here, not redefined.
+   ================================================================================================== */
+
+/* Scoped to this table on purpose: `a2t-col-status` is also the jobs listing's status column, and a
+   bare `.a2t-table col.a2t-col-status` here would resize a table on another page. */
+.a2t-orders { table-layout: fixed; min-width: 72rem; }
+.a2t-orders col.a2t-col-order { width: 11rem; }
+.a2t-orders col.a2t-col-slot { width: auto; min-width: 8rem; }
+.a2t-orders col.a2t-col-status { width: 9rem; }
+/* Wide enough for the longest label and the longest state side by side on one line — "Common / Mixed"
+   next to "Not generated" is the pair that sets it. Narrower and the cell wrapped mid-phrase, which
+   read as two recordings where there was one. */
+.a2t-orders col.a2t-col-tts { width: 14.5rem; }
+/* Wide enough for "Generate Text to Audio" to stay on one line. */
+.a2t-orders col.a2t-col-row-actions { width: 12.5rem; }
+.a2t-orders td { vertical-align: top; }
+
+.a2t-order-id { display: block; font-weight: 650; font-size: .95rem; letter-spacing: -.01em; }
+.a2t-order-when { display: block; margin-top: .15rem; font-size: .74rem; color: var(--text-faint); }
+
+/* One recording inside a cell: a play control, a way in, and — when there are older recordings of the
+   same type — the fold that keeps them reachable. */
+.a2t-slot { display: flex; flex-direction: column; align-items: flex-start; gap: .3rem; }
+.a2t-slot__note { font-size: .74rem; color: var(--text-faint); }
+.a2t-slot__gone { font-size: .8rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* Buttons that read as links: the cell is dense, and a row of filled buttons would drown the data. */
+.a2t-slot__link, .a2t-slot__more {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    font-size: .78rem;
+    cursor: pointer;
+}
+.a2t-slot__link:hover, .a2t-slot__more:hover { text-decoration: underline; }
+.a2t-slot__more { color: var(--text-muted); }
+.a2t-cell-actions .a2t-slot__link { display: block; margin-bottom: .25rem; }
+
+/* THE PLAY CONTROL.
+   A button with a CSS triangle rather than a native <audio> element: a page of twenty orders can hold
+   sixty recordings, and sixty native players is sixty pieces of browser chrome. The shared controller
+   in audio-store.js drives them, which is also what makes "only one plays at a time" possible.
+   `data-playing` is written by that controller — never an inline style, which the CSP would drop. */
+.a2t-play {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .2rem .55rem .2rem .45rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: .78rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+.a2t-play:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.a2t-play:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.a2t-play__icon {
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 5px 0 5px 8px;
+    border-color: transparent transparent transparent var(--primary);
+}
+/* Two bars while playing — the same element, no second control to keep in step. */
+.a2t-play[data-playing] .a2t-play__icon {
+    width: 8px;
+    height: 10px;
+    border: 0;
+    background: linear-gradient(to right, var(--primary) 0 3px, transparent 3px 5px, var(--primary) 5px 8px);
+}
+.a2t-play[data-playing] { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.a2t-play--sm { padding: .2rem .4rem; }
+
+/* The legacy Customer + Agent pair, kept whole in the Mix column with its own caption rather than
+   relabelled Caller and Callee — this application has never known which side called. */
+.a2t-legacy { display: flex; flex-direction: column; gap: .35rem; }
+.a2t-legacy__tag {
+    align-self: flex-start;
+    padding: .1rem .45rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+/* One grid for the whole cell rather than a flex row per recording, so every status starts at the
+   same x whatever the label beside it is — the column reads as two columns, which is what it is. */
+.a2t-tts-list {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    align-items: center;
+    column-gap: .8rem;
+    row-gap: .3rem;
+}
+/* Neither half wraps: "Common / Mixed" and "Not generated" are each one phrase, and breaking either
+   of them across two lines is what made this column unreadable. The column is sized to fit them. */
+.a2t-tts__label { font-size: .76rem; color: var(--text-muted); white-space: nowrap; }
+.a2t-tts__state { font-size: .72rem; color: var(--text-faint); white-space: nowrap; }
+
+.a2t-empty-state {
+    display: grid;
+    place-items: center;
+    gap: .9rem;
+    padding: 2.5rem 1rem;
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 12px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    text-align: center;
+}
+.a2t-empty-state p { margin: 0; }
+
+/* ---- Dialogs ------------------------------------------------------------------------------------
+   The shell is `.source-modal` from admin.css, so these inherit the chat dialog's surface, backdrop,
+   head and close treatment. Only width and the body's scrolling are set here: a transcript must scroll
+   inside the dialog rather than making the page unusable behind it. */
+.a2t-upload-dialog, .a2t-review-dialog, .a2t-transcript-dialog, .a2t-tts-dialog, .a2t-history-dialog {
+    max-width: min(94vw, 46rem);
+    width: 100%;
+}
+.a2t-upload-dialog .source-modal__body,
+.a2t-history-dialog .source-modal__body {
+    max-height: min(70vh, 34rem);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+}
+
+/* The two conversation dialogs are sized for a conversation: wide enough that a left bubble and a
+   right one share horizontal space and the exchange reads as one thread rather than a staircase.
+   Laid out as a column so the head stays put and exactly one thing scrolls — the messages. A body
+   that scrolled too would put two bars on one dialog.
+ *
+ * `display` is set **only under `[open]`**, and that is not a detail. The user-agent stylesheet is
+ * `dialog { display: none }` / `dialog[open] { display: block }`, so an author `display` on the bare
+ * class beats the `none` and paints a *closed* dialog — which, having never entered the top layer,
+ * lays out as an absolutely positioned block after the page content with no backdrop. Sizing is safe
+ * on the bare class; `display` never is.
+ *
+ * No `height` either: a dialog that has only "Loading…" in it should be the size of that sentence,
+ * not a full-height empty panel waiting for a fetch. `max-height` caps it once it has content. */
+.a2t-review-dialog, .a2t-transcript-dialog {
+    max-width: min(84vw, 72rem);
+    max-height: min(88vh, 54rem);
+    overflow: hidden;
+}
+.a2t-review-dialog[open], .a2t-transcript-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+.a2t-review-dialog .source-modal__head, .a2t-transcript-dialog .source-modal__head { flex: 0 0 auto; }
+.a2t-review-dialog .source-modal__status,
+.a2t-transcript-dialog .source-modal__status { flex: 0 0 auto; padding: .6rem 1.1rem 0; }
+.a2t-review-dialog .a2t-tabs, .a2t-transcript-dialog .a2t-tabs { flex: 0 0 auto; }
+.a2t-review-dialog .source-modal__body,
+.a2t-transcript-dialog .source-modal__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+}
+.a2t-review-dialog .source-modal__body[hidden],
+.a2t-transcript-dialog .source-modal__body[hidden] { display: none; }
+.a2t-dialog__actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+
+.a2t-type-choice { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; }
+.a2t-type-choice .a2t-checkbox { font-size: .85rem; }
+
+/* Tabs, one per recording that actually has a transcript. The `[hidden]` companion is required, not
+   tidiness: `display: flex` on the bare class overrides the `hidden` attribute, and a single-recording
+   order would keep an empty bordered strip under its header for ever. */
+.a2t-tabs { display: flex; gap: .4rem; padding: 0 1.2rem; border-bottom: 1px solid var(--border); }
+.a2t-tabs[hidden] { display: none; }
+.a2t-tab {
+    padding: .55rem .8rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: .82rem;
+    cursor: pointer;
+}
+.a2t-tab:hover { color: var(--text); }
+.a2t-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--primary); }
+
+/* A transcript segment: time, optional speaker, text. The speaker line is omitted entirely when the
+   transcription did not establish one — an empty label would read as an unnamed speaker. */
+.a2t-seg { display: grid; grid-template-columns: 4.5rem 1fr; gap: .2rem .9rem; padding: .5rem 0; }
+.a2t-seg + .a2t-seg { border-top: 1px solid var(--border); }
+.a2t-seg__time { font-size: .74rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.a2t-seg__who { font-size: .74rem; font-weight: 650; color: var(--text-muted); }
+.a2t-seg__text { grid-column: 2; overflow-wrap: anywhere; }
+.a2t-seg--plain { grid-template-columns: 1fr; }
+.a2t-seg--plain .a2t-seg__text { grid-column: 1; white-space: pre-wrap; }
+
+.a2t-meta-line { display: flex; flex-wrap: wrap; gap: .3rem 1.1rem; margin: 0 0 .9rem; font-size: .78rem; color: var(--text-muted); }
+
+/* The generate choices: one per recording the backend says may be generated. A refused one is shown
+   with its reason rather than hidden, so the answer to "why can't I?" is on screen. */
+.a2t-tts-options { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; }
+.a2t-tts-option {
+    display: flex;
+    align-items: flex-start;
+    gap: .6rem;
+    padding: .7rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+}
+.a2t-tts-option[data-disabled] { opacity: .65; }
+.a2t-tts-option__reason { display: block; margin-top: .2rem; font-size: .74rem; color: var(--text-faint); }
+
+/* ---- The dialogs' conversation --------------------------------------------------------------
+   Almost nothing here. Both dialogs draw the conversation with `.a2t-thread` / `.a2t-turn` /
+   `.a2t-bubble` from admin.css — the same classes the correction page and the read-only conversation
+   page use — and the Details dialog adds `.a2t-review` so it also gets that page's stacked controls,
+   margin icons and green Agent tint. What is left is only what a dialog needs and a page does not. */
+
+/* `.a2t-chat__scroll` sizes itself against the viewport for a page that *is* a conversation. In a
+   dialog the shell already has a height, so the scroller takes what is left of it instead.
+ *
+ * `overflow-y` is restated, and it has to be: under 900px admin.css hands `.a2t-chat__scroll` back to
+ * ordinary document scrolling with `overflow-y: visible`, which is right for a page and wrong inside
+ * a dialog — the dialog clips at its own `overflow: hidden` and the conversation becomes unreachable.
+ * Same specificity, so this wins only because audio-store.css is loaded after admin.css. */
+.a2t-dialog-scroll {
+    max-height: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-top: .2rem;
+}
+
+/* The strip above the conversation: the same state wording and the same controls as the correction
+   page's notice, without the standing explanation — a dialog opened on one recording is not the
+   place to re-read the feature's terms. */
+.a2t-mnotice { padding: 0 0 .7rem; border-bottom: 1px solid var(--border); margin-bottom: .2rem; }
+.a2t-mnotice:empty { display: none; }
+.a2t-mnotice .a2t-review__status { margin: 0; }
+
+/* An unseparated recording is one passage, not a turn, so it keeps the paragraph breaks it was
+   transcribed with rather than being reflowed into a single run. */
+.a2t-turn__text--plain { white-space: pre-wrap; }
+
+/* The correction page reserves a 7.5rem gutter for the controls that sit beside a bubble. The Details
+   dialog inherits it and needs it; the read-only transcript has no controls, so it gives the width
+   back to the words instead. */
+.a2t-transcript-dialog .a2t-chat__scroll .a2t-thread { padding: 0 1.5rem; }
+
+/* Narrow: the shared stylesheet already drops the margin controls beneath the bubble under 760px, so
+   there is no gutter left to reserve and no reason to hold a bubble to two thirds of a phone. */
+@media (max-width: 760px) {
+    .a2t-review-dialog .a2t-chat__scroll .a2t-thread,
+    .a2t-transcript-dialog .a2t-chat__scroll .a2t-thread { padding: 0; }
+    .a2t-review-dialog .a2t-bubble,
+    .a2t-transcript-dialog .a2t-bubble { max-width: 90%; }
+    .a2t-review-dialog .a2t-turn--neutral .a2t-bubble,
+    .a2t-transcript-dialog .a2t-turn--neutral .a2t-bubble { max-width: 96%; }
+    .a2t-review-dialog, .a2t-transcript-dialog { max-width: 96vw; max-height: 92vh; }
+}
+
+.a2t-tts-option__body { display: flex; flex-direction: column; gap: .15rem; }
+.a2t-tts-option__label { font-size: .82rem; font-weight: 650; }
+.a2t-tts-option__meta { font-size: .74rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.a2t-history-row { padding: .7rem 0; border-bottom: 1px solid var(--border); }
+.a2t-history-row:last-child { border-bottom: 0; }
+.a2t-history-row__when { display: block; font-size: .8rem; font-weight: 600; }
+.a2t-history-row__meta { display: block; margin: .15rem 0 .4rem; font-size: .74rem; color: var(--text-faint); }
+
+@media (max-width: 900px) {
+    .a2t-orders { min-width: 780px; }
 }

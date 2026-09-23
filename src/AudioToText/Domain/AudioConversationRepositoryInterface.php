@@ -75,6 +75,15 @@ interface AudioConversationRepositoryInterface
     public function publicIdFor(int $conversationId): ?string;
 
     /**
+     * What this upload said it was: Mixed, Caller or Callee.
+     *
+     * Null for every row that predates recording types, and for a legacy Customer + Agent pair whose
+     * halves carry their identity in `source_role` instead. Read per conversation because the screens
+     * that need it hold a job and not its upload — the same shape as the two lookups above.
+     */
+    public function recordingTypeFor(int $conversationId): ?RecordingType;
+
+    /**
      * Whether this upload asked for clean AI audio.
      *
      * Narrow on purpose, like the two above: the workers ask this once per completed recording, and

@@ -376,6 +376,25 @@ return [
             Route::methods([Method::GET, Method::POST], '/audio-to-text/store/{sourceId:\d+}')
                 ->action(AudioToText\Job\Store\Action::class)
                 ->name(AudioToTextRoute::STORE),
+            // The data behind one row of that page. A row is an order, not an upload, so these are
+            // addressed by the group key rather than by a conversation — the Original Transcript modal
+            // shows a tab per recording of the call, and the Generate modal offers one choice per
+            // recording. Both resolve through `StoreGroupFinder`, which puts the store predicate in the
+            // query itself: a key naming another store's conversation matches nothing and answers 404,
+            // indistinguishably from a key that never existed.
+            //
+            // The pattern only keeps obvious rubbish out of the action; `GroupKey::fromInput()` is what
+            // decides whether the value is a key this application could have issued.
+            Route::get(
+                '/audio-to-text/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/transcripts',
+            )
+                ->action(AudioToText\Job\Store\Group\TranscriptsAction::class)
+                ->name(AudioToTextRoute::STORE_GROUP_TRANSCRIPTS),
+            Route::get(
+                '/audio-to-text/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/tts-options',
+            )
+                ->action(AudioToText\Job\Store\Group\TtsOptionsAction::class)
+                ->name(AudioToTextRoute::STORE_GROUP_TTS_OPTIONS),
             // One logical conversion. Declared before /job/{publicId} for the same reason /jobs is:
             // the literal segment must not be read as an id.
             Route::get('/audio-to-text/conversion/{publicId:[0-9a-f]{32}}')
@@ -441,6 +460,16 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review')
                 ->action(AudioToText\Job\Review\Action::class)
                 ->name(AudioToTextRoute::JOB_REVIEW),
+            // The same state the page above renders, as data, for the store page's Details modal. GET
+            // only and it writes nothing: the corrections it offers post to the routes below, so there
+            // is exactly one way to change a transcript however it was opened.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/fragment')
+                ->action(AudioToText\Job\Review\Fragment\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_FRAGMENT),
+            // The revision trail for one recording, rendered by the partial the page renders inline.
+            Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/history')
+                ->action(AudioToText\Job\Review\History\Action::class)
+                ->name(AudioToTextRoute::JOB_REVIEW_HISTORY),
             Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/review/turn/{index:\d+}/move')
                 ->action(AudioToText\Job\Review\Move\Action::class)
                 ->name(AudioToTextRoute::JOB_REVIEW_MOVE),

@@ -28,4 +28,25 @@ final class AudioToTextViews
     {
         return __DIR__ . '/_partial/thread';
     }
+
+    /**
+     * The move and merge confirmations, shared by the correction page and the Details dialog.
+     *
+     * Both screens offer the same two corrections, so both read the same words before making one.
+     * The dialog submits these forms by `fetch` instead of following the redirect; everything else
+     * about them — the fields, the token, the version — is identical.
+     */
+    public static function reviewConfirm(): string
+    {
+        return __DIR__ . '/_partial/review-confirm';
+    }
+
+    /**
+     * What was corrected, per message. Rendered inline by the correction page and fetched by the
+     * Details dialog, so a revision reads the same wherever it is opened.
+     */
+    public static function reviewHistory(): string
+    {
+        return __DIR__ . '/_partial/review-history';
+    }
 }
