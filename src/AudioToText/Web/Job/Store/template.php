@@ -733,6 +733,13 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         <template data-a2t-icon="move"><?= AudioToTextIcons::svg(AudioToTextIcons::GRIP, '') ?></template>
         <template data-a2t-icon="edit"><?= AudioToTextIcons::svg(AudioToTextIcons::PENCIL, '') ?></template>
         <template data-a2t-icon="history"><?= AudioToTextIcons::svg(AudioToTextIcons::CLOCK, '') ?></template>
+        <?php
+        // And the transport for the browser's own voice, from the same constants for the same reason.
+?>
+        <template data-a2t-icon="play"><?= AudioToTextIcons::svg(AudioToTextIcons::PLAY, '') ?></template>
+        <template data-a2t-icon="pause"><?= AudioToTextIcons::svg(AudioToTextIcons::PAUSE, '') ?></template>
+        <template data-a2t-icon="resume"><?= AudioToTextIcons::svg(AudioToTextIcons::RESUME, '') ?></template>
+        <template data-a2t-icon="stop"><?= AudioToTextIcons::svg(AudioToTextIcons::STOP, '') ?></template>
     </div>
     <?php
     // Where the revision dialogs land. Fetched from the same partial the correction page renders
@@ -748,6 +755,13 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
     // table with a dialog over it.
 ?>
     <div class="source-modal__body a2t-review" data-a2t-review-body hidden>
+        <?php
+        // Three ways to hear this recording, filled per recording when the dialog opens: the file that
+        // was uploaded, the audio this application generated from the transcript, and the browser
+        // reading the transcript aloud itself. They are kept apart because they are different things —
+        // one is evidence, one costs money, and one is a convenience that leaves nothing behind.
+?>
+        <div class="a2t-listen" data-a2t-listen hidden></div>
         <div class="a2t-mnotice" data-a2t-review-notice></div>
         <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
     </div>

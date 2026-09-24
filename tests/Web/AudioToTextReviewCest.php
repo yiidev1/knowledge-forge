@@ -1541,11 +1541,23 @@ final class AudioToTextReviewCest
         Assert::assertSame(
             [
                 'version', 'isReviewed', 'rolesPublished', 'canConfirm', 'confirmBlockedReason',
-                'confirmedLine', 'voice', 'filename', 'provider', 'turns', 'urls',
+                'confirmedLine', 'voice', 'audio', 'filename', 'provider', 'turns', 'urls',
             ],
             array_keys($payload),
         );
         Assert::assertSame(['full', 'confirm', 'revert', 'history'], array_keys($payload['urls']));
+
+        // The three ways to hear this recording. The browser's own voice needs nothing from here.
+        Assert::assertSame(['original', 'generated'], array_keys($payload['audio']));
+        Assert::assertSame(['available', 'url'], array_keys($payload['audio']['original']));
+        Assert::assertStringEndsWith('/original/file', (string) $payload['audio']['original']['url']);
+        Assert::assertSame(
+            [
+                'state', 'label', 'title', 'playable', 'playUrl', 'canGenerate', 'buttonLabel',
+                'reason', 'action', 'outputType', 'expectedHash',
+            ],
+            array_keys($payload['audio']['generated']),
+        );
 
         /** @var list<array<string, mixed>> $turns */
         $turns = $payload['turns'];
@@ -1658,6 +1670,153 @@ final class AudioToTextReviewCest
         $I->seeCurrentUrlEquals('/login');
     }
 
+    /**
+     * What the browser would read aloud is the corrected wording, not the machine's.
+     *
+     * The system-audio voice speaks the rendered bubbles, so "which text gets spoken" is decided here,
+     * by what the fragment puts in a turn. This corrects a word and then asserts the fragment has
+     * forgotten the original — the same guarantee the screen relies on, asserted where the voice reads.
+     */
+    public function theFragmentExposesTheCorrectedWordingForReadingAloud(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/review/turn/0/text', [
+            '_csrf' => $this->csrfToken($I),
+            'expected_review_count' => '0',
+            'text' => 'Yes. For pickup or delivery?',
+        ]);
+        $I->seeResponseCodeIs(200);
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+        $first = $payload['turns'][0];
+
+        Assert::assertSame('Yes. For pickup or delivery?', $first['text']);
+        // `display` is what the bubble renders and therefore what is spoken; it must not fall back to
+        // the machine wording once a correction exists.
+        Assert::assertStringContainsString('pickup', (string) ($first['display'] ?? $first['text']));
+        Assert::assertStringNotContainsString('pikup', json_encode($payload['turns'], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * The dialog offers this recording's own file, and never another's.
+     *
+     * The address is the job's public id, so "which recording" is not a field a request can set —
+     * but the dialog is what puts the address on screen, and this is the assertion that it puts the
+     * right one there.
+     */
+    public function theAudioPanelNamesThisRecordingsOwnOriginal(WebTester $I): void
+    {
+        $publicId = $this->seed();
+        $other = $this->seed();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame(
+            '/audio-to-text/job/' . $publicId . '/original/file',
+            $payload['audio']['original']['url'],
+        );
+        Assert::assertStringNotContainsString($other, (string) $payload['audio']['original']['url']);
+    }
+
+    /** A recording whose file retention has passed says so rather than offering a dead player. */
+    public function theAudioPanelReportsAMissingOriginal(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['retained_audio_path' => null],
+            ['public_id' => $publicId],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertFalse($payload['audio']['original']['available']);
+    }
+
+    /**
+     * The generated half is the AI audio page's own verdict, not a second opinion.
+     *
+     * Asserted through the states rather than the wording: what matters is that a recording with
+     * nothing generated offers the paid button, and that one with an attempt outstanding does not —
+     * the rule that stops a double press becoming two charges.
+     */
+    public function theAudioPanelFollowsTheExistingGenerationRules(WebTester $I): void
+    {
+        $publicId = $this->seed();
+        $this->signIn($I);
+
+        $read = function () use ($I, $publicId): array {
+            $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+            /** @var array<string, mixed> $payload */
+            $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+            return $payload['audio']['generated'];
+        };
+
+        $before = $read();
+        Assert::assertSame('NotGenerated', $before['state']);
+        Assert::assertTrue($before['canGenerate'], 'Nothing generated yet, so the button is offered.');
+        Assert::assertSame('Generate', $before['buttonLabel']);
+        Assert::assertFalse($before['playable']);
+        Assert::assertNull($before['playUrl']);
+        // The two fields the browser echoes back, both named by the server.
+        Assert::assertSame('MIXED', $before['outputType']);
+        Assert::assertSame(64, strlen((string) $before['expectedHash']));
+
+        // An attempt is now outstanding.
+        $this->queueRendition($publicId, 'QUEUED');
+        $queued = $read();
+        Assert::assertSame('Queued', $queued['state']);
+        Assert::assertFalse($queued['canGenerate'], 'A second press must not become a second charge.');
+        Assert::assertSame('A generation is already under way.', $queued['reason']);
+
+        // And while a worker is mid-flight.
+        $this->queueRendition($publicId, 'GENERATING');
+        $running = $read();
+        Assert::assertSame('Generating', $running['state']);
+        Assert::assertFalse($running['canGenerate']);
+    }
+
+    /** A recording whose speakers are not known keeps the existing gate, with its existing remedy. */
+    public function theAudioPanelKeepsTheSpeakerGate(WebTester $I): void
+    {
+        $publicId = $this->seed();
+
+        // The state the gate exists for: a mixed recording the pipeline could not publish.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['speaker_separation_status' => 'NEEDS_REVIEW', 'roles_confirmed_at' => null],
+            ['public_id' => $publicId],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+        $generated = $payload['audio']['generated'];
+
+        Assert::assertSame('Blocked', $generated['state']);
+        Assert::assertFalse($generated['canGenerate'], 'No synthetic voice for a speaker nobody named.');
+        Assert::assertStringContainsString('Confirm the speakers', (string) $generated['reason']);
+    }
+
     /** A guest gets the login page, not a transcript. */
     public function theDetailsFragmentIsBehindTheAdministratorGate(WebTester $I): void
     {
@@ -1666,6 +1825,44 @@ final class AudioToTextReviewCest
         $I->resetCookie(self::SESSION_COOKIE);
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review/fragment');
         $I->seeCurrentUrlEquals('/login');
+    }
+
+    /** Put a rendition in one state, the way the queue and the worker each would. */
+    private function queueRendition(string $publicId, string $status): void
+    {
+        $jobId = (new Query($this->connection))
+            ->select('id')
+            ->from('{{%audio_transcription_jobs}}')
+            ->where(['public_id' => $publicId])
+            ->scalar();
+
+        $now = gmdate('Y-m-d H:i:s');
+        $existing = (new Query($this->connection))
+            ->from('{{%audio_tts_renditions}}')
+            ->where(['job_id' => $jobId, 'output_type' => 'MIXED'])
+            ->exists();
+
+        if ($existing) {
+            $this->connection->createCommand()->update(
+                '{{%audio_tts_renditions}}',
+                ['status' => $status, 'updated_at' => $now],
+                ['job_id' => $jobId, 'output_type' => 'MIXED'],
+            )->execute();
+
+            return;
+        }
+
+        $this->connection->createCommand()->insert('{{%audio_tts_renditions}}', [
+            'job_id' => $jobId,
+            'output_type' => 'MIXED',
+            'status' => $status,
+            'attempt_token' => bin2hex(random_bytes(16)),
+            'requested_hash' => str_repeat('0', 64),
+            'provider' => 'DEEPGRAM',
+            'attempts' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
     }
 
     private function signIn(WebTester $I): void

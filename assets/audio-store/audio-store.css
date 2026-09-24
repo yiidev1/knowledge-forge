@@ -275,6 +275,95 @@
 }
 .a2t-empty-state p { margin: 0; }
 
+/* ---- Listening to one recording ---------------------------------------------------------------
+   Three rows, not three cards: the dialog is about a transcript, and the audio is what you reach for
+   while reading it. Each row is a label and its controls, so the three read as one small block. */
+/* One toolbar, not three sections. The transcript is what this dialog is for, so the three ways of
+   hearing the recording sit on a single line above it and give the conversation the rest of the
+   height. Laid out as a grid rather than a wrapping flex row because where the groups break matters:
+   a wrapped group that keeps the divider it had when it was second in a row looks like a mistake, and
+   media queries move both the columns and the dividers together. */
+.a2t-listen {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: .5rem 1.05rem;
+    padding-bottom: .55rem;
+    margin-bottom: .2rem;
+    border-bottom: 1px solid var(--border);
+}
+.a2t-listen[hidden] { display: none; }
+/* The caption sits beside its controls, not above them: a line per label is a line the transcript
+   does not get. */
+.a2t-listen__group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.a2t-listen__group + .a2t-listen__group { border-left: 1px solid var(--border-strong); padding-left: 1.05rem; }
+.a2t-listen__label {
+    font-size: .72rem;
+    font-weight: 650;
+    letter-spacing: .01em;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.a2t-listen__row { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .45rem; min-width: 0; flex: 1 1 auto; }
+/* The native player, cut down from its own 300px default to about the narrowest Chrome still draws a
+   usable scrubber at. Narrower than this and the timeline collapses to a stub, which costs more than
+   the space it saves. `min-width` is not belt-and-braces: a percentage width inside a `min-width: 0`
+   flex row resolves to nothing at all, which is a player that is present, focusable and 0px wide. */
+.a2t-listen audio { height: 32px; width: 15rem; min-width: 11rem; max-width: 100%; }
+.a2t-listen__note { font-size: .73rem; color: var(--text-faint); line-height: 1.3; }
+.a2t-listen__state { font-size: .73rem; color: var(--text-muted); white-space: nowrap; }
+/* The dot is decoration and lives in CSS, so the element's text stays the single word a screen
+   reader announces — and the word is what carries the meaning, not the colour. */
+.a2t-listen__status::before {
+    content: "";
+    display: inline-block;
+    width: .4rem;
+    height: .4rem;
+    margin-right: .3rem;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: .05em;
+}
+.a2t-listen__rate { width: auto; min-width: 4.2rem; padding: .16rem .3rem; font-size: .73rem; }
+/* Squarer and a touch smaller than the round tools beside a bubble: these are a transport, read as a
+   block of four, and four circles in a row reads as four separate things. */
+.a2t-listen .a2t-iconbtn { width: 32px; height: 32px; border-radius: 8px; }
+.a2t-listen .a2t-iconbtn + .a2t-iconbtn { margin-left: -.05rem; }
+/* The paid actions keep their words. An icon cannot say "this will call a provider". */
+.a2t-listen .btn { white-space: nowrap; }
+
+/* Two rows: the players share the first, the voice takes the second. The divider between the two
+   players stays; the one that would now start a row is removed. */
+@media (max-width: 1150px) {
+    .a2t-listen { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+    /* Matched as a sibling, not by the modifier alone: the divider rule above is also a sibling
+       selector, and a one-class selector loses to it however much later it is written. */
+    .a2t-listen__group + .a2t-listen__group--speech { grid-column: 1 / -1; border-left: 0; padding-left: 0; }
+}
+
+/* Stacked, and no dividers at all: a border-left on a full-width row is a stray vertical line. */
+@media (max-width: 720px) {
+    .a2t-listen { grid-template-columns: minmax(0, 1fr); }
+    .a2t-listen__group + .a2t-listen__group { border-left: 0; padding-left: 0; }
+    .a2t-listen__group--speech { grid-column: auto; }
+    /* Full width now there is a row to fill, but never below the width the controls need. */
+    .a2t-listen audio { width: 100%; }
+    .a2t-listen__label { min-width: 4.6rem; }
+}
+
+/* The turn being read aloud. A tint rather than an outline: the bubble already uses its border to say
+   whether the speaker is settled, and this must not be mistaken for that. */
+.a2t-turn--speaking .a2t-bubble {
+    --a2t-bubble-bg: color-mix(in srgb, var(--primary) 22%, var(--surface));
+    box-shadow: 0 0 0 1px var(--primary);
+}
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+    .a2t-turn--speaking .a2t-bubble { box-shadow: 0 0 0 1px var(--primary); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .a2t-turn--speaking .a2t-bubble { transition: none; }
+}
+
 /* An in-page action's answer, where a page load would otherwise have carried a flash. */
 .a2t-notice { margin: 0 0 1rem; }
 .a2t-notice[hidden] { display: none; }
@@ -309,7 +398,10 @@
  * No `height` either: a dialog that has only "Loading…" in it should be the size of that sentence,
  * not a full-height empty panel waiting for a fetch. `max-height` caps it once it has content. */
 .a2t-review-dialog, .a2t-transcript-dialog {
-    max-width: min(84vw, 72rem);
+    /* Widened by a step, and only a step: enough that the audio toolbar's three groups fit on one
+       line beside each other, still short of the screen edge so the page behind stays visible and the
+       dialog reads as a dialog. */
+    max-width: min(88vw, 78rem);
     max-height: min(88vh, 54rem);
     overflow: hidden;
 }

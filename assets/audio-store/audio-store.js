@@ -1317,6 +1317,486 @@
         return controls;
     }
 
+    /* ---- Listening to one recording -------------------------------------------------------- */
+
+    var listen = document.querySelector('[data-a2t-listen]');
+    var listenBusy = false;
+    var lastAudio = null;   // the audio block from the last read, for the Generate button
+
+    /**
+     * One group of the toolbar: a caption and its controls, side by side on one line.
+     *
+     * A group rather than a row, because the three of them sit beside each other on a wide screen and
+     * only stack when there is genuinely no room. The caption is inside the group rather than in a
+     * column of its own, so a stacked layout does not leave a ragged gutter where the widest label was.
+     */
+    function listenGroup(label, controls, modifier) {
+        var group = el('div', 'a2t-listen__group' + (modifier ? ' a2t-listen__group--' + modifier : ''));
+        group.appendChild(el('span', 'a2t-listen__label', label));
+        var row = el('div', 'a2t-listen__row');
+        controls.forEach(function (node) { row.appendChild(node); });
+        group.appendChild(row);
+        listen.appendChild(group);
+    }
+
+    function player(url) {
+        var audio = document.createElement('audio');
+        audio.controls = true;
+        // Metadata only: a dialog may be opened on a recording nobody presses play on, and fetching
+        // several megabytes to find that out would be paid for in somebody's bandwidth.
+        audio.preload = 'metadata';
+        audio.src = url;
+        return audio;
+    }
+
+    /**
+     * The three ways to hear this recording, drawn from what the server decided.
+     *
+     * Nothing here works out whether a rendition is stale, whether a paid button may be shown, or
+     * what to call a state: those are `AiAudioPage`'s answers, arriving as data. This places them.
+     */
+    function paintListen(data) {
+        if (!listen) {
+            return;
+        }
+
+        empty(listen);
+        var audio = data.audio || {};
+        lastAudio = audio;
+
+        // 1. The file somebody uploaded. Served by the existing route, which resolves the stored
+        //    name through the one path builder for retained recordings.
+        if (audio.original && audio.original.available) {
+            listenGroup('Original', [player(audio.original.url)]);
+        } else {
+            listenGroup('Original', [
+                el('span', 'a2t-listen__note', 'Unavailable.'),
+            ]);
+        }
+
+        // 2. The audio this application generated from the transcript.
+        listenGroup('AI audio', generatedControls(audio.generated));
+
+        // 3. The browser reading the transcript aloud. Costs nothing and leaves nothing behind.
+        listenGroup('System', speechControls(), 'speech');
+
+        listen.hidden = false;
+    }
+
+    /**
+     * @return {Array} the controls for whatever state the generated audio is in
+     */
+    function generatedControls(generated) {
+        if (!generated) {
+            return [el('span', 'a2t-listen__note', 'This recording cannot produce AI audio.')];
+        }
+
+        var controls = [];
+
+        // Playable first, and playable in every state that has a file: stale audio and audio made
+        // with an older voice are both still audio, and taking them away would be the one thing an
+        // administrator cannot undo without paying again.
+        if (generated.playable && generated.playUrl) {
+            controls.push(player(generated.playUrl));
+        }
+
+        // The state in the server's own words — "Stale", "Queued", "Generating", "Failed". Skipped
+        // for a recording that simply has no audio yet: the button beside it already says "Generate",
+        // and "Not generated / Generate AI audio" is the same sentence twice in a toolbar built to
+        // save room. Every other state says something the button does not.
+        if ((!generated.playable || generated.state !== 'Ready') && generated.state !== 'NotGenerated') {
+            controls.push(el('span', 'a2t-listen__state', generated.label));
+        }
+
+        if (generated.canGenerate) {
+            // Words, never an icon: this one reaches a paid provider, and no glyph says that. The
+            // secondary variant keeps it part of the toolbar rather than the brightest thing in the
+            // dialog, without making it look like anything less than a button.
+            var button = el('button', 'btn btn--sm btn--secondary', generated.buttonLabel + ' AI audio');
+            button.type = 'button';
+            button.setAttribute('data-a2t-listen-generate', '');
+            controls.push(button);
+        } else if (generated.reason) {
+            controls.push(el('span', 'a2t-listen__note', generated.reason));
+        }
+
+        return controls;
+    }
+
+    /**
+     * Ask for this recording's AI audio from inside the dialog.
+     *
+     * The same endpoint, the same fields and the same JSON answer the Generate dialog uses — the
+     * server names the output type and the digest, and revalidates both. Nothing about eligibility,
+     * cost protection or duplicate suppression is decided here; pressing this reaches
+     * `TtsGenerationService::enqueue()` exactly as every other trigger does.
+     */
+    function generateFromListen(button) {
+        if (listenBusy || reviewToken === null || lastAudio === null || !lastAudio.generated) {
+            return;
+        }
+
+        var generated = lastAudio.generated;
+        var label = button.textContent;
+        listenBusy = true;
+        button.disabled = true;
+        button.textContent = 'Queuing…';
+
+        var body = new URLSearchParams();
+        body.set('output_type', generated.outputType);
+        body.set('expected_hash', generated.expectedHash);
+
+        fetch(generated.action, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-CSRF-Token': reviewToken.value
+            },
+            body: body.toString()
+        }).then(function (response) {
+            return response.json().then(
+                function (data) { return data; },
+                function () {
+                    return { success: false, message: 'The server could not confirm this request.' };
+                }
+            );
+        }).then(function (data) {
+            listenBusy = false;
+            button.disabled = false;
+            button.textContent = label;
+            say(reviewStatus, data.message);
+
+            // Re-read rather than guess: the state the panel shows next is the server's, and a
+            // refusal leaves the panel exactly as it was.
+            if (data.success) {
+                renderReview(data.message, reviewScroll ? reviewScroll.scrollTop : 0);
+            }
+        }).catch(function () {
+            listenBusy = false;
+            button.disabled = false;
+            button.textContent = label;
+            say(reviewStatus, 'Connection interrupted. Nothing was queued — try again.');
+        });
+    }
+
+    /* ---- System audio: the browser's own voice ---------------------------------------------- */
+
+    // The one authoritative gap between two spoken messages. Named, and named once: the pause is a
+    // reading decision, and a reading decision scattered across three call sites is three decisions.
+    var SYSTEM_AUDIO_GAP_MS = 1500;
+
+    // Every piece of playback state, in one place, so Stop and a closing dialog have one thing to
+    // clear. `timer` is the gap between messages and is cancelled alongside the speech — without
+    // that, pausing during a gap would let the next line start anyway.
+    //
+    // `phase` is this module's own answer to "where is playback right now", and it exists because the
+    // browser's is not trustworthy for it. `speechSynthesis.speaking` and `.paused` disagree between
+    // engines — and, more to the point, there is a real moment when playback is *between* two
+    // utterances, which the browser cannot describe at all because as far as it is concerned nothing
+    // is happening. Pause has to behave differently in that moment, so the moment has to be named:
+    //
+    //   'idle'      nothing started, or everything torn down
+    //   'speaking'  an utterance is with the engine     (+ paused -> PAUSED_WHILE_SPEAKING)
+    //   'gap'       between two messages, timer pending (+ paused -> PAUSED_DURING_GAP)
+    //   'finished'  the last message was read to its end
+    //
+    // The browser's own flags are still used — but to *drive* the engine, never to decide what should
+    // happen next.
+    var speech = {
+        index: 0,
+        turns: [],
+        timer: null,
+        playing: false,
+        paused: false,
+        phase: 'idle',
+        status: null
+    };
+    var speechSupported = typeof window.speechSynthesis !== 'undefined'
+        && typeof window.SpeechSynthesisUtterance === 'function';
+
+    function speechControls() {
+        if (!speechSupported) {
+            return [el(
+                'span',
+                'a2t-listen__note',
+                'System voice playback is not available in this browser.'
+            )];
+        }
+
+        var controls = [];
+
+        // Icon-only, because Play/Pause/Resume/Stop are the four glyphs every transport in the world
+        // already uses, and four words here would cost more width than the players beside them. Each
+        // one is still named twice — `title` for a pointer, `aria-label` for a screen reader — since
+        // an icon with no name is a button that only its author can use.
+        [
+            { op: 'play', title: 'Play', label: 'Play system audio' },
+            { op: 'pause', title: 'Pause', label: 'Pause system audio' },
+            { op: 'resume', title: 'Resume', label: 'Resume system audio' },
+            { op: 'stop', title: 'Stop', label: 'Stop system audio' }
+        ].forEach(function (action) {
+            var button = iconButton(action.op, action.title);
+            button.setAttribute('data-a2t-speak', action.op);
+            // `aria-label` is the accessible name now, so the helper's hidden span would be a second
+            // one saying something shorter. Removed rather than left to be ignored.
+            button.setAttribute('aria-label', action.label);
+            var hidden = button.querySelector('.a2t-sr');
+            if (hidden) {
+                hidden.remove();
+            }
+            controls.push(button);
+        });
+
+        var rate = document.createElement('select');
+        rate.className = 'field__control a2t-listen__rate';
+        rate.setAttribute('data-a2t-speak-rate', '');
+        rate.setAttribute('aria-label', 'Reading speed');
+        [['0.75', '0.75×'], ['1', '1×'], ['1.25', '1.25×']].forEach(function (choice) {
+            var option = document.createElement('option');
+            option.value = choice[0];
+            option.textContent = choice[1];
+            // 1× unless the reader chose otherwise earlier in this session.
+            option.selected = choice[0] === String(speechRate);
+            rate.appendChild(option);
+        });
+        controls.push(rate);
+
+        // A word, not a control: muted, and carrying its dot in CSS so what a screen reader reads and
+        // what this element's text says stay the one word.
+        speech.status = el('span', 'a2t-listen__state a2t-listen__status', 'Ready');
+        speech.status.setAttribute('role', 'status');
+        speech.status.setAttribute('aria-live', 'polite');
+        controls.push(speech.status);
+
+        return controls;
+    }
+
+    // Kept for the page's lifetime only, never stored: it is a reading preference for this sitting.
+    var speechRate = 1;
+
+    function speechSay(state) {
+        if (speech.status) {
+            speech.status.textContent = state;
+        }
+    }
+
+    /** Clear the highlight from whichever turn had it. */
+    function speechUnmark() {
+        if (!reviewScroll) {
+            return;
+        }
+        Array.from(reviewScroll.querySelectorAll('.a2t-turn--speaking')).forEach(function (turn) {
+            turn.classList.remove('a2t-turn--speaking');
+        });
+    }
+
+    /**
+     * Stop everything: the utterance being spoken, the gap waiting to start the next one, the mark.
+     *
+     * Called by Stop, by a dialog closing, and before any new playback starts. One function, because
+     * three near-identical teardowns is how a stray timer survives a closed dialog and starts talking
+     * over the next recording.
+     */
+    function speechStop() {
+        clearTimeout(speech.timer);
+        speech.timer = null;
+        speech.playing = false;
+        speech.paused = false;
+        speech.phase = 'idle';
+        speech.index = 0;
+        speech.turns = [];
+        speechUnmark();
+
+        if (speechSupported) {
+            window.speechSynthesis.cancel();
+            // `cancel()` empties the queue but does not lift a pause, and an engine left paused
+            // accepts the next `speak()` without ever playing it. So a reading stopped while paused
+            // would silently poison every later one — including the next recording's, and the next
+            // dialog's. Lifted here, where every teardown already passes.
+            if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
+        }
+
+        speechSay('Ready');
+    }
+
+    /**
+     * The messages as they stand on screen, in the order they are drawn.
+     *
+     * Read out of the rendered bubbles rather than out of the payload, and that is the whole rule:
+     * what is spoken is what the administrator is looking at, corrections included. Nothing else in
+     * the bubble is taken — not the speaker name, not the timing, not the edited flag — because none
+     * of it was said out loud by anybody.
+     */
+    function speechCollect() {
+        if (!reviewScroll) {
+            return [];
+        }
+
+        return Array.from(reviewScroll.querySelectorAll('[data-a2t-turn]'))
+            .map(function (turn) {
+                var body = turn.querySelector('[data-a2t-text]');
+
+                return { turn: turn, text: body ? body.textContent.trim() : '' };
+            })
+            .filter(function (entry) { return entry.text !== ''; });
+    }
+
+    function speechNext() {
+        if (!speech.playing || speech.paused) {
+            return;
+        }
+
+        if (speech.index >= speech.turns.length) {
+            speechUnmark();
+            speech.playing = false;
+            speech.phase = 'finished';
+            speech.timer = null;
+            speechSay('Finished');
+
+            return;
+        }
+
+        var entry = speech.turns[speech.index];
+        speechUnmark();
+        entry.turn.classList.add('a2t-turn--speaking');
+
+        // Only when it is not already on screen, and gently: a reader scrolling back through a call
+        // should not be dragged forward by the line being read.
+        if (typeof entry.turn.scrollIntoView === 'function') {
+            var box = entry.turn.getBoundingClientRect();
+            var frame = reviewScroll.getBoundingClientRect();
+
+            if (box.top < frame.top || box.bottom > frame.bottom) {
+                entry.turn.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        var utterance = new window.SpeechSynthesisUtterance(entry.text);
+        utterance.rate = speechRate;
+        utterance.onend = function () {
+            // A cancelled utterance also ends. `playing` is already false by then, so a teardown
+            // cannot advance the index on its way out.
+            if (!speech.playing) {
+                return;
+            }
+            // The one place the index moves, and it moves once per utterance that reached its end.
+            // Neither Pause nor Resume touches it: a held line has not ended, so it has not counted.
+            speech.index++;
+            speech.phase = 'gap';
+            // The gap between messages. Held in `speech.timer` so Pause and Stop can cancel it —
+            // a pause during the gap must not let the next line start anyway.
+            speech.timer = setTimeout(speechNext, SYSTEM_AUDIO_GAP_MS);
+        };
+        utterance.onerror = function () {
+            speechStop();
+            speechSay('Stopped');
+        };
+
+        speech.phase = 'speaking';
+        window.speechSynthesis.speak(utterance);
+        speechSay('Speaking');
+    }
+
+    function speechPlay() {
+        if (!speechSupported) {
+            return;
+        }
+
+        // Already reading: a second press changes nothing. Restarting would throw away the reader's
+        // place for a press they almost certainly did not mean, and Stop is next to it if they did.
+        if (speech.playing && !speech.paused) {
+            return;
+        }
+
+        // Whatever was talking — a paused session, or the last dialog's — stops first. Two queues at
+        // once is the failure this guards against, and the browser's own queue would allow it.
+        speechStop();
+
+        speech.turns = speechCollect();
+
+        if (speech.turns.length === 0) {
+            speechSay('Nothing to read');
+
+            return;
+        }
+
+        speech.playing = true;
+        speech.index = 0;
+        speechNext();
+    }
+
+    /**
+     * Hold playback where it is — which is two different places, handled two different ways.
+     *
+     * Mid-utterance the engine is holding a line and its position within it, so the engine is what
+     * pauses. Mid-gap it is holding nothing: pausing it there would be pausing an idle engine, and an
+     * idle engine that has been paused still refuses the *next* `speak()` — it queues the utterance
+     * and never plays it. That was the bug. So in the gap only our own timer is cancelled and the
+     * engine is left untouched.
+     *
+     * The index is not moved either way. A held line has not ended, so it has not counted.
+     */
+    function speechPause() {
+        if (!speech.playing || speech.paused) {
+            return;
+        }
+
+        speech.paused = true;
+
+        if (speech.phase === 'gap') {
+            // Nothing is being spoken. Cancel only the pending start of the next line.
+            clearTimeout(speech.timer);
+            speech.timer = null;
+        } else {
+            window.speechSynthesis.pause();
+        }
+
+        speechSay('Paused');
+    }
+
+    /**
+     * Carry on from wherever the pause landed, decided by our own phase rather than the engine's.
+     *
+     * `speechSynthesis.speaking` and `.paused` are read differently by different engines — some
+     * report a held utterance as not speaking — and a wrong reading here is not cosmetic: it either
+     * starts a second utterance for a line already half-read, or leaves the reading stopped for good.
+     * So the phase decides, and the engine is only told what to do about it.
+     */
+    function speechResume() {
+        if (!speech.playing || !speech.paused) {
+            return;
+        }
+
+        speech.paused = false;
+        speechSay('Speaking');
+
+        if (speech.phase === 'gap') {
+            // Between messages: nothing was paused, so nothing is resumed — the gap is simply re-armed
+            // and the next line follows it. `speechNext()` is deliberately not called straight away:
+            // the pause is part of the reading, and skipping it here would run two messages together.
+            //
+            // The engine is only nudged if something else left it paused, because a `speak()` issued
+            // to a paused engine is silently queued for ever.
+            if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
+
+            speech.timer = setTimeout(speechNext, SYSTEM_AUDIO_GAP_MS);
+
+            return;
+        }
+
+        // Mid-utterance: the engine still holds the line and where it had got to, so it continues it.
+        // Nothing is spoken again from here — a second `speak()` for the same line is exactly the
+        // duplicate this avoids.
+        window.speechSynthesis.resume();
+    }
+
     function renderReview(message, resumeAt) {
         if (reviewUrl === null) {
             return;
@@ -1334,6 +1814,9 @@
                 .join(' · ');
 
             reviewNotice(data);
+            // Whatever was being read aloud belonged to the turns about to be replaced.
+            speechStop();
+            paintListen(data);
             empty(reviewScroll);
             var thread = el('div', 'a2t-thread');
             data.turns.forEach(function (turn) { thread.appendChild(reviewTurn(turn)); });
@@ -1397,6 +1880,14 @@
         fullEditor.href = button.getAttribute('data-a2t-details-full');
         empty(reviewNoticeBox);
         empty(reviewScroll);
+        // A dialog opening on another recording must not inherit the last one's audio, spoken or
+        // otherwise. `openDialog` reaches here before the fetch returns, so this is the earliest
+        // point at which the previous recording's speech can be stopped.
+        speechStop();
+        if (listen) {
+            empty(listen);
+            listen.hidden = true;
+        }
         reviewBody.hidden = true;
         openDialog(reviewDialog);
         renderReview(null, 0);
@@ -1406,6 +1897,9 @@
         reviewDialog.addEventListener('close', function () {
             reviewUrl = null;
             picked = null;
+            // Closing is the commonest way to leave, and the one where a voice left talking to an
+            // empty screen would be most obviously wrong.
+            speechStop();
         });
     }
 
@@ -1449,6 +1943,29 @@
             // Element rather than HTMLElement: a click on the inline <svg> inside an icon button is
             // an SVGElement and would otherwise be ignored, so the middle of an icon would not respond.
             if (!(target instanceof Element)) {
+                return;
+            }
+
+            var speak = target.closest('[data-a2t-speak]');
+            if (speak) {
+                event.preventDefault();
+                var op = speak.getAttribute('data-a2t-speak');
+                if (op === 'play') {
+                    speechPlay();
+                } else if (op === 'pause') {
+                    speechPause();
+                } else if (op === 'resume') {
+                    speechResume();
+                } else {
+                    speechStop();
+                }
+                return;
+            }
+
+            var generate = target.closest('[data-a2t-listen-generate]');
+            if (generate) {
+                event.preventDefault();
+                generateFromListen(generate);
                 return;
             }
 
@@ -1497,6 +2014,25 @@
                     mergeWith.getAttribute('data-a2t-merge-with'),
                     picked,
                 );
+            }
+        });
+
+        reviewDialog.addEventListener('change', function (event) {
+            var rate = event.target.closest
+                ? event.target.closest('[data-a2t-speak-rate]')
+                : null;
+
+            if (!rate) {
+                return;
+            }
+
+            speechRate = parseFloat(rate.value) || 1;
+
+            // Applied to the next message rather than the current one: an utterance's rate is fixed
+            // once the browser has taken it, and restarting the line to honour a slider would lose
+            // the reader's place mid-sentence.
+            if (speech.playing) {
+                speechSay('Speaking');
             }
         });
 

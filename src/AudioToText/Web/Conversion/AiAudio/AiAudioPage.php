@@ -55,6 +55,37 @@ final readonly class AiAudioPage
         bool $providerConfigured,
         array $providerProblems,
     ): self {
+        [$rows, $transcripts] = self::rowsFor(
+            $jobs,
+            $renditions,
+            $generation,
+            $scripts,
+            $providerConfigured,
+        );
+
+        return new self($conversation, $store, $rows, $transcripts, $providerConfigured, $providerProblems);
+    }
+
+    /**
+     * The rows alone, for a caller that has recordings but no page around them.
+     *
+     * The store page's Details dialog shows one recording's audio and has no conversation, no store and
+     * no provider-problem list to render. It asks for this instead — the same loop, the same
+     * {@see state()}, the same offer rule — so there is still exactly one place that decides whether a
+     * rendition is stale and whether a paid button may be shown.
+     *
+     * @param list<TranscriptionJob> $jobs
+     * @param array<int, array<string, TtsRendition>> $renditions keyed by job id, then output type
+     *
+     * @return array{list<AiAudioRow>, array<int, TranscriptSource>}
+     */
+    public static function rowsFor(
+        array $jobs,
+        array $renditions,
+        TtsGenerationService $generation,
+        TtsScriptBuilder $scripts,
+        bool $providerConfigured,
+    ): array {
         $rows = [];
         $transcripts = [];
 
@@ -114,7 +145,7 @@ final readonly class AiAudioPage
             }
         }
 
-        return new self($conversation, $store, $rows, $transcripts, $providerConfigured, $providerProblems);
+        return [$rows, $transcripts];
     }
 
     /**

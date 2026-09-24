@@ -47,6 +47,19 @@ Caller generates, the rendition goes Ready, an edit makes it stale, and an ambig
 still blocked. **No paid provider is called** — the web tier only enqueues, and `complete-tts.php`
 stands in for the worker's render with the same hash, render key and columns.
 
+`listen.js` — the three audio options in the Details dialog: the original recording's player, the
+generated-AI-audio row in whichever state the recording is actually in, and the browser's own voice.
+**`window.speechSynthesis` is replaced with a recording stub** — nothing is spoken out loud and no
+provider is involved — so the assertions can be about behaviour rather than sound: messages spoken in
+the order they are drawn, the configured `SYSTEM_AUDIO_GAP_MS` gap between them, exactly one bubble highlighted at a time, a pause
+during a gap that does not let the next line start, Stop clearing everything, and both closing the
+dialog and opening another one silencing the previous recording.
+
+Its stub models Chrome rather than convenience, and that is what makes the pause/resume section
+meaningful: `speak()` on a paused engine queues silently and never plays, `cancel()` does not lift
+a pause, and `pause()` mid-utterance holds it with `speaking` still true. A stub that simply spoke
+whatever it was handed passed against the defect those three quirks caused.
+
 `voices.js` — a recording whose type names its speaker. A Caller upload is diarized like any other, so
 its `speaker_segments` really do contain two clusters; these assert that every screen still reads it as
 one person, that the speaker controls are absent, that edit/history/merge still work, and that a Mixed

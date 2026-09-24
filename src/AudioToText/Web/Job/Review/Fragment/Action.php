@@ -6,18 +6,24 @@ namespace App\AudioToText\Web\Job\Review\Fragment;
 
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\ConversationHistoryBuilder;
+use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\SpokenPrice;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
+use App\AudioToText\Application\Tts\TtsGenerationService;
+use App\AudioToText\Application\Tts\TtsScriptBuilder;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\SpeakerRole;
+use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
+use App\AudioToText\Domain\Tts\TtsRenditionRepositoryInterface;
 use App\AudioToText\Web\AudioToTextRoute;
+use App\AudioToText\Web\Conversion\AiAudio\AiAudioPage;
 use App\AudioToText\Web\Job\JobPageGuard;
 use App\AudioToText\Web\Job\Review\ReviewPageView;
 use App\Shared\Application\Time\AppTimeZone;
@@ -64,6 +70,10 @@ final readonly class Action
         private AppTimeZone $appTimeZone,
         private ResponseFactoryInterface $responseFactory,
         private RecordingVoiceReader $voices,
+        private TtsGenerationService $generation,
+        private TtsScriptBuilder $scripts,
+        private TtsRenditionRepositoryInterface $renditions,
+        private AudioToTextSettings $settings,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -189,6 +199,9 @@ final readonly class Action
             ),
             // What this recording is, when the upload said. Null for a conversation.
             'voice' => $page->voice?->label,
+            // The three ways to hear this recording. Computed here so the dialog renders decisions
+            // rather than making them — in particular the staleness rule, which has exactly one home.
+            'audio' => $this->audio($job, $publicId),
             'filename' => $job->originalFilename,
             'provider' => $job->transcriptionProvider()->label(),
             'turns' => $rows,
@@ -208,6 +221,77 @@ final readonly class Action
                 ),
             ],
         ]);
+    }
+
+    /**
+     * What can be listened to for this recording, and in what state.
+     *
+     * Two of the three are server questions and are answered here. The original is a file that either
+     * survived retention or did not. The generated rendition's state — current, stale, queued, failed,
+     * blocked — comes from {@see AiAudioPage::rowsFor()}, which is the same code the AI audio page
+     * renders from; a second copy of that rule would eventually disagree with the one the queue uses,
+     * and disagreeing means either a page claiming audio is current when it is not or a button
+     * charging for audio that already exists.
+     *
+     * The third, the browser's own voice, needs nothing from the server at all.
+     *
+     * @return array<string, mixed>
+     */
+    private function audio(TranscriptionJob $job, string $publicId): array
+    {
+        $original = [
+            'available' => $job->retainedAudioPath !== null,
+            // The existing hardened route: it resolves the stored name through the one path builder
+            // for retained recordings and composes nothing of its own.
+            'url' => $this->urlGenerator->generate(
+                AudioToTextRoute::JOB_ORIGINAL_FILE,
+                ['publicId' => $publicId],
+            ),
+        ];
+
+        [$rows] = AiAudioPage::rowsFor(
+            [$job],
+            [$job->id => $this->renditions->forJobs([$job->id])[$job->id] ?? []],
+            $this->generation,
+            $this->scripts,
+            $this->settings->ttsIsUsable(),
+        );
+
+        $row = $rows[0] ?? null;
+
+        if ($row === null) {
+            // No output this recording can produce at all. The dialog says so rather than offering
+            // a control that would be refused.
+            return ['original' => $original, 'generated' => null];
+        }
+
+        return [
+            'original' => $original,
+            'generated' => [
+                'state' => $row->state->name,
+                'label' => $row->state->label(),
+                'title' => $row->title(),
+                'playable' => $row->isPlayable(),
+                'playUrl' => $row->isPlayable()
+                    ? $this->urlGenerator->generate(
+                        AudioToTextRoute::JOB_AI_AUDIO_FILE,
+                        ['publicId' => $publicId],
+                    )
+                    : null,
+                'canGenerate' => $row->canGenerate,
+                'buttonLabel' => $row->buttonLabel(),
+                'reason' => $row->blockedReason,
+                // Everything a Generate needs, named by the server: the exact output type this
+                // recording produces and the digest the dialog was rendered from. The browser echoes
+                // them back and the endpoint revalidates both.
+                'action' => $this->urlGenerator->generate(
+                    AudioToTextRoute::JOB_AI_AUDIO_GENERATE,
+                    ['publicId' => $publicId],
+                ),
+                'outputType' => $row->outputType->value,
+                'expectedHash' => $row->currentHash,
+            ],
+        ];
     }
 
     private function turnUrl(string $route, string $publicId, int $index): string

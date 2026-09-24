@@ -35,6 +35,24 @@ final class AudioToTextIcons
         . '<circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/>'
         . '<circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>';
 
+    /**
+     * The four transport controls for the browser's own voice.
+     *
+     * Outlined rather than filled, because everything else here is: a solid triangle beside a hairline
+     * pencil reads as two icon sets rather than one.
+     *
+     * {@see PLAY} and {@see RESUME} are deliberately *not* the same glyph. They sit next to each other
+     * in the same toolbar, and two identical triangles would be a coin toss — so resume carries the
+     * bar that says "carry on from where this stopped", the convention a media transport already uses.
+     */
+    public const PLAY = '<path d="M8 5.2v13.6L19 12Z"/>';
+
+    public const PAUSE = '<path d="M9.5 5v14"/><path d="M14.5 5v14"/>';
+
+    public const RESUME = '<path d="M6.5 5v14"/><path d="M10.5 6.2v11.6L19 12Z"/>';
+
+    public const STOP = '<rect x="6.5" y="6.5" width="11" height="11" rx="1.6"/>';
+
     public static function svg(string $paths, string $label): string
     {
         return '<svg class="a2t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
