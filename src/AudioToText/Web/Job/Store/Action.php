@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\AudioToText\Web\Job\Store;
 
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\UploadOptions;
 use App\AudioToText\Application\AudioUploadValidator;
 use App\AudioToText\Application\SeparateUploadValidator;
 use App\AudioToText\Application\TranscriptionQueue;
@@ -36,7 +37,6 @@ use function is_string;
 use function max;
 use function min;
 use function number_format;
-use function sprintf;
 use function trim;
 
 /**
@@ -82,6 +82,14 @@ final readonly class Action
         private WorkerHealthService $workerHealth,
         private AudioToTextSettings $settings,
         private AudioToTextSettingsRepositoryInterface $settingsRepository,
+        /**
+         * The provider field and the paid-audio box, read by the one authority that owns them.
+         *
+         * Shared with the Manage Audio replacement form, which posts the same two fields — see
+         * {@see UploadOptions}. A second copy of either rule here would be a second answer to "may
+         * this provider be used" and to "was audio paid for".
+         */
+        private UploadOptions $uploadOptions,
         private CurrentAdmin $currentAdmin,
         private Redirect $redirect,
         private AppTimeZone $appTimeZone,
@@ -166,7 +174,7 @@ final readonly class Action
                         // Recorded on the conversation and acted on later, by the workers. Nothing in
                         // this request contacts a speech provider: an upload must not be made to wait
                         // on a third party, and generating a long call's audio takes minutes.
-                        $this->wantsAiAudio($body) && $this->settings->ttsIsUsable(),
+                        $this->wantsAiAudio($body) && $this->uploadOptions->aiAudioIsUsable(),
                         // Which card this came from, and which order it belongs to. Both are recorded
                         // on the conversation and read only by the history: the mode above is still
                         // what decides how the recording is processed.
@@ -242,7 +250,7 @@ final readonly class Action
                 'globalDefault' => $globalDefault,
                 // Whether the opt-in below the provider select can do anything. LOCAL configuration
                 // only, like every other readiness question on this page — rendering it opens no socket.
-                'ttsConfigured' => $this->settings->ttsIsUsable(),
+                'ttsConfigured' => $this->uploadOptions->aiAudioIsUsable(),
             ]);
     }
 
@@ -266,17 +274,7 @@ final readonly class Action
      */
     private function preselected(TranscriptionProvider $globalDefault): TranscriptionProvider
     {
-        if ($this->settings->providerIsUsable($globalDefault)) {
-            return $globalDefault;
-        }
-
-        foreach (TranscriptionProvider::all() as $provider) {
-            if ($this->settings->providerIsUsable($provider)) {
-                return $provider;
-            }
-        }
-
-        return $globalDefault;
+        return $this->uploadOptions->preselected($globalDefault);
     }
 
     /**
@@ -292,32 +290,14 @@ final readonly class Action
      */
     private function providerUsability(): array
     {
-        $usable = [];
-
-        foreach (TranscriptionProvider::all() as $provider) {
-            $usable[$provider->value] = $this->settings->providerIsUsable($provider);
-        }
-
-        return $usable;
+        return $this->uploadOptions->usability();
     }
 
     /**
      * The provider for this upload, and why it was refused if it was.
      *
-     * Three outcomes, and they are deliberately distinct:
-     *
-     *  - **No field posted.** An older form, or a browser that dropped it. The global default stands;
-     *    this is not an error.
-     *  - **A value that is not a provider.** A tampered or stale form. Refused, because
-     *    `fromStorage()` returns null rather than defaulting and silently accepting Whisper for a
-     *    request that asked for something else would report success for a choice nobody made.
-     *  - **A real provider this server cannot run.** Refused *before* anything is stored or queued,
-     *    with the reason. Checking it here rather than letting the worker discover it saves a recording
-     *    from being uploaded, converted and then failed for a condition that was knowable at the click.
-     *
-     * The readiness check is {@see AudioToTextSettings::providerIsUsable()} — **local configuration
-     * only.** Nothing in this request path opens a socket to a provider: an upload must not wait on a
-     * third party, and a provider outage must not be reported to an administrator as a misconfiguration.
+     * {@see UploadOptions::provider()} owns the rule; this page only supplies the default to fall back
+     * on. The replacement form asks the same object the same question.
      *
      * @param mixed $body the parsed request body, in whatever shape it arrived
      *
@@ -325,45 +305,13 @@ final readonly class Action
      */
     private function provider(mixed $body, TranscriptionProvider $default): array
     {
-        $posted = is_array($body) && is_string($body['transcription_provider'] ?? null)
-            ? (string) $body['transcription_provider']
-            : null;
-
-        if ($posted === null || $posted === '') {
-            return [$default, null];
-        }
-
-        $provider = TranscriptionProvider::fromStorage($posted);
-
-        if ($provider === null) {
-            return [$default, 'Choose one of the listed transcription providers.'];
-        }
-
-        if (!$this->settings->providerIsUsable($provider)) {
-            return [
-                $default,
-                sprintf(
-                    '%s is not configured on this server yet, so it cannot be used for this recording. '
-                        . 'Choose another provider, or ask an administrator to finish setting it up.',
-                    $provider->label(),
-                ),
-            ];
-        }
-
-        return [$provider, null];
+        return $this->uploadOptions->provider($body, $default);
     }
 
-    /**
-     * Whether the uploader ticked the AI-audio box.
-     *
-     * An unchecked checkbox posts nothing at all, so absence is the "no" — which is exactly what makes
-     * the default of off reliable rather than something the form has to remember to say.
-     *
-     * @param mixed $body the parsed request body, in whatever shape it arrived
-     */
+    /** An unchecked box posts nothing; {@see UploadOptions::wantsAiAudio()} is what reads that. */
     private function wantsAiAudio(mixed $body): bool
     {
-        return is_array($body) && ($body['generate_ai_audio'] ?? null) !== null;
+        return $this->uploadOptions->wantsAiAudio($body);
     }
 
     /**

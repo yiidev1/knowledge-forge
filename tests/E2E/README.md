@@ -60,6 +60,13 @@ meaningful: `speak()` on a paused engine queues silently and never plays, `cance
 a pause, and `pause()` mid-utterance holds it with `speaking` still true. A stub that simply spoke
 whatever it was handed passed against the defect those three quirks caused.
 
+`manage.js` — Manage Audio. Uploads a real replacement for one side of an order through the real
+endpoint and asserts the property the feature exists for: while the replacement is still queued the
+recording it replaces stays current and the store row still reports the order as complete, and only
+once the replacement finishes does it take over — with the one it replaced kept, numbered and still
+openable. `complete-replacement.php` stands in for the transcription worker's status write, so no
+Whisper run is needed to reach the state under test.
+
 `voices.js` — a recording whose type names its speaker. A Caller upload is diarized like any other, so
 its `speaker_segments` really do contain two clusters; these assert that every screen still reads it as
 one person, that the speaker controls are absent, that edit/history/merge still work, and that a Mixed

@@ -161,8 +161,17 @@ final class StoreDialogStylesheetTest extends TestCase
 
         $this->assertStringContainsString("'Loading transcript…'", $js);
         $this->assertStringContainsString('No original transcript is available', $js);
-        // Three dialogs fetch; each hands its failure a way to try again.
-        $this->assertSame(3, preg_match_all('/\bfail\(\w+Status,/', $js));
+        // Every dialog that fetches hands its failure a way to try again — Details, Original
+        // transcript, Generate Text to Audio and Manage Audio. Counted rather than listed because the
+        // thing worth catching is a *new* fetching dialog that quietly has no retry.
+        $this->assertSame(4, preg_match_all('/\bfail\(\w+Status,/', $js));
+        foreach (['reviewStatus', 'transcriptStatus', 'ttsStatus', 'manageStatus'] as $status) {
+            $this->assertMatchesRegularExpression(
+                '/\bfail\(' . $status . ',/',
+                $js,
+                $status . ' must report a failure the reader can retry.',
+            );
+        }
     }
 
     /**

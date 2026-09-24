@@ -91,18 +91,28 @@ final readonly class StoreOrderGroup
     }
 
     /**
-     * One state for the whole row.
+     * One state for the whole row, describing the call as it currently stands.
      *
-     * Every job in the group is fed to the rule this application already uses to turn several child
+     * Each **current** recording is fed to the rule this application already uses to turn several child
      * states into one, so a row can say "Partially completed" for the same reason a paired upload does
-     * and the two screens cannot disagree. Nothing here is a new status, and nothing is taken from
-     * whichever recording happens to be newest.
+     * and the two screens cannot disagree. Nothing here is a new status.
+     *
+     * ## Why superseded versions are not counted
+     *
+     * They are answers to a question nobody is asking any more. Once a recording can be replaced, the
+     * history holds two kinds of row a status must not speak for: a replacement still being transcribed,
+     * and one that failed. Counting either would report an order as unfinished or broken at the very
+     * moment its current recordings are all complete and correct — which is the opposite of what this
+     * column exists to say, and would make a failed replacement look like damage to the call itself.
+     *
+     * What happened to a replacement is the Manage Audio dialog's business, where the version it
+     * belongs to is named. See {@see allRecordings()} for the count that does include history.
      */
     public function aggregateStatus(): ConversationStatus
     {
         return ConversationStatus::fromChildren(array_map(
             static fn(StoreRecordingSlot $slot): JobStatus => $slot->status,
-            $this->allRecordings(),
+            $this->primaries(),
         ));
     }
 

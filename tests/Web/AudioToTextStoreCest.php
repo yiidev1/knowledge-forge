@@ -15,6 +15,7 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function array_keys;
+use function array_map;
 use function codecept_data_dir;
 use function file_put_contents;
 use function gmdate;
@@ -1461,6 +1462,519 @@ final class AudioToTextStoreCest
     }
 
     // ---------------------------------------------------------------------------------- helpers
+
+    // ------------------------------------------------------------------ Manage Audio
+
+    /**
+     * The dialog is told what the order holds and what may be done to it.
+     *
+     * Asserted through the payload rather than the markup, because the payload is the contract: the
+     * browser renders exactly what this says and works nothing out for itself — least of all which
+     * recording is current.
+     */
+    public function manageAudioListsEveryRecordingKindAndOffersReplacement(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $payload = $this->recordings($I, self::STORE_A, 'order:16513791');
+
+        Assert::assertTrue($payload['canReplace']);
+        Assert::assertNull($payload['reason']);
+        Assert::assertSame('16513791', $payload['orderId']);
+        Assert::assertCount(3, $payload['slots'], 'Mixed, caller and callee, always.');
+
+        $byType = [];
+        foreach ($payload['slots'] as $slot) {
+            $byType[$slot['recordingType']] = $slot;
+        }
+
+        Assert::assertCount(1, $byType['MIXED']['versions']);
+        Assert::assertTrue($byType['MIXED']['versions'][0]['current']);
+        // The kind this order does not have yet is still offered, because "there is no callee
+        // recording" is exactly what an administrator opens this dialog to fix.
+        Assert::assertSame([], $byType['CALLEE']['versions']);
+        Assert::assertTrue($byType['CALLEE']['canReplace']);
+    }
+
+    /**
+     * A replacement is a new recording; nothing about the one it replaces is touched.
+     *
+     * The assertions are against the database, because that is where the guarantee lives: the old
+     * conversation, its job, its retained audio path and its transcript are all still exactly as they
+     * were, and the new row is a separate conversation with its own public id.
+     */
+    public function replacingARecordingAddsAVersionAndLeavesTheOldOneIntact(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(1, $before);
+        $originalJob = $this->childrenOf((int) $before[0]['id'])[0];
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(2, $after, 'The replacement is a new conversation, not a rewrite.');
+        Assert::assertSame('CALLER', $after[0]['recording_type']);
+        Assert::assertSame('16513791', $after[0]['order_id'], 'It joins the same order.');
+        Assert::assertNotSame($before[0]['public_id'], $after[0]['public_id']);
+
+        // The recording being replaced, re-read: every column as it was.
+        $old = $this->childrenOf((int) $before[0]['id'])[0];
+        Assert::assertSame($originalJob['public_id'], $old['public_id']);
+        Assert::assertSame($originalJob['retained_audio_path'], $old['retained_audio_path']);
+        Assert::assertSame($originalJob['transcript'], $old['transcript']);
+        Assert::assertSame($originalJob['reviewed_segments'], $old['reviewed_segments']);
+
+        // And the replacement starts empty: its own job, its own storage, nothing carried across.
+        $new = $this->childrenOf((int) $after[0]['id'])[0];
+        Assert::assertNotSame($old['public_id'], $new['public_id']);
+        Assert::assertNull($new['transcript']);
+        Assert::assertNull($new['reviewed_segments']);
+    }
+
+    /**
+     * Replacing one side does not disturb the other two.
+     *
+     * The failure this guards against is not subtle in effect — it would silently discard a correct
+     * recording — but it is easy to introduce, because "the order's recordings" is one query away from
+     * "this order's caller recording".
+     */
+    public function replacingOneRecordingLeavesTheOtherKindsAlone(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLEE', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(4, $after);
+
+        // Every original row is still present, unchanged.
+        $stillThere = array_map(static fn(array $r): string => (string) $r['public_id'], $after);
+        foreach ($before as $row) {
+            Assert::assertContains((string) $row['public_id'], $stillThere);
+        }
+    }
+
+    /**
+     * A replacement never buys audio.
+     *
+     * `generate_ai_audio` is what the worker reads to queue Deepgram TTS without being asked. An
+     * administrator fixing a mistaken upload has not asked for audio to be paid for on the corrected
+     * one, so the replacement is written with the flag off — even when the recording it replaces has
+     * it on, which this seeds deliberately.
+     */
+    public function aReplacementNeverInheritsTheAutomaticAiAudioOptIn(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_conversations}}',
+            ['generate_ai_audio' => 1],
+            ['id' => $before[0]['id']],
+        )->execute();
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertSame(0, (int) $after[0]['generate_ai_audio'], 'No provider spend was requested.');
+    }
+
+    /** The provider of the recording being replaced is the one the replacement uses. */
+    public function aReplacementKeepsTheProviderOfTheRecordingItReplaces(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['transcription_provider' => 'DEEPGRAM'],
+            ['conversation_id' => $before[0]['id']],
+        )->execute();
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        $new = $this->childrenOf((int) $after[0]['id'])[0];
+        Assert::assertSame('DEEPGRAM', $new['transcription_provider']);
+    }
+
+    /** An upload that named no order has nothing for a replacement to join, and says so. */
+    public function anOrderlessRecordingExplainsWhyItCannotBeReplaced(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED');
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0]['public_id'];
+        $payload = $this->recordings($I, self::STORE_A, 'conversation:' . $conversation);
+
+        Assert::assertFalse($payload['canReplace']);
+        Assert::assertStringContainsString('order id', (string) $payload['reason']);
+
+        // And the refusal is a rule, not a hidden button: posting anyway is refused too.
+        $this->replace($I, self::STORE_A, 'conversation:' . $conversation, 'MIXED');
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('"success":false');
+    }
+
+    /** A group belonging to another store is not found, exactly as an invented key is not. */
+    public function anotherStoresOrderCannotBeReadOrReplaced(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        // The key is real; the store in the address is not the one that owns it.
+        $I->amOnPage('/audio-to-text/store/' . self::STORE_B . '/group/order:16513791/recordings');
+        $I->seeResponseCodeIs(404);
+
+        $this->replace($I, self::STORE_B, 'order:16513791', 'CALLER');
+        $I->seeResponseCodeIs(404);
+
+        // And nothing was created anywhere by the attempt.
+        Assert::assertCount(0, $this->conversationsFor(self::STORE_B));
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A));
+    }
+
+    /** Signed out, both endpoints are the login page rather than an answer. */
+    public function manageAudioRequiresAnAdministrator(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+        $I->resetCookie(self::SESSION_COOKIE);
+
+        $I->amOnPage('/audio-to-text/store/' . self::STORE_A . '/group/order:16513791/recordings');
+        $I->dontSeeInSource('"slots"');
+
+        $I->sendAjaxPostRequest(
+            '/audio-to-text/store/' . self::STORE_A . '/group/order:16513791/replace',
+            ['recording_type' => 'CALLER'],
+        );
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was uploaded.');
+    }
+
+    /** Without the token the upload does not happen, exactly as on the page's own form. */
+    public function aReplacementWithoutItsTokenIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $I->sendAjaxPostRequest(
+            '/audio-to-text/store/' . self::STORE_A . '/group/order:16513791/replace',
+            ['recording_type' => 'CALLER'],
+        );
+
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'CSRF is still enforced.');
+    }
+
+    /** A recording type that is not one of the three is refused before anything is stored. */
+    public function aReplacementMustNameARecordingKindThisApplicationHas(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CUSTOMER');
+        $I->seeResponseCodeIs(422);
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A));
+    }
+
+    // ------------------------------------------------------- the replacement's own upload options
+
+    /**
+     * The dialog is given the same two choices the page's own upload form offers.
+     *
+     * Both are the server's answers, not the browser's: which providers exist, which this machine can
+     * run, which one this recording starts on, and whether paid audio is configured at all. A browser
+     * that worked any of those out for itself would be a second authority over what may run and over
+     * what may be paid for.
+     */
+    public function theReplacementFormIsGivenTheProviderChoicesAndThePaidOptIn(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $payload = $this->recordings($I, self::STORE_A, 'order:16513791');
+
+        Assert::assertArrayHasKey('providers', $payload);
+        Assert::assertArrayHasKey('aiAudioConfigured', $payload);
+
+        $values = array_map(static fn(array $p): string => (string) $p['value'], $payload['providers']);
+        Assert::assertSame(['WHISPER', 'DEEPGRAM'], $values, 'Every provider, in the order the page lists them.');
+
+        foreach ($payload['providers'] as $provider) {
+            Assert::assertArrayHasKey('label', $provider);
+            // Listed and marked rather than hidden: an administrator who cannot see the choice cannot
+            // tell a one-provider install from a broken one.
+            Assert::assertArrayHasKey('usable', $provider);
+        }
+
+        // Each slot names the provider its field starts on.
+        foreach ($payload['slots'] as $slot) {
+            Assert::assertArrayHasKey('provider', $slot);
+        }
+    }
+
+    /** The field starts on the engine that transcribed the recording being replaced. */
+    public function theReplacementProviderDefaultsToTheOneBeingReplaced(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['transcription_provider' => 'DEEPGRAM'],
+            ['conversation_id' => $before[0]['id']],
+        )->execute();
+
+        $payload = $this->recordings($I, self::STORE_A, 'order:16513791');
+        $caller = $this->slotOf($payload, 'CALLER');
+
+        Assert::assertSame('DEEPGRAM', $caller['provider']);
+
+        // And a kind this order has no recording of falls back to the server's default rather than
+        // to whatever another recording happened to use.
+        Assert::assertSame('WHISPER', $this->slotOf($payload, 'CALLEE')['provider']);
+    }
+
+    /** The administrator may choose another engine, and that is what the new job records. */
+    public function anAdministratorCanOverrideTheReplacementProvider(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['transcription_provider' => 'DEEPGRAM'],
+            ['conversation_id' => $before[0]['id']],
+        )->execute();
+        $oldJob = $this->childrenOf((int) $before[0]['id'])[0];
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', [
+            'transcription_provider' => 'WHISPER',
+        ]);
+        $I->seeResponseCodeIs(200);
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertSame(
+            'WHISPER',
+            $this->childrenOf((int) $after[0]['id'])[0]['transcription_provider'],
+            'The replacement records the engine that was chosen for it.',
+        );
+
+        // And the recording it replaces keeps the engine it was actually transcribed with.
+        Assert::assertSame(
+            'DEEPGRAM',
+            $this->childrenOf((int) $before[0]['id'])[0]['transcription_provider'],
+        );
+        Assert::assertSame($oldJob['public_id'], $this->childrenOf((int) $before[0]['id'])[0]['public_id']);
+    }
+
+    /**
+     * A provider value the application does not issue is refused, and nothing is stored.
+     *
+     * The same refusal the page's own upload form gives, because it is the same object giving it —
+     * {@see \App\AudioToText\Application\UploadOptions}.
+     */
+    public function anUnknownReplacementProviderIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', [
+            'transcription_provider' => 'ACME_TRANSCRIBE',
+        ]);
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('listed transcription providers');
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
+    }
+
+    /**
+     * A real provider this server cannot run is refused too, before anything is stored.
+     *
+     * Deepgram is unconfigured in this suite's environment, which is what makes this assertable: the
+     * refusal is the shared rule's, not a second one written for replacements.
+     */
+    public function aReplacementProviderThisServerCannotRunIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $payload = $this->recordings($I, self::STORE_A, 'order:16513791');
+        $deepgram = null;
+        foreach ($payload['providers'] as $provider) {
+            if ($provider['value'] === 'DEEPGRAM') {
+                $deepgram = $provider;
+            }
+        }
+
+        Assert::assertNotNull($deepgram);
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', [
+            'transcription_provider' => 'DEEPGRAM',
+        ]);
+
+        if ($deepgram['usable'] === true) {
+            // Configured here after all, so the assertable thing is the other half of the same rule:
+            // a usable provider is accepted and recorded.
+            $I->seeResponseCodeIs(200);
+            Assert::assertCount(2, $this->conversationsFor(self::STORE_A));
+
+            return;
+        }
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('not configured on this server');
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A));
+    }
+
+    /**
+     * The paid box is off unless this upload ticked it, whatever the recording it replaces asked for.
+     *
+     * Three cases in one test because they are one rule: the flag is read from this request and is
+     * never inherited. Inheriting it would mean an administrator fixing a mistaken upload silently
+     * pays for audio a second time, for a request they did not make.
+     */
+    public function thePaidAudioOptInIsReadFromThisUploadAndNeverInherited(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        // The recording being replaced asked for audio.
+        $first = $this->conversationsFor(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_conversations}}',
+            ['generate_ai_audio' => 1],
+            ['id' => $first[0]['id']],
+        )->execute();
+
+        // 1. Box not posted at all — an unticked checkbox posts nothing.
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+        $rows = $this->conversationsFor(self::STORE_A);
+        Assert::assertSame(0, (int) $rows[0]['generate_ai_audio'], 'Not inherited, and not assumed.');
+
+        // 2. Box ticked — the intent is recorded on this upload.
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', ['generate_ai_audio' => '1']);
+        $rows = $this->conversationsFor(self::STORE_A);
+        Assert::assertSame(
+            $this->ttsIsConfigured($I) ? 1 : 0,
+            (int) $rows[0]['generate_ai_audio'],
+            'Recorded when asked for, and only when this server could honour it.',
+        );
+
+        // 3. The recording being replaced is untouched throughout.
+        Assert::assertSame(
+            1,
+            (int) $this->conversationsFor(self::STORE_A)[2]['generate_ai_audio'],
+            'The old version keeps its own answer.',
+        );
+    }
+
+    /**
+     * Ticking the box queues nothing here. It records an intent and returns.
+     *
+     * The whole cost protection rests on the web tier never generating: a replacement is queued for
+     * transcription, and the existing worker — or the speaker confirmation, when the roles are not
+     * yet known — is what queues audio afterwards. Asserted as the absence of a rendition row, which
+     * is the only thing a synchronous generation could not avoid creating.
+     */
+    public function tickingThePaidBoxQueuesNoAudioFromTheWebRequest(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', ['generate_ai_audio' => '1']);
+        $I->seeResponseCodeIs(200);
+
+        $newJob = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        Assert::assertSame('QUEUED', $newJob['status'], 'Queued for transcription, nothing more.');
+        Assert::assertSame(
+            0,
+            (int) (new Query($this->connection))
+                ->from('{{%audio_tts_renditions}}')
+                ->where(['job_id' => $newJob['id']])
+                ->count(),
+            'No rendition exists yet: the web tier records the intent and the worker acts on it.',
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    private function slotOf(array $payload, string $type): array
+    {
+        foreach ($payload['slots'] as $slot) {
+            if ($slot['recordingType'] === $type) {
+                return $slot;
+            }
+        }
+
+        Assert::fail('No ' . $type . ' slot in the payload.');
+    }
+
+    private function ttsIsConfigured(WebTester $I): bool
+    {
+        return $this->recordings($I, self::STORE_A, 'order:16513791')['aiAudioConfigured'] === true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function recordings(WebTester $I, int $sourceId, string $groupKey): array
+    {
+        $I->amOnPage('/audio-to-text/store/' . $sourceId . '/group/' . $groupKey . '/recordings');
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        return $payload;
+    }
+
+    /**
+     * The replacement upload, carrying its file and the page's token exactly as the dialog does.
+     *
+     * Posted through the browser module directly, as {@see LegacySeparateAudioUpload} does, because a
+     * multipart body with a file is not something `submitForm` can build for a form that only exists
+     * once the dialog has fetched.
+     */
+    /** @param array<string, string> $fields the provider select and the paid box, when they are set */
+    private function replace(
+        WebTester $I,
+        int $sourceId,
+        string $groupKey,
+        string $type,
+        array $fields = [],
+    ): void {
+        $I->amOnPage($this->storeUrl($sourceId));
+        $csrf = '#a2t-upload-form input[type="hidden"][name="_csrf"]';
+        $token = (string) $I->grabAttributeFrom($csrf, 'value');
+
+        $this->audioBrowser->_loadPage(
+            'POST',
+            '/audio-to-text/store/' . $sourceId . '/group/' . $groupKey . '/replace',
+            ['_csrf' => $token, 'recording_type' => $type] + $fields,
+            ['audio' => [
+                'name' => 'kf_store_valid.wav',
+                'tmp_name' => codecept_data_dir('kf_store_valid.wav'),
+            ]],
+        );
+    }
 
     private function signIn(WebTester $I): void
     {

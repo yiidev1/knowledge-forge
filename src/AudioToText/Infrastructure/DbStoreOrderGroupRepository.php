@@ -22,10 +22,12 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
 
+use function array_filter;
+use function array_keys;
 use function array_map;
-use function array_slice;
+use function array_values;
+use function count;
 use function is_string;
-use function usort;
 
 use const SORT_DESC;
 
@@ -270,11 +272,31 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
     }
 
     /**
-     * The newest recording of one type, carrying the rest as its history.
+     * The **current** recording of one type, carrying every other version as its history.
      *
-     * Nothing is discarded: an order uploaded twice keeps both, and the older one stays reachable.
+     * Nothing is discarded: an order uploaded twice keeps both, and the earlier one stays reachable.
      *
-     * @param list<StoreRecordingSlot> $found
+     * ## Current means newest *finished*, not newest uploaded
+     *
+     * This is what makes replacing a recording safe. An administrator who replaces the caller side has
+     * a working recording until the replacement is transcribed — and if the replacement fails, they
+     * still do. Were "current" simply the newest row, the moment a replacement was queued the order
+     * would start showing a recording with no transcript, no speakers and nothing to correct, and a
+     * failed replacement would leave it that way for good.
+     *
+     * So a version becomes current by **completing**, and the switch is therefore the worker's own
+     * `status` write: one row, one transaction, already atomic. There is no second pointer to update,
+     * which is precisely why there is nothing here for two replacements to race over.
+     *
+     * ## Why the ordering is the id and not the timestamp
+     *
+     * `$found` arrives newest-first because {@see build()} orders conversations by `c.id DESC`, and
+     * that is a total order the database maintains. `created_at` is only second-precision: two uploads
+     * within one second compare equal, and a sort on equal keys decides nothing. It also means a
+     * worker that finishes late cannot win — a replacement is newer or older by the id it was given
+     * when it was uploaded, never by when its transcription happened to finish.
+     *
+     * @param list<StoreRecordingSlot> $found newest first, by conversation id
      */
     private function primary(array $found): ?StoreRecordingSlot
     {
@@ -282,10 +304,36 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             return null;
         }
 
-        usort($found, static fn(StoreRecordingSlot $a, StoreRecordingSlot $b): int
-            => $b->uploadedAt <=> $a->uploadedAt);
+        // Numbered from the far end, so the earliest upload is v1 and stays v1 whatever arrives above
+        // it. `$found` is newest-first, so the count itself is the newest one's number.
+        $total = count($found);
+        $found = array_map(
+            static fn(int $index, StoreRecordingSlot $slot): StoreRecordingSlot
+                => $slot->withVersion($total - $index),
+            array_keys($found),
+            $found,
+        );
 
-        $primary = $found[0];
+        $primary = null;
+
+        foreach ($found as $slot) {
+            if ($slot->status === JobStatus::COMPLETED) {
+                $primary = $slot;
+
+                break;
+            }
+        }
+
+        // Nothing has finished yet — a first upload still processing, or one that failed. The newest is
+        // shown so the order reports what is actually happening to it rather than an empty cell.
+        $primary ??= $found[0];
+
+        // Everything else, still newest-first: an in-flight replacement is in here too, which is how
+        // the Manage Audio dialog can say a replacement is under way without asking a second question.
+        $found = array_values(array_filter(
+            $found,
+            static fn(StoreRecordingSlot $slot): bool => $slot !== $primary,
+        ));
 
         return new StoreRecordingSlot(
             $primary->conversationPublicId,
@@ -302,7 +350,8 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             $primary->hasSegments,
             $primary->rolesConfirmed,
             $primary->rendition,
-            array_slice($found, 1),
+            $found,
+            $primary->version,
         );
     }
 

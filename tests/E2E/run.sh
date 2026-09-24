@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 
 export KF_BASE="${KF_BASE:-http://127.0.0.1:8080}"
 
-for suite in flows page voices tts listen; do
+for suite in flows page voices tts listen manage; do
     echo "=== $suite ==="
     # Reseeded per suite: these corrections are real, so a suite consumes the conversation it edits.
     php seed.php > fixtures.json

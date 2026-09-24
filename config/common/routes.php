@@ -395,6 +395,19 @@ return [
             )
                 ->action(AudioToText\Job\Store\Group\TtsOptionsAction::class)
                 ->name(AudioToTextRoute::STORE_GROUP_TTS_OPTIONS),
+            // Manage Audio: what the order holds, and the replacement upload. The POST is a file
+            // upload like any other on this page, so it carries the same CSRF middleware and the same
+            // validator — see ReplaceAction, which adds no storage or validation of its own.
+            Route::get(
+                '/audio-to-text/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/recordings',
+            )
+                ->action(AudioToText\Job\Store\Group\RecordingsAction::class)
+                ->name(AudioToTextRoute::STORE_GROUP_RECORDINGS),
+            Route::post(
+                '/audio-to-text/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/replace',
+            )
+                ->action(AudioToText\Job\Store\Group\ReplaceAction::class)
+                ->name(AudioToTextRoute::STORE_GROUP_REPLACE),
             // One logical conversion. Declared before /job/{publicId} for the same reason /jobs is:
             // the literal segment must not be read as an id.
             Route::get('/audio-to-text/conversion/{publicId:[0-9a-f]{32}}')

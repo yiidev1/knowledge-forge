@@ -38,6 +38,12 @@ final class AudioToTextRoute
     public const STORE_GROUP_TRANSCRIPTS = 'audio-to-text.store.group.transcripts';
     public const STORE_GROUP_TTS_OPTIONS = 'audio-to-text.store.group.tts-options';
 
+    /** Every recording an order holds, current and superseded — what Manage Audio reads. */
+    public const STORE_GROUP_RECORDINGS = 'audio-to-text.store.group.recordings';
+
+    /** Upload a replacement for one of them. */
+    public const STORE_GROUP_REPLACE = 'audio-to-text.store.group.replace';
+
     /**
      * One logical conversion, whether it was recorded as one mixed file or as a Customer and an Agent
      * file. This is what a row in the store history opens.

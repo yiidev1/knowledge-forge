@@ -162,6 +162,148 @@ final class StoreOrderGroupRepositoryTest extends Unit
         self::assertCount(2, $caller->withHistory());
     }
 
+    // ------------------------------------------------------------------ replacement
+
+    /**
+     * A replacement that has not finished yet does not take over.
+     *
+     * This is the property the whole Manage Audio feature rests on. An administrator who replaces the
+     * caller side has a working recording throughout — were "current" simply the newest row, the order
+     * would show a recording with no transcript and nothing to correct from the moment the replacement
+     * was queued until whenever the worker got to it.
+     */
+    public function testAReplacementStillProcessingDoesNotBecomeCurrent(): void
+    {
+        $good = $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:00:00');
+        $pending = $this->upload(RecordingType::Caller, '16513791', '2026-09-02 10:00:00', 'QUEUED');
+
+        $caller = $this->repository->pageFor(self::STORE, 20)[0]->caller;
+
+        self::assertNotNull($caller);
+        self::assertSame($good, $caller->conversationPublicId, 'The finished recording is still current.');
+        self::assertSame(1, $caller->olderCount());
+        self::assertSame($pending, $caller->older[0]->conversationPublicId, 'The replacement is visible.');
+    }
+
+    /** And a replacement that failed never does, however new it is. */
+    public function testAFailedReplacementLeavesThePreviousRecordingCurrent(): void
+    {
+        $good = $this->upload(RecordingType::Callee, '16513791', '2026-09-01 10:00:00');
+        $this->upload(RecordingType::Callee, '16513791', '2026-09-03 10:00:00', 'FAILED');
+
+        $callee = $this->repository->pageFor(self::STORE, 20)[0]->callee;
+
+        self::assertNotNull($callee);
+        self::assertSame($good, $callee->conversationPublicId);
+    }
+
+    /** Once it finishes, it takes over — and the recording it replaced is kept, not removed. */
+    public function testACompletedReplacementBecomesCurrentAndKeepsTheOneItReplaced(): void
+    {
+        $first = $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:00:00');
+        $second = $this->upload(RecordingType::Caller, '16513791', '2026-09-02 10:00:00');
+
+        $caller = $this->repository->pageFor(self::STORE, 20)[0]->caller;
+
+        self::assertNotNull($caller);
+        self::assertSame($second, $caller->conversationPublicId);
+        self::assertSame($first, $caller->older[0]->conversationPublicId);
+    }
+
+    /**
+     * A worker finishing late for an older replacement cannot overtake a newer one.
+     *
+     * Two replacements are uploaded, the newer finishes first, and then the older one finishes too.
+     * Ordering is by the id the upload was given, never by when a transcription happened to end, so
+     * the newer upload stays current — which is what stops a slow queue quietly reinstating a
+     * recording the administrator had already replaced again.
+     */
+    public function testALateWorkerCannotMakeAnOlderReplacementCurrent(): void
+    {
+        $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:00:00');
+        $middle = $this->conversation(RecordingType::Caller, '16513791', '2026-09-02 10:00:00');
+        $this->job($middle, SourceRole::Common, 'PROCESSING');
+        $newest = $this->upload(RecordingType::Caller, '16513791', '2026-09-03 10:00:00');
+
+        // The newest one won while the middle upload was still running.
+        self::assertSame(
+            $newest,
+            $this->repository->pageFor(self::STORE, 20)[0]->caller?->conversationPublicId,
+        );
+
+        // The middle one now finishes, later in wall-clock time than the winner did.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['status' => 'COMPLETED'],
+            ['conversation_id' => $this->conversationId($middle)],
+        )->execute();
+
+        self::assertSame(
+            $newest,
+            $this->repository->pageFor(self::STORE, 20)[0]->caller?->conversationPublicId,
+            'A late finish does not reinstate an upload that had already been superseded.',
+        );
+    }
+
+    /** Replacing one side leaves the other two exactly as they were. */
+    public function testReplacingOneRecordingLeavesTheOtherTwoAlone(): void
+    {
+        $mixed = $this->upload(RecordingType::Mixed, '16513791', '2026-09-01 10:00:00');
+        $caller = $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:01:00');
+        $callee = $this->upload(RecordingType::Callee, '16513791', '2026-09-01 10:02:00');
+
+        $replacement = $this->upload(RecordingType::Caller, '16513791', '2026-09-04 10:00:00');
+
+        $group = $this->repository->pageFor(self::STORE, 20)[0];
+
+        self::assertSame($mixed, $group->mixed?->conversationPublicId, 'Mixed is untouched.');
+        self::assertSame($callee, $group->callee?->conversationPublicId, 'Callee is untouched.');
+        self::assertSame($replacement, $group->caller?->conversationPublicId);
+        self::assertSame(0, $group->mixed?->olderCount());
+        self::assertSame(0, $group->callee?->olderCount());
+        self::assertSame($caller, $group->caller?->older[0]->conversationPublicId);
+    }
+
+    /**
+     * A row's status describes the recordings it is using, not the ones it stopped using.
+     *
+     * Without this an order whose caller replacement is still queued would report itself as partially
+     * complete, and one whose replacement failed would report a failure — while all three recordings
+     * it is actually using are finished and correct.
+     */
+    public function testAnInFlightOrFailedReplacementDoesNotChangeTheRowsStatus(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791', '2026-09-01 10:00:00');
+        $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:01:00');
+        $this->upload(RecordingType::Caller, '16513791', '2026-09-05 10:00:00', 'QUEUED');
+        $this->upload(RecordingType::Callee, '16513791', '2026-09-01 10:02:00');
+        $this->upload(RecordingType::Callee, '16513791', '2026-09-06 10:00:00', 'FAILED');
+
+        self::assertSame(
+            ConversationStatus::COMPLETED,
+            $this->repository->pageFor(self::STORE, 20)[0]->aggregateStatus(),
+        );
+    }
+
+    /** Nothing is hidden, though: the count still speaks for every recording ever uploaded. */
+    public function testEveryVersionIsStillCounted(): void
+    {
+        $this->upload(RecordingType::Caller, '16513791', '2026-09-01 10:00:00');
+        $this->upload(RecordingType::Caller, '16513791', '2026-09-02 10:00:00');
+
+        self::assertSame(2, $this->repository->pageFor(self::STORE, 20)[0]->recordingCount());
+    }
+
+    private function conversationId(string $publicId): int
+    {
+        return (int) $this->connection
+            ->createCommand(
+                'SELECT id FROM {{%audio_conversations}} WHERE public_id = :p',
+                [':p' => $publicId],
+            )
+            ->queryScalar();
+    }
+
     // ------------------------------------------------------------------ legacy shapes
 
     /** A pre-recording-type upload is a COMMON conversation and belongs in the mixed column. */

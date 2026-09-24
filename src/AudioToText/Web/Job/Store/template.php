@@ -542,6 +542,18 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                     data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
                                 Generate Text to Audio
                             </button>
+                            <?php
+                            // Offered for every row, including one whose recordings cannot be replaced:
+                            // the dialog is also where an administrator reads what an order holds and
+                            // why a replacement is refused, and a missing button answers neither.
+                    ?>
+                            <button class="a2t-slot__link" type="button"
+                                    data-a2t-manage="<?= Html::encode(
+                                        $groupUrl(AudioToTextRoute::STORE_GROUP_RECORDINGS, $group->key),
+                                    ) ?>"
+                                    data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
+                                Manage Audio
+                            </button>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -786,6 +798,32 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
     <div class="source-modal__body" data-a2t-transcript-body hidden>
         <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-transcript-scroll></div>
     </div>
+</dialog>
+
+<?php
+// Manage Audio. One section per kind of recording, each listing its current version and everything it
+// superseded, with the replacement upload inside the section it belongs to.
+//
+// The form is a real multipart POST carrying the page's CSRF field, submitted by `fetch` so the reader
+// stays on the store page — the same shape the Generate form uses. Nothing about which recording is
+// being replaced is decided here: the section supplies the recording type, and the server re-checks it
+// against the group it resolved.
+?>
+<dialog class="source-modal a2t-manage-dialog" id="a2t-manage-dialog" data-a2t-dialog
+        aria-labelledby="a2t-manage-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-manage-title">Manage Audio</h2>
+            <p class="source-modal__meta" data-a2t-manage-meta></p>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
+    </div>
+    <p class="source-modal__status" data-a2t-manage-status hidden></p>
+    <div class="source-modal__body" data-a2t-manage-body hidden>
+        <div class="a2t-manage" data-a2t-manage-slots></div>
+    </div>
+    <div class="a2t-manage-token" data-a2t-manage-token hidden><?= $csrfField ?></div>
 </dialog>
 
 <dialog class="source-modal a2t-tts-dialog" id="a2t-tts-dialog" data-a2t-dialog

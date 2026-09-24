@@ -368,15 +368,58 @@
 .a2t-notice { margin: 0 0 1rem; }
 .a2t-notice[hidden] { display: none; }
 
+/* ---- Manage Audio ------------------------------------------------------------------------------
+   One section per kind of recording, each holding its versions. Flat rows rather than cards: the
+   dialog is a list of facts about an order, and a card per version would make three recordings look
+   like nine things. */
+.a2t-manage { display: flex; flex-direction: column; gap: 1.1rem; }
+.a2t-manage__slot { display: flex; flex-direction: column; gap: .45rem; }
+.a2t-manage__head { display: flex; align-items: center; gap: .6rem; }
+.a2t-manage__title { margin: 0; font-size: .92rem; font-weight: 650; }
+.a2t-manage__note { margin: 0; font-size: .76rem; color: var(--text-faint); line-height: 1.5; }
+.a2t-manage__version {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    padding: .5rem .7rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+/* The current one is the answer to "what is this order using", so it is the one that stands out. */
+.a2t-manage__version--current { border-color: var(--border-strong); }
+.a2t-manage__vhead { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.a2t-manage__vnum { font-size: .78rem; font-weight: 700; color: var(--text); }
+.a2t-manage__vstate { font-size: .72rem; color: var(--text-muted); }
+.a2t-manage__version--current .a2t-manage__vstate { color: var(--primary); font-weight: 650; }
+/* A replacement that has not finished or has failed: said in words, never by colour alone. */
+.a2t-manage__vwarn { font-size: .72rem; color: var(--warning-text, var(--text-muted)); }
+.a2t-manage__vmeta { margin: 0; font-size: .72rem; color: var(--text-faint); }
+.a2t-manage__vlinks { display: flex; flex-wrap: wrap; gap: .2rem .75rem; margin-top: .15rem; }
+.a2t-manage__form { display: flex; flex-direction: column; gap: .5rem; }
+.a2t-manage__form[hidden] { display: none; }
+/* Tighter than the page's own fields: three of these sit inside a dialog that is mostly a list, and
+   the upload form's rhythm would push the versions below it off screen. */
+.a2t-manage__field { margin: 0; }
+.a2t-manage__field .field__label { margin-bottom: .2rem; font-size: .76rem; }
+.a2t-manage__field .field__control { font-size: .8rem; padding: .3rem .45rem; }
+.a2t-manage__field .field__hint { margin-top: .2rem; font-size: .72rem; line-height: 1.4; }
+.a2t-manage__field .a2t-checkbox { align-items: center; gap: .4rem; font-size: .8rem; }
+.a2t-manage__file { font-size: .78rem; padding: .3rem; }
+.a2t-manage__actions { display: flex; gap: .4rem; }
+.a2t-manage-token[hidden] { display: none; }
+
 /* ---- Dialogs ------------------------------------------------------------------------------------
    The shell is `.source-modal` from admin.css, so these inherit the chat dialog's surface, backdrop,
    head and close treatment. Only width and the body's scrolling are set here: a transcript must scroll
    inside the dialog rather than making the page unusable behind it. */
-.a2t-upload-dialog, .a2t-review-dialog, .a2t-transcript-dialog, .a2t-tts-dialog, .a2t-history-dialog {
+.a2t-upload-dialog, .a2t-review-dialog, .a2t-transcript-dialog, .a2t-tts-dialog, .a2t-history-dialog,
+.a2t-manage-dialog {
     max-width: min(94vw, 46rem);
     width: 100%;
 }
 .a2t-upload-dialog .source-modal__body,
+.a2t-manage-dialog .source-modal__body,
 .a2t-history-dialog .source-modal__body {
     max-height: min(70vh, 34rem);
     overflow-y: auto;

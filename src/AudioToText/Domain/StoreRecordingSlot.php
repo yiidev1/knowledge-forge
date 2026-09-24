@@ -57,7 +57,39 @@ final readonly class StoreRecordingSlot
         public bool $rolesConfirmed,
         public ?TtsRendition $rendition = null,
         public array $older = [],
+        /**
+         * Which upload of this kind this is, counting from the first: v1 is the earliest ever made.
+         *
+         * Assigned from the order the database returns rather than from a position in any list, because
+         * the two differ exactly when it matters. A replacement still being transcribed is the newest
+         * upload but not the current recording, so a number taken from "where it sits in the dialog"
+         * would call the newest one v1 and the recording it is replacing v2.
+         */
+        public int $version = 1,
     ) {}
+
+    /** The same recording, numbered. Kept here so a caller does not restate fourteen arguments. */
+    public function withVersion(int $version): self
+    {
+        return new self(
+            $this->conversationPublicId,
+            $this->jobPublicId,
+            $this->recordingType,
+            $this->sourceRole,
+            $this->status,
+            $this->provider,
+            $this->durationSeconds,
+            $this->uploadedAt,
+            $this->originalFilename,
+            $this->hasOriginalAudio,
+            $this->hasTranscript,
+            $this->hasSegments,
+            $this->rolesConfirmed,
+            $this->rendition,
+            $this->older,
+            $version,
+        );
+    }
 
     /**
      * What this recording is called on screen.

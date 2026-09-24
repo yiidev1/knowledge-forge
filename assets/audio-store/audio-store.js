@@ -1317,6 +1317,340 @@
         return controls;
     }
 
+    /* ---- Manage Audio: what an order holds, and replacing one of it ------------------------- */
+
+    var manageBody = document.querySelector('[data-a2t-manage-body]');
+    var manageSlots = document.querySelector('[data-a2t-manage-slots]');
+    var manageStatus = document.querySelector('[data-a2t-manage-status]');
+    var manageMeta = document.querySelector('[data-a2t-manage-meta]');
+    var manageToken = document.querySelector('[data-a2t-manage-token] input');
+    var manageDialog = dialogOf(manageBody);
+    var manageUrl = null;
+    var manageBusy = false;
+
+    function openManage(button) {
+        if (!manageDialog) {
+            return;
+        }
+        openDialog(manageDialog);
+        empty(manageSlots);
+        manageBody.hidden = true;
+        manageUrl = button.getAttribute('data-a2t-manage');
+        var order = button.getAttribute('data-a2t-order');
+        manageMeta.textContent = order ? 'Order ' + order : 'No order id';
+        say(manageStatus, 'Loading…');
+
+        loadManage();
+    }
+
+    /**
+     * Read, or re-read: after an upload the dialog asks again rather than guessing what changed.
+     *
+     * `keep` is the confirmation of whatever caused the re-read. Without it the reload would clear the
+     * message it was triggered by, and an administrator who had just uploaded a replacement would be
+     * shown a refreshed list and no word about whether it worked.
+     */
+    function loadManage(keep) {
+        var requested = manageUrl;
+
+        return load(requested).then(function (data) {
+            if (manageUrl !== requested) {
+                return; // The dialog moved on to another order while this was in flight.
+            }
+            paintManage(data);
+            if (keep) {
+                say(manageStatus, keep);
+            } else {
+                quiet(manageStatus);
+            }
+            manageBody.hidden = false;
+        }).catch(function (error) {
+            if (manageUrl === requested) {
+                fail(manageStatus, error.message, function () { loadManage(keep); });
+            }
+        });
+    }
+
+    function paintManage(data) {
+        empty(manageSlots);
+
+        // Why nothing here can be replaced, said once at the top rather than three times over.
+        if (!data.canReplace && data.reason) {
+            manageSlots.appendChild(el('p', 'a2t-manage__note', data.reason));
+        }
+
+        data.slots.forEach(function (slot) {
+            manageSlots.appendChild(manageSlot(slot, data));
+        });
+    }
+
+    function manageSlot(slot, data) {
+        var section = el('section', 'a2t-manage__slot');
+        var head = el('div', 'a2t-manage__head');
+        head.appendChild(el('h3', 'a2t-manage__title', slot.label));
+
+        if (slot.canReplace) {
+            // Words, and the right words: replacing an existing recording and adding a missing one are
+            // different actions to the person doing them, though the server treats them alike.
+            var button = el('button', 'btn btn--sm btn--secondary',
+                slot.versions.length ? 'Replace' : 'Upload');
+            button.type = 'button';
+            button.setAttribute('data-a2t-replace', slot.recordingType);
+            head.appendChild(button);
+        }
+
+        section.appendChild(head);
+
+        if (!slot.versions.length) {
+            section.appendChild(el('p', 'a2t-manage__note', 'Not uploaded.'));
+        }
+
+        slot.versions.forEach(function (version) {
+            // The number is the server's: it counts uploads, which is not the same as counting rows in
+            // this list once a replacement that has not finished sits above the current recording.
+            section.appendChild(manageVersion(version, version.version));
+        });
+
+        section.appendChild(replaceForm(slot, data));
+
+        return section;
+    }
+
+    /**
+     * One version: what it is, and every way of opening it.
+     *
+     * Numbered from the bottom, so v1 is the first recording ever uploaded for this slot and the number
+     * never changes when another replacement arrives above it.
+     */
+    function manageVersion(version, number) {
+        var row = el('div', 'a2t-manage__version' + (version.current ? ' a2t-manage__version--current' : ''));
+
+        var head = el('div', 'a2t-manage__vhead');
+        head.appendChild(el('span', 'a2t-manage__vnum', 'v' + number));
+        head.appendChild(el('span', 'a2t-manage__vstate',
+            version.current ? 'Current' : (version.settled ? 'Superseded' : version.statusLabel)));
+        // A replacement that has not finished, or one that failed, says so in its own words rather
+        // than being described as history it is not yet.
+        if (!version.current && !version.settled) {
+            head.appendChild(el('span', 'a2t-manage__vwarn', 'Replacement in progress'));
+        } else if (!version.current && version.status === 'FAILED') {
+            head.appendChild(el('span', 'a2t-manage__vwarn', 'Failed'));
+        }
+        row.appendChild(head);
+
+        var meta = [version.filename, version.providerLabel, stamp(version.uploadedAt)];
+        var length = seconds(version.durationSeconds);
+        if (length) {
+            meta.push(length);
+        }
+        row.appendChild(el('p', 'a2t-manage__vmeta', meta.filter(Boolean).join(' · ')));
+
+        var links = el('div', 'a2t-manage__vlinks');
+        [
+            ['originalUrl', 'Original audio'],
+            ['transcriptUrl', 'Transcript'],
+            ['reviewUrl', 'Corrections'],
+            ['aiAudioUrl', 'AI audio']
+        ].forEach(function (pair) {
+            if (!version[pair[0]]) {
+                return;
+            }
+            var link = el('a', 'a2t-slot__link', pair[1]);
+            link.href = version[pair[0]];
+            links.appendChild(link);
+        });
+
+        if (links.childNodes.length) {
+            row.appendChild(links);
+        }
+
+        return row;
+    }
+
+    /**
+     * The upload, hidden until Replace is pressed.
+     *
+     * Rendered per slot rather than shared, so the recording type is a fixed field of the form the
+     * reader is looking at rather than something a shared form has to be re-pointed at.
+     */
+    function replaceForm(slot, data) {
+        var form = document.createElement('form');
+        form.className = 'a2t-manage__form';
+        form.method = 'post';
+        form.action = data.action;
+        form.enctype = 'multipart/form-data';
+        form.hidden = true;
+        form.setAttribute('data-a2t-replace-form', slot.recordingType || '');
+
+        form.appendChild(el('p', 'a2t-manage__note',
+            'A new version is created and transcribed on its own. The current recording stays in use '
+            + 'until the replacement finishes, and stays current if it fails. Earlier transcripts, '
+            + 'corrections and generated audio stay with the version they belong to, and none of them '
+            + 'is carried over — including whether AI audio was paid for, which is asked below.'));
+
+        var type = document.createElement('input');
+        type.type = 'hidden';
+        type.name = 'recording_type';
+        type.value = slot.recordingType || '';
+        form.appendChild(type);
+
+        form.appendChild(labelledField(
+            'Audio file',
+            (function () {
+                var file = document.createElement('input');
+                file.type = 'file';
+                file.className = 'field__control a2t-manage__file';
+                file.name = 'audio';
+                file.required = true;
+                file.setAttribute('aria-label', 'Replacement audio file for ' + slot.label);
+                return file;
+            }())
+        ));
+
+        // The same two choices the store page's own upload form offers, answered by the same server
+        // object — the labels, the availability and which one starts selected all arrive as data.
+        form.appendChild(labelledField('Transcription provider', providerSelect(slot, data)));
+        form.appendChild(aiAudioField(data));
+
+        var actions = el('div', 'a2t-manage__actions');
+        var submit = el('button', 'btn btn--sm btn--primary', 'Upload replacement');
+        submit.type = 'submit';
+        actions.appendChild(submit);
+        var cancel = el('button', 'btn btn--sm', 'Cancel');
+        cancel.type = 'button';
+        cancel.setAttribute('data-a2t-replace-cancel', '');
+        actions.appendChild(cancel);
+        form.appendChild(actions);
+
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            submitReplacement(form, submit);
+        });
+
+        return form;
+    }
+
+    /** A field of the page's own shape: a label above its control. */
+    function labelledField(text, control) {
+        var field = el('div', 'field a2t-manage__field');
+        var label = el('label', 'field__label', text);
+        if (!control.id) {
+            control.id = 'a2t-mf-' + (++fieldSeq);
+        }
+        label.htmlFor = control.id;
+        field.appendChild(label);
+        field.appendChild(control);
+        return field;
+    }
+
+    var fieldSeq = 0;
+
+    /**
+     * Every provider, with the one this recording was transcribed with already chosen.
+     *
+     * A provider this machine cannot run is listed and marked rather than hidden — an administrator
+     * who cannot see the choice cannot tell a single-provider install from a broken one — and is
+     * `disabled`, which is a courtesy: the server refuses it whatever is posted.
+     */
+    function providerSelect(slot, data) {
+        var select = document.createElement('select');
+        select.className = 'field__control';
+        select.name = 'transcription_provider';
+
+        (data.providers || []).forEach(function (provider) {
+            var option = document.createElement('option');
+            option.value = provider.value;
+            option.textContent = provider.label + (provider.usable ? '' : ' — Not configured');
+            option.disabled = !provider.usable;
+            // The server named the one to start on, from the recording being replaced.
+            option.selected = provider.value === slot.provider;
+            select.appendChild(option);
+        });
+
+        return select;
+    }
+
+    /**
+     * The paid opt-in, unticked every time this form is built.
+     *
+     * Never carried over from the recording being replaced: the flag is what makes the worker buy
+     * audio unasked, and replacing a mistaken upload is not a request to pay for it again. Rebuilt
+     * rather than reset, so reopening the form cannot show a box somebody ticked and cancelled.
+     */
+    function aiAudioField(data) {
+        var field = el('div', 'field a2t-manage__field');
+        var label = el('label', 'a2t-checkbox');
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.name = 'generate_ai_audio';
+        box.value = '1';
+        box.checked = false;
+        box.disabled = !data.aiAudioConfigured;
+        label.appendChild(box);
+        label.appendChild(el('span', null, 'Generate clean AI audio after transcription'));
+        field.appendChild(label);
+        field.appendChild(el('div', 'field__hint', data.aiAudioConfigured
+            ? 'Costs money. Off by default, and never carried over from the recording being replaced.'
+            : 'Not configured on this server yet, so nothing would be generated.'));
+
+        return field;
+    }
+
+    function submitReplacement(form, submit) {
+        if (manageBusy || !manageToken) {
+            return;
+        }
+        // One at a time. A second press while the first upload is in flight would put two recordings
+        // of the same side on the order, and the reader has no reason to think they did that.
+        manageBusy = true;
+        submit.disabled = true;
+        var label = submit.textContent;
+        submit.textContent = 'Uploading…';
+
+        fetch(form.action, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': manageToken.value
+            },
+            body: new FormData(form)
+        }).then(function (response) {
+            return response.json().then(
+                function (data) { return data; },
+                function () {
+                    return { success: false, message: 'The server could not confirm this upload.' };
+                }
+            );
+        }).then(function (data) {
+            manageBusy = false;
+            submit.disabled = false;
+            submit.textContent = label;
+            say(manageStatus, data.message);
+
+            // Re-read on success: the new version appears because the server says it is there, and a
+            // refusal leaves the dialog exactly as it was so the file can be chosen again. The
+            // message is carried through the re-read, which would otherwise clear it.
+            if (data.success) {
+                loadManage(data.message);
+            }
+        }).catch(function () {
+            manageBusy = false;
+            submit.disabled = false;
+            submit.textContent = label;
+            say(manageStatus, 'Connection interrupted. Nothing was uploaded — try again.');
+        });
+    }
+
+    /** An ISO stamp as the page's other dates read. */
+    function stamp(iso) {
+        var when = new Date(iso);
+        return isFinite(when.getTime())
+            ? when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+            : '';
+    }
+
     /* ---- Listening to one recording -------------------------------------------------------- */
 
     var listen = document.querySelector('[data-a2t-listen]');
@@ -2126,6 +2460,37 @@
         if (tts && ttsDialog) {
             event.preventDefault();
             openTts(tts);
+            return;
+        }
+
+        var manage = target.closest('[data-a2t-manage]');
+        if (manage && manageDialog) {
+            event.preventDefault();
+            openManage(manage);
+            return;
+        }
+
+        var replace = target.closest('[data-a2t-replace]');
+        if (replace) {
+            event.preventDefault();
+            var slot = replace.closest('.a2t-manage__slot');
+            var form = slot ? slot.querySelector('[data-a2t-replace-form]') : null;
+            if (form) {
+                form.hidden = !form.hidden;
+            }
+            return;
+        }
+
+        var cancelReplace = target.closest('[data-a2t-replace-cancel]');
+        if (cancelReplace) {
+            event.preventDefault();
+            var owner = cancelReplace.closest('[data-a2t-replace-form]');
+            if (owner) {
+                // `reset()` restores the *rendered* defaults, which is what we want for all three
+                // fields: no file, the provider the server chose, and an unticked paid box.
+                owner.reset();
+                owner.hidden = true;
+            }
             return;
         }
 
