@@ -4,29 +4,25 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\Shared\Machine\MachineResourceProbeInterface;
+
 /**
- * Reads the machine's current headroom.
+ * The machine's headroom, plus the one question only this module needs answered.
  *
- * Behind an interface so the admission tests never touch `/proc` — a test that depends on the real
- * machine's free memory passes or fails according to what else is running, which is no test at all.
+ * Memory and load are machine-wide facts and live in {@see MachineResourceProbeInterface}, which a second
+ * background worker also reads. Extending it rather than restating it means there is one `/proc` parser on
+ * this server, and that transcription admission keeps seeing exactly the numbers it saw before.
  *
- * Implementations must throw rather than guess. An implementation that returns a plausible-looking
- * default when it cannot read `/proc` would defeat the fail-closed policy in
+ * `foreignWhisperRunning()` stays here, and that is the whole reason this interface still exists: it is a
+ * question about whisper, not about machines, and nothing outside Audio-to-Text has any business asking it.
+ *
+ * Implementations must throw rather than guess. An implementation that returned a plausible-looking
+ * default when it could not read `/proc` would defeat the fail-closed policy in
  * {@see \App\AudioToText\Application\WorkerAdmissionGuard}, which exists precisely so that an
  * unmeasurable machine is never handed an 834 MB job.
  */
-interface SystemResourceProbeInterface
+interface SystemResourceProbeInterface extends MachineResourceProbeInterface
 {
-    /**
-     * @throws \RuntimeException when the value cannot be read or parsed
-     */
-    public function availableMegabytes(): int;
-
-    /**
-     * @throws \RuntimeException when the value cannot be read or parsed
-     */
-    public function loadAveragePerCore(): float;
-
     /**
      * Best-effort check for a transcription belonging to some other project on this machine.
      *

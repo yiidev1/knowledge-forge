@@ -1,0 +1,65 @@
+# Fires the Order58 recording importer every 2 minutes.
+#
+# EXAMPLE ONLY — NOT INSTALLED. See docs/deploy/worker.md.
+#
+# ------------------------------------------------------------------------------
+# TO CHANGE THE SCHEDULE, EDIT OnUnitActiveSec BELOW AND NOTHING ELSE.
+#   OnUnitActiveSec=2min    every 2 minutes   (current)
+#   OnUnitActiveSec=5min    every 5 minutes   (gentler; matches the audio queue's real drain rate)
+#   OnUnitActiveSec=30s     every 30 seconds  (drains a backlog faster; each tick is still ONE recording)
+# Then: sudo systemctl daemon-reload && sudo systemctl restart knowledge-forge-order58-import.timer
+# No application code or configuration changes with the interval.
+# ------------------------------------------------------------------------------
+#
+# Why a timer plus a Type=oneshot service needs no outer lock file of its own: systemd will not start a
+# second run of a unit that is still active. A download normally takes seconds, but a slow provider can
+# outlast the interval, and when it does the next tick is skipped rather than queued behind it or run in
+# parallel. The application's own flock on runtime/locks/order58-import.lock remains the authority on
+# single-worker operation however the command is started, including by hand.
+#
+# `OnUnitActiveSec` measures from the last *activation*, so the effective cadence is
+# max(2 minutes, however long the tick took) — which is the behaviour wanted for a queue drained one item
+# at a time.
+#
+# --- On rate, honestly --------------------------------------------------------
+#
+# Two minutes is a ceiling on production of work, not a promise of throughput. At one recording per tick
+# this offers up to 30 items an hour, while the transcription worker measured on real recordings
+# (avg 122 s of audio, whisper RTF 1.19) drains roughly 20 an hour. The importer can therefore outrun the
+# transcriber, and that is fine — a queue is for exactly that — but it is bounded on purpose by
+# AUDIO_TRANSCRIPTION_MAX_QUEUE, which makes an over-full queue defer this importer instead of letting the
+# backlog and its WAVs grow without limit. Lengthen the interval here if that back-pressure ever becomes
+# the normal state rather than the exception.
+
+[Unit]
+Description=Run the Knowledge Forge Order58 recording importer every 2 minutes
+Documentation=file:///var/www/html/knowledge-forge/docs/deploy/worker.md
+
+[Timer]
+Unit=knowledge-forge-order58-import.service
+
+# Third in the queue of background workers after a boot, so a cold machine does not start three PHP
+# processes and MySQL's warm-up in the same few seconds:
+#
+#   knowledge-forge-audio-worker       OnBootSec=2min
+#   knowledge-forge-audio-tts-worker   OnBootSec=4min
+#   this unit                          OnBootSec=6min
+OnBootSec=6min
+OnUnitActiveSec=2min
+
+# A 2-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
+AccuracySec=30s
+
+# The boot offset above separates the FIRST ticks, but `OnUnitActiveSec` re-phases from each activation,
+# so two units on the same 2-minute cadence will drift into alignment sooner or later. This is what
+# actually keeps them from starting in the same second once that happens — and it also spreads this unit
+# against telecom-billing's audio cron, which fires on the exact minute.
+RandomizedDelaySec=30s
+
+# Missed ticks are not made up after downtime. Queued imports are still in the table and the next ordinary
+# tick collects them, so replaying a backlog of timer events would only bunch up work for no benefit —
+# and on a small server, bunching up work is the one thing worth avoiding.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

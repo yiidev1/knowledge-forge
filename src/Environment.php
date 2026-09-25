@@ -133,6 +133,15 @@ final class Environment
         // deploying. Attempts match the sync budget so two background features retry alike.
         'ORDER58_RECORDING_IMPORT_ENABLED' => ['type' => 'bool', 'default' => false],
         'ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
+        // Machine headroom the importer wants before it claims a recording. Sized from the work, not from
+        // the box: a tick was measured at 44 MB steady and about 92 MB while ffprobe runs, so 350 MB is
+        // roughly 3.8x the peak. Deliberately far below the transcription worker's threshold — that one
+        // guards a 904 MB whisper job, and applying its number here would stall downloads on a small
+        // server in exactly the conditions where the queue most needs feeding.
+        'ORDER58_IMPORT_MIN_AVAILABLE_MB' => ['type' => 'int', 'default' => 350, 'min' => 0, 'max' => 1048576],
+        // Per logical CPU, so one value holds on any host. Matches the transcription worker's figure:
+        // "how busy is too busy" is a property of the machine, not of the work.
+        'ORDER58_IMPORT_MAX_LOAD_PER_CORE' => ['type' => 'float', 'default' => 1.5, 'min' => 0.0, 'max' => 1000.0],
         // When false, Order58 store-profile documents stay in the DB/index but are hidden on the KB
         // documents list. Set true to show them again without code changes.
         'ORDER58_SHOW_STORE_PROFILE_DOCUMENTS' => ['type' => 'bool', 'default' => false],

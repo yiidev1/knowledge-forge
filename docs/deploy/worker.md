@@ -105,23 +105,104 @@ Fetches the call recordings an administrator queued on `/admin/order58/calls` an
 normal Audio-to-Text pipeline. Manual only in Phase A: this command imports what was **already queued**
 from the page, and discovers nothing by itself.
 
-```cron
-*/2 * * * * /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/locks/order58-import-cron.lock /usr/bin/nice -n 10 /usr/bin/php /var/www/html/knowledge-forge/yii kf:order58:import-recordings --once >> /var/www/html/knowledge-forge/runtime/logs/order58-import.log 2>&1
+**The scheduler is a systemd timer**, matching the two audio workers. Units live in
+[`docs/server/systemd/`](../server/systemd/):
+
+```
+knowledge-forge-order58-import.service     one recording, then exit
+knowledge-forge-order58-import.timer       every 2 minutes, offset behind the audio timers
 ```
 
+```bash
+sudo install -o root -g root -m 0644 \
+  /var/www/html/knowledge-forge/docs/server/systemd/knowledge-forge-order58-import.service \
+  /var/www/html/knowledge-forge/docs/server/systemd/knowledge-forge-order58-import.timer \
+  /etc/systemd/system/
+sudo -u www-data mkdir -p /var/www/html/knowledge-forge/runtime/tmp   # TMPDIR, see below
+sudo systemctl daemon-reload
+sudo systemctl enable --now knowledge-forge-order58-import.timer
+```
+
+**Run one scheduler, never two.** There is no cron line for this command, deliberately — see the fallback
+note at the end of this section.
+
 * **Off unless enabled.** Without `ORDER58_RECORDING_IMPORT_ENABLED=true` the command exits immediately
-  and says so. The recording API is gated by an IP allowlist, so enabling it belongs to a server the
-  client has allowlisted — not to a deployment.
-* **Three lock files, all different**, and this matters more than it looks:
-  * `order58-import-cron.lock` — the wrapper above, so a slow run does not stack.
-  * `runtime/locks/order58-import.lock` — the command's own, taken inside PHP.
+  and says so, before the resource check and before any claim. The recording API is gated by an IP
+  allowlist, so enabling it belongs to a server the client has allowlisted — not to a deployment.
+* **Two lock files, not three.** A systemd timer will not start a second run of a unit that is still
+  active, so the outer wrapper lock a cron line needs does not exist here.
+  * `runtime/locks/order58-import.lock` — the command's own, taken inside PHP. **Keep it**: it is the
+    authority however the command starts, including a developer running it by hand.
   * `runtime/audio-to-text/worker.lock` — the transcription worker's, which this must **not** share.
     Sharing it would make a download block a transcription for no reason.
-  Giving the wrapper and the command the same file makes every run skip; that mistake is already
-  recorded in `docs/server/cron/knowledge-forge-audio-transcription`.
+  If you ever fall back to cron, the wrapper needs a *third*, dedicated file — giving the wrapper and the
+  command the same file makes every run skip, a mistake already recorded in
+  `docs/server/cron/knowledge-forge-audio-transcription`.
 * **One recording at a time.** The provider's rate limits are undocumented and the pipeline this feeds
   transcribes serially, so fetching in parallel would only move the queue and raise the chance of a 429.
+  `--once` is what enforces it; without it the command is a permanent foreground worker that holds the
+  lock for ever and makes every timer tick skip.
 * A killed run leaves its item claimed; the next run returns anything claimed for more than 15 minutes.
+
+### Resource admission, and why it is not the transcription worker's
+
+Each pass asks whether the machine can spare the room **before** it claims anything. A pass that cannot
+leaves the row exactly as it found it — not claimed, not failed, no attempt spent — logs
+`order58_import_deferred`, and exits `0` so the timer keeps its cadence. It fails closed: an unreadable
+`/proc` defers.
+
+| Variable | Default | Why |
+|---|---|---|
+| `ORDER58_IMPORT_MIN_AVAILABLE_MB` | `350` | ~3.8× the measured tick peak (44 MB steady, ~92 MB while ffprobe runs) |
+| `ORDER58_IMPORT_MAX_LOAD_PER_CORE` | `1.5` | per core, so one value holds on any host; same figure the audio worker uses |
+
+The threshold is deliberately far below `AUDIO_WORKER_MIN_AVAILABLE_MB` (1500), which guards a 904 MB
+whisper job. Reusing that number here would make a 92 MB download wait for a gigabyte — and because the
+gate fails closed, on a small server that means waiting indefinitely.
+
+The memory and load reading is shared with the transcription worker
+(`App\Shared\Machine\ResourceAdmission`), with each worker passing its own `ResourceBudget`. What is *not*
+shared is anything about whisper: this importer runs none, so it never waits on `pgrep whisper-cli` or on
+`AUDIO_WORKER_FOREIGN_LOCKS`.
+
+### Queue back-pressure
+
+The importer produces up to 30 items an hour on a 2-minute timer, while the transcription worker drains
+roughly 20 (measured: avg 122 s of audio, whisper RTF 1.19). `AUDIO_TRANSCRIPTION_MAX_QUEUE=20` bounds the
+backlog and the retained WAVs that come with it.
+
+Reaching the cap loses nothing: `queueFull` is not marked as a bad recording, so the Order58 item is
+requeued with exponential backoff and succeeds once the queue drains. The only cost is a re-download on
+the next attempt, because the cap is checked after the file has been moved into the job directory.
+
+### TMPDIR
+
+The unit sets `Environment=TMPDIR=/var/www/html/knowledge-forge/runtime/tmp`. The downloader writes to
+`sys_get_temp_dir()` and the hand-off is a `rename()`, which **fails across filesystems**; pointing TMPDIR
+into the runtime tree makes source and destination the same filesystem by construction. It also avoids a
+tmpfs `/tmp` holding a whole recording in RAM.
+
+**The directory must exist and be writable by `www-data` before the first tick.** A missing directory is
+not an error `tempnam()` reports — it silently falls back to the system `/tmp` — so the command checks at
+startup and refuses to run rather than quietly undoing the setting.
+
+`PrivateTmp=true` is deliberately **not** set on this unit, unlike the two audio ones: they never rename a
+file out of `/tmp`, and this one does. Before adding it, check
+`df -T /tmp …/runtime` and `stat -c '%d %n' /tmp …/runtime`.
+
+### Cron fallback
+
+**Fallback only, for a host without systemd. NEVER run this together with the timer.** It needs its own
+dedicated wrapper lock, which the timer does not:
+
+```cron
+*/2 * * * * TMPDIR=/var/www/html/knowledge-forge/runtime/tmp /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/locks/order58-import-cron.lock /usr/bin/nice -n 15 /usr/bin/ionice -c 3 /usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:order58:import-recordings --once >> /var/www/html/knowledge-forge/runtime/logs/order58-import.log 2>&1
+```
+
+Note what cron cannot give you and the unit does: `CPUQuota`, `MemoryHigh` and `MemoryMax` are
+kernel-enforced ceilings, while `nice`/`ionice` are only priority hints. On a small server with no swap
+that difference is the whole point — PHP's CLI `memory_limit` is `-1`, so the cgroup is the only backstop
+against a regression that buffers a recording instead of streaming it.
 
 **If `CRON_TZ` is unsupported** (e.g. BusyBox cron), do **not** convert to a fixed UTC hour (New York shifts
 between EST/EDT). Either run the schedulers hourly (the app's own `APP_TIMEZONE` due-check fires them at the right

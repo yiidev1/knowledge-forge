@@ -1,0 +1,136 @@
+# Order58 call-recording importer for Knowledge Forge.
+#
+# EXAMPLE ONLY — NOT INSTALLED. Nothing in this project writes to /etc/systemd. See
+# docs/deploy/worker.md for the install commands and run them yourself.
+#
+# One tick = fetch at most ONE queued recording, hand it to the Audio-to-Text queue, exit. Paired with
+# the .timer beside this file. Type=oneshot for the same reason the two audio units are: systemd will
+# not start a second run of a unit that is still active, so a slow download delays the next tick
+# instead of racing it — which is also why this unit needs no outer flock wrapper the way a cron line
+# would.
+#
+# --- Why this is a SEPARATE unit ----------------------------------------------
+#
+# It is not a drainer inside kf:worker:run, and not a step inside the transcription worker. It downloads
+# megabytes over a third party's network and then waits on the audio pipeline; running that inside
+# either would stall document processing, Order58 sync, or transcription behind every recording.
+#
+# Separate unit, separate schedule, separate lock: the application takes an flock on
+# runtime/locks/order58-import.lock, never runtime/audio-to-text/worker.lock. Sharing the transcription
+# worker's lock would make a download block a transcription for no reason at all.
+#
+# --- What this process actually does, and does not do -------------------------
+#
+# Measured on the development host, and the numbers are why the ceilings below are small:
+#
+#   empty tick, peak RSS                    43.9 MB
+#   PHP heap while streaming a 30 MB WAV      2.0 MB   (independent of file size — 256 KB chunks)
+#   ffprobe child, header-only                47.6 MB, 0.06 s
+#   realistic tick peak (parent + child)     ~92 MB
+#
+# For contrast, one whisper transcription peaks at 904 MB. This process runs NO whisper, NO diarization,
+# NO Deepgram transcription and NO OpenAI call. It performs one HTTPS GET, streams the body to a
+# temporary file, verifies the RIFF/WAVE header, and enqueues. The expensive work happens later, in
+# knowledge-forge-audio-worker, behind that unit's own much larger admission threshold.
+
+[Unit]
+Description=Knowledge Forge Order58 recording importer (one recording, then exit)
+Documentation=file:///var/www/html/knowledge-forge/docs/deploy/worker.md
+After=network-online.target mysql.service
+Wants=network-online.target mysql.service
+
+[Service]
+Type=oneshot
+
+# www-data, and this is not optional. Audio job directories are created mode 0700 by PHP-FPM, which runs
+# as www-data, and this process writes into that tree when it hands a recording over. As any other user
+# every import would fail at the last step, after the download had already been paid for.
+User=www-data
+Group=www-data
+
+WorkingDirectory=/var/www/html/knowledge-forge
+ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:order58:import-recordings --once
+
+# /usr/bin/php8.2 is pinned rather than /usr/bin/php: the latter is an update-alternatives symlink a
+# later PHP install could silently repoint.
+#
+# --once is load-bearing, not a nicety. Without it the command is a permanent foreground worker that
+# loops with a five-second sleep, holds the internal lock for ever, and makes every scheduled tick skip.
+
+# --- Where the temporary download lands --------------------------------------
+#
+# The downloader writes to sys_get_temp_dir() and the hand-off is a rename(), which FAILS across
+# filesystems. Pointing TMPDIR at the project's own runtime tree makes source and destination the same
+# filesystem by construction, so the rename is a metadata operation and can never fail for that reason.
+#
+# It also removes two hazards a system /tmp can carry: on a tmpfs /tmp the whole recording would sit in
+# RAM, which on a 4 GB server with no swap is exactly the memory nobody budgeted for.
+#
+# The directory must exist and be writable by www-data BEFORE the first tick. A missing directory is not
+# an error tempnam() reports — it silently falls back to the system /tmp — so the command checks for it
+# at startup and refuses to run rather than quietly undoing this setting.
+Environment=TMPDIR=/var/www/html/knowledge-forge/runtime/tmp
+
+# Generous next to the work, tight next to a wedge. The provider's own ceilings are a 10s connect and a
+# 60s read, and a real 8 kHz mono call is a few megabytes, so an honest tick finishes in seconds. 300
+# covers a slow transfer without letting a hung socket hold the lock for the rest of the afternoon.
+#
+# A SIGKILL here is survivable by design: the row is left FETCHING and the next run's stale sweep returns
+# anything claimed for more than 15 minutes to PENDING, so the recording is retried rather than lost.
+TimeoutStartSec=300
+
+# --- Resource ceilings (cgroup v2) -------------------------------------------
+#
+# Sized from the ~92 MB measurement above, not from the machine. On a 4 GB server with no swap there is
+# nowhere for an overrun to spill, so the point of these numbers is not to ration a 44 MB process — it is
+# that a future regression which buffers a whole response instead of streaming it cannot take the box
+# down with it. PHP's CLI memory_limit is -1 here, so this cgroup is the only backstop that exists.
+#
+# MemoryHigh throttles by reclaiming; MemoryMax is the OOM backstop. Being killed at MemoryMax costs one
+# claimed row and a partial temporary file, both of which the stale sweep and the unlink-on-failure path
+# already handle.
+CPUQuota=25%
+MemoryHigh=192M
+MemoryMax=256M
+
+# Priority hints on top of the ceilings: nginx, PHP-FPM, MySQL and both audio workers are served first.
+# This work is not time-critical — a recording that arrives two minutes later is indistinguishable.
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# --- Logging ----------------------------------------------------------------
+# journald, so there is no logfile to grow unbounded or rotate by hand. The application's own logger
+# writes to stdout independently of console verbosity, so deferrals and failures are captured here too:
+#   journalctl -u knowledge-forge-order58-import -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kf-order58-import
+
+# --- Hardening --------------------------------------------------------------
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Writable: its own runtime tree only — which is also where TMPDIR points, so the download and the
+# hand-off both stay inside one allowed path. Outbound HTTPS is needed, so no IP restrictions here.
+ReadWritePaths=/var/www/html/knowledge-forge/runtime
+
+# NOTE: deliberately no PrivateTmp=true, unlike the two audio units.
+#
+# Those units never rename a file out of /tmp, so a private /tmp costs them nothing. This one does. A
+# private /tmp is a fresh mount, and whether a rename out of it reaches the project's filesystem depends
+# on how the host mounts /tmp — a question that cannot be answered from a unit file. TMPDIR above solves
+# the same isolation problem for this process by keeping the temporary file inside ReadWritePaths, with
+# no filesystem ambiguity at all. Do not add PrivateTmp here without re-checking:
+#   df -T /tmp /var/www/html/knowledge-forge/runtime
+#   stat -c '%d %n' /tmp /var/www/html/knowledge-forge/runtime
+
+# NOTE: no EnvironmentFile=. The application reads .env itself from WorkingDirectory, exactly as both
+# audio units do — one place for configuration, and no credential enters a unit file or
+# `systemctl show` output.
+
+[Install]
+WantedBy=multi-user.target

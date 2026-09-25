@@ -2,13 +2,16 @@
 
 declare(strict_types=1);
 
-namespace App\AudioToText\Application;
+namespace App\Shared\Machine;
 
 /**
- * Whether this tick may claim a job, and if not, why.
+ * Whether this tick may start work, and if not, why.
  *
- * The reason is carried for the log; the admin page shows only the generic deferral wording, because a
+ * The reason is carried for the log; an admin surface shows only generic deferral wording, because a
  * server's free memory and load average are not facts a web page needs to publish.
+ *
+ * Lives in `Shared` because {@see ResourceAdmission} has to return something and it may not name any
+ * business module's types. Every worker that asks the question gets the same answer shape.
  */
 final readonly class AdmissionDecision
 {

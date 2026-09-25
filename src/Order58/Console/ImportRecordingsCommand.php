@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Order58\Console;
 
 use App\Order58\Application\RecordingImportProcessor;
+use App\Shared\Machine\ResourceAdmission;
+use App\Shared\Machine\ResourceBudget;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -21,7 +23,10 @@ use function fopen;
 use function ftruncate;
 use function fwrite;
 use function getmypid;
+use function is_dir;
 use function is_resource;
+use function is_writable;
+use function sprintf;
 use function usleep;
 
 use const LOCK_EX;
@@ -47,6 +52,20 @@ use const LOCK_UN;
  * No batching and no concurrency. The provider is a third party with undocumented rate limits, and the
  * pipeline this feeds already runs one transcription at a time — fetching ten recordings in parallel
  * would only move the queue from here to there, while multiplying the chance of a 429.
+ *
+ * ## It asks whether the machine can spare the room, before it claims anything
+ *
+ * A download is cheap — a tick was measured at 44 MB, about 92 MB while ffprobe runs — but cheap is not
+ * free, and on a server with no swap there is nowhere for a bad moment to spill. So each pass asks
+ * {@see ResourceAdmission} first, against a budget sized from that measurement rather than from the
+ * transcription worker's much larger one. Deferring costs minutes on work that is not time-critical;
+ * being killed by the OOM reaper costs a claimed row and a partial file.
+ *
+ * What it does **not** wait for is anything to do with whisper — no `pgrep`, no foreign project's
+ * transcription lock. It runs no whisper, so waiting on one would defer ticks for no reason.
+ *
+ * A deferred pass leaves the queue exactly as it found it: nothing claimed, nothing failed, no attempt
+ * consumed, and an exit code of 0 so the next timer tick simply tries again.
  */
 #[AsCommand(
     name: 'kf:order58:import-recordings',
@@ -65,8 +84,19 @@ final class ImportRecordingsCommand extends Command
 
     public function __construct(
         private readonly RecordingImportProcessor $processor,
+        private readonly ResourceAdmission $admission,
+        private readonly ResourceBudget $budget,
         private readonly LoggerInterface $logger,
         private readonly string $lockFile,
+        /**
+         * Where a download lands, which is whatever `tempnam()` will use.
+         *
+         * Passed in rather than read here so the startup check can be tested: PHP caches
+         * `sys_get_temp_dir()` for the life of the process, so a test cannot move it with `putenv()`. The
+         * container resolves it with the same call the downloader makes, in the same process, so the two
+         * cannot disagree about which directory is being checked.
+         */
+        private readonly string $temporaryDirectory,
         private readonly bool $enabled,
     ) {
         parent::__construct();
@@ -94,6 +124,20 @@ final class ImportRecordingsCommand extends Command
             return ExitCode::OK;
         }
 
+        // A temporary directory that does not exist is not an error `tempnam()` reports — it silently
+        // falls back to the system one. On a host whose /tmp is a different filesystem that turns the
+        // hand-off rename into a failure, and on a tmpfs /tmp it puts the whole recording in RAM. Both
+        // are worth refusing to start over, because both are invisible once running.
+        if (!is_dir($this->temporaryDirectory) || !is_writable($this->temporaryDirectory)) {
+            $io->error(sprintf(
+                'The temporary directory "%s" does not exist or is not writable, so a download has '
+                    . 'nowhere safe to land. Create it for this user, or clear TMPDIR.',
+                $this->temporaryDirectory,
+            ));
+
+            return ExitCode::DATAERR;
+        }
+
         if (!$this->acquireLock()) {
             // Not an error: the previous run is still going, which is exactly what the lock is for.
             $io->warning('Another Order58 recording import is already running.');
@@ -113,6 +157,27 @@ final class ImportRecordingsCommand extends Command
             $processed = 0;
 
             while (true) {
+                // Before the claim, never after. A pass that cannot afford the work must leave the queue
+                // exactly as it found it — nothing claimed, nothing failed, no attempt spent — so the
+                // next tick picks up the same item with the same budget.
+                $decision = $this->admission->decide($this->budget);
+
+                if (!$decision->admitted) {
+                    $this->logger->info('The Order58 recording importer deferred a pass.', [
+                        'reason' => 'order58_import_deferred',
+                        'error_message' => (string) $decision->reason,
+                    ]);
+                    $io->writeln('  deferred due to system resources: ' . (string) $decision->reason);
+
+                    if ($once) {
+                        break;
+                    }
+
+                    usleep(self::IDLE_SLEEP_SECONDS * 1_000_000);
+
+                    continue;
+                }
+
                 $did = $this->processor->processNext();
 
                 if ($did) {

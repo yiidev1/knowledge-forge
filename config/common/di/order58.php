@@ -25,6 +25,7 @@ use App\Order58\Infrastructure\DbCallImportRepository;
 use App\Order58\Infrastructure\DbStoreAudioCounts;
 use App\Order58\Infrastructure\DbStoreDirectoryReader;
 use App\Order58\Infrastructure\DbSyncRunRepository;
+use App\Shared\Machine\ResourceBudget;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Psr7\HttpFactory;
 use Psr\Http\Client\ClientInterface as PsrHttpClient;
@@ -56,12 +57,30 @@ return [
 
     // The recording importer. The lock file is its own — sharing the transcription worker's would make
     // the two needlessly exclusive, and sharing a cron wrapper's would make every run skip.
+    //
+    // Its resource budget is its own too, and much smaller than the transcription worker's. A tick was
+    // measured at 44 MB, about 92 MB while ffprobe runs, so the default 350 MB is roughly 3.8x its peak.
+    // Handing it the transcription threshold would make a 92 MB download wait for a gigabyte, which on a
+    // small server means waiting for ever — the guard fails closed by design.
     App\Order58\Console\ImportRecordingsCommand::class => [
         '__construct()' => [
+            'budget' => Reference::to('order58.import.budget'),
             'lockFile' => DynamicReference::to(
                 static fn(Aliases $aliases): string => $aliases->get('@runtime/locks') . '/order58-import.lock',
             ),
+            // The same call the downloader makes, in the same process, so the startup check and the actual
+            // download can never disagree about which directory is in use. Steered by TMPDIR in the
+            // systemd unit so the temporary file shares a filesystem with its destination.
+            'temporaryDirectory' => DynamicReference::to(static fn(): string => sys_get_temp_dir()),
             'enabled' => $params['app/order58']['recordingImportEnabled'],
+        ],
+    ],
+
+    'order58.import.budget' => [
+        'class' => ResourceBudget::class,
+        '__construct()' => [
+            'minAvailableMegabytes' => $params['app/order58']['recordingImportMinAvailableMb'],
+            'maxLoadPerCore' => $params['app/order58']['recordingImportMaxLoadPerCore'],
         ],
     ],
 

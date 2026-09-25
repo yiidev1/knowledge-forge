@@ -16,6 +16,8 @@ use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Shared\Infrastructure\Db\DbParams;
+use App\Shared\Machine\MachineResourceProbeInterface;
+use App\Shared\Machine\ProcMachineResourceProbe;
 use App\Shared\Infrastructure\Log\SafeLogContext;
 use App\Shared\Infrastructure\Log\SecretRedactor;
 use App\Shared\Infrastructure\Storage\StoragePaths;
@@ -29,6 +31,11 @@ use Yiisoft\Definitions\Reference;
 // only boundary where a string key becomes a constructor argument; everything downstream is typed.
 return [
     ClockInterface::class => SystemClock::class,
+
+    // One `/proc` reader for the whole application. Two background workers ask it the same two questions
+    // with different ideas of what counts as enough room, and each passes its own ResourceBudget — the
+    // threshold belongs to the work, the measurement belongs to the machine.
+    MachineResourceProbeInterface::class => ProcMachineResourceProbe::class,
 
     AppTimeZone::class => [
         '__construct()' => ['timezone' => $params['app/timezone']],

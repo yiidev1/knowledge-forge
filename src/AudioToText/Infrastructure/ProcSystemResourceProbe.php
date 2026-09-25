@@ -6,20 +6,19 @@ namespace App\AudioToText\Infrastructure;
 
 use App\AudioToText\Domain\SystemResourceProbeInterface;
 use App\AudioToText\Infrastructure\Process\ProcessRunner;
+use App\Shared\Machine\MachineResourceProbeInterface;
 use RuntimeException;
 
-use function file_get_contents;
-use function is_numeric;
-use function max;
-use function preg_match;
-use function trim;
-
 /**
- * Reads machine headroom from `/proc`, which is free, synchronous and needs no privileges.
+ * This module's probe: the shared machine reading, plus the whisper process scan.
  *
- * Every method throws rather than guessing. That is the contract the fail-closed admission policy
- * depends on: a probe that quietly returned "plenty of memory" when it could not read `/proc/meminfo`
- * would turn a safety mechanism into a decoration.
+ * The `/proc/meminfo` and `/proc/loadavg` parsing used to live here and now lives in
+ * {@see \App\Shared\Machine\ProcMachineResourceProbe}, because a second background worker needs the same
+ * two numbers and two copies of that parsing would eventually disagree. The values are unchanged and the
+ * delegation is unconditional, so transcription admission behaves exactly as it did before.
+ *
+ * What stays is `foreignWhisperRunning()`. It is specific to one binary belonging to one pipeline, so it
+ * would be wrong in `Shared` — a worker that runs no whisper has no reason to ask, and no reason to wait.
  */
 final readonly class ProcSystemResourceProbe implements SystemResourceProbeInterface
 {
@@ -27,42 +26,17 @@ final readonly class ProcSystemResourceProbe implements SystemResourceProbeInter
 
     public function __construct(
         private ProcessRunner $processes,
+        private MachineResourceProbeInterface $machine,
     ) {}
 
-    /**
-     * `MemAvailable`, not `MemFree`.
-     *
-     * The distinction matters on a machine like this one, where 6.6 GB sits in page cache: `MemFree`
-     * would report a few hundred megabytes and defer every job forever, while the kernel's own estimate
-     * of what a new allocation could actually obtain is several gigabytes.
-     */
     public function availableMegabytes(): int
     {
-        $contents = @file_get_contents('/proc/meminfo');
-        if ($contents === false) {
-            throw new RuntimeException('/proc/meminfo could not be read');
-        }
-
-        if (preg_match('/^MemAvailable:\s+(\d+)\s+kB$/m', $contents, $matches) !== 1) {
-            throw new RuntimeException('/proc/meminfo contained no MemAvailable line');
-        }
-
-        return (int) ((int) $matches[1] / 1024);
+        return $this->machine->availableMegabytes();
     }
 
     public function loadAveragePerCore(): float
     {
-        $contents = @file_get_contents('/proc/loadavg');
-        if ($contents === false) {
-            throw new RuntimeException('/proc/loadavg could not be read');
-        }
-
-        $parts = preg_split('/\s+/', trim($contents));
-        if ($parts === false || !isset($parts[0]) || !is_numeric($parts[0])) {
-            throw new RuntimeException('/proc/loadavg could not be parsed');
-        }
-
-        return (float) $parts[0] / (float) $this->coreCount();
+        return $this->machine->loadAveragePerCore();
     }
 
     /**
@@ -86,21 +60,5 @@ final readonly class ProcSystemResourceProbe implements SystemResourceProbeInter
             1 => false,
             default => throw new RuntimeException('pgrep returned exit code ' . $result->exitCode),
         };
-    }
-
-    /**
-     * Logical CPUs. `nproc` is not used: it means shelling out on every tick for a number that is
-     * sitting in a file, and `/proc/cpuinfo` is available even where coreutils is not.
-     */
-    private function coreCount(): int
-    {
-        $contents = @file_get_contents('/proc/cpuinfo');
-        if ($contents === false) {
-            return 1;
-        }
-
-        $count = preg_match_all('/^processor\s*:/m', $contents);
-
-        return max(1, (int) $count);
     }
 }

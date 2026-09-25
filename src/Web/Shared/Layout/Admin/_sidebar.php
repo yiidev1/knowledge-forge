@@ -36,7 +36,7 @@ $items = [
     ['label' => 'Audio to Text', 'icon' => '🎙', 'route' => 'audio-to-text', 'match' => ['audio-to-text']],
     // Its own entry rather than a link inside Audio to Text: the page is about Order58 calls, and the
     // prefix covers its two POST routes so they stay highlighted after a redirect.
-    // ['label' => 'Order58 calls', 'icon' => '📞', 'route' => 'order58.calls', 'match' => ['order58.calls']],
+    ['label' => 'Order58 calls', 'icon' => '📞', 'route' => 'order58.calls', 'match' => ['order58.calls']],
 ];
 
 $navItems = [];

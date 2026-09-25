@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace App\AudioToText\Application;
 
 use App\AudioToText\Domain\SystemResourceProbeInterface;
+use App\Shared\Machine\AdmissionDecision;
+use App\Shared\Machine\ResourceAdmission;
+use App\Shared\Machine\ResourceBudget;
 use Throwable;
 
-use function sprintf;
-
 /**
- * Decides whether this tick should claim a queued job at all.
+ * Decides whether this tick should claim a queued transcription at all.
  *
  * Checked *before* the claim, never after: a job that is not admitted stays QUEUED and untouched. It is
  * not failed, not retried and not counted against anything — the queue simply waits for a tick that can
@@ -24,6 +25,13 @@ use function sprintf;
  *
  * Thresholds are deliberately generous. This exists for the pathological case, not to ration normal
  * use: on an idle machine every check passes with room to spare.
+ *
+ * ## Two layers, one order
+ *
+ * The memory and load questions are machine-wide and are answered by {@see ResourceAdmission} against
+ * this module's own {@see ResourceBudget} — the same mechanism a second, much lighter worker uses with a
+ * much smaller budget. The whisper process scan stays here because it is about whisper, and it runs last
+ * because it is the least reliable of the three.
  */
 final readonly class WorkerAdmissionGuard
 {
@@ -34,32 +42,13 @@ final readonly class WorkerAdmissionGuard
 
     public function decide(): AdmissionDecision
     {
-        try {
-            $available = $this->probe->availableMegabytes();
-        } catch (Throwable $e) {
-            return AdmissionDecision::defer('available memory could not be read: ' . $e->getMessage());
-        }
+        $machine = (new ResourceAdmission($this->probe))->decide(new ResourceBudget(
+            $this->settings->worker->minAvailableMegabytes,
+            $this->settings->worker->maxLoadPerCore,
+        ));
 
-        if ($available < $this->settings->worker->minAvailableMegabytes) {
-            return AdmissionDecision::defer(sprintf(
-                'available memory %d MB is below the %d MB required',
-                $available,
-                $this->settings->worker->minAvailableMegabytes,
-            ));
-        }
-
-        try {
-            $load = $this->probe->loadAveragePerCore();
-        } catch (Throwable $e) {
-            return AdmissionDecision::defer('system load could not be read: ' . $e->getMessage());
-        }
-
-        if ($load > $this->settings->worker->maxLoadPerCore) {
-            return AdmissionDecision::defer(sprintf(
-                'load per core %.2f exceeds the %.2f threshold',
-                $load,
-                $this->settings->worker->maxLoadPerCore,
-            ));
+        if (!$machine->admitted) {
+            return $machine;
         }
 
         // Best-effort, and labelled as such wherever it appears. It catches a foreign worker started by
