@@ -63,6 +63,9 @@ use Yiisoft\Definitions\Reference;
  */
 
 return [
+    // The seam the Order58 recording importer ingests through: Audio-to-Text implements it, and the
+    // importer depends on the interface, so neither module has to name the other.
+    App\Shared\Audio\AudioIngestionPortInterface::class => App\AudioToText\Application\AudioIngestionService::class,
     TranscriptionJobRepositoryInterface::class => DbTranscriptionJobRepository::class,
     AudioConversationRepositoryInterface::class => DbAudioConversationRepository::class,
     StoreOrderGroupRepositoryInterface::class => DbStoreOrderGroupRepository::class,

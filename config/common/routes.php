@@ -21,6 +21,7 @@ use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
+use App\Order58\Web\Calls as Order58Calls;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Stores as Order58Stores;
@@ -297,6 +298,19 @@ return [
             Route::get('/admin/order58/store-audio')
                 ->action(Order58StoreAudio\Action::class)
                 ->name('order58.store-audio'),
+
+            // Manage Order58 Calls. The page itself contacts no provider; the call list is fetched only
+            // when `?store=&load=1` is present, which is what its Load button submits. Sync writes rows
+            // and returns — recordings are fetched by `kf:order58:import-recordings`, never in a request.
+            Route::get('/admin/order58/calls')
+                ->action(Order58Calls\Action::class)
+                ->name('order58.calls'),
+            Route::post('/admin/order58/calls/sync')
+                ->action(Order58Calls\SyncAction::class)
+                ->name('order58.calls.sync'),
+            Route::post('/admin/order58/calls/retry')
+                ->action(Order58Calls\RetryAction::class)
+                ->name('order58.calls.retry'),
 
             // Hidden, URL-only manual probe of the two external recording endpoints. Diagnostic only: it
             // reads and writes nothing, enqueues nothing, and is not linked from any navigation.

@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Order58;
 
-use App\Order58\Web\TestRecordingChannels\CallSummary;
-use App\Order58\Web\TestRecordingChannels\ChannelApiProbe;
-use App\Order58\Web\TestRecordingChannels\ChannelDiagnosis;
-use App\Order58\Web\TestRecordingChannels\ChannelRequestMapping;
-use App\Order58\Web\TestRecordingChannels\LatestCallsRequest;
+use App\Integration\Order58Recording\CallSummary;
+use App\Integration\Order58Recording\ChannelApiProbe;
+use App\Integration\Order58Recording\ChannelDiagnosis;
+use App\Integration\Order58Recording\ChannelRequestMapping;
+use App\Integration\Order58Recording\LatestCallsRequest;
 use Codeception\Test\Unit;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Exception\ConnectException;

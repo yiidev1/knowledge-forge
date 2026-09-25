@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Order58\Web\TestRecordingChannels;
+namespace App\Integration\Order58Recording;
 
 use function array_slice;
 use function dirname;
@@ -135,6 +135,6 @@ final readonly class FixtureRecordingSource
     private function directory(): string
     {
         // src/Order58/Web/TestRecordingChannels -> project root
-        return dirname(__DIR__, 4) . '/' . self::DIRECTORY;
+        return dirname(__DIR__, 3) . '/' . self::DIRECTORY;
     }
 }

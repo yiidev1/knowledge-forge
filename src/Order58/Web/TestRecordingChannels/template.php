@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-use App\Order58\Web\TestRecordingChannels\ChannelDiagnosis;
-use App\Order58\Web\TestRecordingChannels\ChannelProbeResult;
-use App\Order58\Web\TestRecordingChannels\FixtureAvailability;
-use App\Order58\Web\TestRecordingChannels\LatestCallsResult;
-use App\Order58\Web\TestRecordingChannels\RecordingChannel;
+use App\Integration\Order58Recording\ChannelDiagnosis;
+use App\Integration\Order58Recording\ChannelProbeResult;
+use App\Integration\Order58Recording\FixtureAvailability;
+use App\Integration\Order58Recording\LatestCallsResult;
+use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Web\TestRecordingChannels\RecordingChannelsAsset;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;

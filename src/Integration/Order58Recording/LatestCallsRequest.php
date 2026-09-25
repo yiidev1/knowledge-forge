@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Order58\Web\TestRecordingChannels;
+namespace App\Integration\Order58Recording;
 
 use function preg_match;
 use function sprintf;

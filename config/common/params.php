@@ -206,6 +206,8 @@ return [
         'pageSize' => Environment::int('ORDER58_API_PAGE_SIZE'),
         'syncMaxAttempts' => Environment::int('ORDER58_SYNC_MAX_ATTEMPTS'),
         'pagesPerRun' => Environment::int('ORDER58_SYNC_PAGES_PER_RUN'),
+        'recordingImportEnabled' => Environment::bool('ORDER58_RECORDING_IMPORT_ENABLED'),
+        'recordingImportMaxAttempts' => Environment::int('ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
         // Fallback credential validation (a separate Order58 API; see Order58ValidateCredentials).
         'validateUrl' => Environment::string('ORDER58_VALIDATE_API_URL'),

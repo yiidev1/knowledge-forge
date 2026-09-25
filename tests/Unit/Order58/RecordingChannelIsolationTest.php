@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Order58;
 
 use App\Environment;
-use App\Order58\Web\TestRecordingChannels\FixtureAvailability;
-use App\Order58\Web\TestRecordingChannels\RecordingChannel;
+use App\Integration\Order58Recording\FixtureAvailability;
+use App\Integration\Order58Recording\RecordingChannel;
 use Codeception\Test\Unit;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
@@ -34,7 +34,18 @@ use function token_get_all;
  */
 final class RecordingChannelIsolationTest extends Unit
 {
+    /**
+     * The diagnostic page's own web layer.
+     *
+     * The provider contract it used to hold — the URL mapping, the channel enum, the WAV check — now lives
+     * in {@see CLIENT_DIRECTORY}, because a second consumer needed it and a second copy of a URL builder is
+     * how the caller channel starts returning the mixed file again. Both directories are held to the same
+     * rules below: neither may reach a database, a queue, or Audio-to-Text.
+     */
     private const DIRECTORY = 'src/Order58/Web/TestRecordingChannels';
+
+    /** The shared vendor client, named by the page and by the recording importer alike. */
+    private const CLIENT_DIRECTORY = 'src/Integration/Order58Recording';
 
     private const PAGE_ROUTE = "Route::get('/admin/order58/test-recording-channels')";
     private const DOWNLOAD_ROUTE = "Route::get('/admin/order58/test-recording-channels/download')";
@@ -201,8 +212,8 @@ final class RecordingChannelIsolationTest extends Unit
     public function testTheChannelRequestMappingIsNotDuplicated(): void
     {
         $allowed = [
-            self::DIRECTORY . '/ChannelRequestMapping.php',
-            self::DIRECTORY . '/RecordingChannel.php',
+            self::CLIENT_DIRECTORY . '/ChannelRequestMapping.php',
+            self::CLIENT_DIRECTORY . '/RecordingChannel.php',
         ];
 
         foreach ($this->sourceFiles() as $path => $source) {
@@ -296,7 +307,7 @@ final class RecordingChannelIsolationTest extends Unit
     /** The gate is written as an allow-list, not as a negation of production. */
     public function testTheEnvironmentGateIsAnAllowListRatherThanANegation(): void
     {
-        $source = $this->read(self::DIRECTORY . '/FixtureAvailability.php');
+        $source = $this->read(self::CLIENT_DIRECTORY . '/FixtureAvailability.php');
         $code = $this->stripComments($source);
 
         $this->assertStringNotContainsString(
@@ -373,20 +384,24 @@ final class RecordingChannelIsolationTest extends Unit
     {
         $root = dirname(__DIR__, 3);
 
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($root . '/' . self::DIRECTORY, FilesystemIterator::SKIP_DOTS),
-        );
-
         $files = [];
 
-        /** @var SplFileInfo $file */
-        foreach ($iterator as $file) {
-            if (!$file->isFile() || $file->getExtension() !== 'php') {
-                continue;
-            }
+        // Both halves of the tool: the page and the client it now shares. Splitting the files must not
+        // split the rules — a forbidden dependency is no more acceptable in the client than in the page.
+        foreach ([self::DIRECTORY, self::CLIENT_DIRECTORY] as $directory) {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root . '/' . $directory, FilesystemIterator::SKIP_DOTS),
+            );
 
-            $path = (string) $file->getPathname();
-            $files[substr($path, strlen($root) + 1)] = (string) file_get_contents($path);
+            /** @var SplFileInfo $file */
+            foreach ($iterator as $file) {
+                if (!$file->isFile() || $file->getExtension() !== 'php') {
+                    continue;
+                }
+
+                $path = (string) $file->getPathname();
+                $files[substr($path, strlen($root) + 1)] = (string) file_get_contents($path);
+            }
         }
 
         return $files;

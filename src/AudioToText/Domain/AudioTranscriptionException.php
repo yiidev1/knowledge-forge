@@ -29,6 +29,16 @@ final class AudioTranscriptionException extends RuntimeException
         string $userMessage,
         private readonly string $technicalDetail,
         ?Throwable $previous = null,
+        /**
+         * Whether the fault is the *recording's* rather than this server's.
+         *
+         * Every other failure here describes a condition that may pass — no temporary directory, a full
+         * queue, a probe that would not run — and is worth trying again. A recording longer than the
+         * configured limit is not: it will be exactly as long next time. An automated importer needs to
+         * tell the two apart, because retrying the second for ever is how a queue fills with work that
+         * can never succeed.
+         */
+        private readonly bool $recordingIsUnusable = false,
     ) {
         parent::__construct($userMessage, 0, $previous);
     }
@@ -37,6 +47,12 @@ final class AudioTranscriptionException extends RuntimeException
     public function technicalDetail(): string
     {
         return $this->technicalDetail === '' ? $this->getMessage() : $this->technicalDetail;
+    }
+
+    /** Whether retrying this exact recording could ever produce a different answer. */
+    public function recordingIsUnusable(): bool
+    {
+        return $this->recordingIsUnusable;
     }
 
     // ---------------------------------------------------------------- queue admission
@@ -72,6 +88,8 @@ final class AudioTranscriptionException extends RuntimeException
                 $maxLabel,
             ),
             sprintf('duration %.2fs exceeds the %ds limit', $seconds, $maxSeconds),
+            // The one failure in this class that is about the file rather than the server.
+            recordingIsUnusable: true,
         );
     }
 

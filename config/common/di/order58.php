@@ -12,6 +12,7 @@ use App\Order58\Domain\Order58KnowledgeRepositoryInterface;
 use App\Order58\Domain\Order58RuleRepositoryInterface;
 use App\Order58\Domain\Order58StoreRepositoryInterface;
 use App\Order58\Domain\AudioProviderDefaultInterface;
+use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\SyncRunRepositoryInterface;
@@ -20,6 +21,7 @@ use App\Order58\Infrastructure\DbOrder58KnowledgeRepository;
 use App\Order58\Infrastructure\DbOrder58RuleRepository;
 use App\Order58\Infrastructure\DbOrder58StoreRepository;
 use App\Order58\Infrastructure\DbAudioProviderDefault;
+use App\Order58\Infrastructure\DbCallImportRepository;
 use App\Order58\Infrastructure\DbStoreAudioCounts;
 use App\Order58\Infrastructure\DbStoreDirectoryReader;
 use App\Order58\Infrastructure\DbSyncRunRepository;
@@ -28,6 +30,7 @@ use GuzzleHttp\Psr7\HttpFactory;
 use Psr\Http\Client\ClientInterface as PsrHttpClient;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Yiisoft\Aliases\Aliases;
 use Yiisoft\Definitions\DynamicReference;
 use Yiisoft\Definitions\Reference;
 
@@ -47,8 +50,35 @@ return [
     SyncRunRepositoryInterface::class => DbSyncRunRepository::class,
     App\Order58\Domain\DailySyncScheduleRepositoryInterface::class => App\Order58\Infrastructure\DbDailySyncScheduleRepository::class,
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
+    CallImportRepositoryInterface::class => DbCallImportRepository::class,
     StoreAudioCountsInterface::class => DbStoreAudioCounts::class,
     AudioProviderDefaultInterface::class => DbAudioProviderDefault::class,
+
+    // The recording importer. The lock file is its own — sharing the transcription worker's would make
+    // the two needlessly exclusive, and sharing a cron wrapper's would make every run skip.
+    App\Order58\Console\ImportRecordingsCommand::class => [
+        '__construct()' => [
+            'lockFile' => DynamicReference::to(
+                static fn(Aliases $aliases): string => $aliases->get('@runtime/locks') . '/order58-import.lock',
+            ),
+            'enabled' => $params['app/order58']['recordingImportEnabled'],
+        ],
+    ],
+
+    // The page and its Sync action both read the feature flag: the page to say so, the action to
+    // enforce it. A form rendered before the flag was turned off must not still queue work.
+    App\Order58\Web\Calls\Action::class => [
+        '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
+    ],
+    App\Order58\Web\Calls\SyncAction::class => [
+        '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
+    ],
+
+    App\Order58\Application\RecordingImportProcessor::class => [
+        '__construct()' => [
+            'maxAttempts' => $params['app/order58']['recordingImportMaxAttempts'],
+        ],
+    ],
 
     Order58RetryPolicy::class => [
         '__construct()' => ['profile' => Reference::to('order58.profile')],

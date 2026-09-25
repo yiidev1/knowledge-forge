@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Order58;
 
-use App\Order58\Web\TestRecordingChannels\ChannelApiProbe;
-use App\Order58\Web\TestRecordingChannels\ChannelDiagnosis;
-use App\Order58\Web\TestRecordingChannels\ChannelRecordingRequest;
-use App\Order58\Web\TestRecordingChannels\ChannelRequestMapping;
-use App\Order58\Web\TestRecordingChannels\RecordingChannel;
-use App\Order58\Web\TestRecordingChannels\UnconfirmedChannelMapping;
-use App\Order58\Web\TestRecordingChannels\WavSignature;
+use App\Integration\Order58Recording\ChannelApiProbe;
+use App\Integration\Order58Recording\ChannelDiagnosis;
+use App\Integration\Order58Recording\ChannelRecordingRequest;
+use App\Integration\Order58Recording\ChannelRequestMapping;
+use App\Integration\Order58Recording\RecordingChannel;
+use App\Integration\Order58Recording\UnconfirmedChannelMapping;
+use App\Integration\Order58Recording\WavSignature;
 use Codeception\Test\Unit;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Exception\ConnectException;

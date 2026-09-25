@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Order58\Web\TestRecordingChannels;
+namespace App\Integration\Order58Recording;
 
 use function http_build_query;
 use function rawurlencode;

@@ -4,6 +4,18 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\TestRecordingChannels;
 
+use App\Integration\Order58Recording\ChannelApiProbe;
+use App\Integration\Order58Recording\ChannelDiagnosis;
+use App\Integration\Order58Recording\ChannelProbeResult;
+use App\Integration\Order58Recording\ChannelRecordingRequest;
+use App\Integration\Order58Recording\ChannelRequestMapping;
+use App\Integration\Order58Recording\FixtureAvailability;
+use App\Integration\Order58Recording\FixtureRecordingSource;
+use App\Integration\Order58Recording\LatestCallsRequest;
+use App\Integration\Order58Recording\LatestCallsResult;
+use App\Integration\Order58Recording\RecordingChannel;
+use App\Integration\Order58Recording\UnconfirmedChannelMapping;
+use App\Integration\Order58Recording\WavSignature;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Throwable;

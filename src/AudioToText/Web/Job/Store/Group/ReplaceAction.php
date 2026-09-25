@@ -5,11 +5,10 @@ declare(strict_types=1);
 namespace App\AudioToText\Web\Job\Store\Group;
 
 use App\Auth\Application\CurrentAdmin;
-use App\AudioToText\Application\TranscriptionQueue;
+use App\AudioToText\Application\AudioIngestionService;
 use App\AudioToText\Application\UploadOptions;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
-use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\StoreOrderGroup;
 use App\AudioToText\Domain\TranscriptionProvider;
@@ -34,8 +33,8 @@ use const JSON_THROW_ON_ERROR;
  *
  * ## What this actually does, and what it deliberately does not
  *
- * It enqueues an ordinary upload — the same {@see TranscriptionQueue::enqueueConversation()} the store
- * page's own form calls — carrying this group's store, order and the recording type being replaced. It
+ * It enqueues an ordinary upload — through {@see AudioIngestionService}, the same validate-then-queue
+ * path the store page's own form uses — carrying this group's store, order and the recording type being replaced. It
  * writes nothing else. It does not touch the recording being replaced, its job row, its retained audio,
  * its transcript, its corrections or its generated audio, and it could not: everything it creates hangs
  * off a **new** conversation with a new public id, and storage is addressed by the new job's public id.
@@ -78,7 +77,7 @@ final readonly class ReplaceAction
 {
     public function __construct(
         private StoreGroupFinder $finder,
-        private TranscriptionQueue $queue,
+        private AudioIngestionService $ingestion,
         /**
          * The provider rule and the paid-audio rule, both owned by {@see UploadOptions}.
          *
@@ -142,24 +141,29 @@ final readonly class ReplaceAction
         }
 
         try {
-            $this->queue->enqueueConversation(
-                // One file, one recording: the same shape every modern upload has. SEPARATE is the
-                // legacy two-file pair, which this action has already refused.
-                ConversationMode::Common,
+            // Through the shared ingestion path, which validates the file before it queues anything.
+            // This action used to call the queue directly and therefore checked neither the size nor the
+            // type — the store page's own form did, and this one silently did not.
+            $result = $this->ingestion->ingest(
                 $sourceId,
-                // Keyed by the role the mode expects, exactly as the upload form supplies it.
-                [ConversationMode::Common->childRoles()[0]->value => $file],
-                $this->currentAdmin->get()->id(),
+                $file,
+                $type,
+                $group->orderId,
                 $provider,
                 // Only if it was asked for on *this* upload, and only if this server can honour it.
                 // Never inherited: see the class docblock.
                 $this->uploadOptions->wantsAiAudio($body) && $this->uploadOptions->aiAudioIsUsable(),
-                $type,
-                $group->orderId,
+                $this->currentAdmin->get()->id(),
             );
         } catch (AudioTranscriptionException $e) {
             // The uploader-facing half only. technicalDetail() stays in the log, where the queue put it.
             return $this->refused($e->getMessage());
+        }
+
+        if (!$result->wasQueued()) {
+            // One sentence, because the dialog has one place to put it. The rest are the same problem
+            // said differently, and the first is the one to fix.
+            return $this->refused($result->problems[0]);
         }
 
         return $this->json(200, [

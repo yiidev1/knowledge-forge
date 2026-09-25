@@ -25,6 +25,10 @@ return [
     'kf:order58:schedule-agents' => App\Order58\Console\ScheduleAgentsSyncCommand::class,
     'kf:order58:schedule-knowledge' => App\Order58\Console\ScheduleKnowledgeSyncCommand::class,
     'kf:order58:schedule-rules' => App\Order58\Console\ScheduleRulesSyncCommand::class,
+    // Its own command rather than a drainer inside kf:worker:run, for the reason the transcription
+    // worker is: it downloads megabytes over a third-party network and then waits on the audio
+    // pipeline, and running that in the shared worker would stall documents and sync behind it.
+    'kf:order58:import-recordings' => App\Order58\Console\ImportRecordingsCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
     'kf:rules:repair-lifecycle' => App\Rules\Console\RepairRuleLifecycleCommand::class,
     'kf:rules:retire-store-projections' => App\Rules\Console\RetireStoreRuleProjectionsCommand::class,

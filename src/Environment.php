@@ -128,6 +128,11 @@ final class Environment
         'ORDER58_API_PAGE_SIZE' => ['type' => 'int', 'default' => 100, 'min' => 1, 'max' => 500],
         'ORDER58_SYNC_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
         'ORDER58_SYNC_PAGES_PER_RUN' => ['type' => 'int', 'default' => 1000, 'min' => 1, 'max' => 100000],
+        // Recording import. OFF by default: the external recording API is gated by an IP allowlist, so
+        // enabling it is a deliberate act on a server the client has allowlisted, never a side effect of
+        // deploying. Attempts match the sync budget so two background features retry alike.
+        'ORDER58_RECORDING_IMPORT_ENABLED' => ['type' => 'bool', 'default' => false],
+        'ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
         // When false, Order58 store-profile documents stay in the DB/index but are hidden on the KB
         // documents list. Set true to show them again without code changes.
         'ORDER58_SHOW_STORE_PROFILE_DOCUMENTS' => ['type' => 'bool', 'default' => false],

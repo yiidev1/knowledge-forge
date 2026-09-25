@@ -1913,6 +1913,44 @@ final class AudioToTextStoreCest
     }
 
     /**
+     * A replacement is held to the same file rules as a first upload.
+     *
+     * It was not. This action called the transcription queue directly, and the queue checks only the
+     * duration — so a renamed text file, or one over the size limit, was refused on the store page's own
+     * form and accepted here. Both paths now go through {@see \App\AudioToText\Application\AudioIngestionService},
+     * which validates before it queues, and this is the assertion that says so.
+     */
+    public function aReplacementIsValidatedLikeAnyOtherUpload(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(1, $before);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $token = (string) $I->grabAttributeFrom('#a2t-upload-form input[type="hidden"][name="_csrf"]', 'value');
+
+        // Real WAV bytes under a name this application does not accept. Chosen deliberately: a text
+        // file would be refused either way, because ffprobe cannot read it — so it would prove nothing
+        // about whether the validator ran. ffprobe reads this one happily; only the extension rule
+        // refuses it, and that rule lives in the validator alone.
+        $this->audioBrowser->_loadPage(
+            'POST',
+            '/audio-to-text/store/' . self::STORE_A . '/group/order:16513791/replace',
+            ['_csrf' => $token, 'recording_type' => 'CALLER'],
+            ['audio' => [
+                'name' => 'pretend.bin',
+                'tmp_name' => codecept_data_dir('kf_store_valid.wav'),
+            ]],
+        );
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('"success":false');
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
+    }
+
+    /**
      * @param array<string, mixed> $payload
      *
      * @return array<string, mixed>

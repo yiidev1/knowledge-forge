@@ -1,0 +1,1749 @@
+==========================================================================================
+MANAGE ORDER58 CALLS - TECHNICAL DOCUMENTATION
+Admin recording import: /admin/order58/calls
+==========================================================================================
+
+Written for       : a developer who has never worked on this feature before.
+Document status   : investigation + verification only. No application code, no migration, no
+                    database row and no .env value was created, modified or deleted while
+                    producing this file.
+Date written      : 2026-09-25
+Code state        : working tree on branch `main`, at/after commit 1a89bb6, with the Phase A
+                    recording-import files present (26 new files, 18 modified - see section 17).
+Source of truth   : the source files named in section 17, the live schema of
+                    `knowledge_forge_db`, and the test runs recorded in section 18.
+                    Every statement below was read out of the code or measured on this
+                    machine. Nothing is inferred from the feature's design documents.
+
+------------------------------------------------------------------------------------------
+0. A NOTE ON THE STACK, BEFORE ANYTHING ELSE
+------------------------------------------------------------------------------------------
+
+The task description this document answers was written in Laravel vocabulary. This project is
+NOT Laravel. It is a **Yii 3** application (yiisoft/yii-runner-http + a hand-wired DI
+container). The Laravel concepts do not have one-to-one equivalents, and several of the
+questions asked do not apply at all. The mapping, so nothing below is misread:
+
+  Laravel concept            This project's equivalent
+  -------------------------  --------------------------------------------------------------
+  .env + config() + env()    `.env` -> `App\Environment` (a typed SPEC) -> `config/common/
+                             params.php` -> the DI container. There is no `env()` helper and
+                             no `config()` helper. See section 2.
+  config:cache / cache:clear **DOES NOT EXIST AND IS NOT NEEDED.** There is no compiled
+                             config cache and no compiled container. `runtime/cache/` holds
+                             only Psalm's cache. Changing `.env` takes effect on the next
+                             request - no command to run. Verified: `ls runtime/cache`.
+  Controller                 An invokable final class, e.g.
+                             `src/Order58/Web/Calls/Action.php` with `__invoke()`.
+  routes/web.php             `config/common/routes.php`, using
+                             `Route::get(...)->action(...)->name(...)`.
+  Blade view                 A plain PHP template rendered by `WebViewRenderer`:
+                             `src/Order58/Web/Calls/template.php`.
+  Eloquent model             None. Queries are written with `Yiisoft\Db\Query\Query` inside
+                             an Infrastructure class behind a Domain interface, e.g.
+                             `DbCallImportRepository` implements
+                             `CallImportRepositoryInterface`.
+  Artisan command            A Symfony Console command registered in
+                             `config/console/commands.php`, run as `./yii <name>`.
+  Queue / Horizon            None. The queue is a database table plus a cron-driven console
+                             command. See section 9.
+  Migration (artisan)        `src/Migration/M*.php`, run with `./yii migrate:up`.
+
+Two more things that surprise people:
+
+  * There is **JavaScript on this page**, unlike the older diagnostic page. It is exactly one
+    file, `assets/order58-calls/order58-calls.js`, and it does only Select-All bookkeeping.
+    There is **no AJAX and no fetch()**. Every state change is a real form submit.
+  * The page is **server-rendered on every request with no caching**, deliberately: the call
+    list is a snapshot of a third party's state and the statuses move underneath it.
+
+------------------------------------------------------------------------------------------
+1. OVERVIEW - WHAT, WHY, WHERE, WHEN
+------------------------------------------------------------------------------------------
+
+WHAT IT IS
+  An admin-only page that (a) asks the client's external Order58 recording service which
+  calls a store had **today**, (b) lets an administrator tick the ones wanted, and (c) queues
+  those recordings for background download and hand-off into the **existing** Audio-to-Text
+  transcription pipeline. The imported recordings appear on the existing store page,
+  `/audio-to-text/store/{sourceId}`, grouped under their Order ID, indistinguishable from a
+  manual upload.
+
+WHY IT EXISTS
+  Before this feature, the only way a call recording reached Knowledge Forge was: a human
+  opened the hidden diagnostic page `/admin/order58/test-recording-channels`, typed a call id,
+  downloaded a WAV to their laptop, then re-uploaded it by hand on the store's Audio-to-Text
+  page. That is one recording per several minutes of human attention, and the human had to
+  know the call id in advance. This page discovers the calls and does the fetching.
+
+WHERE IT LIVES
+  URL         : /admin/order58/calls  (plus two POST endpoints - section 3)
+  Navigation  : sidebar entry "Order58 calls" (icon phone), added at
+                src/Web/Shared/Layout/Admin/_sidebar.php:39. It is its own entry rather than
+                a link inside Audio to Text, and its `match` prefix covers the POST routes so
+                the item stays highlighted after a redirect.
+  Access      : admin session only. Every route sits inside the
+                `Group::create()->middleware(RequireAdminMiddleware::class)` block in
+                config/common/routes.php. Signed out, the page is the login redirect (302).
+
+WHEN IT RUNS
+  Three separate clocks, and confusing them is the main way to misread this feature:
+
+  1. The page  - only when a human opens it. Opening it contacts **no** provider.
+  2. The list  - only when `?store=<id>&load=1` is present, which is what the
+                 "Load today's calls" button submits. One HTTP GET to the provider.
+  3. The audio - never in a web request. A cron-driven worker
+                 (`kf:order58:import-recordings`) does all downloading, every 2 minutes as
+                 documented in docs/deploy/worker.md:109.
+
+  Phase A (what exists today) is **manual**: an administrator must click Sync. The worker
+  imports what was already queued and discovers nothing by itself. There is no scheduler for
+  recordings yet - `ImportRecordingsCommand`'s own docblock says so.
+
+------------------------------------------------------------------------------------------
+2. THE FEATURE FLAG: ORDER58_RECORDING_IMPORT_ENABLED
+------------------------------------------------------------------------------------------
+
+This was the first thing asked about, so it is answered exhaustively. The flag has a
+five-link chain and **three** enforcement points, not one.
+
+2.1 DECLARATION AND DEFAULT
+
+  .env.example:157        # ORDER58_RECORDING_IMPORT_ENABLED=false
+                          (commented out - the documented value is the default)
+  .env.example:158        # ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS=3
+
+  src/Environment.php:134
+      'ORDER58_RECORDING_IMPORT_ENABLED' => ['type' => 'bool', 'default' => false],
+  src/Environment.php:135
+      'ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3,
+                                                   'min' => 1, 'max' => 20],
+
+  **Default is FALSE.** An absent key, an empty `.env`, a fresh clone - all give `false`.
+  This is deliberate: the recording API is behind the client's IP allowlist, so enabling
+  import belongs to a specific allowlisted server and must not be a side effect of deploying.
+
+2.2 HOW A STRING BECOMES A BOOL
+
+  src/Environment.php:550 (the bool arm of the coercion switch):
+
+      filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+
+  and an unparseable value **throws** rather than defaulting. So:
+
+      true, "true", "1", "on", "yes"     -> true
+      false, "false", "0", "off", "no"   -> false
+      "" (key present, value empty)      -> false
+      key absent / commented out         -> false (the SPEC default)
+      "maybe", "TRUE-ish", "2"           -> startup exception, named key in the message
+
+  There is no silent fallback for a typo. A misspelt value breaks the boot loudly, which is
+  the correct behaviour for a flag that gates outbound requests to a third party.
+
+2.3 THE CHAIN, END TO END
+
+  .env (or the process environment)
+    v   src/bootstrap.php:21   Dotenv::createImmutable(...)->safeLoad()
+    v                          NOTE: *immutable* - a real process environment variable
+    v                          WINS over the .env file. This is how the flag can be flipped
+    v                          for one command without editing any file (used in section 18).
+    v   src/bootstrap.php:23   Environment::prepare()   - validates + coerces the whole SPEC
+    v
+  config/common/params.php:209
+      'recordingImportEnabled' => Environment::bool('ORDER58_RECORDING_IMPORT_ENABLED'),
+      (inside the 'app/order58' params group)
+    v
+  config/common/di/order58.php
+      :64  ImportRecordingsCommand   '__construct()' => ['enabled' => ...]
+      :71  Web\Calls\Action          '__construct()' => ['importEnabled' => ...]
+      :74  Web\Calls\SyncAction      '__construct()' => ['importEnabled' => ...]
+    v
+  Three consumers, each with a different job (2.4).
+
+  Note what is NOT in that list: `RecordingImportProcessor`, `RecordingDownloader`,
+  `ChannelApiProbe`, `DbCallImportRepository`. The flag is checked at the three entry points
+  and nowhere deeper, so the lower layers stay testable without it.
+
+2.4 THE THREE ENFORCEMENT POINTS
+
+  (a) THE PAGE - it says so.
+      src/Order58/Web/Calls/Action.php:67          constructor property
+      src/Order58/Web/Calls/Action.php:112         passed to the template as `importEnabled`
+      src/Order58/Web/Calls/template.php:112,116  renders the warning banner
+      src/Order58/Web/Calls/template.php:257       adds `disabled` to the Sync button
+
+  (b) THE SYNC ENDPOINT - it refuses. **This is the real gate.**
+      src/Order58/Web/Calls/SyncAction.php:76      constructor property
+      src/Order58/Web/Calls/SyncAction.php:93-100
+
+          if (!$this->importEnabled) {
+              $this->flash->error(
+                  'Recording import is turned off on this server '
+                  . '(ORDER58_RECORDING_IMPORT_ENABLED). Nothing was queued.',
+              );
+              return $this->back($storeId, $source);
+          }
+
+      Its own comment states the reason: "The flag is a real gate, not a UI hint: a form
+      submitted from a page rendered before it was turned off must not queue work either."
+      The check sits **before** `selectedIds()`, before the company resolver and before any
+      write. Nothing is inserted.
+
+  (c) THE WORKER - it exits.
+      src/Order58/Console/ImportRecordingsCommand.php:92-97
+
+          if (!$this->enabled) {
+              $io->writeln('Order58 recording import is disabled '
+                           . '(ORDER58_RECORDING_IMPORT_ENABLED).');
+              return ExitCode::OK;
+          }
+
+      It returns OK, not an error, so a cron entry left in place on a disabled server does not
+      fill a mailbox with failures. The check is before the lock is taken and before
+      `recoverStuck()`.
+
+2.5 CAN A USER BYPASS IT?
+
+  **No.** Three ways it could be attempted, and what happens:
+
+    Craft a POST to /admin/order58/calls/sync directly, with a valid CSRF token and a valid
+    admin session
+        -> refused at SyncAction.php:93. Zero rows written. Flash explains why.
+
+    Re-submit a form that was rendered while the flag was on, after it was turned off
+        -> same refusal. This is exactly the case the comment calls out.
+
+    Re-enable the HTML button in the browser devtools (remove `disabled`)
+        -> the button submits, and the backend refuses. `disabled` is cosmetic.
+
+  The one thing the flag does **not** do is stop the *page* rendering or stop
+  "Load today's calls". Loading the call list is a read-only GET against the provider and is
+  useful for confirming connectivity before enabling import. That is a design choice, and it
+  is visible in the code: `Action` receives the flag only to display it.
+
+2.6 WHAT COMMAND MUST BE RUN AFTER CHANGING THE FLAG?
+
+  **None.** This is the Laravel question that has no Yii 3 answer.
+
+  * There is no compiled config. `Environment::prepare()` runs on every request/command from
+    `src/bootstrap.php:23`.
+  * There is no compiled container. Verified: `runtime/cache/` contains only `psalm`.
+  * The web layer is served by PHP-FPM, so the next request picks up a changed `.env`
+    immediately. If PHP's OPcache were configured to cache `.env` - it is not, `.env` is not
+    PHP - it would still be irrelevant.
+  * A **long-running** `kf:order58:import-recordings` (without `--once`) holds the value it
+    booted with, because it is one PHP process. The cron form in
+    docs/deploy/worker.md:109 uses `--once`, so each run re-reads the flag. That is the
+    supported deployment and it needs no restart.
+
+  Summary: edit `.env`, done. No `config:cache`, no `cache:clear`, no service restart.
+
+2.7 CURRENT STATE ON THIS MACHINE (measured, not assumed)
+
+  .env            ORDER58_RECORDING_IMPORT_ENABLED=true   (local development value)
+  .env.example    commented out, documented as false
+  Effective       true, locally
+
+  This was **not** changed while writing this document. Both states were proven by passing a
+  process environment variable for one command only - see section 18.4.
+
+------------------------------------------------------------------------------------------
+3. ROUTES
+------------------------------------------------------------------------------------------
+
+All three are declared in config/common/routes.php:305-313, inside the admin group.
+
+  Method  Path                              Route name           Action class
+  ------  --------------------------------  -------------------  --------------------------
+  GET     /admin/order58/calls              order58.calls        Order58Calls\Action
+  POST    /admin/order58/calls/sync         order58.calls.sync   Order58Calls\SyncAction
+  POST    /admin/order58/calls/retry        order58.calls.retry  Order58Calls\RetryAction
+
+  (`Order58Calls` is the file's import alias for `App\Order58\Web\Calls`.)
+
+MIDDLEWARE, inherited from the enclosing group:
+  RequireAdminMiddleware      - admin session or 302 to login
+  DomainExceptionMiddleware   - a domain exception becomes a flash + redirect, not a 500
+  CSRF                        - application-wide; both POSTs render `$csrf->hiddenInput()`
+
+QUERY PARAMETERS ON THE GET ROUTE
+  store   positive integer, `/\A\d{1,9}\z/` (Action.php:190). Anything else -> treated as
+          "no store chosen". No error, no 400 - the page simply renders unloaded.
+  load    the literal string `1` and nothing else (Action.php:75). This is what makes the
+          provider call opt-in.
+  source  `fixture` activates the local fixture call source, and **only** in the two
+          environments FixtureAvailability allows, and only on that one request. There is no
+          sticky setting and no default. Carried through redirects so a fixture session does
+          not silently fall through to the live API (SyncAction.php:335).
+
+POST BODIES
+  sync    store, calls[] (repeated), transcription_provider, generate_ai_audio (presence),
+          source, _csrf. A posted `company` is **ignored outright, not validated** - see 8.4.
+  retry   id, store, _csrf.
+
+BOTH POSTS ANSWER WITH A REDIRECT
+  `Redirect::afterPost()` back to `order58.calls` with `store` and `load=1` preserved, so the
+  list is re-rendered with fresh statuses and a browser reload never re-posts.
+
+------------------------------------------------------------------------------------------
+4. THE PAGE, END TO END
+------------------------------------------------------------------------------------------
+
+4.1 FLOW DIAGRAM - opening the page (no store chosen)
+
+  Browser                    Yii 3                                  External
+  -------                    -----                                  --------
+  GET /admin/order58/calls
+       |
+       +-------------------> RequireAdminMiddleware
+       |                       no admin session? -> 302 login
+       |                     Order58Calls\Action::__invoke()
+       |                       storeId  = null   (no ?store)
+       |                       wantsCalls = false (no ?load=1)
+       |                       calls = [] statuses = [] problem = null
+       |                       storeOptions()   ---> DB: knowledge_bases + order58_stores
+       |                       imports->history(null, 40) --> DB: order58_call_imports
+       |                       WebViewRenderer
+       |                         ->withLayout(admin layout)
+       |                         ->render(template.php, [...20 keys...])
+       <------------------- 200 HTML
+                                                                    (NOTHING. Zero
+                                                                     outbound requests.)
+
+  This is worth stating plainly because it is the single most important property of the page:
+  **an idle browser tab on this page generates no traffic to the client's API.** The older
+  diagnostic page follows the same rule for the same reason - a page that probes a third party
+  on every render turns an open tab into traffic somebody else is rate-limiting.
+
+4.2 FLOW DIAGRAM - "Load today's calls" (store chosen)
+
+  GET /admin/order58/calls?store=1491&load=1
+       |
+       +-------------------> Action::__invoke()
+       |                       storeId = 1491        (regex-validated)
+       |                       wantsCalls = true
+       |                       usingFixtures = FixtureAvailability::isRequested(?source)
+       |                         |
+       |                         +-- true  --> FixtureCallSource::today($now)   [dev/test]
+       |                         +-- false --> loadCalls(1491, $now)
+       |                                         LatestCallsRequest::fromStrings('1491','200')
+       |                                         ChannelApiProbe::latestCalls()   ----------> GET {base}/1491/latest-calls?limit=200
+       |                                         ChannelDiagnosis classification  <---------- 200 JSON | 403 | timeout | ...
+       |                                         TodayCallFilter::today(calls, now)
+       |                       if calls !== []:
+       |                         imports->statusesFor(1491, [sessionIds])  --> DB
+       |                       history(1491, 40)                          --> DB
+       <------------------- 200 HTML with the call table
+
+  A transport failure here is **caught**, not allowed to 500 (Action.php:143). The page still
+  renders, with a sentence instead of a table, and the Sync History below it is unaffected -
+  it reads the local tables only. From any machine outside the client's IP allowlist, that
+  sentence is the normal outcome.
+
+4.3 FLOW DIAGRAM - Sync, and where the audio actually moves
+
+  POST /admin/order58/calls/sync
+       |
+       +--> SyncAction  (writes rows, fetches no audio)  -----> GET .../latest-calls  (ONE
+       |      1 store id valid?                                  read, to re-verify the list)
+       |      2 importEnabled?            <-- THE GATE
+       |      3 selected ids shape-checked
+       |      4 company resolved from the store
+       |      5 provider valid?
+       |      6 re-fetch today's calls and INTERSECT
+       |      7 createBatch(...)          --> order58_call_import_batches
+       |      8 queueCall(...) x N        --> order58_call_imports (3 rows per call)
+       |      9 flash + redirect
+       |
+       |   ... minutes later, out of band ...
+       |
+       +--> cron every 2 min: ./yii kf:order58:import-recordings --once
+              flock(runtime/locks/order58-import.lock)
+              recoverStuck(900s)
+              claimNext()                 PENDING -> FETCHING (conditional UPDATE)
+              RecordingDownloader::fetch()  -----------------> GET {base}/fetch/{id}?time=&company=&name=
+              WavSignature::inspect()                          (streamed to a temp file)
+              AudioIngestionService::ingestFile()
+                 AudioUploadValidator::validate()
+                 TranscriptionQueue::enqueueConversation()
+              markImported / markSettled / requeue
+              -> the recording is now an ordinary Audio-to-Text conversation and shows up on
+                 /audio-to-text/store/1491
+
+4.4 WHAT THE TEMPLATE RENDERS
+
+  src/Order58/Web/Calls/template.php, in order:
+
+  :104  <h1> Manage Order58 Calls
+  :112  the flag banner, when importEnabled is false
+  :121  card "Find today's calls"
+  :128    a GET form (method="get") with the store <select> and the Load button (:143)
+  :154  card "Today's calls - <business date>", only when `loaded`
+  :175    a POST form to order58.calls.sync wrapping the whole table
+  :182    <div class="table-wrap" data-o58-calls>
+  :188      the Select-All checkbox, `data-o58-select-all`
+          per-call rows: checkbox (name="calls[]"), session id, time, order id, current status
+  :224    <p data-o58-count> the live "n calls selected" hint
+          provider <select>, "Generate clean AI audio" checkbox
+  :257    the Sync submit button, `disabled` when the flag is off
+  :274  card "Sync history"
+  :286    the history table - one row per call, one column per channel
+  :338    a POST form to order58.calls.retry per **failed** channel only (:331 comment:
+          "a button that did nothing would be worse than none")
+
+  Assets: `$assetManager->register(CallsAsset::class)` at :40. CSS classes are reused from the
+  existing admin design system (`.page-header`, `.card`, `.table-wrap > table.table`,
+  `.badge badge--*`, `.store-picker`, `.a2t-checkbox`), so the page needed no new stylesheet
+  vocabulary.
+
+4.5 THE JAVASCRIPT - all of it
+
+  assets/order58-calls/order58-calls.js, one IIFE, 60-odd lines. It binds two listeners by
+  `data-` attribute, never by class or id:
+
+    :52  the select-all checkbox's `change` -> set every `input[name="calls[]"]`
+    :60  the table's `change` (delegated)   -> recompute the count and the all-box state
+    :36  sync() updates `[data-o58-count]`
+
+  It composes no URL, sends no request, and reads no provider data. **The page works with
+  JavaScript disabled**: every checkbox is a real form control and Sync is a real submit; only
+  the convenience of Select-All is lost. No inline JS anywhere - the application's CSP is
+  `script-src 'self'`.
+
+------------------------------------------------------------------------------------------
+5. THE STORE DROPDOWN
+------------------------------------------------------------------------------------------
+
+5.1 WHERE THE OPTIONS COME FROM
+
+  src/Order58/Web/Calls/Action.php:172-186
+
+      $result = $this->stores->search(new StoreDirectoryQuery(
+          perPage: 1000,
+          sourceStatus: StoreSourceStatusFilter::Active,
+      ));
+      foreach ($result->items as $store) {
+          $options[$store->sourceId] = $store->name;
+      }
+
+  So: **value = source id, label = store name**, and the list is filtered to active stores.
+  `perPage: 1000` is a deliberate "all of them" - there are 235 mirrored stores and no pager
+  on this control.
+
+5.2 WHICH TABLE DECIDES "ACTIVE", AND WHY IT IS NOT THE OBVIOUS ONE
+
+  The authoritative flag is **`knowledge_bases.source_active`**, not
+  `order58_stores.active`. Measured on this database right now:
+
+      knowledge_bases.source_active = 1      208 of 237 rows
+      order58_stores.active = 1              0 of 235 rows      <-- every row is 0
+
+  A dropdown built on `order58_stores.active` would be **empty**. Action.php:167-168 says
+  exactly this in a comment. The mirror's `active` column is stale data that a previous phase
+  already had to reconcile (see `kf:order58:reconcile-active`); `knowledge_bases.source_active`
+  is what the rest of the application - `DbStoreDirectoryReader`, `DbAudioStoreLookup` - also
+  displays and filters on.
+
+5.3 THE NAME
+
+  `order58_stores.name`, surfaced through `StoreDirectoryReaderInterface`. Sample rows:
+
+      source_id  name              company
+      ---------  ----------------  -------
+      831        KONG'S KITCHEN    KONG
+      871        TING HO KITCHEN   THAO
+      1491       888 Chinese       WGEU
+
+5.4 WHAT IS *NOT* ON THIS FORM
+
+  There is **no Company field**. It is not rendered, not posted, and a submitted `company`
+  parameter is ignored rather than validated - because there is no value a browser could send
+  that the server should prefer to the store's own. See 8.4.
+
+  (The hidden diagnostic page `/admin/order58/test-recording-channels` keeps its editable
+  Company field. It is a probe, not this importer, and it writes nothing.)
+
+5.5 A MEASURED EDGE CASE
+
+  Exactly one mirrored store has no company code: **source_id 151, "Koki Demo", company
+  NULL** (234 of 235 have one). It is not `source_active`, so it does not appear in this
+  dropdown. Cross-checked: of the 208 stores the dropdown offers, **208 have a usable company
+  code**. The missing-company refusal path (8.4) is therefore currently unreachable from the
+  UI - it exists for the day a sync mirrors a store with a blank code, and it is covered by
+  unit tests rather than by production data.
+
+------------------------------------------------------------------------------------------
+6. "LOAD TODAY'S CALLS", STEP BY STEP
+------------------------------------------------------------------------------------------
+
+The button is a plain submit inside a `method="get"` form (template.php:128,143). Clicking it
+navigates; it does not fetch.
+
+  STEP 1  Browser issues GET /admin/order58/calls?store=1491&load=1
+          (plus `source=fixture` if that session asked for fixtures)
+
+  STEP 2  Action.php:74   storeId <- `/\A\d{1,9}\z/` then `> 0`, else null
+          Action.php:75   wantsCalls <- `load === '1' && storeId !== null`
+          A non-numeric store, a negative one, or a missing `load` all mean "render unloaded".
+          No exception, no 400.
+
+  STEP 3  Action.php:82   usingFixtures <- FixtureAvailability::isRequested(?source)
+          Two conditions, both required: APP_ENV is one of the two environments allowed to use
+          fixtures (checked as an allow-list, so an unrecognised value falls through to the
+          live API) **and** this request carries `source=fixture`.
+
+  STEP 4a FIXTURES: FixtureCallSource::today($now) returns three deterministic calls
+          - sessions 22487129 / 22487119 / 22487109
+          - times generated against **today's** date, so they never age out at midnight
+          - one deliberately has a blank order id, because the provider's `orderId` can be
+            blank and a page that has never rendered "-" will render it first in production
+
+  STEP 4b LIVE: Action.php:133 loadCalls()
+          1  LatestCallsRequest::fromStrings('1491', '200')
+             null -> "That store id cannot be used to look up calls." (never reachable from
+             the dropdown, which only offers validated ids)
+          2  ChannelApiProbe::latestCalls($request)
+             GET {base}/1491/latest-calls?limit=200
+             wrapped in try/catch(Throwable) -> "The recording service could not be reached
+             from this server. <message>"
+          3  !$result->diagnosis->isSuccess() -> headline + advice, rendered as prose
+          4  TodayCallFilter::today($result->calls, $now)
+
+  STEP 5  THE "TODAY" RULE  (src/Order58/Application/TodayCallFilter.php)
+          `businessDate($now)` is `AppTimeZone::businessDate($now)` - the same
+          **America/New_York** calendar day the daily sync schedulers use, so two background
+          features cannot disagree about what day it is.
+          A call is kept when `CallSummary::derivedDate() === $businessDate`. `derivedDate()`
+          reads the leading `YYYY-MM-DD` out of the provider's `callTime` string. **No
+          timezone conversion is performed** - the provider's wall-clock date is compared to
+          the business date as text. An unreadable `callTime` yields null and the call is
+          dropped rather than guessed at.
+
+  STEP 6  Action.php:155  a useful distinction is drawn:
+          calls === [] but the provider returned some ->
+              "This store has recent calls, but none from today."
+          calls === [] and the provider returned none -> no message at all
+          An account with no calls and an account whose calls are all from earlier days are
+          different situations, and only one of them is a surprise.
+
+  STEP 7  Action.php:91  statusesFor(1491, [sessionIds]) reads
+          `order58_call_imports` so each listed call shows what has already been requested for
+          it. This is the "already synced" column; it is a local read and cannot fail because
+          of the provider.
+
+  STEP 8  The template renders. Nothing has been written to the database at any point in this
+          whole sequence - loading is read-only.
+
+  LIMIT: `Action::LIMIT = 200` (Action.php:52) - "enough recent calls to cover a busy day,
+  well inside the provider's own ceiling of 500".
+
+------------------------------------------------------------------------------------------
+7. THE EXTERNAL ORDER58 RECORDING API
+------------------------------------------------------------------------------------------
+
+Owned entirely by `src/Integration/Order58Recording/`. That namespace exists for one reason:
+it is the only place both `App\Order58` and `App\AudioToText` are allowed to name (section
+17.3).
+
+7.1 BASE URL
+
+  src/Integration/Order58Recording/ChannelRequestMapping.php:70
+
+      BASE_URL = 'https://order58.xrainbow.com/api/external/recording'
+
+  A compile-time constant, not configuration. It is not a secret - it is the client's
+  documented endpoint - and nothing about it is per-environment.
+
+7.2 ENDPOINT 1 - LATEST CALLS  (CONFIRMED WORKING)
+
+  Built by ChannelRequestMapping::latestCallsUrl() (:119):
+
+      GET {BASE_URL}/{accountId}/latest-calls?limit={limit}
+
+  `accountId` is the store's `source_id`; `limit` is 200 from this page. Response is JSON;
+  `CallSummary` (src/Integration/Order58Recording/CallSummary.php:45-47) reads exactly three
+  fields and ignores everything else the provider sends:
+
+      callSessionId    the identity of the call
+      callTime         a wall-clock string, e.g. "2026-09-25 06:09:16"
+      orderId          may be blank
+
+  Ignoring the rest is deliberate: an added provider field cannot break this page.
+
+7.3 ENDPOINT 2 - FETCH ONE RECORDING  (CONFIRMED WORKING)
+
+  Mixed channel - ChannelRequestMapping::mixedUrl() (:135):
+
+      GET {BASE_URL}/fetch/{callSessionId}?time={YYYY-MM-DD}&company={code}&name={display}
+
+  Caller / callee - the `CANDIDATE_ID_CARRIES_SUFFIX` arm (:160):
+
+      GET {BASE_URL}/fetch/{callSessionId}-caller?time=...&company=...&name={id}-caller
+      GET {BASE_URL}/fetch/{callSessionId}-callee?time=...&company=...&name={id}-callee
+
+  Two provider facts encoded here, both confirmed by the client on 21 September 2026 and both
+  easy to get wrong:
+
+    * **The channel suffix belongs in the PATH, not in `name`.** A bare path returns the
+      *mixed* recording with a 200 - which reads as success. That is why
+      `RecordingChannel::requestSegmentFor()` exists.
+    * **`name` carries no extension.** The provider appends one, so sending
+      `22359279-caller.wav` produces `22359279-caller.wav.wav` on disk. This is the entire
+      reason `downloadNameFor()` is a separate method from `fileNameFor()` - the two strings
+      differ by exactly the extension, which is precisely the bug.
+
+  Two other readings of the caller/callee contract were tried and **rejected**; both arms are
+  still written out in full in the same `match`, so the difference stays visible where it
+  matters rather than living in a commit message.
+
+7.4 AUTHENTICATION
+
+  **There is none.** ChannelApiProbe.php:153-162 sends:
+
+      connect_timeout  10   (CONNECT_TIMEOUT_SECONDS, :38)
+      timeout          60   (TIMEOUT_SECONDS, :39)
+      headers          Accept: application/json
+      http_errors      false        - a 4xx is data to classify, not an exception
+      allow_redirects  true
+      stream           true         - so a large WAV is never held in memory
+
+  No Authorization header, no API key, no token. **Access is controlled by the client's
+  server-side IP allowlist.** This is the single most important operational fact about the
+  feature:
+
+    * It cannot be made to work by configuring a credential.
+    * From a machine the client has not allowlisted, every call fails with a 403 whose body
+      says so - `ChannelDiagnosis::IP_NOT_WHITELISTED`, carried through to the history row so
+      an administrator reads "ask the client to whitelist this IP" rather than a stack trace.
+    * A local failure therefore proves nothing about the API. It was confirmed working during
+      an earlier phase from an allowlisted host.
+
+  Note this is a *different* API from the main Order58 data API, which does use
+  `ORDER58_API_TOKEN` (src/Environment.php:123, marked `secret`). That token is not sent here
+  and is not involved in recording import at all. No secret of any kind is needed by this
+  feature. (Where secrets do exist elsewhere, they are configured in `.env` under the keys
+  named in `src/Environment.php` and are never printed - `SecretRedactor::redactAndTruncate`
+  passes over every message this feature stores.)
+
+7.5 THE `company` PARAMETER
+
+  Undocumented on the provider's side. This application's answer is the selected store's own
+  mirrored code, resolved server-side. Full treatment in 8.4.
+
+7.6 CLASSIFYING THE ANSWER
+
+  `ChannelDiagnosis` turns (status, content-type, body sample, bytes) into one of sixteen
+  named kinds (ChannelDiagnosis.php:26-41):
+
+      ok                  ip-not-whitelisted   forbidden            unauthorized
+      not-found           timeout              connection-failed    empty-body
+      not-audio           truncated            server-error         unexpected-status
+      not-configured      rate-limited         invalid-json         no-calls
+
+  These strings are stored verbatim in `order58_call_imports.error_code`, which is why that
+  column is `varchar(64)` and not an enum: adding a diagnosis kind must not need a migration.
+
+------------------------------------------------------------------------------------------
+8. SYNC - WHAT THE POST ACTUALLY DOES
+------------------------------------------------------------------------------------------
+
+src/Order58/Web/Calls/SyncAction.php. Ten ordered steps; the first failure wins and returns.
+
+  1  :82   store <- `/\A\d{1,9}\z/`, `> 0`          else "Choose a store first."
+  2  :93   **importEnabled**                        else the flag message, nothing queued
+  3  :102  selectedIds(parsed body)                 else "Select at least one call to sync."
+  4  :111  company <- RecordingCompanyResolver      else the missing-code message (8.4)
+  5  :120  provider <- validated against the DB     else "Choose one of the listed ...
+                                                    providers."
+  6  :130  generateAiAudio <- `$form->has(...)`     presence is the yes; absence is false
+  7  :132  todaysCalls() - re-fetch from provider   else the transport/diagnosis message
+  8  :142  INTERSECT selected ids against that      else "None of the selected calls are in
+                                                    this store's list for today..."
+  9  :157  queue() - one batch + 3 items per call
+  10 :159  flash + redirect back with `store` and `load=1`
+
+8.1 THE BROWSER'S LIST OF CALLS IS NEVER BELIEVED
+
+  Step 7 costs one extra HTTP request per Sync click and is the most important line of defence
+  in the feature. `todaysCalls()` (:248) asks the provider for today's calls **again** and
+  step 8 keeps only the intersection. An id that is not in that answer is dropped without
+  comment.
+
+  Why it is worth the request:
+
+    * A forged id would otherwise become a path segment in an outbound fetch.
+    * A stale tab's ids would queue work for calls that no longer exist.
+    * The call's `callTime` is taken from the fresh answer too, **never from the form**. It
+      decides the date the recording is fetched with, and a date the browser could choose is a
+      date that can be wrong.
+
+  `selectedIds()` (:285) is shape-only - `/\A\d{1,20}\z/` per value, arrays skipped, non-
+  strings skipped. Its own comment is explicit that this "just keeps obvious rubbish out of an
+  IN clause"; the intersection is the check that matters.
+
+  Note the ordering: the flag gate (step 2) runs **before** the re-fetch, so a disabled server
+  makes no outbound request when someone posts to this endpoint.
+
+8.2 NOTHING IS DOWNLOADED HERE
+
+  The action writes rows and returns. Its docblock states the reason: "a web request that
+  downloads twenty WAVs is a web request that times out halfway through and leaves nobody able
+  to say which ten arrived."
+
+8.3 ALL THREE CHANNELS, EVERY TIME
+
+  SyncAction.php:213 passes `RecordingChannel::all()` -> `[mixed, caller, callee]`.
+  `queueCall()` inserts up to three rows per call in that order, and that id order is what
+  makes the worker process mixed first.
+
+  Which channels a given merchant actually produces is the provider's answer to give. A 404 on
+  caller or callee is recorded as **"Not available"** - a fact about the merchant, not a fault -
+  rather than guessed at in advance. See 13.
+
+8.4 `company` IS RESOLVED, NOT ACCEPTED  (the standing business rule)
+
+  RULE: `company=` is **`order58_stores.company` for the selected store.** Store 831 fetches
+  with `company=KONG`; store 1491 with `company=WGEU`. Each store uses its own code.
+
+  Owned by one class, src/Order58/Application/RecordingCompanyResolver.php:
+
+      public function forStore(int $storeSourceId): string;   // throws RecordingCompanyMissing
+
+  Validation, applied in order (:54-75):
+      store row must exist                        else RecordingCompanyMissing::noSuchStore()
+      trim(company) !== ''                        else RecordingCompanyMissing::forStore()
+      mb_strlen <= 100                            else RecordingCompanyMissing::forStore()
+      no control characters `/[\x00-\x1F\x7F]/`   else RecordingCompanyMissing::forStore()
+
+  (Measured: the longest company code in this database is 8 characters, so the 100-character
+  ceiling is the provider's contract rather than a real constraint today.)
+
+  Guarantees:
+      * The admin cannot edit or override it - no Company field is rendered (5.4) and a posted
+        `company` is ignored outright rather than validated.
+      * It is **snapshotted** to `order58_call_import_batches.recording_company` when the
+        batch is created, and the worker uses the snapshot. A later mirror sync - which
+        overwrites `order58_stores` wholesale - therefore cannot change what an already-queued
+        batch fetches, and the row is the audit trail of exactly which code was sent.
+      * A store with a missing or unusable code queues **nothing at all**, for every call, not
+        just the first. Falling back to another value would build a well-formed request for
+        somebody else's audio (SyncAction.php:112-118).
+      * **No hardcoded `SWCC` anywhere in this importer.** `SWCC` was only the diagnostic
+        page's `DEFAULT_COMPANY`, and it resolves to store #21 "Order58" = Seawolf
+        Technologies, the platform vendor - which is why it is not used here.
+      * URLs are built only by `ChannelRequestMapping`. JavaScript never composes one.
+      * `company` is request configuration, **not** part of the idempotency key.
+
+8.5 WHAT `queue()` WRITES  (SyncAction.php:170-221)
+
+  One row in `order58_call_import_batches`:
+      store_source_id         the selected store
+      triggered_by            'MANUAL'
+      requested_by_admin_id   `CurrentAdmin::get()->id()` - the acting admin, always
+      transcription_provider  the validated choice
+      generate_ai_audio       0 or 1
+      recording_company       the resolved snapshot
+      created_at              the clock
+
+  Then, per accepted call, up to three rows in `order58_call_imports` with
+  `status = 'PENDING'`. A call whose `derivedDate()` is null is counted as skipped rather than
+  written with a blank date (:195-201) - defensive, since the filter has already excluded
+  those, but a silent `''` would become a malformed fetch.
+
+8.6 PRESSING SYNC TWICE IS SAFE, AND SAYS SO
+
+  `queueCall()` inserts and catches `IntegrityException` on the unique key, so a call already
+  requested is **skipped, not refused**. The flash reports it:
+
+      queued 0            "Nothing new to queue - all N selected call(s) had already been
+                           requested."
+      queued > 0          "N call(s) queued. Recordings import in the background and appear
+                           on the store's Audio to Text page as they finish."
+      + skipped > 0       ...plus " M had already been requested."
+
+  "3 already queued" is a more useful answer than an error about duplicates.
+
+------------------------------------------------------------------------------------------
+9. THE IMPORT WORKER
+------------------------------------------------------------------------------------------
+
+9.1 THE COMMAND
+
+  Name      kf:order58:import-recordings
+  Class     src/Order58/Console/ImportRecordingsCommand.php (#[AsCommand] at :51)
+  Registered config/console/commands.php:31
+  Option    --once   "Process at most one recording, then exit. Intended for a timer or cron."
+  Constants STALE_AFTER_SECONDS = 900 (:58), IDLE_SLEEP_SECONDS = 5 (:61)
+  Cron      docs/deploy/worker.md:109 - every 2 minutes, wrapped in `flock` + `nice -n 10`
+
+9.2 EXECUTION ORDER  (:85 onwards)
+
+  1  flag check -> "Order58 recording import is disabled (...)" + ExitCode::OK
+  2  acquireLock() -> on failure, `$io->warning('Another Order58 recording import is already
+     running.')` + ExitCode::OK. Not an error: the previous run is still going, which is
+     exactly what the lock is for.
+  3  recoverStuck(900) -> any item left `FETCHING` by a killed process goes back to `PENDING`;
+     prints "Recovered N stranded import(s)." when N > 0
+  4  loop: processNext(); with `--once` it breaks after one iteration either way
+  5  prints "Processed N recording(s)."
+  6  finally: releaseLock()
+  A Throwable escaping the loop - a database gone away - is logged with
+  `reason=order58_import_worker_failed` and returns UNSPECIFIED_ERROR, so the run ends rather
+  than looping against it.
+
+9.3 THE LOCK, AND WHY IT HAS ITS OWN FILE
+
+  config/common/di/order58.php:64
+
+      'lockFile' => $aliases->get('@runtime/locks') . '/order58-import.lock'
+
+  `flock(LOCK_EX|LOCK_NB)`, opened with mode `c` so the file is created without truncation.
+  The pid is written for diagnostics; nothing reads it. **The file is never unlinked** -
+  removing a lock file another process holds is how two workers end up believing they are
+  alone.
+
+  **Three lock files, all different, and this matters more than it looks:**
+
+      runtime/locks/order58-import.lock        the command's own internal lock
+      runtime/locks/order58-import-cron.lock   the cron `flock -n` wrapper's lock
+      (the audio transcription worker's)       a separate file again
+
+  If the cron wrapper were pointed at the application's own lock file, the wrapper would take
+  it first and **every single run would skip**. This is a mistake this project has made before,
+  which is why docs/deploy/worker.md:115 spells it out.
+
+9.4 CLAIMING WORK  (DbCallImportRepository::claimNext, :148)
+
+  Two steps, no transaction, no `SELECT ... FOR UPDATE`:
+
+    a  Read up to CLAIM_CANDIDATES ids:
+         WHERE status = 'PENDING'
+           AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
+         ORDER BY id ASC
+       This is served by `ix_order58_call_imports_queue (status, next_attempt_at, id)`.
+    b  For each candidate, a conditional UPDATE:
+         SET status='FETCHING', claimed_at=:now, updated_at=:now
+         WHERE id=:id AND status='PENDING'
+       **`affected === 1` is the lock token.** Exactly one of N concurrent workers can win any
+       given row; the losers see 0 and move to the next candidate.
+
+  A PDO gotcha is documented in place at :150-153: the driver returns column values as
+  **strings**, so `findItem((int) $id)` needs that cast. An annotation claiming `list<int>`
+  was wrong, and removing the cast on the strength of it turned every claim into a TypeError.
+  The annotation now reads `list<string>` with the reason written next to it.
+
+9.5 DOWNLOADING  (src/Order58/Application/RecordingDownloader.php)
+
+  SAMPLE_BYTES = 8192 (:51) - enough for a RIFF/WAVE header and a readable error page
+  CHUNK_BYTES  = 262144 (:53) - the streaming read size
+
+  fetch() (:59):
+    1  builds a `ChannelRecordingRequest` from the item: recordingId = call_session_id,
+       time = call_date, company = the batch snapshot, name = the session id. `merchantId` is
+       set to the store id and is **not sent** - the recording endpoint takes no merchant
+       parameter - but the request object validates it, so it is given the store it belongs to
+       rather than a blank.
+    2  `ChannelApiProbe::open()`, streamed. A transport throw becomes
+       `ChannelDiagnosis::fromTransportFailure()`.
+    3  Non-2xx: read a **bounded** 8 KB sample and stop, so an IP-allowlist refusal is still
+       recognised from the provider's own wording without buffering an error page.
+    4  2xx: `tempnam(sys_get_temp_dir(), 'kf-o58-')`, then chunked copy while counting bytes.
+    5  `WavSignature::inspect()` - RIFF/WAVE magic plus declared-versus-received length. A
+       200 that is HTML, or a WAV cut short, is classified rather than passed on.
+    6  **Every failure `@unlink`s its own temp file** (:104, :137, :158). A partial download is
+       never handed on, so no caller can accidentally ingest a truncated recording and there is
+       no cleanup path for anyone to forget.
+
+  Filename handed to the pipeline: `RecordingChannel::fileNameFor()` ->
+  `{id}.wav` / `{id}-caller.wav` / `{id}-callee.wav`.
+
+9.6 PROCESSING ONE ITEM  (RecordingImportProcessor::process, :113)
+
+      download -> not fetched?  -> recordFetchFailure()          [13.1]
+               -> fetched
+                    ingestFile(...)  (section 10)
+                      throw          -> @unlink, rethrow -> caught in processNext -> retry
+                      wasQueued      -> markImported(conversation_public_id, bytes)
+                      !isTransient   -> TOO_LARGE, code 'rejected_by_pipeline', bytes kept
+                                        as evidence, never retried - it would be exactly as
+                                        big next time
+                      isTransient    -> @unlink + giveUpOrRetry('pipeline_unavailable')
+                                        (no disk, a full queue - the recording is fine)
+
+  An unexpected Throwable in `processNext()` (:84-100) is logged with
+  `reason=order58_import_unexpected`, the item id, the session id, the channel and the error
+  class, then **counted as an attempt** so a permanently broken item cannot spin.
+
+------------------------------------------------------------------------------------------
+10. THE AUDIO-TO-TEXT INTEGRATION
+------------------------------------------------------------------------------------------
+
+10.1 THE SEAM
+
+  `tests/Unit/AudioToText/ModuleIsolationTest.php` enforces, bidirectionally:
+
+    * `src/AudioToText/**` may not contain `App\Order58\` (nor Chat, Rules, KnowledgeBase,
+      Document, Agent, Ai, Reports, Worker);
+    * **every file under `src/` except `src/AudioToText/`** may not contain `App\AudioToText`.
+
+  The test scans **raw source**, so even a docblock that spells the namespace trips it. So
+  `App\Order58\Application\RecordingImportProcessor` cannot name `TranscriptionQueue`,
+  `RecordingType`, `TranscriptionProvider` or anything else in the audio module.
+
+  The seam is a **neutral interface in a third namespace**:
+
+      src/Shared/Audio/AudioIngestionPortInterface.php   - named by both sides
+      src/Shared/Audio/AudioIngestionOutcome.php          - the answer
+      src/AudioToText/Application/AudioIngestionService.php - implements it
+
+  All cross-boundary values are **plain strings**: `'MIXED'`, `'WHISPER'`. The service
+  re-hydrates them with `RecordingType::fromStorage()` / `TranscriptionProvider::fromStorage()`
+  on its own side of the wall. This is the same pattern `DbAudioProviderDefault` already used
+  to read `{{%audio_to_text_settings}}` by table name.
+
+10.2 `ingestFile()`  (AudioIngestionService.php:108)
+
+      ingestFile(int $storeSourceId, string $path, string $filename, string $recordingType,
+                 ?string $orderId, string $provider, bool $generateAiAudio, int $adminUserId)
+          : AudioIngestionOutcome
+
+  In order:
+    :118  `RecordingType::fromStorage()` + `TranscriptionProvider::fromStorage()`; an
+          unrecognised value is a **rejection, not a default** - quietly transcribing with
+          Whisper because a caller sent a provider name this build does not know would report
+          success for a choice nobody made.
+    :130  the path must be a readable file, else `unavailable` (transient)
+    :136  size must be > 0, else `rejected('The downloaded recording is empty.')`
+    :142  `new UploadedFile($path, $size, UPLOAD_ERR_OK, basename($filename), 'audio/wav')` -
+          the vendor class accepts a path. The client filename is only what the validator reads
+          the extension from and what storage sanitises; **the bytes themselves are still
+          sniffed**, so a misleading name changes nothing.
+    :145  delegates to `ingest()`, which runs
+          `AudioUploadValidator::validate()` **then**
+          `TranscriptionQueue::enqueueConversation(ConversationMode::Common, $storeSourceId,
+           [SourceRole::Common->value => $file], ...)`
+
+  Validation happens **before** ingest, and it must: `getStream()` throws after `moveTo()`.
+
+10.3 A PRE-EXISTING BUG THIS SEAM FIXED
+
+  Before `AudioIngestionService` existed, `AudioUploadValidator` ran only in
+  `Job/Store/Action.php`, while `TranscriptionQueue` enforced **only duration**. Any other
+  caller bypassed the size and type checks - and `Job/Store/Group/ReplaceAction.php` did
+  exactly that, in shipped code. Both callers are now routed through the service, so the check
+  can no longer be skipped by construction. `TranscriptionQueue` itself was not modified.
+
+  Proof recorded at the time: with the fix stashed, uploading a valid WAV named `pretend.bin`
+  through ReplaceAction returned **200**; with the fix, **422**.
+
+10.4 LIMITS THAT APPLY TO AN IMPORTED RECORDING
+
+  AudioUploadValidator::EXTENSIONS (:44)   wav, mp3, m4a, ogg, webm
+  size ceiling (:88)                       AUDIO_TRANSCRIPTION_MAX_SIZE = 31457280 (30 MB)
+  duration ceiling                         AUDIO_TRANSCRIPTION_MAX_DURATION = 300 s
+                                           (TranscriptionQueue::assertDurationWithinLimit,
+                                            :313-314)
+
+  An imported recording gets no exemption from any of these. Over either ceiling it is
+  recorded as `TOO_LARGE` with the measured `bytes` as evidence, and the limits are not
+  bypassed - raising them is not a decision the importer is authorised to make on its own.
+
+10.5 THE CHANNEL VOCABULARY - THE ONE MAPPING THAT MUST NEVER DRIFT
+
+  Three separate vocabularies, deliberately kept distinct:
+
+      RecordingChannel  mixed / caller / callee        the provider's words (lowercase)
+      RecordingType     MIXED / CALLER / CALLEE        the audio module's words (uppercase)
+      SourceRole        COMMON / CUSTOMER / AGENT      who is speaking
+
+  `RecordingImportProcessor::recordingTypeFor()` (:264) is a literal three-arm `match`:
+
+      Mixed -> 'MIXED'      Caller -> 'CALLER'      Callee -> 'CALLEE'
+
+  written out rather than shared, because the two modules are not allowed to name each other's
+  enums. They happen to agree on all three names.
+
+  **Caller is NEVER rewritten as "customer", and callee is NEVER rewritten as "agent".** It
+  cannot happen here, because nothing in this path produces a speaker role at all: every
+  conversation is enqueued with `mode = COMMON` and `source_role = COMMON`. Who spoke is a
+  question for the separate speaker-correction review layer, which has its own confirmation
+  gate.
+
+10.6 WHERE THE RESULT LANDS
+
+  `enqueueConversation(storeSourceId: 1491, recordingType: MIXED|CALLER|CALLEE,
+  orderId: <the provider's orderId>)` writes exactly the columns
+  `DbStoreOrderGroupRepository` already selects on. So the recording appears on
+  `/audio-to-text/store/1491`, grouped under its Order ID, **with no change to that page** -
+  and `/audio-to-text/store/{sourceId}` was not modified by this feature.
+
+  Once an item is `IMPORTED`, the importer's job is finished: the Audio-to-Text job owns the
+  transcription status from then on, and `order58_call_imports.conversation_public_id` is the
+  only link kept.
+
+  If `generate_ai_audio` was ticked, the flag rides on the conversation and the **existing**
+  worker -> `TtsGenerationService::enqueueRequested()` path runs. No TTS code was touched.
+
+------------------------------------------------------------------------------------------
+11. SYNC HISTORY
+------------------------------------------------------------------------------------------
+
+11.1 WHAT IS SHOWN
+
+  template.php:274-350, fed by `Action.php:114` -> `imports->history($storeId, 40)`.
+  `Action::HISTORY = 40` (:55) - "long enough to find yesterday's problem, short enough to
+  read". With no store selected the history is global; with one selected it is filtered.
+
+  One row **per call**, with one column per channel:
+
+      Call      Order     Time   Mixed     Caller         Callee    Overall  Provider AI Updated
+      22487129  16547451  06:09  Imported  Not available  Imported  Partial  Whisper  -  2 min ago
+
+11.2 HOW ONE ROW IS BUILT  (DbCallImportRepository::history, :292)
+
+  A single query, then grouping in PHP:
+
+      SELECT <item columns>, s.name AS store_name
+      FROM order58_call_imports i
+      LEFT JOIN order58_stores s ON s.source_id = i.store_source_id
+      [WHERE i.store_source_id = :store]
+      ORDER BY i.id DESC
+      LIMIT :limit * 3
+
+  * `LEFT JOIN`, not `JOIN`: a call whose store row has since vanished still appears, with a
+    blank name, rather than disappearing from the audit trail.
+  * `ORDER BY i.id DESC` rather than by a timestamp, because two calls queued in the same
+    second must still have a stable order.
+  * `LIMIT $limit * 3` because there are up to three channel rows per call; the PHP loop then
+    stops at `count($history) >= $limit` (:358).
+  * Rows are folded into calls keyed `store:session`, and the call's `updated` is the **latest**
+    of its channels' `updatedAt` (:331).
+
+  The result is a list of `CallImportHistoryRow`, each carrying its channels as
+  `array<string, CallImportItem>`.
+
+11.3 IT NEVER FAILS BECAUSE OF THE PROVIDER
+
+  This half of the page reads the import tables and nothing else, so it renders at full speed
+  with the provider unreachable - which is the normal state of any machine outside the client's
+  IP allowlist. A failure to load today's calls costs the call list, not the page.
+
+11.4 RETRY, FROM THE HISTORY TABLE
+
+  src/Order58/Web/Calls/RetryAction.php
+
+      id shape invalid              -> "That import could not be identified."
+      retry() reports true          -> "Queued again. The importer will pick it up on its
+                                        next run."
+      retry() reports false         -> "That recording is not in a state that can be retried."
+
+  `CallImportRepositoryInterface::retry()` carries **`status = FAILED` in its WHERE clause**,
+  so the repository - not the template, and not the request - is what decides whether a retry
+  is allowed. The template offers a button only per failed channel (template.php:331-347),
+  because "a button that did nothing would be worse than none", but the guarantee is in the
+  SQL.
+
+  `Order58ImportStatus::isRetryable()` (:85) is `$this === self::Failed`. So:
+
+      FAILED         retryable
+      TOO_LARGE      NOT retryable - it would be exactly as large next time
+      NOT_AVAILABLE  NOT retryable - the merchant does not produce that channel
+      IMPORTED       NOT retryable - already done
+      PENDING/FETCHING - already in flight
+
+------------------------------------------------------------------------------------------
+12. THE STATUS MODEL
+------------------------------------------------------------------------------------------
+
+12.1 PER-CHANNEL: src/Order58/Domain/Order58ImportStatus.php
+
+  value            label            badge     settled  retryable
+  ---------------  ---------------  --------  -------  ---------
+  PENDING          Pending          info      no       no
+  FETCHING         Fetching         info      no       no
+  IMPORTED         Imported         success   yes      no
+  NOT_AVAILABLE    Not available    muted     yes      no
+  TOO_LARGE        Too large        warning   yes      no
+  FAILED           Failed           error     yes      YES
+
+  `isSettled()` (:73) is "not PENDING and not FETCHING". Badge values are restricted to the
+  five the admin stylesheet actually defines - `success | error | warning | info | muted`.
+  (`SyncRunStatus`'s badges `pending`/`processing`/`ready` have no matching CSS, which is why
+  this enum follows `RuleReadinessStatus` instead.)
+
+  TRANSITIONS
+
+      PENDING ---claim---> FETCHING ---+--> IMPORTED        terminal, success
+         ^                             |
+         |                             +--> NOT_AVAILABLE   terminal (404 on caller/callee)
+         |                             |
+         +---requeue(backoff)----------+--> TOO_LARGE       terminal (over size/duration)
+         ^                             |
+         |                             +--> FAILED          terminal (attempts spent, or a
+         |                                                   condition retry cannot fix)
+         +---retry (admin, FAILED only)
+
+      plus: FETCHING ---recoverStuck(>900s)---> PENDING
+
+12.2 PER-CALL: src/Order58/Domain/CallImportOutcome.php
+
+  Derived from the channel rows, never stored (:55-58):
+
+      any PENDING or FETCHING                                    -> Processing   (info)
+      no IMPORTED at all                                         -> Failed       (error)
+      some IMPORTED but a shortfall (any not-available/too-large
+        /failed)                                                 -> Partial      (warning)
+      otherwise                                                  -> Completed    (success)
+
+  This aggregation mirrors `ConversationStatus::fromChildren()`, which already turns job
+  statuses into one row on the store page - the same shape, so nobody has to learn a second
+  one. A third database table holding the call status would store a value that can only be
+  computed from the second, and would need updating on every channel transition.
+
+  **`Partial` is the expected outcome, not an edge case.** Most merchants do not produce
+  separated caller/callee recordings, so "Mixed imported, Caller not available, Callee not
+  available" is the normal, healthy result. Reading it as a problem is the most likely way to
+  misinterpret this page.
+
+------------------------------------------------------------------------------------------
+13. RETRY AND BACKOFF
+------------------------------------------------------------------------------------------
+
+13.1 CLASSIFICATION  (RecordingImportProcessor::recordFetchFailure, :180)
+
+  Checked in this order:
+
+  (1) 404 on a channel that is NOT mixed -> `NOT_AVAILABLE`, **terminal, never retried**
+      error_code    'not-found'
+      error_message "This merchant does not produce a separate Caller recording."
+      The mixed channel gets no such grace - every account is supposed to have one - so a 404
+      on mixed falls through to (3).
+
+  (2) kind in TRANSIENT (:52) -> `giveUpOrRetry()`
+          timeout, connection-failed, rate-limited, server-error, truncated
+      `truncated` is in this list because a cut-short download is exactly the kind of thing
+      that succeeds on a second attempt.
+
+  (3) everything else -> `FAILED`, terminal
+          unauthorized, forbidden, ip-not-whitelisted, not-audio, empty-body,
+          unexpected-status, not-configured, and 404-on-mixed
+      The diagnosis **advice** is appended to the headline, because it is the only part an
+      administrator can act on - e.g. "ask the client to whitelist this IP".
+
+13.2 BACKOFF  (giveUpOrRetry, :227)
+
+      MAX_BACKOFF_SECONDS  = 3600   (:47)
+      BASE_BACKOFF_SECONDS = 60     (:49)
+      maxAttempts                   ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS, default 3,
+                                    injected at config/common/di/order58.php:79-83
+
+      if (attempts + 1 >= maxAttempts)  -> markSettled(FAILED, code, message)
+      else  next_attempt_at = now + min(3600, 60 * 2 ** attempts)
+
+      attempts=0 -> +60s     attempts=1 -> +120s     attempts=2 -> +240s   ... capped at 1h
+
+  Deliberately the same shape as `IntegrationSyncDrainer`, so two background features in this
+  application do not answer "how long before we try again" differently.
+
+13.3 EVERY STORED MESSAGE IS REDACTED
+
+  `RecordingImportProcessor::safe()` (:279) is
+  `SecretRedactor::redactAndTruncate($message, 1000)`, matching
+  `error_message varchar(1000)`. It is applied to every message the processor stores, because
+  that string is rendered on an admin page. Provider response bodies are never stored raw; no
+  file path, no stack trace and no token reaches the column.
+
+13.4 STRANDED ITEMS
+
+  A worker killed mid-fetch leaves a row `FETCHING` with `claimed_at` set. The next run's
+  `recoverStuck(900)` (`STALE_AFTER_SECONDS`) puts anything claimed more than 15 minutes ago
+  back to `PENDING`, so it is picked up again rather than stranded forever.
+
+------------------------------------------------------------------------------------------
+14. THE FEATURE-FLAG MATRIX
+------------------------------------------------------------------------------------------
+
+  Behaviour                                 FLAG = false            FLAG = true
+  ----------------------------------------  ---------------------  ----------------------
+  /admin/order58/calls renders              YES                    YES
+  Sidebar entry visible                     YES                    YES
+  Store dropdown populated                  YES (208 stores)       YES (208 stores)
+  Warning banner shown                      YES (template :112)    no
+  "Load today's calls" works                YES                    YES
+  Provider contacted on load                YES (one GET)          YES (one GET)
+  Sync button rendered                      YES, `disabled`        YES, enabled
+  POST /sync writes rows                    NO - refused at :93    YES
+  POST /sync contacts the provider           NO - gate is first     YES (the re-fetch)
+  POST /retry works                         YES (a local write)    YES
+  Sync History renders                      YES                    YES
+  Worker downloads anything                 NO - exits at :92      YES
+  Worker exit code                          0 (OK)                 0 (OK)
+  Worker output                             "Order58 recording      "Processed N
+                                            import is disabled      recording(s)."
+                                            (ORDER58_RECORDING_
+                                            IMPORT_ENABLED)."
+  Rows already queued while it was on       stay PENDING; nothing  processed on the next run
+                                            touches them
+
+  Note the two rows that are `YES` in both columns and sometimes surprise people: the page
+  renders and the call list loads regardless of the flag. That is intentional - both are
+  read-only, and confirming that this server can reach the provider is exactly what you want
+  to do *before* enabling import. What the flag gates is **writing rows and downloading
+  audio**.
+
+  Note also that `POST /retry` is not gated. It only moves a local row from `FAILED` back to
+  `PENDING`; with the flag off, the worker will never pick it up, so nothing happens.
+
+------------------------------------------------------------------------------------------
+15. DATABASE SCHEMA
+------------------------------------------------------------------------------------------
+
+Migration: src/Migration/M260924120000CreateOrder58CallImports.php - one migration, purely
+additive, two new tables. **No existing table was modified by this feature.**
+
+15.1 order58_call_import_batches  (one Sync click)
+
+  CREATE TABLE `order58_call_import_batches` (
+    `id`                     bigint unsigned NOT NULL AUTO_INCREMENT,
+    `store_source_id`        bigint unsigned NOT NULL,
+    `triggered_by`           varchar(16) NOT NULL DEFAULT 'MANUAL',
+    `requested_by_admin_id`  bigint DEFAULT NULL,
+    `transcription_provider` varchar(16) NOT NULL,
+    `generate_ai_audio`      tinyint(1) NOT NULL DEFAULT '0',
+    `recording_company`      varchar(100) NOT NULL,
+    `call_count`             smallint unsigned NOT NULL DEFAULT '0',
+    `created_at`             datetime NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `ix_order58_call_import_batches_store` (`store_source_id`,`id`),
+    KEY `fk_order58_call_import_batches_admin` (`requested_by_admin_id`),
+    CONSTRAINT `fk_order58_call_import_batches_admin`
+      FOREIGN KEY (`requested_by_admin_id`) REFERENCES `admin_users` (`id`)
+      ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_order58_call_import_batches_company`
+      CHECK (`recording_company` <> ''),
+    CONSTRAINT `chk_order58_call_import_batches_provider`
+      CHECK (`transcription_provider` IN ('WHISPER','DEEPGRAM')),
+    CONSTRAINT `chk_order58_call_import_batches_trigger`
+      CHECK (`triggered_by` IN ('MANUAL','AUTOMATIC'))
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+
+  Notes:
+    * `triggered_by` is `varchar` + CHECK, not an ENUM, so adding a trigger source later is
+      not a schema migration. `AUTOMATIC` is already allowed and reserved for a future
+      scheduler; nothing writes it today.
+    * `requested_by_admin_id` is nullable for that same future, with
+      `ON DELETE RESTRICT` - an admin who queued an import cannot be deleted out from under
+      the audit trail.
+    * `recording_company` is a **snapshot**. See 8.4.
+    * `call_count` exists and defaults to 0; the current code does not maintain it.
+
+15.2 order58_call_imports  (one row per recording channel)
+
+  CREATE TABLE `order58_call_imports` (
+    `id`                     bigint unsigned NOT NULL AUTO_INCREMENT,
+    `batch_id`               bigint unsigned NOT NULL,
+    `store_source_id`        bigint unsigned NOT NULL,
+    `call_session_id`        varchar(32) NOT NULL,
+    `channel`                varchar(16) NOT NULL,
+    `call_time_raw`          varchar(64) NOT NULL,
+    `call_date`              date NOT NULL,
+    `order_id`               varchar(20) DEFAULT NULL,
+    `status`                 varchar(16) NOT NULL DEFAULT 'PENDING',
+    `attempts`               smallint unsigned NOT NULL DEFAULT '0',
+    `next_attempt_at`        datetime DEFAULT NULL,
+    `error_code`             varchar(64) DEFAULT NULL,
+    `error_message`          varchar(1000) DEFAULT NULL,
+    `bytes`                  bigint unsigned DEFAULT NULL,
+    `duration_seconds`       decimal(9,2) DEFAULT NULL,
+    `conversation_public_id` char(32) DEFAULT NULL,
+    `claimed_at`             datetime DEFAULT NULL,
+    `completed_at`           datetime DEFAULT NULL,
+    `created_at`             datetime NOT NULL,
+    `updated_at`             datetime NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `ux_order58_call_imports_identity`
+      (`store_source_id`,`call_session_id`,`channel`),
+    KEY `ix_order58_call_imports_queue` (`status`,`next_attempt_at`,`id`),
+    KEY `ix_order58_call_imports_batch` (`batch_id`),
+    CONSTRAINT `fk_order58_call_imports_batch`
+      FOREIGN KEY (`batch_id`) REFERENCES `order58_call_import_batches` (`id`)
+      ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_order58_call_imports_channel`
+      CHECK (`channel` IN ('mixed','caller','callee')),
+    CONSTRAINT `chk_order58_call_imports_session`
+      CHECK (REGEXP_LIKE(`call_session_id`,'^[0-9]{1,20}$')),
+    CONSTRAINT `chk_order58_call_imports_status`
+      CHECK (`status` IN ('PENDING','FETCHING','IMPORTED','NOT_AVAILABLE',
+                          'TOO_LARGE','FAILED'))
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+
+  FORMAT NOTES THAT MATTER
+
+    * **`channel` is stored LOWERCASE** - `mixed|caller|callee` - because that is
+      `RecordingChannel`'s own vocabulary (the provider's). `status` is stored UPPERCASE.
+      The CHECK constraints enforce both cases, so the mismatch cannot drift. (An early
+      version of this migration had an uppercase channel CHECK; it would never have
+      round-tripped, and it was rolled back with `migrate:down`, corrected and reapplied
+      before anything used it.)
+    * `call_time_raw` keeps the provider's `callTime` string **unparsed**, alongside the
+      derived `call_date`. The raw string is what the history table displays and what a future
+      investigation into a timezone question would need.
+    * `call_date` is what goes in `?time=` on the fetch URL.
+    * `call_session_id` is `varchar(32)` with a digits-only CHECK; the shape check in PHP
+      allows up to 20 digits, so the column and the regexp both have headroom.
+    * `error_message varchar(1000)` matches `redactAndTruncate($msg, 1000)` exactly.
+    * `duration_seconds decimal(9,2)` exists as evidence for a `TOO_LARGE` decision; the
+      current code always passes null there and records `bytes` instead.
+
+  THE IDEMPOTENCY KEY
+
+      UNIQUE (store_source_id, call_session_id, channel)
+
+    * `store_source_id` is included conservatively: whether `call_session_id` is globally
+      unique is **unverified** with the provider.
+    * `order_id` is **never** part of the key - one order can have several calls and each call
+      three channels.
+    * Enforced by insert-and-catch, the same way `DbSyncRunRepository::enqueue()` does it.
+
+  THE QUEUE INDEX
+
+      KEY (status, next_attempt_at, id)
+
+    matches `claimNext()`'s WHERE + ORDER BY exactly (9.4), so claiming is an index range scan
+    regardless of table size.
+
+15.3 WHY `integration_sync_runs` WAS NOT REUSED
+
+  Three concrete reasons, all still true:
+    * its `active_key` coalesces by `(type, scope_ref)`, so a second Sync click for the same
+      store would silently **merge** into the first - wrong when the two clicks select
+      different calls;
+    * its `status` is a real MySQL ENUM, so new states need a migration;
+    * `IntegrationSyncDrainer::drain()` early-returns when the *token* credentials are
+      incomplete, which would couple recording import to an unrelated API's configuration.
+
+15.4 EXISTING TABLES THIS FEATURE READS
+
+  knowledge_bases          source_active (the dropdown filter), source_store_id
+  order58_stores           name, company, source_id
+  audio_to_text_settings   default_transcription_provider - read **by table name** by
+                           `DbAudioProviderDefault`, never by importing the audio module's
+                           enum. Current row: id=1, WHISPER.
+  admin_users              FK target for requested_by_admin_id
+
+  All four are read-only from this feature's point of view.
+
+15.5 LIVE STATE ON THIS MACHINE (measured 2026-09-25)
+
+  order58_call_import_batches   0 rows   (AUTO_INCREMENT = 173)
+  order58_call_imports          0 rows   (AUTO_INCREMENT = 597)
+
+  Both empty: the test suites clean up after themselves, and the auto-increment counters are
+  the only trace of previous runs. No production import has been performed.
+
+------------------------------------------------------------------------------------------
+16. FAILURE AND EDGE CASES
+------------------------------------------------------------------------------------------
+
+Every one of these is a real code path with a file reference, not a hypothetical.
+
+  #   Situation                            What happens                                 Where
+  --  -----------------------------------  -------------------------------------------  -----
+  1   Not signed in                        302 to login                                 RequireAdminMiddleware
+  2   ?store=abc                           renders unloaded; no error                   Action.php:190
+  3   ?store=0 or a negative value         renders unloaded                             Action.php:196
+  4   ?store=999999 (no such store)        dropdown never offers it; a hand-typed id
+                                           produces an empty provider answer            7.2
+  5   ?store=1491 with no load=1           no provider call at all                       Action.php:75
+  6   Provider unreachable (no network)    "The recording service could not be reached
+                                           from this server. <msg>"; page still renders  Action.php:143
+  7   Provider 403, IP not allowlisted     diagnosis headline + advice as prose; the
+                                           normal state off the allowlist                7.4
+  8   Provider 200 with invalid JSON       `invalid-json` diagnosis -> prose             ChannelDiagnosis
+  9   Provider returns calls, none today   "This store has recent calls, but none from
+                                           today."                                       Action.php:158
+  10  Provider returns nothing at all      empty table, no message                       Action.php:155
+  11  A call's callTime is unparseable     silently dropped from the list                TodayCallFilter:77
+  12  A call has a blank orderId           rendered as "-"; stored NULL                  SyncAction.php:209
+  13  Sync with no store                   "Choose a store first."                       SyncAction.php:86
+  14  Sync with the flag off               "Recording import is turned off on this
+                                           server..."; nothing queued                    SyncAction.php:93
+  15  Sync with nothing ticked             "Select at least one call to sync."            SyncAction.php:105
+  16  Sync with a forged calls[] id        dropped by the intersection, silently          SyncAction.php:142
+  17  Sync where ALL ids are forged/stale  "None of the selected calls are in this
+                                           store's list for today..."; nothing queued     SyncAction.php:149
+  18  Sync with calls[]=<not a string>     skipped by the shape check                     SyncAction.php:295
+  19  Store has a blank/NULL company       nothing queued for ANY call; "Recording
+                                           company code is missing for this store."       SyncAction.php:112
+  20  Store company has a control char     same refusal                                   Resolver:71
+  21  Sync with company=EVIL posted        ignored outright; the store's code is used     8.4
+  22  Sync with an unknown provider        "Choose one of the listed transcription
+                                           providers."                                    SyncAction.php:123
+  23  Sync with no provider posted         falls back to the configured default           SyncAction.php:309
+  24  Provider unreachable at Sync time    "The recording service could not be reached,
+                                           so nothing was queued."                        SyncAction.php:267
+  25  Sync pressed twice                   duplicates skipped by the unique key; "N
+                                           already queued"                                8.6
+  26  Missing/invalid CSRF token           rejected by the application CSRF middleware;
+                                           nothing written                                routes.php group
+  27  Two workers start at once            the second sees the flock held and exits OK    :99
+  28  Two workers race one row             the conditional UPDATE's affected-rows
+                                           decides; exactly one wins                      9.4
+  29  Worker killed mid-fetch              temp file left in the system temp dir; the row
+                                           returns to PENDING after 900s                  13.4
+  30  404 on caller/callee                 NOT_AVAILABLE, terminal, no retry              13.1(1)
+  31  404 on mixed                         FAILED (every account should have a mixed)     13.1
+  32  Provider 200 but the body is HTML    `not-audio` -> FAILED; temp file unlinked      9.5(5)
+  33  Provider 200 but the WAV is short    `truncated` -> requeued with backoff           13.1(2)
+  34  Provider 200 with an empty body      `empty-body` -> FAILED                         13.1(3)
+  35  Provider 429                         requeued with backoff                          13.1(2)
+  36  Provider 5xx                         requeued with backoff                          13.1(2)
+  37  Timeout (>60 s)                      requeued with backoff                          13.1(2)
+  38  Recording over 30 MB                 TOO_LARGE, code rejected_by_pipeline, bytes
+                                           recorded; never retried                        9.6
+  39  Recording over 300 s                 TOO_LARGE, same path                           10.4
+  40  Recording is 0 bytes                 rejected("The downloaded recording is empty")  Service:137
+  41  tempnam() fails (disk full)          transport-failure diagnosis; no file leaked    Downloader:92
+  42  The temp file cannot be opened       same, and the path is unlinked first           Downloader:104
+  43  Pipeline transiently unavailable     requeued as `pipeline_unavailable`             Processor:177
+  44  An unexpected exception mid-import   logged `order58_import_unexpected`; counted as
+                                           an attempt so it cannot spin                  Processor:84
+  45  Attempts exhausted                   FAILED with the last code and message          13.2
+  46  Retry a TOO_LARGE row                "That recording is not in a state that can be
+                                           retried." (the WHERE says FAILED)              11.4
+  47  Retry with a malformed id            "That import could not be identified."         RetryAction:47
+  48  The store row is deleted later       history still shows the call, with a blank
+                                           store name (LEFT JOIN)                        11.2
+  49  JavaScript disabled                  everything works except Select-All             4.5
+  50  A batch is deleted while items exist RESTRICT refuses it                            15.2
+
+------------------------------------------------------------------------------------------
+17. FILE MAP
+------------------------------------------------------------------------------------------
+
+17.1 NEW - the vendor client, `src/Integration/Order58Recording/`
+
+  Fourteen classes moved out of `src/Order58/Web/TestRecordingChannels/` with their behaviour
+  unchanged, plus one new one. The move is what makes the client shareable (17.3).
+
+    RecordingChannel.php          mixed/caller/callee + label, fileNameFor,
+                                  requestSegmentFor, downloadNameFor, all()
+    ChannelRequestMapping.php     EVERY provider URL this application builds
+    ChannelRecordingRequest.php   validates recordingId/merchantId/time/company/name
+    ChannelApiProbe.php           the Guzzle calls: latestCalls(), open()
+    ChannelProbeResult.php        one probe's outcome
+    ChannelDiagnosis.php          the 16 diagnosis kinds + headline/advice
+    LatestCallsRequest.php        accountId + limit, validated
+    LatestCallsResult.php         calls + diagnosis
+    CallSummary.php               callSessionId, callTime, orderId, derivedDate()
+    WavSignature.php              RIFF/WAVE inspection
+    FixtureAvailability.php       APP_ENV allow-list AND ?source=fixture
+    FixtureRecordingSource.php    fixture WAVs
+    FixturesNotPermitted.php      the refusal
+    UnconfirmedChannelMapping.php the rejected-reading guard
+    FixtureCallSource.php         NEW - three deterministic "today" calls
+
+17.2 NEW - the neutral seam, `src/Shared/Audio/`
+
+    AudioIngestionPortInterface.php   named by both modules
+    AudioIngestionOutcome.php         queued | rejected | unavailable
+
+17.3 THE ISOLATION RULE THAT FORCED THAT DESIGN
+
+  `tests/Unit/AudioToText/ModuleIsolationTest.php`, both directions, scanning raw source:
+
+      src/AudioToText/**  must not contain  App\Order58\ (and 8 more)
+      src/** except src/AudioToText/  must not contain  App\AudioToText
+
+  `src/Integration/Order58Recording/` satisfies both: it is not in `FORBIDDEN_MODULES`, and it
+  contains neither namespace. A dedicated test,
+  `tests/Unit/Order58/RecordingChannelIsolationTest.php`, asserts that.
+
+  Practical consequence, learned the hard way: a **docblock** that spells `App\AudioToText`
+  outside the audio module fails the test, because the scan is textual. The port interface's
+  documentation is worded to avoid the literal namespace.
+
+17.4 NEW - Order58 application layer
+
+    src/Order58/Application/RecordingCompanyResolver.php   the company rule, one file
+    src/Order58/Application/RecordingImportProcessor.php   one item, start to finish
+    src/Order58/Application/RecordingDownloader.php        stream, verify, clean up
+    src/Order58/Application/RecordingDownload.php          the download's outcome
+    src/Order58/Application/TodayCallFilter.php            the NY business-date rule
+    src/Order58/Domain/Order58ImportStatus.php             the 6 channel states
+    src/Order58/Domain/CallImportOutcome.php               the 4 derived call states
+    src/Order58/Domain/CallImportItem.php                  one queued channel
+    src/Order58/Domain/CallImportHistoryRow.php            one history row
+    src/Order58/Domain/CallImportRepositoryInterface.php   13 methods
+    src/Order58/Domain/Exception/RecordingCompanyMissing.php
+    src/Order58/Infrastructure/DbCallImportRepository.php  all the SQL
+    src/Order58/Console/ImportRecordingsCommand.php        the worker
+
+17.5 NEW - the web layer
+
+    src/Order58/Web/Calls/Action.php        GET  the page
+    src/Order58/Web/Calls/SyncAction.php    POST queue the selection
+    src/Order58/Web/Calls/RetryAction.php   POST requeue one FAILED channel
+    src/Order58/Web/Calls/template.php      the whole page
+    src/Order58/Web/Calls/CallsAsset.php    the asset bundle
+    assets/order58-calls/order58-calls.js   Select-All only
+
+17.6 NEW - the audio side
+
+    src/AudioToText/Application/AudioIngestionService.php   implements the port
+    src/AudioToText/Application/IngestionResult.php
+
+17.7 NEW - the migration
+
+    src/Migration/M260924120000CreateOrder58CallImports.php
+
+17.8 MODIFIED
+
+    .env.example                              +2 documented keys (:157-158)
+    src/Environment.php                       +2 SPEC entries (:134-135)
+    config/common/params.php                  +2 params (:209-210)
+    config/common/di/order58.php              worker, both web actions, the processor
+    config/common/routes.php                  +3 routes (:305-313)
+    config/console/commands.php               +1 command (:31)
+    src/Web/Shared/Layout/Admin/_sidebar.php  +1 entry (:39)
+    docs/deploy/worker.md                     +1 cron entry and its notes (:105-115)
+    src/AudioToText/Web/Job/Store/Action.php          repointed at the service
+    src/AudioToText/Web/Job/Store/Group/ReplaceAction.php  repointed (10.3 - a real fix)
+    src/Order58/Web/TestRecordingChannels/*    imports only, after the move
+
+17.9 NOT CHANGED, DELIBERATELY
+
+    src/AudioToText/Application/TranscriptionQueue.php     untouched
+    /audio-to-text/store/{sourceId} and its repository     untouched
+    every TTS class                                        untouched
+    every existing database table                          untouched
+
+------------------------------------------------------------------------------------------
+18. VERIFICATION PERFORMED
+------------------------------------------------------------------------------------------
+
+Everything in this section was run on this machine on 2026-09-25. All of it is read-only with
+respect to application code, `.env`, and production data.
+
+18.1 STATIC VERIFICATION
+
+  the flag chain, all five links, each read at the line number quoted in section 2
+  `ls runtime/cache` -> only `psalm`; there is no config or container cache (2.6)
+  `grep -n "ORDER58" src/Environment.php` -> the two recording keys at :134-135
+  `sed -n '300,320p' config/common/routes.php` -> the three routes, inside the admin group
+  `grep -n "order58" config/console/commands.php` -> the command at :31
+  every constant quoted in sections 6, 7, 9 and 13 read from its source line
+
+18.2 LIVE SCHEMA VERIFICATION
+
+  `SHOW CREATE TABLE` for both new tables - reproduced verbatim in 15.1 and 15.2
+  `SHOW INDEX FROM order58_call_imports` -> PRIMARY, ux_..._identity (3 columns),
+      ix_..._queue (3 columns), ix_..._batch
+  row counts -> both tables empty (15.5)
+  `knowledge_bases.source_active = 1` -> 208 of 237
+  `order58_stores.active = 1` -> 0 of 235                      <- confirms 5.2
+  stores with a usable company -> 234 of 235; the one exception is source_id 151 "Koki Demo"
+  dropdown-eligible stores that have a company -> 208 of 208   <- confirms 5.5
+  longest company code -> 8 characters
+  `audio_to_text_settings` -> one row, default provider WHISPER
+
+18.3 TEST RUNS
+
+  Unit
+    tests/Unit/Order58/CallImportStatusTest.php            OK (15 tests,  47 assertions)
+    tests/Unit/Order58/RecordingCompanyResolverTest.php    OK (10 tests,  13 assertions)
+    tests/Unit/Order58/TodayCallFilterTest.php             OK ( 9 tests,  12 assertions)
+    tests/Unit/Order58/RecordingDownloadTest.php           OK (24 tests,  67 assertions)
+    tests/Unit/Order58/RecordingChannelIsolationTest.php   OK (14 tests, 443 assertions)
+    tests/Unit/Order58/LatestCallsTest.php                 OK (40 tests,  70 assertions)
+    tests/Unit/AudioToText/ModuleIsolationTest.php         OK ( 6 tests,  57 assertions)
+  Integration
+    tests/Integration/Order58/CallImportRepositoryTest.php OK (10 tests,  36 assertions)
+  Web (Codeception PhpBrowser, against php -S 127.0.0.1:8080)
+    tests/Web/Order58CallsCest.php, flag ON                OK (21 tests, 112 assertions)
+    tests/Web/Order58CallsCest.php, flag OFF               OK (21 tests,  50 assertions)
+
+  Total: 170 tests, 907 assertions, zero failures and zero errors.
+
+  The Cest is deliberately written to pass in **both** flag states: an `importEnabled($I)`
+  helper reads the rendered page and branches, so the suite cannot pass merely because a
+  developer's local `.env` happens to have the flag on. The assertion counts differ (112 vs
+  50) precisely because the enabled path asserts more.
+
+18.4 THE FLAG, PROVEN BOTH WAYS WITHOUT EDITING ANY FILE
+
+  `src/bootstrap.php:21` uses `Dotenv::createImmutable(...)`, so a real process environment
+  variable takes precedence over the `.env` file. That makes it possible to test the disabled
+  path without changing configuration:
+
+      $ ORDER58_RECORDING_IMPORT_ENABLED=false php yii kf:order58:import-recordings --once
+      Order58 recording import is disabled (ORDER58_RECORDING_IMPORT_ENABLED).
+      exit=0
+
+      $ php yii kf:order58:import-recordings --once          # flag from .env (true)
+      Processed 0 recording(s).
+      exit=0
+
+      $ grep ORDER58_RECORDING_IMPORT .env
+      ORDER58_RECORDING_IMPORT_ENABLED=true                   # unchanged
+
+  The Web suite's disabled run (18.3) used the same technique: the dev server was restarted
+  with the variable set for that process only, the suite was run, and the server was then
+  restored. **`.env` was never edited.**
+
+18.5 WHAT WAS DELIBERATELY NOT DONE
+
+  no code was modified, formatted or refactored
+  no migration was created or run
+  no database row was inserted, updated or deleted
+  `.env` was not edited
+  no recording was imported and no production service was called in a way that could create or
+    change data
+  `integration_sync_runs.id = 1486` was **not touched**. Confirmed still present and unchanged:
+    id=1486, type=rules, status=pending, created_at=2026-09-16 09:52:49. (This unrelated stale
+    row holds the `active_key` for rules syncs and is the known cause of 13 pre-existing
+    failures in other suites - 6 Integration, 7 Web - which have nothing to do with this
+    feature.)
+  no secret, password, API key or token value appears anywhere in this document. Where one
+    exists it is named only by its key: the main Order58 data API uses
+    `ORDER58_API_TOKEN`, configured in `.env` and declared `secret` at
+    src/Environment.php:123. The recording API this feature calls needs **no** credential at
+    all (7.4).
+
+------------------------------------------------------------------------------------------
+19. FINAL REPORT
+------------------------------------------------------------------------------------------
+
+19.1 WHAT THIS FEATURE IS
+  An admin page plus a cron worker that import Order58 call recordings into the existing
+  Audio-to-Text pipeline. Manual in its current phase: a human picks the calls.
+
+19.2 THE FLAG
+  `ORDER58_RECORDING_IMPORT_ENABLED`, default **false**, declared at src/Environment.php:134,
+  reaching three consumers through config/common/params.php:209 and
+  config/common/di/order58.php. It gates **writing rows and downloading audio**. It does not
+  gate rendering the page or loading the call list, both of which are read-only.
+
+19.3 ENFORCEMENT
+  Three points: the page shows a banner and disables the button; **SyncAction.php:93 refuses
+  the POST**; **ImportRecordingsCommand.php:92 exits the worker**. The UI check is cosmetic and
+  the other two are real.
+
+19.4 NO CACHE COMMAND EXISTS OR IS NEEDED
+  Yii 3, no compiled config, no compiled container. Edit `.env` and the next request sees it.
+  The only caveat is a long-running worker started without `--once`; the documented cron uses
+  `--once`.
+
+19.5 WHAT HAPPENS WHEN THE PAGE OPENS
+  Two database reads (the store list and the history) and **zero** outbound requests.
+
+19.6 WHAT HAPPENS WHEN "LOAD TODAY'S CALLS" IS CLICKED
+  One GET to `{base}/{storeId}/latest-calls?limit=200`, filtered to the America/New_York
+  business date, then one local read for the already-requested statuses. Still no writes.
+
+19.7 WHAT HAPPENS WHEN "SYNC" IS CLICKED
+  Ten ordered checks, one re-fetch of today's calls, an intersection against it, then one
+  batch row and up to three item rows per accepted call. **No audio moves in the request.**
+
+19.8 WHAT HAPPENS IN THE BACKGROUND
+  `kf:order58:import-recordings --once`, every two minutes under `flock`: recover stranded
+  items, claim one row with a conditional UPDATE, stream the WAV to a temp file, verify its
+  RIFF/WAVE signature, validate it, hand it to `TranscriptionQueue`, record the outcome.
+
+19.9 THE STORE DROPDOWN
+  Label `order58_stores.name`, value `source_id`, filtered on
+  **`knowledge_bases.source_active`** - 208 stores today. `order58_stores.active` is 0 for all
+  235 rows and would give an empty list.
+
+19.10 THE `company` RULE
+  `order58_stores.company`, per store, resolved server-side by `RecordingCompanyResolver`,
+  snapshotted onto the batch, never accepted from the browser. No hardcoded `SWCC`.
+
+19.11 IDEMPOTENCY
+  `UNIQUE (store_source_id, call_session_id, channel)`, insert-and-catch. `order_id` is not
+  part of the key. Pressing Sync twice is safe and reports how many were already requested.
+
+19.12 THE STATUS MODEL
+  Six per-channel states; four derived per-call states. `Partial` is the **expected** result
+  for most merchants, because most do not produce separated caller/callee recordings.
+
+19.13 RETRY
+  Transient kinds requeue with `min(3600, 60 * 2^attempts)` up to
+  `ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS` (default 3). A 404 on caller/callee is terminal
+  "Not available"; a 404 on mixed is a failure. `TOO_LARGE` is never retried. Only `FAILED`
+  is retryable from the UI, and the repository's WHERE clause is what enforces that.
+
+19.14 SECURITY PROPERTIES
+  Admin-only; CSRF on both POSTs; the browser's call list is never trusted; the fetch date
+  comes from the provider, not the form; `company` is server-derived; every stored message is
+  redacted and truncated; no provider body, file path or stack trace is ever rendered;
+  JavaScript never composes a provider URL; CSP `script-src 'self'` with no inline JS.
+
+19.15 DATABASE FOOTPRINT
+  Two new tables, one additive migration, no existing table altered. Both tables are currently
+  empty on this machine.
+
+19.16 MODULE ISOLATION
+  The bidirectional rule in `ModuleIsolationTest` is intact and green. The two modules speak
+  through `src/Shared/Audio/AudioIngestionPortInterface` using plain strings, and the provider
+  client lives in `src/Integration/Order58Recording/`, which neither side is forbidden to name.
+
+19.17 TEST STATE
+  170 tests, 907 assertions, all passing, including the Web suite in **both** flag states.
+
+19.18 THE OPEN QUESTIONS - ANSWERED
+
+  A. IS `ORDER58_RECORDING_IMPORT_ENABLED` CURRENTLY ON OR OFF?
+     On this development machine: **on** (`.env` has `=true`). The shipped default and the
+     documented value in `.env.example` are **off**. Production state is a property of the
+     production `.env` and cannot be read from here.
+
+  B. CAN A USER BYPASS THE FLAG BY CALLING THE ENDPOINT DIRECTLY?
+     **No.** The POST is refused at SyncAction.php:93 before any validation of the selection,
+     before the company resolver and before any write. Re-enabling the disabled button in
+     devtools changes nothing. The worker refuses independently at
+     ImportRecordingsCommand.php:92, so even rows queued while the flag was on stay `PENDING`.
+
+  C. WHAT COMMAND MUST BE RUN AFTER CHANGING THE FLAG?
+     **None.** There is no config cache and no container cache in this application. The next
+     request and the next `--once` worker run both re-read it. (If someone runs the worker
+     without `--once` as a long-lived process, that process must be restarted - but the
+     documented cron form does not.)
+
+  D. WHY DOES THE PAGE STILL LOAD CALLS WHEN THE FLAG IS OFF?
+     Because loading is a read-only GET, and confirming that this server can reach the
+     provider is exactly what an operator wants to do before enabling import. The flag gates
+     writes and downloads, which is the distinction the matrix in section 14 makes explicit.
+
+  E. WHY IS THERE NO AUTHENTICATION ON THE RECORDING API?
+     The client controls access with a **server-side IP allowlist**. No credential exists to
+     configure. A 403 from a non-allowlisted machine is classified as
+     `ip-not-whitelisted` and its advice ("ask the client to whitelist this IP") is carried
+     into the history row. A local failure therefore says nothing about whether the API works.
+
+  F. WHY IS "PARTIAL" THE NORMAL OUTCOME?
+     Because most merchants produce only a mixed recording. A 404 on caller or callee is a
+     fact about the merchant, recorded as "Not available" and never retried. Treating
+     `Partial` as a problem is the most likely way to misread this page.
+
+  G. WHAT IS STILL UNVERIFIED, AND WHAT WOULD VERIFY IT?
+     Three assumptions, each of which fails visibly rather than silently:
+       1. **`accountId == order58_stores.source_id`.** Evidenced for 871 and 831 only; all 235
+          mirrored ids end in `1`, so it is a derived id space. A wrong id returns no calls,
+          which the page reports plainly.
+       2. **`callTime` is the provider's local wall-clock.** Its leading date is compared to
+          `AppTimeZone::businessDate()` with no conversion. If the provider is actually UTC,
+          the "today" list can be off near midnight. The administrator still sees the real
+          times and can select deliberately, and `call_time_raw` preserves the original string
+          for whoever settles this.
+       3. **Per-store `company` is what the provider expects.** A mismatch shows up as a 404
+          or, worse, the wrong audio.
+     The verification for all three is the same and has not been done: from an **allowlisted**
+     server, sync a **single** call on one store, play the fetched WAV back on
+     `/audio-to-text/store/{sourceId}`, and confirm it is that call - before syncing anything
+     in bulk. Real sizes and durations should then be observed against the 30 MB / 300 s
+     ceilings before deciding whether either needs raising.
+
+==========================================================================================
+END OF DOCUMENT
+==========================================================================================

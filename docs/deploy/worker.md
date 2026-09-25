@@ -99,6 +99,30 @@ CRON_TZ=America/New_York
   The `UNIQUE(sync_type, ny_date)` reservation guarantees **at most one successful scheduled run per type per NY
   day**, so running the schedulers hourly is safe. Manual admin syncs never touch that table and are never blocked.
 
+## Order58 recording import (Manage Order58 Calls)
+
+Fetches the call recordings an administrator queued on `/admin/order58/calls` and hands each one to the
+normal Audio-to-Text pipeline. Manual only in Phase A: this command imports what was **already queued**
+from the page, and discovers nothing by itself.
+
+```cron
+*/2 * * * * /usr/bin/flock -n /var/www/html/knowledge-forge/runtime/locks/order58-import-cron.lock /usr/bin/nice -n 10 /usr/bin/php /var/www/html/knowledge-forge/yii kf:order58:import-recordings --once >> /var/www/html/knowledge-forge/runtime/logs/order58-import.log 2>&1
+```
+
+* **Off unless enabled.** Without `ORDER58_RECORDING_IMPORT_ENABLED=true` the command exits immediately
+  and says so. The recording API is gated by an IP allowlist, so enabling it belongs to a server the
+  client has allowlisted — not to a deployment.
+* **Three lock files, all different**, and this matters more than it looks:
+  * `order58-import-cron.lock` — the wrapper above, so a slow run does not stack.
+  * `runtime/locks/order58-import.lock` — the command's own, taken inside PHP.
+  * `runtime/audio-to-text/worker.lock` — the transcription worker's, which this must **not** share.
+    Sharing it would make a download block a transcription for no reason.
+  Giving the wrapper and the command the same file makes every run skip; that mistake is already
+  recorded in `docs/server/cron/knowledge-forge-audio-transcription`.
+* **One recording at a time.** The provider's rate limits are undocumented and the pipeline this feeds
+  transcribes serially, so fetching in parallel would only move the queue and raise the chance of a 429.
+* A killed run leaves its item claimed; the next run returns anything claimed for more than 15 minutes.
+
 **If `CRON_TZ` is unsupported** (e.g. BusyBox cron), do **not** convert to a fixed UTC hour (New York shifts
 between EST/EDT). Either run the schedulers hourly (the app's own `APP_TIMEZONE` due-check fires them at the right
 NY time and the idempotency guard prevents duplicates), or use a systemd timer with `OnCalendar` +

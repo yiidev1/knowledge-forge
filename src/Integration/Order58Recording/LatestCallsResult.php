@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Order58\Web\TestRecordingChannels;
+namespace App\Integration\Order58Recording;
 
 use function array_filter;
 use function array_values;
