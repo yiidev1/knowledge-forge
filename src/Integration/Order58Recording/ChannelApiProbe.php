@@ -11,6 +11,7 @@ use Psr\Http\Message\ResponseInterface;
 
 use function is_array;
 use function json_decode;
+use function sprintf;
 use function strlen;
 use function substr;
 
@@ -46,6 +47,29 @@ final readonly class ChannelApiProbe
      */
     private const SAMPLE_BYTES = 8192;
 
+    /**
+     * How much of a JSON body is read before it is decoded.
+     *
+     * Deliberately separate from {@see SAMPLE_BYTES}, and much larger. That cap exists because
+     * {@see inspect()} may be handed a multi-megabyte recording, and it is correct there. Applying it to
+     * a call list was not: `latest-calls?limit=200` for a busy store measured 16,120 bytes, so half the
+     * body was discarded and the remainder — cut in the middle of a `"callTime"` string — was handed to
+     * `json_decode`, which reported
+     *
+     *     Control character error, possibly incorrectly encoded
+     *
+     * That message is a red herring. PHP returns JSON_ERROR_CTRL_CHAR rather than JSON_ERROR_SYNTAX
+     * whenever input ends inside a string literal, so OUR truncation was being reported to operators as
+     * the provider sending malformed data. The provider's body was valid JSON throughout: no control
+     * bytes, valid UTF-8, 199 records.
+     *
+     * 1 MiB holds roughly 12,900 records at the ~81 bytes/record measured, against the provider's own
+     * documented ceiling of 500 — so it cannot be reached in normal operation, while still bounding a
+     * runaway response. If it ever IS reached, latestCalls() says so in those words instead of decoding
+     * a fragment; see the size check there.
+     */
+    private const JSON_BODY_MAX_BYTES = 1048576;
+
     private const READ_CHUNK_BYTES = 8192;
 
     public function __construct(
@@ -66,35 +90,50 @@ final readonly class ChannelApiProbe
     /**
      * The list of recent calls for an account — a CONFIRMED endpoint, unlike the channel mapping.
      *
-     * The body is JSON of a few kilobytes rather than a recording, so it is read whole (still bounded by
-     * the same sampling cap) and decoded. Decoding is best-effort: a body that is not a list of call
-     * objects yields no rows and the raw response is printed instead, which is more useful than an
-     * exception.
+     * The body is JSON rather than a recording, so it is read up to {@see JSON_BODY_MAX_BYTES} and
+     * decoded whole. It is NOT read through {@see readBounded()}: that method's 8 KB recording cap
+     * silently cut real call lists in half and made valid provider JSON look malformed. Decoding is
+     * best-effort: a body that is not a list of call objects yields no rows and the raw response is
+     * printed instead, which is more useful than an exception.
+     *
+     * A body that genuinely exceeds the cap is never decoded from a fragment. It is reported as the size
+     * problem it is, because a truncated parse is indistinguishable from provider corruption to whoever
+     * reads the page — which is precisely the confusion this method used to cause.
      */
     public function latestCalls(LatestCallsRequest $request): LatestCallsResult
     {
         $url = $this->mapping->latestCallsUrl($request->accountId, $request->limit);
         $response = $this->send($url);
 
-        [$body, ] = $this->readBounded($response);
+        [$body, $bytes] = $this->readBoundedJson($response);
         $status = $response->getStatusCode();
 
         $diagnosis = ChannelDiagnosis::forJson($status, $body);
         $calls = [];
 
         if ($diagnosis->isSuccess()) {
-            try {
-                /** @var mixed $decoded */
-                $decoded = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
-                $calls = CallSummary::fromDecoded($decoded);
+            if ($bytes > strlen($body)) {
+                // Truncated by our own cap. Decoding what arrived would report a parse error the
+                // provider did not cause, so the cap is named instead.
+                $diagnosis = ChannelDiagnosis::invalidJson(sprintf(
+                    'the response was %d bytes, larger than the %d-byte read limit, so it could not be decoded',
+                    $bytes,
+                    self::JSON_BODY_MAX_BYTES,
+                ));
+            } else {
+                try {
+                    /** @var mixed $decoded */
+                    $decoded = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
+                    $calls = CallSummary::fromDecoded($decoded);
 
-                // A valid JSON body that is not a list of calls, and an account with genuinely no recent
-                // calls, are different problems — so they get different sentences.
-                $diagnosis = $calls === []
-                    ? (is_array($decoded) ? ChannelDiagnosis::noCalls() : ChannelDiagnosis::invalidJson('the body was not a list of calls'))
-                    : $diagnosis;
-            } catch (JsonException $e) {
-                $diagnosis = ChannelDiagnosis::invalidJson($e->getMessage());
+                    // A valid JSON body that is not a list of calls, and an account with genuinely no
+                    // recent calls, are different problems — so they get different sentences.
+                    $diagnosis = $calls === []
+                        ? (is_array($decoded) ? ChannelDiagnosis::noCalls() : ChannelDiagnosis::invalidJson('the body was not a list of calls'))
+                        : $diagnosis;
+                } catch (JsonException $e) {
+                    $diagnosis = ChannelDiagnosis::invalidJson($e->getMessage());
+                }
             }
         }
 
@@ -193,5 +232,41 @@ final readonly class ChannelApiProbe
         }
 
         return [$sample, $bytes];
+    }
+
+    /**
+     * The same bounded read, with the JSON ceiling instead of the recording one.
+     *
+     * Kept as a separate method rather than a parameter on {@see readBounded()} so that the recording
+     * path cannot acquire a larger cap by accident: the two limits exist for opposite reasons — one to
+     * keep megabytes of audio out of memory, one to let a few tens of kilobytes of text through intact.
+     *
+     * The returned byte count is the WHOLE body, as it is in readBounded(), so the caller can tell a
+     * complete body from a truncated one by comparing it against the string's length.
+     *
+     * @return array{0: string, 1: int} body (up to the cap), total bytes
+     */
+    private function readBoundedJson(ResponseInterface $response): array
+    {
+        $body = $response->getBody();
+        $json = '';
+        $bytes = 0;
+
+        while (!$body->eof()) {
+            $chunk = $body->read(self::READ_CHUNK_BYTES);
+
+            if ($chunk === '') {
+                break;
+            }
+
+            $bytes += strlen($chunk);
+            $kept = strlen($json);
+
+            if ($kept < self::JSON_BODY_MAX_BYTES) {
+                $json .= substr($chunk, 0, self::JSON_BODY_MAX_BYTES - $kept);
+            }
+        }
+
+        return [$json, $bytes];
     }
 }
