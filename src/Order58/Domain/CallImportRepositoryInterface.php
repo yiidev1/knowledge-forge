@@ -135,5 +135,15 @@ interface CallImportRepositoryInterface
      */
     public function history(?int $storeSourceId, int $limit): array;
 
+    /**
+     * The same history, across every store, one page at a time.
+     *
+     * Separate from {@see history()} rather than an extra argument to it, because the two answer
+     * different questions. That one is a fixed peek at the newest calls and stops when it has enough;
+     * this one must know how many calls exist in total and must land on a page boundary that falls
+     * between calls, never between a call's channels.
+     */
+    public function historyPage(int $page, int $perPage): CallImportHistoryPage;
+
     public function findItem(int $id): ?CallImportItem;
 }

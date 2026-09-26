@@ -21,6 +21,7 @@ use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
+use App\Order58\Web\CallHistory as Order58CallHistory;
 use App\Order58\Web\Calls as Order58Calls;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
@@ -311,6 +312,12 @@ return [
             Route::post('/admin/order58/calls/retry')
                 ->action(Order58Calls\RetryAction::class)
                 ->name('order58.calls.retry'),
+            // The same import history the calls page shows, across every store and paged. Nested under
+            // /calls because it reads that feature's rows; a GET, so it cannot collide with the two
+            // POSTs above.
+            Route::get('/admin/order58/calls/history')
+                ->action(Order58CallHistory\Action::class)
+                ->name('order58.calls.history'),
 
             // Hidden, URL-only manual probe of the two external recording endpoints. Diagnostic only: it
             // reads and writes nothing, enqueues nothing, and is not linked from any navigation.

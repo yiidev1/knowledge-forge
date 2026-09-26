@@ -9,6 +9,7 @@ use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Application\RecordingDownloader;
 use App\Order58\Application\RecordingImportProcessor;
 use App\Order58\Console\ImportRecordingsCommand;
+use App\Order58\Domain\CallImportHistoryPage;
 use App\Order58\Domain\CallImportItem;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\Order58ImportStatus;
@@ -436,6 +437,11 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
     public function history(?int $storeSourceId, int $limit): array
     {
         return [];
+    }
+
+    public function historyPage(int $page, int $perPage): CallImportHistoryPage
+    {
+        return new CallImportHistoryPage([], 0, $page, $perPage);
     }
 
     public function findItem(int $id): ?CallImportItem

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Infrastructure;
 
 use App\Integration\Order58Recording\RecordingChannel;
+use App\Order58\Domain\CallImportHistoryPage;
 use App\Order58\Domain\CallImportHistoryRow;
 use App\Order58\Domain\CallImportItem;
 use App\Order58\Domain\CallImportRepositoryInterface;
@@ -19,6 +20,7 @@ use Yiisoft\Db\Query\Query;
 use function is_array;
 use function count;
 use function is_string;
+use function max;
 
 use const SORT_ASC;
 use const SORT_DESC;
@@ -306,6 +308,105 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
         /** @var list<array<string, mixed>> $rows */
         $rows = $query->all();
 
+        return $this->groupIntoCalls($rows, $limit);
+    }
+
+    /**
+     * One page of history across every store, ordered newest call first.
+     *
+     * ## Why this is not `history()` with an offset
+     *
+     * A call is up to three channel rows, and `history()` over-fetches rows and stops once it has enough
+     * calls. That is sound for a fixed peek and unusable for paging: an `OFFSET` counted in rows lands
+     * mid-call, so the same call appears at the bottom of one page and the top of the next, each time
+     * with only some of its cells filled in.
+     *
+     * So the page is chosen over **calls** and the rows are fetched afterwards:
+     *
+     *   1. count the distinct calls — the total the pager needs;
+     *   2. select this page's call identities, ordered by their newest row;
+     *   3. fetch every channel row belonging to those identities.
+     *
+     * Three queries, whatever the page size, and the third is the same {@see itemQuery()} the
+     * store-specific history uses. Nothing here loops over stores or issues a query per row.
+     */
+    public function historyPage(int $page, int $perPage): CallImportHistoryPage
+    {
+        $page = max(1, $page);
+        $perPage = max(1, $perPage);
+
+        $total = (int) (new Query($this->connection))
+            ->from(self::IMPORTS)
+            // COUNT over the pair, not over rows: rows would report roughly three times too many and
+            // hand the pager pages that do not exist.
+            //
+            // An Expression, because the builder reads a plain string here as a column name and quotes
+            // it into `COUNT(DISTINCT AS ...)`, which is a syntax error rather than a wrong answer.
+            ->select(new Expression('COUNT(DISTINCT store_source_id, call_session_id)'))
+            ->scalar();
+
+        if ($total === 0) {
+            return new CallImportHistoryPage([], 0, $page, $perPage);
+        }
+
+        /** @var list<array<string, mixed>> $keys */
+        $keys = (new Query($this->connection))
+            ->from(self::IMPORTS)
+            ->select(['store_source_id', 'call_session_id'])
+            ->groupBy(['store_source_id', 'call_session_id'])
+            // By the call's newest row, matching how `history()` orders — the item id rather than a
+            // timestamp, so calls queued in the same second keep a stable order. An Expression for the
+            // same reason as the count above: a key here would be quoted as a column name.
+            ->orderBy(new Expression('MAX(id) DESC'))
+            ->limit($perPage)
+            ->offset(($page - 1) * $perPage)
+            ->all();
+
+        if ($keys === []) {
+            // A page past the end. The action clamps, so this is the race where rows went away between
+            // the count and the select; an empty page is a truer answer than a refusal.
+            return new CallImportHistoryPage([], $total, $page, $perPage);
+        }
+
+        $identities = [];
+
+        foreach ($keys as $key) {
+            $identities[] = [
+                'i.store_source_id' => (int) $key['store_source_id'],
+                'i.call_session_id' => (string) $key['call_session_id'],
+            ];
+        }
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->itemQuery()
+            ->addSelect(['store_name' => 's.name'])
+            ->leftJoin(['s' => self::STORES], 's.source_id = i.store_source_id')
+            // An OR of equality pairs rather than two separate IN lists: separate lists would also match
+            // a session id belonging to a different store on this page.
+            ->andWhere(['or', ...$identities])
+            ->orderBy(['i.id' => SORT_DESC])
+            ->all();
+
+        return new CallImportHistoryPage(
+            $this->groupIntoCalls($rows, $perPage),
+            $total,
+            $page,
+            $perPage,
+        );
+    }
+
+    /**
+     * Channel rows, newest first, folded into one entry per call.
+     *
+     * Shared by both history readers so a column added to the table appears on both pages, and so the
+     * rule that a call's `updated` is the latest of its channels lives in one place.
+     *
+     * @param list<array<string, mixed>> $rows
+     *
+     * @return list<CallImportHistoryRow>
+     */
+    private function groupIntoCalls(array $rows, int $limit): array
+    {
         $calls = [];
 
         foreach ($rows as $row) {

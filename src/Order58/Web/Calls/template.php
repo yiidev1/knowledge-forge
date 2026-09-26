@@ -49,6 +49,7 @@ $csrfField = (string) $csrf->hiddenInput();
 $pageUrl = $urlGenerator->generate('order58.calls');
 $syncUrl = $urlGenerator->generate('order58.calls.sync');
 $retryUrl = $urlGenerator->generate('order58.calls.retry');
+$allHistoryUrl = $urlGenerator->generate('order58.calls.history');
 
 /**
  * One call's status, as the discovery table shows it.
@@ -106,6 +107,13 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
             Bring a store's call recordings into Audio to Text. Imported recordings appear on that
             store's own Audio to Text page, alongside anything uploaded by hand.
         </p>
+    </div>
+    <?php
+    // Up here rather than beside the history card below, because it leaves this page rather than
+    // changing it — the same reason Store audio puts its cross-store link in the header.
+?>
+    <div class="page-header__actions">
+        <a class="btn btn--secondary" href="<?= Html::encode($allHistoryUrl) ?>">View Sync History</a>
     </div>
 </div>
 
