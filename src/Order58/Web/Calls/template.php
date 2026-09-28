@@ -279,7 +279,12 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     </section>
 <?php endif; ?>
 
-<section class="card">
+<?php
+// `o58-wide` is the marker `.content:has(.o58-wide)` looks for: it opens the page column to 1680px,
+// which is what lets this eleven-column table show every column on a desktop screen. The same pattern
+// the conversions list uses, and scoped the same way — it widens only while this page is on screen.
+?>
+<section class="card o58-wide">
     <h2 class="card__title">Sync history</h2>
 
     <?php if ($history === []): ?>
@@ -291,7 +296,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
         </div>
     <?php else: ?>
         <div class="table-wrap">
-            <table class="table">
+            <table class="table o58-table">
                 <thead>
                 <tr>
                     <th>Store</th>

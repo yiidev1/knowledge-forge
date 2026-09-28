@@ -1100,6 +1100,45 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .kb-subsection__title { margin: 0 0 .9rem; font-size: 1.02rem; font-weight: 700; }
 
 /* ------------------------------------------------------------------------------------------------
+ * Order58 call import: Manage Order58 Calls and Sync History
+ *
+ * Both pages draw the same eleven-column table — store, call, order, time, three channels, overall,
+ * provider, AI audio, updated — which does not fit the standard 1240px reading column. Same problem
+ * the conversions list has, and the same answer: a marker class the page puts on its own card, and
+ * `:has()` to widen the column only while such a page is on screen. Nothing here can reach another
+ * page, and the layout file needs no parameter.
+ *
+ * A browser without `:has()` simply keeps the normal width and scrolls inside the card, which is the
+ * behaviour these pages had before.
+ * ---------------------------------------------------------------------------------------------- */
+
+/* 1680px rather than the conversions list's 1600px: this table carries one more column, and 1680 is
+   what a 1920px screen can give after the 248px sidebar and the page gutters — so nothing is left on
+   the table at full width, and narrower screens are unaffected because `width: 100%` still governs. */
+.content:has(.o58-wide) { max-width: 1680px; }
+
+/* The breadcrumb bar is centred on the same max-width as the content column, so widening one without
+   the other would leave the header visibly offset from the page below it. Both are children of
+   `.main`, which is what makes this reachable. */
+.main:has(.o58-wide) .topbar__inner { max-width: 1680px; }
+
+/* Why the table stops shrinking.
+ *
+ * `.table` is `width: 100%` with no floor, so when the columns do not fit the browser compresses them
+ * and wraps the text — a store name over two lines, a timestamp over four. That is harder to read than
+ * a scrollbar, and it is what these pages looked like before.
+ *
+ * Holding the cells on one line makes the table take its natural width instead, at which point the
+ * `overflow-x: auto` already on `.table-wrap` does its job and the card scrolls. The scrollbar belongs
+ * to the card, never to the page. */
+.o58-table { min-width: 1100px; }
+.o58-table th, .o58-table td { white-space: nowrap; }
+
+/* The one exception: a hint under a cell is either a store id (short) or a truncated provider error
+   (not short), and an error message that cannot wrap would widen the whole table to fit one row. */
+.o58-table .field__hint { white-space: normal; }
+
+/* ------------------------------------------------------------------------------------------------
  * Audio to Text
  *
  * Styles live here rather than inline in the templates: the CSP is `style-src 'self'` with no

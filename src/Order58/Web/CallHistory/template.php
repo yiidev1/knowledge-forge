@@ -72,7 +72,12 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     </div>
 </div>
 
-<section class="card">
+<?php
+// `o58-wide` opens the page column to 1680px — see the Manage Order58 Calls template and the rule in
+// admin.css. This page carries the same table with no store filter, so it earns the width more than
+// that one does.
+?>
+<section class="card o58-wide">
     <h2 class="card__title">
         All stores
         <?php if ($result->total > 0): ?>
@@ -89,7 +94,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
         </div>
     <?php else: ?>
         <div class="table-wrap">
-            <table class="table">
+            <table class="table o58-table">
                 <thead>
                 <tr>
                     <th>Store</th>
