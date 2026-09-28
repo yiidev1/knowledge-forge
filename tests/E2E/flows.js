@@ -1,5 +1,5 @@
 /* The full operations, end to end: does Confirm actually change the transcript? */
-const { BASE, launch, signIn, selectTurnText, sleep } = require('./lib');
+const { BASE, LABELS, launch, selectTurnText, signIn, sleep } = require('./lib');
 const fx = require('./fixtures.json');
 
 const R = '.a2t-review-dialog';
@@ -13,7 +13,7 @@ async function openDetails(page) {
     await page.goto(BASE + '/audio-to-text/store/' + fx.store, { waitUntil: 'networkidle0' });
     // The mixed recording specifically: it is the one with two speakers, so it is the one that offers
     // every control. Caller and Callee are covered by voices.js, where their absence is the point.
-    await page.click('[data-a2t-details-label="Common / Mixed"]');
+    await page.click('[data-a2t-details-label="' + LABELS.MIXED + '"]');
     await page.waitForSelector(R + ' [data-a2t-turn]', { timeout: 5000 });
     await sleep(300);
 }

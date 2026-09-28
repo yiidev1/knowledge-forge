@@ -156,7 +156,7 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
     }
 
     /**
-     * Take the oldest queued rendition, atomically.
+     * Take the next queued rendition, atomically: somebody's own request first, then oldest.
      *
      * The same shape as `DbTranscriptionJobRepository::claimNextQueued()`: a cheap list of candidates,
      * then a conditional update per candidate whose affected-row count decides the winner. Two workers
@@ -165,6 +165,22 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
      *
      * Walking a short list rather than taking only the head means one rendition that somehow cannot be
      * claimed does not stall everything behind it.
+     *
+     * ## Why an administrator's request goes first
+     *
+     * `requested_by_admin_id` already tells the two apart, and it does so honestly rather than as a flag
+     * somebody has to remember to set: {@see \App\AudioToText\Application\Tts\TtsGenerationService::enqueueRequested()}
+     * — the automatic path, run by the transcription worker and by speaker confirmation — passes `null`,
+     * and only a human pressing Generate supplies an id. So the distinction needed no new column and no
+     * migration; it was already in the data.
+     *
+     * The ordering PRIORITISES THE NEXT CLAIM. It does not preempt: a rendition already GENERATING is
+     * not this query's business, because the status filter never sees it. Somebody who presses Generate
+     * while a bulk import's audio is being produced waits for that one file and then goes next — not
+     * behind the other forty.
+     *
+     * FIFO is intact inside each band. `id ASC` is still the tiebreaker, so two administrators pressing
+     * Generate are served in the order they pressed, and the automatic backlog keeps its own order.
      */
     public function claim(int $candidates = 10): ?TtsRendition
     {
@@ -172,7 +188,10 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
             ->select('id')
             ->from(self::TABLE)
             ->where(['status' => TtsStatus::Queued->value])
-            ->orderBy(['id' => SORT_ASC])
+            // `IS NOT NULL` yields 1 for a human request and 0 for an automatic one, so DESC puts the
+            // human first. Written as an expression because the builder would quote a bare string here
+            // as a column name.
+            ->orderBy([new Expression('`requested_by_admin_id` IS NOT NULL DESC'), 'id' => SORT_ASC])
             ->limit($candidates)
             ->column();
 

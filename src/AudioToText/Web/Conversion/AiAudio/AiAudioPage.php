@@ -128,13 +128,23 @@ final readonly class AiAudioPage
                     $script->characterCount(),
                     $script->turnCount(),
                     $script->omittedTurns,
-                    // Offered only when pressing it would actually do something: not while an attempt is
-                    // outstanding, not when the audio is already current, not when there is nothing to
-                    // say, and not when the provider is unconfigured.
+                    // Offered whenever pressing it could do something OR could usefully tell the
+                    // operator that it would not: not while an attempt is outstanding, not when there
+                    // is nothing to say, and not when the provider is unconfigured.
+                    //
+                    // READY IS DELIBERATELY INCLUDED. The button used to be hidden for audio that was
+                    // already current, which left an administrator looking at a finished recording with
+                    // no way to ask the question at all. It is offered now, and the confirmation dialog
+                    // is where "this is already current" gets said — a sentence, rather than an absence
+                    // the reader has to interpret.
+                    //
+                    // NOTHING ABOUT COST CHANGED. `TtsGenerationService::enqueue()` still returns
+                    // AlreadyCurrent for a matching digest and queues nothing, and the dialog still
+                    // carries `expected_hash`. The button can be pressed; a paid identical re-run still
+                    // cannot happen.
                     $providerConfigured
                         && !$nothingToSay
-                        && !$state->isInFlight()
-                        && $state !== AiAudioState::Ready,
+                        && !$state->isInFlight(),
                     match (true) {
                         $nothingToSay => 'Nothing was said on this side of the call, so there is nothing to read out.',
                         !$providerConfigured => 'AI audio is not configured on this server yet.',

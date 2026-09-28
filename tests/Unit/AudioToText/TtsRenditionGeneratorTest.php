@@ -161,7 +161,19 @@ final class TtsRenditionGeneratorTest extends TestCase
         );
     }
 
-    public function testNoGapIsInsertedForASingleRoleRendition(): void
+    /**
+     * A single-role rendition gets the gap too, because the gap is about turns and not about output type.
+     *
+     * **This test used to assert the opposite, and the change is deliberate.** It read
+     * `testNoGapIsInsertedForASingleRoleRendition`, pinning an assembler that only inserted silence when
+     * the output type was MIXED. That was right about every case that existed — a per-role output comes
+     * from a separate upload, whose side is held whole as one utterance — and wrong about the reason, so
+     * it would have been silently wrong the day `TtsScriptBuilder::singleRole()` was asked for a role's
+     * turns from a mixed recording, which it already knows how to do.
+     *
+     * One person taking two turns paused between them. That is the same fact whichever file it goes in.
+     */
+    public function testASingleRoleRenditionWithTwoTurnsIsAlsoGivenAGapBetweenThem(): void
     {
         [$generator, $synthesizer, $encoder] = $this->build();
 
@@ -172,7 +184,70 @@ final class TtsRenditionGeneratorTest extends TestCase
 
         $generator->generate($script, TtsOutputType::Customer, $this->jobPublicId(), $this->hash());
 
-        $this->assertSame($synthesizer->calls * 480, strlen($encoder->rawBytes));
+        $this->assertSame(
+            $synthesizer->calls * 480 + strlen(PcmAudio::silence(350, 24000)),
+            strlen($encoder->rawBytes),
+            'Exactly one gap, between the two turns.',
+        );
+    }
+
+    /** One utterance has no boundary to put a breath at, so nothing is added before or after it. */
+    public function testAScriptOfOneUtteranceGetsNoLeadingOrTrailingSilence(): void
+    {
+        [$generator, $synthesizer, $encoder] = $this->build();
+
+        $script = new TtsScript([new TtsUtterance(SpeakerRole::CUSTOMER, 'Just the one.')]);
+
+        $generator->generate($script, TtsOutputType::Mixed, $this->jobPublicId(), $this->hash());
+
+        $this->assertSame(
+            $synthesizer->calls * 480,
+            strlen($encoder->rawBytes),
+            'Speech and nothing else — no gap leads the file and none trails it.',
+        );
+    }
+
+    /** And with three turns there are two gaps: between each pair, never at either end. */
+    public function testThreeTurnsAreSeparatedByTwoGapsAndNothingElse(): void
+    {
+        [$generator, $synthesizer, $encoder] = $this->build();
+
+        $script = new TtsScript([
+            new TtsUtterance(SpeakerRole::CUSTOMER, 'One.'),
+            new TtsUtterance(SpeakerRole::AGENT, 'Two.'),
+            new TtsUtterance(SpeakerRole::CUSTOMER, 'Three.'),
+        ]);
+
+        $generator->generate($script, TtsOutputType::Mixed, $this->jobPublicId(), $this->hash());
+
+        $this->assertSame(
+            $synthesizer->calls * 480 + 2 * strlen(PcmAudio::silence(350, 24000)),
+            strlen($encoder->rawBytes),
+        );
+    }
+
+    /** The configured value is what gets written, so changing it changes the file. */
+    public function testTheConfiguredGapIsTheOneInserted(): void
+    {
+        $settings = AudioToTextSettingsFactory::create(ttsApiKey: 'k', ttsGapMilliseconds: 2000);
+        $synthesizer = new FakeSynthesizer(480);
+        $encoder = new CapturingEncoder();
+
+        $generator = new TtsRenditionGenerator(
+            $settings,
+            $synthesizer,
+            $encoder,
+            new GeneratedAudioStorage($settings),
+            new TtsTextChunker(),
+        );
+
+        $generator->generate($this->script(), TtsOutputType::Mixed, $this->jobPublicId(), $this->hash());
+
+        $this->assertSame(
+            $synthesizer->calls * 480 + strlen(PcmAudio::silence(2000, 24000)),
+            strlen($encoder->rawBytes),
+            'Two seconds of silence, from the setting rather than from a literal in the assembler.',
+        );
     }
 
     public function testTheEncoderIsToldTheRateTheProviderWasAskedFor(): void

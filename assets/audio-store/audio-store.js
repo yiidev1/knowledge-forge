@@ -1,4 +1,25 @@
 /* Store-audio page only: the existing upload POST plus read-only conversion status polling. */
+
+/**
+ * `ProcessingStage` in English, once for this page.
+ *
+ * Two things on this page follow a job: the upload form at the top, and the Update Audio dialog watching
+ * a replacement it just queued. They are separate scopes in this file, and a second copy of these seven
+ * strings would be two vocabularies for one enum — found to have drifted only when a reader noticed the
+ * same stage worded two ways.
+ *
+ * Deliberately global, like `window.KFReviewTurns`. There is no module loader here.
+ */
+window.KFAudioStages = {
+    QUEUED: 'Waiting for the transcription worker',
+    CLAIMED: 'Starting conversion',
+    CONVERTING: 'Preparing audio for transcription',
+    TRANSCRIBING: 'Transcribing audio to text',
+    DIARIZING: 'Separating speakers',
+    MAPPING_SPEAKERS: 'Identifying speakers',
+    SAVING: 'Saving the transcript'
+};
+
 (function () {
     'use strict';
 
@@ -13,15 +34,7 @@
             window.location.reload();
         }
     });
-    var stages = {
-        QUEUED: 'Waiting for the transcription worker',
-        CLAIMED: 'Starting conversion',
-        CONVERTING: 'Preparing audio for transcription',
-        TRANSCRIBING: 'Transcribing audio to text',
-        DIARIZING: 'Separating speakers',
-        MAPPING_SPEAKERS: 'Identifying speakers',
-        SAVING: 'Saving the transcript'
-    };
+    var stages = window.KFAudioStages;
 
     forms.forEach(function (form) {
         var input = form.querySelector('.a2t-upload-input');
@@ -1327,6 +1340,7 @@
     var manageDialog = dialogOf(manageBody);
     var manageUrl = null;
     var manageBusy = false;
+    var manageFocus = null;
 
     function openManage(button) {
         if (!manageDialog) {
@@ -1336,6 +1350,10 @@
         empty(manageSlots);
         manageBody.hidden = true;
         manageUrl = button.getAttribute('data-a2t-manage');
+        // Set only by the "+ Add audio" button in an empty table cell, which names the column it stands
+        // for. The dialog already lists all three types whether or not a recording exists; this just
+        // saves the administrator finding the one they clicked.
+        manageFocus = button.getAttribute('data-a2t-manage-focus');
         var order = button.getAttribute('data-a2t-order');
         manageMeta.textContent = order ? 'Order ' + order : 'No order id';
         say(manageStatus, 'Loading…');
@@ -1382,6 +1400,37 @@
         data.slots.forEach(function (slot) {
             manageSlots.appendChild(manageSlot(slot, data));
         });
+
+        revealRequestedSlot();
+    }
+
+    /**
+     * Open the upload form for the type the administrator actually clicked, if they came from a cell.
+     *
+     * Consumed once: a later reload of this dialog — after an upload, say — must not spring the form
+     * open again underneath the confirmation it was showing.
+     */
+    function revealRequestedSlot() {
+        if (!manageFocus) {
+            return;
+        }
+
+        var wanted = manageFocus;
+        manageFocus = null;
+
+        var button = manageSlots.querySelector('[data-a2t-replace="' + wanted + '"]');
+        var slot = button ? button.closest('.a2t-manage__slot') : null;
+        var form = slot ? slot.querySelector('[data-a2t-replace-form]') : null;
+
+        if (!form) {
+            return;
+        }
+
+        form.hidden = false;
+
+        if (typeof slot.scrollIntoView === 'function') {
+            slot.scrollIntoView({ block: 'nearest' });
+        }
     }
 
     function manageSlot(slot, data) {
@@ -1654,8 +1703,11 @@
     /* ---- Listening to one recording -------------------------------------------------------- */
 
     var listen = document.querySelector('[data-a2t-listen]');
+    var reviewActions = document.querySelector('[data-a2t-review-actions]');
     var listenBusy = false;
-    var lastAudio = null;   // the audio block from the last read, for the Generate button
+    var lastAudio = null;      // the audio block from the last read, for the Generate button
+    var lastFragment = null;   // the whole of it, for the two dialogs that open on top of this one
+    var generatedTimer = null; // set only while a generation is in flight; see watchGenerated()
 
     /**
      * One group of the toolbar: a caption and its controls, side by side on one line.
@@ -1697,6 +1749,7 @@
         empty(listen);
         var audio = data.audio || {};
         lastAudio = audio;
+        lastFragment = data;
 
         // 1. The file somebody uploaded. Served by the existing route, which resolves the stored
         //    name through the one path builder for retained recordings.
@@ -1714,7 +1767,122 @@
         // 3. The browser reading the transcript aloud. Costs nothing and leaves nothing behind.
         listenGroup('System', speechControls(), 'speech');
 
+        // 4. What can be DONE to this recording, as opposed to heard. In the dialog's header, not here:
+        //    these two reach a provider or replace a file, and the three above only play things.
+        paintRecordingActions(data);
+
+        // 5. Keep asking, but only while there is an answer coming. Nothing pushes the end of a
+        //    generation to an open page, so a dialog left open would otherwise sit on "Queued…" until
+        //    somebody reloaded — and the operator who pressed the button is exactly the person watching.
+        watchGenerated(audio.generated);
+
         listen.hidden = false;
+    }
+
+    /**
+     * Re-read this recording while a worker is generating its audio, and stop as soon as it is not.
+     *
+     * Reuses the dialog's own endpoint rather than adding one, and repaints ONLY the audio panel and the
+     * header actions — never the transcript. That distinction is the point: `renderReview` rebuilds
+     * every turn, and doing that on a timer would throw away an editor somebody had open, lose a
+     * selection mid-merge and jump the scroll, all to report a state change in a strip at the top.
+     *
+     * Stopped by its own state (the server stops saying `inFlight`), by the dialog closing, and by the
+     * dialog moving to another recording — the last of which is why `requested` is compared.
+     */
+    function watchGenerated(generated) {
+        stopWatchingGenerated();
+
+        if (!generated || !generated.inFlight || reviewUrl === null) {
+            return;
+        }
+
+        var requested = reviewUrl;
+
+        generatedTimer = setTimeout(function () {
+            generatedTimer = null;
+
+            load(requested).then(function (fresh) {
+                // Moved on, or closed, while that was in flight. The worker carries on either way.
+                if (reviewUrl !== requested || !reviewDialog.open) {
+                    return;
+                }
+
+                paintListen(fresh);
+            }).catch(function () {
+                // A lost poll is not a lost generation. Ask again; the panel says nothing new meanwhile.
+                if (reviewUrl === requested && reviewDialog.open) {
+                    watchGenerated(generated);
+                }
+            });
+        }, 3000);
+    }
+
+    function stopWatchingGenerated() {
+        if (generatedTimer !== null) {
+            clearTimeout(generatedTimer);
+            generatedTimer = null;
+        }
+    }
+
+    /** Run something against the header's generate control, when there is one drawn. */
+    function headerAction(change) {
+        var control = reviewActions && reviewActions.querySelector('[data-a2t-tts-confirm]');
+
+        if (control) {
+            change(control);
+        }
+    }
+
+    /**
+     * "Update Audio" and "Generate / Regenerate AI Audio", in the dialog's own header.
+     *
+     * Both were previously only reachable from the page behind the dialog — the row's Manage Audio
+     * button, or the AI audio page. An administrator reading a transcript and deciding it is wrong had
+     * to close the dialog to act on that, and then find the row again.
+     *
+     * Everything here is the server's answer, not a decision taken in the browser: whether the recording
+     * can be replaced at all (`data.replace`), whether the generate control is drawn (`offered`), whether
+     * it may be pressed (`canGenerate`), what it says (`actionLabel`) and whether pressing it would cost
+     * anything (`paid`). This places them.
+     *
+     * ## The generate control is not removed while a worker has it
+     *
+     * It used to be, because it was drawn on `canGenerate` alone — and that is false while a generation
+     * is in flight. Pressing it therefore made it vanish: the request succeeded, the panel re-read, the
+     * state was Queued, and the only evidence that anything had happened was that the button had gone.
+     * It now stays where it was, disabled, saying "Queued…" and then "Generating…", and comes back by
+     * itself. `offered` says whether to draw it; `canGenerate` still says whether it may be pressed.
+     */
+    function paintRecordingActions(data) {
+        if (!reviewActions) {
+            return;
+        }
+
+        empty(reviewActions);
+
+        if (data.replace) {
+            // Left enabled during a generation, deliberately. A replacement is an additive upload that
+            // writes a NEW conversation and a new job, and renditions are keyed by job id — so the
+            // generation under way stays bound to the recording it was asked for and finishes there.
+            // Disabling this would refuse a safe action to prevent something that cannot happen.
+            var update = el('button', 'btn btn--sm', 'Update Audio');
+            update.type = 'button';
+            update.setAttribute('data-a2t-update-open', '');
+            reviewActions.appendChild(update);
+        }
+
+        var generated = data.audio && data.audio.generated;
+
+        if (generated && generated.offered) {
+            // `actionLabel` is the whole sentence for the state the server found this in — "Generate AI
+            // Audio", "Regenerate AI Audio", "Queued…", "Generating…". Nothing is assembled here.
+            var tts = el('button', 'btn btn--sm btn--primary', generated.actionLabel);
+            tts.type = 'button';
+            tts.disabled = !generated.canGenerate;
+            tts.setAttribute('data-a2t-tts-confirm', '');
+            reviewActions.appendChild(tts);
+        }
     }
 
     /**
@@ -1742,19 +1910,305 @@
             controls.push(el('span', 'a2t-listen__state', generated.label));
         }
 
-        if (generated.canGenerate) {
-            // Words, never an icon: this one reaches a paid provider, and no glyph says that. The
-            // secondary variant keeps it part of the toolbar rather than the brightest thing in the
-            // dialog, without making it look like anything less than a button.
-            var button = el('button', 'btn btn--sm btn--secondary', generated.buttonLabel + ' AI audio');
-            button.type = 'button';
-            button.setAttribute('data-a2t-listen-generate', '');
-            controls.push(button);
-        } else if (generated.reason) {
+        // The button that asks for generation is NOT here. It lives in the actions row below the
+        // players, with Update Audio, because both of those reach outside this page — one spends money,
+        // the other replaces a file — and the three groups above only play what already exists. Two
+        // buttons doing the same thing in one dialog is the alternative, and it was the first thing
+        // written here.
+        // "A generation is already under way." is skipped: the header control says "Queued…" or
+        // "Generating…" in the same breath, and a dialog that reports one state twice in two places
+        // invites the reader to look for the difference between them. Every other reason — no provider,
+        // nothing said on this side — has no control saying it, so it is shown.
+        if (!generated.canGenerate && !generated.inFlight && generated.reason) {
             controls.push(el('span', 'a2t-listen__note', generated.reason));
         }
 
         return controls;
+    }
+
+    /* ---- Updating this recording's audio ---------------------------------------------------- */
+
+    var updateForm = document.querySelector('[data-a2t-update-form]');
+    var updateDialog = dialogOf(updateForm);
+    var updateStatus = document.querySelector('[data-a2t-update-status]');
+    var updateSubmit = document.querySelector('[data-a2t-update-submit]');
+    var updateBusy = false;
+    var updateTimer = null;
+
+    /**
+     * One line of text inside one dialog, by the attribute the template marked it with.
+     *
+     * Scoped to the dialog rather than to the document: two of these dialogs are open at once — Update
+     * or the confirmation, on top of Details — and an attribute that is unique today is only unique
+     * until somebody reuses the name in the other one.
+     *
+     * An em dash for an absent value, because a blank definition beside its term reads as a bug.
+     */
+    function fillIn(root, selector, value) {
+        var node = root.querySelector(selector);
+
+        if (node) {
+            node.textContent = (value === null || value === undefined || value === '') ? '—' : value;
+        }
+    }
+
+    /**
+     * Open Update for the recording the Details dialog is currently showing.
+     *
+     * Every field comes from `data.replace`, which the server built: the endpoint, this recording's own
+     * job public id, its type and its order. Nothing here works out which slot is being replaced — which
+     * is the whole reason the type is a fact in a list rather than a select. The server derives it from
+     * `replaces` and ignores any type the body carries.
+     */
+    function openUpdate() {
+        var target = lastFragment && lastFragment.replace;
+
+        if (!updateDialog || !target) {
+            return;
+        }
+
+        // Before `replaces` is written, not after: reset restores every control to the value the markup
+        // declared, and for that hidden field the declared value is empty.
+        updateForm.reset();
+        updateForm.action = target.url;
+        updateForm.querySelector('[data-a2t-update-replaces]').value = target.replaces;
+
+        fillIn(updateDialog, '[data-a2t-update-order]', target.orderId ? 'Order ' + target.orderId : null);
+        fillIn(updateDialog, '[data-a2t-update-type]', target.recordingTypeLabel);
+        fillIn(updateDialog, '[data-a2t-update-current]', lastFragment.filename);
+        fillIn(
+            updateDialog,
+            '[data-a2t-update-meta]',
+            target.recordingTypeLabel + ' · order ' + target.orderId,
+        );
+
+        quiet(updateStatus);
+        // A previous replacement may still be being watched. Its worker carries on either way; this
+        // dialog is now about a different recording and must not report the old one's stages.
+        stopWatching();
+        releaseUpdate();
+
+        openDialog(updateDialog);
+    }
+
+    /**
+     * Send the replacement, then follow the recording it created.
+     *
+     * The upload is one request and the progress is another endpoint entirely — the existing job status
+     * one, polled on the **new** job. A replacement is a new recording with a new public id, so watching
+     * the id this dialog was opened on would report the recording being replaced, which finished long ago.
+     */
+    function submitUpdate(event) {
+        event.preventDefault();
+
+        if (updateBusy) {
+            return; // One at a time: a second press would put two recordings on the same slot.
+        }
+
+        var file = updateForm.querySelector('input[type="file"]');
+
+        // The input is `required`, so a browser enforcing that never reaches this. Kept for one that
+        // does not, because the alternative is a POST with no file and a refusal from the server.
+        if (!file || !file.files || !file.files.length) {
+            say(updateStatus, 'Choose an audio file to upload.');
+            return;
+        }
+
+        updateBusy = true;
+        updateSubmit.disabled = true;
+        updateSubmit.textContent = 'Uploading…';
+        say(updateStatus, 'Uploading…');
+
+        fetch(updateForm.action, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            // Multipart, carrying the form's own CSRF field. Not JSON: this is a file.
+            body: new FormData(updateForm)
+        }).then(function (response) {
+            return response.json().then(
+                function (data) { return data; },
+                function () {
+                    return { success: false, message: 'The server could not confirm this upload.' };
+                }
+            );
+        }).then(function (data) {
+            if (!data.success) {
+                // A refusal leaves the dialog exactly as it was, so the file can be chosen again.
+                releaseUpdate();
+                say(updateStatus, data.message || 'The upload was refused.');
+                return;
+            }
+
+            if (!data.statusUrl) {
+                // Queued, but there is nothing to watch. Say what happened rather than inventing progress.
+                releaseUpdate();
+                say(updateStatus, data.message);
+                return;
+            }
+
+            say(updateStatus, data.message);
+            watchReplacement(data.statusUrl, data.jobPublicId);
+        }).catch(function () {
+            releaseUpdate();
+            say(updateStatus, 'Connection interrupted. Nothing was uploaded — try again.');
+        });
+    }
+
+    function releaseUpdate() {
+        updateBusy = false;
+        updateSubmit.disabled = false;
+        updateSubmit.textContent = 'Update Audio';
+    }
+
+    function stopWatching() {
+        if (updateTimer !== null) {
+            clearTimeout(updateTimer);
+            updateTimer = null;
+        }
+    }
+
+    /**
+     * Follow the new recording through the stages the worker actually reports.
+     *
+     * No percentage anywhere. The status endpoint publishes a status and a stage and knows nothing about
+     * how far through either it is, so a bar would be a number this application invented — and one that
+     * sticks at 90% is worse than a sentence saying what is happening.
+     */
+    function watchReplacement(statusUrl, jobPublicId, misses) {
+        stopWatching();
+        var failures = misses || 0;
+
+        load(statusUrl).then(function (state) {
+            if (!updateDialog.open) {
+                return; // Closed while that was in flight. The worker carries on regardless.
+            }
+
+            if (state.status === 'COMPLETED') {
+                say(updateStatus, 'Finished. Reloading to show the new recording…');
+                arriveAt(jobPublicId);
+                return;
+            }
+
+            if (state.status === 'FAILED') {
+                // The real end state, in the page's own words. No reason is published by that endpoint —
+                // the failure detail lives on the recording's own page, where the log put it.
+                releaseUpdate();
+                say(updateStatus, 'The new recording failed. Open it from the table to see why.');
+                return;
+            }
+
+            say(updateStatus, stageWords(state));
+            updateTimer = setTimeout(function () { watchReplacement(statusUrl, jobPublicId, 0); }, 2000);
+        }).catch(function () {
+            if (!updateDialog.open) {
+                return;
+            }
+
+            // A lost poll is not a lost upload, so a few are simply retried and the dialog says nothing
+            // new. Bounded, because the endpoint also answers 404 for a job that is not there — an
+            // unbounded loop would ask for a recording that will never exist every five seconds for as
+            // long as the tab stayed open, and say "Uploading…" the whole time.
+            if (failures >= 4) {
+                releaseUpdate();
+                say(
+                    updateStatus,
+                    'The upload was accepted, but its progress cannot be read just now. '
+                    + 'Reload the page to see where it got to.',
+                );
+
+                return;
+            }
+
+            updateTimer = setTimeout(function () {
+                watchReplacement(statusUrl, jobPublicId, failures + 1);
+            }, 5000);
+        });
+    }
+
+    /**
+     * Reload onto the recording that now exists.
+     *
+     * The row behind the dialog is server-rendered and there is no endpoint that re-renders one, so the
+     * only truthful way to refresh it is to ask for the page again. The fragment names the recording to
+     * open once it arrives, which is what makes this a continuation rather than losing the reader's place.
+     */
+    function arriveAt(jobPublicId) {
+        if (jobPublicId) {
+            window.location.hash = 'a2t-recording=' + jobPublicId;
+        }
+        window.location.reload();
+    }
+
+    /** `ProcessingStage` in the same words the page's own upload form uses for it. */
+    function stageWords(state) {
+        var labels = window.KFAudioStages || {};
+
+        return labels[state.stage] || labels[state.status] || 'Working…';
+    }
+
+    if (updateForm) {
+        updateForm.addEventListener('submit', submitUpdate);
+        updateDialog.addEventListener('close', stopWatching);
+    }
+
+    /* ---- Generating this recording's AI audio ----------------------------------------------- */
+
+    var ttsConfirmDialog = document.getElementById('a2t-tts-confirm-dialog');
+    var ttsConfirmSubmit = document.querySelector('[data-a2t-tts-confirm-submit]');
+    var ttsConfirmStatus = document.querySelector('[data-a2t-tts-confirm-status]');
+
+    /**
+     * Ask before spending anything — and say plainly when there is nothing to spend.
+     *
+     * The button that opens this is shown even for audio that is already current, because that state is
+     * the one worth explaining: the dialog says the audio matches the latest transcript and disables its
+     * own confirm. Hiding the button instead would leave a reader who came to regenerate wondering
+     * whether they had missed it, or whether the feature was broken.
+     */
+    function openTtsConfirm() {
+        var generated = lastAudio && lastAudio.generated;
+
+        if (!ttsConfirmDialog || !generated) {
+            return;
+        }
+
+        var current = generated.alreadyCurrent === true;
+        var replace = lastFragment && lastFragment.replace;
+
+        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-title]', generated.buttonLabel + ' AI Audio');
+        fillIn(
+            ttsConfirmDialog,
+            '[data-a2t-tts-confirm-recording]',
+            replace ? replace.recordingTypeLabel : generated.outputType,
+        );
+        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-source]', generated.transcriptSource);
+        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-state]', generated.label);
+        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-note]', current
+            ? 'This AI audio is already current and matches the latest transcript. Nothing would be generated.'
+            : 'This reads the latest effective transcript aloud with a paid provider and replaces the '
+              + 'recording\'s AI audio when it finishes.');
+
+        quiet(ttsConfirmStatus);
+        ttsConfirmSubmit.disabled = current;
+        ttsConfirmSubmit.textContent = current ? 'Already current' : generated.buttonLabel;
+
+        openDialog(ttsConfirmDialog);
+    }
+
+    if (ttsConfirmSubmit) {
+        ttsConfirmSubmit.addEventListener('click', function () {
+            // Belt and braces. The button is disabled for audio that is already current, and
+            // `TtsGenerationService::enqueue()` answers AlreadyCurrent for a matching digest whatever
+            // reaches it — neither of those is the only guard, and neither is this.
+            if (ttsConfirmSubmit.disabled) {
+                return;
+            }
+
+            requestGeneration(ttsConfirmSubmit, ttsConfirmStatus, function () {
+                closeDialog(ttsConfirmDialog);
+            });
+        });
     }
 
     /**
@@ -1764,8 +2218,16 @@
      * server names the output type and the digest, and revalidates both. Nothing about eligibility,
      * cost protection or duplicate suppression is decided here; pressing this reaches
      * `TtsGenerationService::enqueue()` exactly as every other trigger does.
+     *
+     * `expected_hash` is sent unchanged and is what makes a stale tab harmless: it is the digest of the
+     * transcript the dialog was rendered from, and the server refuses a request whose digest no longer
+     * matches rather than reading aloud a transcript nobody looked at.
+     *
+     * @param {Element}  button the control to disable while this is in flight
+     * @param {Element}  status where to put the server's answer
+     * @param {Function} done   run once the answer is in, whether or not it was a refusal
      */
-    function generateFromListen(button) {
+    function requestGeneration(button, status, done) {
         if (listenBusy || reviewToken === null || lastAudio === null || !lastAudio.generated) {
             return;
         }
@@ -1775,6 +2237,15 @@
         listenBusy = true;
         button.disabled = true;
         button.textContent = 'Queuing…';
+
+        // The header control too, at once. It is behind a modal dialog and cannot be clicked from here,
+        // but the re-read below is a round trip and this is the control the operator is watching — it
+        // should not still read "Regenerate AI Audio" for the moment it takes the server to answer.
+        // Replaced by whatever the server then says, in its words, not left on this guess.
+        headerAction(function (control) {
+            control.disabled = true;
+            control.textContent = 'Queued…';
+        });
 
         var body = new URLSearchParams();
         body.set('output_type', generated.outputType);
@@ -1801,19 +2272,39 @@
             listenBusy = false;
             button.disabled = false;
             button.textContent = label;
-            say(reviewStatus, data.message);
+            say(status, data.message);
 
             // Re-read rather than guess: the state the panel shows next is the server's, and a
-            // refusal leaves the panel exactly as it was.
+            // refusal leaves the panel exactly as it was. The message is carried into the re-read so
+            // the confirmation survives the repaint that would otherwise clear it.
             if (data.success) {
                 renderReview(data.message, reviewScroll ? reviewScroll.scrollTop : 0);
+
+                if (typeof done === 'function') {
+                    done();
+                }
+
+                return;
             }
+
+            // Refused. The header was moved to "Queued…" the moment this was sent, on the assumption
+            // that it would be accepted, so it has to be put back — nothing was queued, and a control
+            // left disabled would be the second thing this request broke.
+            restoreHeaderAction();
         }).catch(function () {
             listenBusy = false;
             button.disabled = false;
             button.textContent = label;
-            say(reviewStatus, 'Connection interrupted. Nothing was queued — try again.');
+            say(status, 'Connection interrupted. Nothing was queued — try again.');
+            restoreHeaderAction();
         });
+    }
+
+    /** Put the header control back to whatever the last read from the server said it was. */
+    function restoreHeaderAction() {
+        if (lastFragment !== null) {
+            paintRecordingActions(lastFragment);
+        }
     }
 
     /* ---- System audio: the browser's own voice ---------------------------------------------- */
@@ -2218,13 +2709,52 @@
         // otherwise. `openDialog` reaches here before the fetch returns, so this is the earliest
         // point at which the previous recording's speech can be stopped.
         speechStop();
+        stopWatchingGenerated();
+        if (reviewActions) {
+            // Emptied with the panel, not left showing the previous recording's buttons over a dialog
+            // that is still loading — those buttons would act on whatever `lastFragment` still held.
+            empty(reviewActions);
+        }
         if (listen) {
             empty(listen);
             listen.hidden = true;
+            // The dialogs that open on top of this one read these. Cleared here rather than left to be
+            // overwritten by the fetch, so a press during the load cannot act on the last recording.
+            lastAudio = null;
+            lastFragment = null;
         }
         reviewBody.hidden = true;
         openDialog(reviewDialog);
         renderReview(null, 0);
+    }
+
+    /**
+     * Continue where the reader was after a reload that was not their idea.
+     *
+     * The Update dialog reloads the page when a replacement finishes, because the row behind it is
+     * server-rendered and nothing re-renders one row. That would otherwise drop the reader back on a
+     * table, having lost the transcript they were reading and with no clue which of three recordings had
+     * just been replaced. The fragment names the recording to reopen.
+     *
+     * Only ever a 32-hex public id, and only ever used to find a button the server already rendered: a
+     * fragment naming a recording that is not on this page opens nothing, which is the right answer for a
+     * hand-edited URL as much as for a recording that has since been filtered out of the list.
+     */
+    function openRequestedRecording() {
+        var wanted = /^#a2t-recording=([0-9a-f]{32})$/.exec(window.location.hash);
+
+        if (!wanted) {
+            return;
+        }
+
+        // Consumed: a later reload of this URL must not spring the dialog open again.
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+        var button = document.querySelector('[data-a2t-details*="' + wanted[1] + '"]');
+
+        if (button) {
+            openReview(button);
+        }
     }
 
     if (reviewDialog) {
@@ -2234,7 +2764,11 @@
             // Closing is the commonest way to leave, and the one where a voice left talking to an
             // empty screen would be most obviously wrong.
             speechStop();
+            // Nothing to keep asking for once there is nowhere to show the answer.
+            stopWatchingGenerated();
         });
+
+        openRequestedRecording();
     }
 
     /* ---- The correction controls, driven by the shared module ------------------------------ */
@@ -2296,10 +2830,18 @@
                 return;
             }
 
-            var generate = target.closest('[data-a2t-listen-generate]');
-            if (generate) {
+            // Both open a dialog on top of this one rather than acting on the press. Replacing a
+            // recording and paying a provider are the two things in here that cannot be undone, and
+            // neither should happen on a single click inside a transcript somebody is reading.
+            if (target.closest('[data-a2t-update-open]')) {
                 event.preventDefault();
-                generateFromListen(generate);
+                openUpdate();
+                return;
+            }
+
+            if (target.closest('[data-a2t-tts-confirm]')) {
+                event.preventDefault();
+                openTtsConfirm();
                 return;
             }
 

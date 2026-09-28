@@ -283,7 +283,7 @@ config/common/di/audio-to-text.php assembles the settings object.
   DEEPGRAM_TTS_SAMPLE_RATE        24000        (8000-48000)
   DEEPGRAM_TTS_MAX_CHARS          1900         (100-2000, the documented cap)
   DEEPGRAM_TTS_TIMEOUT            120
-  DEEPGRAM_TTS_GAP_MS             350          (silence between turns; 0 = off)
+  DEEPGRAM_TTS_GAP_MS             2000         (silence between turns; 0 = off)
   DEEPGRAM_TTS_OUTPUT_FORMAT      mp3          (or wav)
   DEEPGRAM_TTS_MAX_ATTEMPTS       3
 

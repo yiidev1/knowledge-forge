@@ -1541,7 +1541,12 @@ final class AudioToTextReviewCest
         Assert::assertSame(
             [
                 'version', 'isReviewed', 'rolesPublished', 'canConfirm', 'confirmBlockedReason',
-                'confirmedLine', 'voice', 'audio', 'filename', 'provider', 'turns', 'urls',
+                'confirmedLine', 'voice', 'audio', 'filename', 'provider',
+                // Everything the Update Audio dialog needs to replace this recording, or null when it
+                // cannot be replaced. Named by the server so the browser never decides which of the
+                // three sides of a call it is looking at.
+                'replace',
+                'turns', 'urls',
             ],
             array_keys($payload),
         );
@@ -1553,7 +1558,15 @@ final class AudioToTextReviewCest
         Assert::assertStringEndsWith('/original/file', (string) $payload['audio']['original']['url']);
         Assert::assertSame(
             [
-                'state', 'label', 'title', 'playable', 'playUrl', 'canGenerate', 'buttonLabel',
+                'state', 'label', 'title', 'playable', 'playUrl', 'canGenerate',
+                // Whether the header control is DRAWN, whether a worker already has it, and the whole
+                // sentence it says right now. Separate from `canGenerate`, which is only whether it may
+                // be pressed — drawing on that alone is what made it vanish when it was pressed.
+                'offered', 'inFlight', 'actionLabel',
+                'buttonLabel',
+                // The confirmation dialog's three questions: would this generate anything, would it
+                // cost anything, and which transcript would be read out.
+                'alreadyCurrent', 'paid', 'transcriptSource',
                 'reason', 'action', 'outputType', 'expectedHash',
             ],
             array_keys($payload['audio']['generated']),

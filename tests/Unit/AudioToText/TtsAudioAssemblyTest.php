@@ -6,12 +6,19 @@ namespace App\Tests\Unit\AudioToText;
 
 use App\AudioToText\Application\Tts\PcmAudio;
 use App\AudioToText\Application\Tts\TtsRenderKey;
+use App\AudioToText\Application\Tts\TtsSourceDigest;
 use App\AudioToText\Application\Tts\TtsSourceText;
 use App\AudioToText\Domain\Tts\TtsOutputFormat;
 use App\AudioToText\Domain\Tts\TtsOutputType;
+use App\AudioToText\Domain\Tts\TtsUtterance;
+use App\AudioToText\Domain\Tts\TtsVoice;
+use App\AudioToText\Domain\SpeakerRole;
+use App\Environment;
 use App\Tests\Support\AudioToTextSettingsFactory;
 use PHPUnit\Framework\TestCase;
 
+use function getenv;
+use function putenv;
 use function str_repeat;
 use function strlen;
 
@@ -158,19 +165,99 @@ final class TtsAudioAssemblyTest extends TestCase
         $this->assertSame($a, $b);
     }
 
-    /** Only a mixed file has gaps between turns, so only it is affected when that setting moves. */
-    public function testTheInterTurnGapOnlyAffectsMixedOutput(): void
+    /**
+     * Moving the inter-turn gap changes the render identity of EVERY output.
+     *
+     * **This test used to assert that a per-role output was unaffected, and the change is deliberate.**
+     * It was named `testTheInterTurnGapOnlyAffectsMixedOutput` and was true of an assembler that only
+     * inserted silence into a mixed file. The assembler now inserts one between any two turns whatever
+     * the output type, so the setting can change how a per-role file sounds too — and a render input
+     * missing from the key is audio the page calls current when it no longer matches the configuration.
+     *
+     * It belongs in the render key and not in {@see \App\AudioToText\Application\Tts\TtsSourceDigest}:
+     * a longer breath changes the file without changing a word of what is said, so the page says
+     * "generated with a different voice setting" rather than claiming a transcript changed.
+     */
+    public function testMovingTheInterTurnGapChangesEveryOutputsRenderIdentity(): void
     {
         $changed = AudioToTextSettingsFactory::create(ttsGapMilliseconds: 800)->tts;
         $default = AudioToTextSettingsFactory::create()->tts;
 
+        foreach ([TtsOutputType::Mixed, TtsOutputType::Customer, TtsOutputType::Agent] as $type) {
+            $this->assertNotSame(
+                TtsRenderKey::for($default, $type),
+                TtsRenderKey::for($changed, $type),
+                $type->value . ' can contain gaps, so the gap is part of what it was rendered with.',
+            );
+        }
+
+        // A named-voice recording — a CALLER or CALLEE upload — has always counted it, and still does.
         $this->assertNotSame(
-            TtsRenderKey::for($default, TtsOutputType::Mixed),
-            TtsRenderKey::for($changed, TtsOutputType::Mixed),
+            TtsRenderKey::for($default, TtsOutputType::Mixed, TtsVoice::Caller),
+            TtsRenderKey::for($changed, TtsOutputType::Mixed, TtsVoice::Caller),
         );
+    }
+
+    /**
+     * The shipped default is two seconds, and it comes from configuration rather than from the code.
+     *
+     * Two seconds is long for a conversation and deliberate: this audio is listened to for training,
+     * where the pause is when the listener decides what they would have said next. Asserted on the
+     * environment schema rather than on a literal in the assembler, because the whole point of the
+     * setting is that the assembler does not know the number — changing it must be one edit.
+     */
+    public function testTheShippedGapIsTwoSecondsAndComesFromConfiguration(): void
+    {
+        $previous = getenv('DEEPGRAM_TTS_GAP_MS');
+        putenv('DEEPGRAM_TTS_GAP_MS');
+
+        try {
+            $this->assertSame(2000, Environment::int('DEEPGRAM_TTS_GAP_MS'));
+        } finally {
+            if ($previous !== false) {
+                putenv('DEEPGRAM_TTS_GAP_MS=' . $previous);
+            }
+        }
+    }
+
+    /**
+     * Milliseconds, so half a second is expressible.
+     *
+     * Recorded as a test because the obvious "improvement" is to call the setting seconds, and a client
+     * asking for 1.5 would then need either a float through an int-typed reader or a rounding rule
+     * nobody chose.
+     */
+    public function testAFractionOfASecondIsExpressible(): void
+    {
+        $settings = AudioToTextSettingsFactory::create(ttsGapMilliseconds: 1500)->tts;
+
+        $this->assertSame(1500, $settings->gapMilliseconds);
         $this->assertSame(
-            TtsRenderKey::for($default, TtsOutputType::Customer),
-            TtsRenderKey::for($changed, TtsOutputType::Customer),
+            36000 * PcmAudio::BYTES_PER_SAMPLE,
+            strlen(PcmAudio::silence($settings->gapMilliseconds, 24000)),
+            'A second and a half at 24 kHz, to the sample.',
+        );
+    }
+
+    /**
+     * The gap is a render setting, never part of what was said.
+     *
+     * The digest is computed from the output type and the utterances alone, so it cannot see a setting
+     * at all — asserted here because the alternative failure is silent and expensive: every `.env` edit
+     * would announce itself as "the transcript changed after this audio was generated", and an operator
+     * who learns to ignore that notice ignores it on the day it is reporting a real correction.
+     */
+    public function testTheGapDoesNotReachTheTranscriptDigest(): void
+    {
+        $utterances = [
+            new TtsUtterance(SpeakerRole::CUSTOMER, 'Two egg foo young.'),
+            new TtsUtterance(SpeakerRole::AGENT, 'Ready in 25 minutes.'),
+        ];
+
+        $this->assertSame(
+            TtsSourceDigest::for(TtsOutputType::Mixed, $utterances),
+            TtsSourceDigest::for(TtsOutputType::Mixed, $utterances),
+            'The digest has no gap input to take, whatever the configuration says.',
         );
     }
 

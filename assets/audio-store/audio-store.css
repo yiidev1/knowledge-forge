@@ -194,6 +194,32 @@
 .a2t-slot__more { color: var(--text-muted); }
 .a2t-cell-actions .a2t-slot__link { display: block; margin-bottom: .25rem; }
 
+/* "+ Add audio", in a cell that holds no recording yet.
+ *
+ * A GHOST control, and the restraint is the point: a page of twenty orders can show sixty of these, and
+ * sixty filled buttons would read as sixty things demanding attention in a table whose job is to show
+ * what already exists. So it sits at the weight of the dash it replaces and only resolves into a button
+ * when the row is hovered or it is focused.
+ *
+ * Focus is handled separately from hover rather than folded into one selector: a keyboard user never
+ * hovers, and this must not be a control only a mouse can find. */
+.a2t-slot__add {
+    display: inline-flex; align-items: center; gap: .25rem;
+    padding: .15rem .4rem;
+    border: 1px dashed transparent; border-radius: var(--radius-sm, .4rem);
+    background: none; color: var(--text-faint);
+    font: inherit; font-size: .78rem; cursor: pointer;
+    transition: color .12s, border-color .12s, background-color .12s;
+}
+tr:hover .a2t-slot__add,
+.a2t-slot__add:hover,
+.a2t-slot__add:focus-visible {
+    color: var(--primary); border-color: var(--border-strong); background: var(--surface-2);
+}
+/* Never suppressed by the rule above — a focus ring the browser draws is the only thing telling a
+   keyboard user where they are. */
+.a2t-slot__add:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
 /* THE PLAY CONTROL.
    A button with a CSS triangle rather than a native <audio> element: a page of twenty orders can hold
    sixty recordings, and sixty native players is sixty pieces of browser chrome. The shared controller
@@ -329,8 +355,16 @@
    block of four, and four circles in a row reads as four separate things. */
 .a2t-listen .a2t-iconbtn { width: 32px; height: 32px; border-radius: 8px; }
 .a2t-listen .a2t-iconbtn + .a2t-iconbtn { margin-left: -.05rem; }
-/* The paid actions keep their words. An icon cannot say "this will call a provider". */
-.a2t-listen .btn { white-space: nowrap; }
+/* No `.btn` rule here any more: the two actions moved to the dialog header, and the panel now holds
+   only players, the state word and the browser's own transport. */
+
+/* The two dialogs the header actions open, narrower than the 46rem the shared modal gives.
+   Both ask one question about one recording and hold four short lines. At full width the facts sit in a
+   strip of whitespace and the reader has to hunt for the sentence that matters — and the confirmation in
+   particular has to be read, because it is the one that says whether anything will be spent. Not a new
+   modal: everything else about them is `.source-modal`. */
+.a2t-update-dialog { width: min(34rem, calc(100vw - 2rem)); }
+.a2t-tts-confirm-dialog { width: min(30rem, calc(100vw - 2rem)); }
 
 /* Two rows: the players share the first, the voice takes the second. The divider between the two
    players stays; the one that would now start a row is removed. */
@@ -468,7 +502,62 @@
 }
 .a2t-review-dialog .source-modal__body[hidden],
 .a2t-transcript-dialog .source-modal__body[hidden] { display: none; }
-.a2t-dialog__actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+/* The dialog header's right-hand side: what can be done to this recording, the way to the full editor,
+   and the close button.
+
+   Wrapping, and aligned to the right edge. The two action buttons are built by the script and their
+   width depends on what the server called the state — "Regenerate AI Audio" and "Generating…" are not
+   the same size — so a fixed arrangement would either overflow the header at the long end or leave a
+   gap at the short one. `flex-end` means a wrapped line stacks under the right edge rather than
+   drifting back towards the title. */
+.a2t-dialog__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: .4rem .5rem;
+    flex-shrink: 0;
+}
+
+/* The two built controls, kept together so they wrap as a pair and "Open full editor" and the close
+   button are never separated from each other by one of them. Empty for a recording that can be neither
+   replaced nor generated from, and an empty flex box with no padding is nothing on screen. */
+.a2t-dialog__acts { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
+
+/* The disabled state is reached only while a worker holds the job, so it has to read as "in progress",
+   not as "refused". Muted rather than greyed out of existence, and the cursor says it is not for
+   pressing rather than that something is wrong. */
+.a2t-dialog__acts .btn[disabled] { opacity: .62; cursor: default; }
+
+/* The title column takes the slack, and yields first.
+
+   `flex: 1` is load-bearing, not tidiness: the header is `justify-content: space-between`, and it now
+   has three children rather than two. Without it the free space is shared out BETWEEN them and the
+   actions drift into the middle of the header, a gap away from the close button they belong beside.
+   Absorbing it here leaves nothing to distribute, so the two sit together at the right.
+
+   `min-width: 0` is the other half: without it a long filename in the meta line pushes the header wider
+   than the dialog instead of wrapping, and the actions go off the right edge — the one failure this
+   layout must not have, since the close button is over there. */
+.a2t-review-dialog .source-modal__head > :first-child { flex: 1 1 auto; min-width: 0; }
+.a2t-review-dialog .source-modal__meta { overflow-wrap: anywhere; }
+
+/* Narrow: the actions take a line of their own under the title, rather than competing for a header that
+   is now barely wider than they are.
+
+   A grid for the two rows, because the close button has to stay on the first one. Flex wrapping cannot
+   do that — items wrap in order, so anything after the wrapped actions goes with them, and the close
+   button would leave the corner every dialog puts it in. Placement is explicit for the same reason. */
+@media (max-width: 620px) {
+    .a2t-review-dialog .source-modal__head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+    }
+    .a2t-review-dialog .source-modal__head > :first-child { grid-column: 1; grid-row: 1; }
+    .a2t-review-dialog .source-modal__close { grid-column: 2; grid-row: 1; }
+    .a2t-review-dialog .a2t-dialog__actions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+}
 
 .a2t-type-choice { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; }
 .a2t-type-choice .a2t-checkbox { font-size: .85rem; }

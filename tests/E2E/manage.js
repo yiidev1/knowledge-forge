@@ -1,5 +1,5 @@
 /* Manage Audio: replacing one recording of an order, in a real browser. */
-const { BASE, launch, signIn, sleep } = require('./lib');
+const { BASE, LABELS, launch, signIn, sleep } = require('./lib');
 const fx = require('./fixtures.json');
 const { execFileSync } = require('child_process');
 const path = require('path');
@@ -55,7 +55,7 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
     check('manage opens for the order', await openManage(page));
     let found = await slots(page);
     check('one section per recording kind',
-        JSON.stringify(found.map((s) => s.title)) === JSON.stringify(['Common / Mixed', 'Caller', 'Callee']),
+        JSON.stringify(found.map((s) => s.title)) === JSON.stringify([LABELS.MIXED, LABELS.CALLER, LABELS.CALLEE]),
         JSON.stringify(found.map((s) => s.title)));
     check('each holds one current version',
         found.every((s) => s.versions.length === 1 && s.versions[0].state === 'Current'),
@@ -63,23 +63,23 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
 
     console.log('\nB. UPLOADING A REPLACEMENT FOR THE CALLER SIDE ONLY');
     // The Replace button of the Caller section, then its own form's file input.
-    await page.evaluate(() => {
+    await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         slot.querySelector('[data-a2t-replace]').click();
-    });
+    }, LABELS.CALLER);
     await sleep(200);
-    const formVisible = await page.evaluate(() => {
+    const formVisible = await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         return !slot.querySelector('[data-a2t-replace-form]').hidden;
-    });
+    }, LABELS.CALLER);
     check('Replace reveals the upload, in its own section', formVisible);
 
     // The two upload options, as rendered.
-    const fields = await page.evaluate(() => {
+    const fields = await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         const form = slot.querySelector('[data-a2t-replace-form]');
         const box = form.querySelector('input[name=generate_ai_audio]');
         return {
@@ -89,7 +89,7 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
             checked: box.checked,
             boxLabel: form.querySelector('.a2t-checkbox span').textContent.trim(),
         };
-    });
+    }, LABELS.CALLER);
     check('the form offers the audio file and the provider',
         JSON.stringify(fields.labels) === JSON.stringify(['Audio file', 'Transcription provider']),
         JSON.stringify(fields.labels));
@@ -103,35 +103,35 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
     check('and starts unticked', fields.checked === false);
 
     // Cancel and reopen: the paid box must come back unticked even after being ticked.
-    await page.evaluate(() => {
+    await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         const form = slot.querySelector('[data-a2t-replace-form]');
         form.querySelector('input[name=generate_ai_audio]').checked = true;
         form.querySelector('[data-a2t-replace-cancel]').click();
-    });
+    }, LABELS.CALLER);
     await sleep(200);
-    await page.evaluate(() => {
+    await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         slot.querySelector('[data-a2t-replace]').click();
-    });
+    }, LABELS.CALLER);
     await sleep(200);
-    check('cancel and reopen leaves the paid box unticked', await page.evaluate(() => {
+    check('cancel and reopen leaves the paid box unticked', await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         const form = slot.querySelector('[data-a2t-replace-form]');
         return form.querySelector('input[name=generate_ai_audio]').checked === false
             && form.querySelector('input[type=file]').value === '';
-    }));
+    }, LABELS.CALLER));
 
     const input = await page.$('.a2t-manage__slot:nth-of-type(2) input[type=file]');
     await input.uploadFile(path.join(__dirname, '..', '_data', 'recording-channels', '22342359-caller.wav'));
-    await page.evaluate(() => {
+    await page.evaluate((caller) => {
         const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+            .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
         slot.querySelector('[data-a2t-replace-form] button[type=submit]').click();
-    });
+    }, LABELS.CALLER);
     await page.waitForFunction(
         () => !document.querySelector('.a2t-manage-dialog .source-modal__status').hidden
             && /replacement/i.test(document.querySelector('.a2t-manage-dialog .source-modal__status').textContent),
@@ -140,7 +140,7 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
     await sleep(600);
 
     found = await slots(page);
-    const caller = found.find((s) => s.title === 'Caller');
+    const caller = found.find((s) => s.title === LABELS.CALLER);
     check('the caller side now has two versions', caller.versions.length === 2,
         JSON.stringify(caller.versions.map((v) => v.num + ' ' + v.state)));
     check('the replacement is reported as in progress, not as history',
@@ -149,7 +149,7 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
     check('and the recording it replaces is still current',
         caller.versions[1].state === 'Current' && caller.versions[1].num === 'v1',
         JSON.stringify(caller.versions[1]));
-    const others = found.filter((s) => s.title !== 'Caller');
+    const others = found.filter((s) => s.title !== LABELS.CALLER);
     check('the other two recordings are untouched',
         others.every((s) => s.versions.length === 1 && s.versions[0].state === 'Current'),
         JSON.stringify(others.map((s) => s.title + ':' + s.versions.length)));
@@ -166,7 +166,7 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
     });
     check('manage reopens', await openManage(page));
     found = await slots(page);
-    const after = found.find((s) => s.title === 'Caller');
+    const after = found.find((s) => s.title === LABELS.CALLER);
     check('the replacement is now current',
         after.versions[0].state === 'Current' && after.versions[0].num === 'v2',
         JSON.stringify(after.versions.map((v) => v.num + ' ' + v.state)));
@@ -174,24 +174,24 @@ const slots = (page) => page.$$eval(D + ' .a2t-manage__slot', (n) => n.map((s) =
         after.versions[1].state === 'Superseded' && after.versions[1].num === 'v1',
         JSON.stringify(after.versions[1]));
     check('the superseded recording is still openable',
-        await page.evaluate(() => {
+        await page.evaluate((caller) => {
             const slot = [...document.querySelectorAll('.a2t-manage__slot')]
-                .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === 'Caller');
+                .find((s) => s.querySelector('.a2t-manage__title').textContent.trim() === caller);
             const old = slot.querySelectorAll('.a2t-manage__version')[1];
             return [...old.querySelectorAll('a')].map((a) => a.textContent.trim()).join(',');
-        }));
+        }, LABELS.CALLER));
 
     console.log('\nE. THE TRANSCRIPT THE ORDER NOW SHOWS IS THE REPLACEMENT S');
     await page.goto(BASE + '/audio-to-text/store/' + fx.store, { waitUntil: 'networkidle0' });
-    const opened = await page.evaluate((order) => {
+    const opened = await page.evaluate((order, caller) => {
         const r = [...document.querySelectorAll('.a2t-orders tbody tr')].find((x) => x.textContent.includes(order));
-        // The Caller cell's Details button.
+        // The caller recording's Details button, found by the label the server rendered on it.
         const button = [...r.querySelectorAll('[data-a2t-details-label]')]
-            .find((b) => b.getAttribute('data-a2t-details-label') === 'Caller');
+            .find((b) => b.getAttribute('data-a2t-details-label') === caller);
         if (!button) return false;
         button.click();
         return true;
-    }, ORDER);
+    }, ORDER, LABELS.CALLER);
     check('the caller details open', opened);
     if (opened) {
         await page.waitForSelector('.a2t-review-dialog [data-a2t-turn]', { timeout: 5000 });

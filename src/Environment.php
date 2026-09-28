@@ -329,10 +329,19 @@ final class Environment
         // counting disagreement without a paid round trip to discover it.
         'DEEPGRAM_TTS_MAX_CHARS' => ['type' => 'int', 'default' => 1900, 'min' => 100, 'max' => 2000],
         'DEEPGRAM_TTS_TIMEOUT' => ['type' => 'int', 'default' => 120, 'min' => 1, 'max' => 3600],
-        // Silence between TURNS of a mixed conversation, not between the chunks of one turn. Two people
-        // running into each other without a breath is the difference between a recording that trains and
-        // one nobody finishes. Zero disables it.
-        'DEEPGRAM_TTS_GAP_MS' => ['type' => 'int', 'default' => 350, 'min' => 0, 'max' => 5000],
+        // Silence between TURNS, not between the chunks of one turn. Two people running into each other
+        // without a breath is the difference between a recording that trains and one nobody finishes.
+        // Zero disables it.
+        //
+        // Two seconds, which is long for a conversation and deliberate: this audio is listened to for
+        // training, where the pause is when the listener decides what they would have said next. It
+        // applies to every rendition with more than one turn, a single-side recording included.
+        //
+        // Milliseconds rather than seconds so a half-second adjustment is expressible — 1500 rather than
+        // a fraction this reader would have to parse. Changing it changes {@see TtsRenderKey}, so every
+        // existing rendition then reads as "generated with a different voice setting" and offers a
+        // regeneration. Nothing regenerates on its own; the money is still spent by a person.
+        'DEEPGRAM_TTS_GAP_MS' => ['type' => 'int', 'default' => 2000, 'min' => 0, 'max' => 5000],
         // `mp3` or `wav`. Linear16 at 24 kHz mono is 48 kB per second and the default retention keeps
         // audio forever; mp3 at 64 kbps is six times smaller for speech nobody is going to master from
         // (measured: 1.5 MB against ~9 MB on a 188-second rendition). `wav` stays available.

@@ -9,7 +9,9 @@ use App\AudioToText\Application\ConversationHistoryBuilder;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\SpokenPrice;
+use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
@@ -74,6 +76,12 @@ final readonly class Action
         private TtsScriptBuilder $scripts,
         private TtsRenditionRepositoryInterface $renditions,
         private AudioToTextSettings $settings,
+        /**
+         * Only for the four facts the Update dialog needs — which slot this recording occupies, which
+         * order and store it belongs to. The job row carries none of them; they live on the
+         * conversation, which is also where {@see \App\AudioToText\Domain\RecordingType} is stored.
+         */
+        private AudioConversationRepositoryInterface $conversationRecords,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -204,6 +212,14 @@ final readonly class Action
             'audio' => $this->audio($job, $publicId),
             'filename' => $job->originalFilename,
             'provider' => $job->transcriptionProvider()->label(),
+            // Which slot this recording occupies, and where it lives. Named by the SERVER so the Update
+            // dialog can show the type as a label rather than a choice — and so the browser never has
+            // to work out which of the three it is looking at.
+            //
+            // `replaces` is the job's own public id. The endpoint uses it to derive the recording type
+            // from THIS recording rather than from anything the form posts, which is what stops an
+            // Update opened on Caller from filing its upload under Mixed.
+            'replace' => $this->replaceTarget($job),
             'turns' => $rows,
             'urls' => [
                 'full' => $this->urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $publicId]),
@@ -279,7 +295,26 @@ final readonly class Action
                     )
                     : null,
                 'canGenerate' => $row->canGenerate,
+                // Drawn at all, as opposed to pressable now. The dialog keeps the control in one place
+                // for the whole lifecycle and disables it while a worker has it, rather than removing
+                // the thing the operator just pressed.
+                'offered' => $row->isActionOffered(),
+                // Whether a worker is already acting. What makes the control disabled, and what tells
+                // the dialog to keep asking — there is no push, so a finished generation is only ever
+                // noticed by looking again.
+                'inFlight' => $row->state->isInFlight(),
+                // The whole button text for the state it is in, including "Queued…" and "Generating…".
+                'actionLabel' => $row->actionLabel(),
                 'buttonLabel' => $row->buttonLabel(),
+                // The confirmation dialog's whole job: whether pressing this would generate anything.
+                // Current audio is offered, and then told it is current — rather than hidden, which
+                // left the operator with no way to ask.
+                'alreadyCurrent' => $row->isAlreadyCurrent(),
+                'paid' => $row->isPaidAction(),
+                // Which transcript the audio would be read from, in the administrator's words.
+                'transcriptSource' => $job->isReviewed()
+                    ? 'Reviewed / corrected transcript'
+                    : 'Machine transcript',
                 'reason' => $row->blockedReason,
                 // Everything a Generate needs, named by the server: the exact output type this
                 // recording produces and the digest the dialog was rendered from. The browser echoes
@@ -291,6 +326,55 @@ final readonly class Action
                 'outputType' => $row->outputType->value,
                 'expectedHash' => $row->currentHash,
             ],
+        ];
+    }
+
+    /**
+     * Everything the Update dialog needs to replace THIS recording, or null when it cannot be.
+     *
+     * Null for a recording with no conversation, no store, no order or no recording type. Each of those
+     * is a real case — a legacy Customer + Agent half carries no type, and an upload that named no order
+     * has nothing to group a replacement under — and each is the same answer to the dialog: do not offer
+     * the button. The endpoint refuses all of them again anyway.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function replaceTarget(TranscriptionJob $job): ?array
+    {
+        $conversationId = $job->conversationId;
+
+        if ($conversationId === null) {
+            return null;
+        }
+
+        $publicId = $this->conversationRecords->publicIdFor($conversationId);
+        $conversation = $publicId === null ? null : $this->conversationRecords->findByPublicId($publicId);
+
+        if ($conversation === null
+            || $conversation->storeSourceId === null
+            || $conversation->orderId === null
+            || $conversation->recordingType === null
+        ) {
+            return null;
+        }
+
+        return [
+            'url' => $this->urlGenerator->generate(
+                AudioToTextRoute::STORE_GROUP_REPLACE,
+                [
+                    'sourceId' => $conversation->storeSourceId,
+                    // Through `GroupKey`, never assembled here. That class exists because the key is
+                    // computed in SQL and in PHP and a disagreement between the two would resolve a
+                    // different row than the page showed — so `order:` is written down in exactly one
+                    // file, and this is not it.
+                    'groupKey' => GroupKey::forOrder($conversation->orderId)->value,
+                ],
+            ),
+            'replaces' => $job->publicId,
+            'recordingType' => $conversation->recordingType->value,
+            'recordingTypeLabel' => $conversation->recordingType->label(),
+            'orderId' => $conversation->orderId,
+            'storeSourceId' => $conversation->storeSourceId,
         ];
     }
 

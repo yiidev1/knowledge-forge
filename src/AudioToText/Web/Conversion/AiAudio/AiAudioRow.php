@@ -82,13 +82,72 @@ final readonly class AiAudioRow
     }
 
     /**
+     * Whether the control is drawn at all — which is NOT whether it may be pressed.
+     *
+     * {@see $canGenerate} answers "would pressing this do anything now?", and it is false while a worker
+     * is already generating. Rendering on that alone made the button vanish the moment it was pressed:
+     * the answer arrived, the panel re-read, the state was Queued, and the control the operator had just
+     * used was gone. Nothing was wrong, but the only evidence of that was its absence.
+     *
+     * So the two questions are separated. This one stays true through the whole lifecycle — queued,
+     * generating, finished, failed — and the control reports the state instead of disappearing into it.
+     * The states where nothing is offered are the ones where nothing ever will be until something else
+     * changes: no provider, nothing said on this side of the call, speakers not published.
+     */
+    public function isActionOffered(): bool
+    {
+        return $this->canGenerate || $this->state->isInFlight();
+    }
+
+    /**
+     * What the control says right now, including while it is disabled.
+     *
+     * The whole string, not a fragment the browser completes: "Queued…" and "Regenerate AI Audio" are
+     * not the same sentence with a word swapped, and a client assembling them would be the second place
+     * that decides what a state is called.
+     */
+    public function actionLabel(): string
+    {
+        return match ($this->state) {
+            AiAudioState::Queued => 'Queued…',
+            AiAudioState::Generating => 'Generating…',
+            default => $this->buttonLabel() . ' AI Audio',
+        };
+    }
+
+    /**
      * Whether pressing the button will cost money.
      *
-     * Always true when it is offered at all: the button is hidden for audio that is already current, so
-     * every press that is possible is a paid one. Stated as a method so the template says it once.
+     * NOT simply "the button is offered". It used to be: the button was hidden for audio that was
+     * already current, so every possible press was a paid one. The button is now offered in that state
+     * too — so that an administrator can ask the question and be told the answer — and this had to stop
+     * meaning the same thing, or the confirmation would warn about a charge that cannot occur.
+     *
+     * Current audio is the one state where pressing it is free: `TtsGenerationService::enqueue()`
+     * matches the digest, returns AlreadyCurrent and queues nothing.
+     *
+     * ## It is also what the AI audio page renders its form on
+     *
+     * That page has no confirmation step — its button posts immediately — and the note beside it reads
+     * "will be sent to the speech provider. This is a paid action." Offering it for current audio would
+     * make that sentence false, so the page asks this narrower question and shows "Up to date with the
+     * current transcript." instead. This is exactly the condition that branch carried before
+     * {@see $canGenerate} was widened, so that page behaves as it always did.
      */
     public function isPaidAction(): bool
     {
-        return $this->canGenerate;
+        return $this->canGenerate && !$this->isAlreadyCurrent();
+    }
+
+    /**
+     * Whether the audio on disk already says exactly what the current transcript says.
+     *
+     * The confirmation dialog's whole job: it is the difference between "this will generate new audio"
+     * and "there is nothing to generate". Derived from the state the page already computed, which is
+     * where the digest comparison lives — never re-derived here, or the two could disagree.
+     */
+    public function isAlreadyCurrent(): bool
+    {
+        return $this->state === AiAudioState::Ready;
     }
 }

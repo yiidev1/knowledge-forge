@@ -4,9 +4,9 @@
 #
 # ------------------------------------------------------------------------------
 # TO CHANGE THE SCHEDULE, EDIT OnUnitActiveSec BELOW AND NOTHING ELSE.
-#   OnUnitActiveSec=2min    every 2 minutes   (current)
+#   OnUnitActiveSec=30s     every 30 seconds  (current)
+#   OnUnitActiveSec=2min    every 2 minutes
 #   OnUnitActiveSec=5min    every 5 minutes
-#   OnUnitActiveSec=30s     every 30 seconds
 # Then: sudo systemctl daemon-reload && sudo systemctl restart knowledge-forge-audio-worker.timer
 # No application code or configuration changes with the interval.
 # ------------------------------------------------------------------------------
@@ -30,15 +30,32 @@ Unit=knowledge-forge-audio-worker.service
 
 # First tick shortly after boot, then every 2 minutes from the previous activation.
 OnBootSec=2min
-OnUnitActiveSec=2min
+# 30 seconds rather than 2 minutes, so a recording somebody just uploaded starts converting while they
+# are still looking at the page instead of up to two minutes later.
+#
+# THIS IS SAFE BECAUSE OF Type=oneshot, NOT BECAUSE THE WORK IS SHORT. A transcription takes 90-400
+# seconds, far longer than the interval, and systemd will not start a second run of a unit that is still
+# active — so the ticks that land during a job are simply skipped, and the effective cadence stays
+# max(30s, however long the job took). The tick that matters is the one on an EMPTY queue, which exits
+# in about 0.1 s and 45 MB without starting ffmpeg or whisper. Four times as many of those is a few
+# seconds of CPU an hour.
+#
+# The application's flock on runtime/audio-to-text/worker.lock remains the authority regardless, so even
+# a misconfigured scheduler cannot produce two workers.
+OnUnitActiveSec=30s
 
-# A 2-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
-AccuracySec=10s
+
+# 5s rather than 10s: the accuracy window should stay small next to the interval, or systemd's batching
+# can defer a 30-second tick by a third of its own period.
+AccuracySec=5s
 
 # This machine also runs telecom-billing's audio cron on the exact minute. Jittering means the two do
 # not routinely start whisper in the same second — a courtesy on top of the real coordination, which
 # is AUDIO_WORKER_FOREIGN_LOCKS.
-RandomizedDelaySec=15s
+#
+# Scaled down with the interval. 15s of jitter on a 30-second period is half the period, which would
+# make the real cadence 30–45s and undo much of the point of shortening it.
+RandomizedDelaySec=5s
 
 # Missed ticks are not made up after downtime. Queued jobs are still there and the next ordinary tick
 # collects them, so replaying a backlog of timer events would only bunch up work for no benefit.

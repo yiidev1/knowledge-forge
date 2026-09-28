@@ -60,4 +60,13 @@ async function selectTurnText(page, rootSel, index) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = { BASE, launch, signIn, selectTurnText, sleep };
+/**
+ * What a recording type is called on screen, for the scripts that click on those names.
+ *
+ * The one place this suite writes them down. The application's own copy is
+ * `src/Shared/Audio/RecordingTypeLabels.php`, which Node cannot read — so if a client renames these,
+ * both that file and this line change, and nothing else in the suite does.
+ */
+const LABELS = { MIXED: 'Mix / Common', CALLER: 'Customer', CALLEE: 'Agent' };
+
+module.exports = { BASE, LABELS, launch, signIn, selectTurnText, sleep };

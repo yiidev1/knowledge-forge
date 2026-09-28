@@ -8,7 +8,11 @@ use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
+use App\AudioToText\Application\Tts\TtsRenderKey;
+use App\AudioToText\Domain\Tts\TtsOutputType;
+use App\Shared\Audio\RecordingTypeLabels;
 use App\Tests\Support\LegacySeparateAudioUpload;
+use App\Tests\Support\TtsRenderSettings;
 use App\Tests\Support\WebTester;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -23,6 +27,7 @@ use function json_decode;
 use function json_encode;
 use function is_file;
 use function pack;
+use function preg_quote;
 use function str_repeat;
 use function strlen;
 use function unlink;
@@ -410,9 +415,14 @@ final class AudioToTextStoreCest
         $I->amOnPage(self::PICKER_URL);
 
         $I->seeElement('.store-card__audio');
-        $I->see('Mixed', '.store-card__audio-label');
-        $I->see('Caller', '.store-card__audio-label');
-        $I->see('Callee', '.store-card__audio-label');
+
+        // Read from the shared map, not typed out. These cells and the Audio-to-Text table headers name
+        // the same three things, and a test carrying its own copy of the words would keep passing while
+        // the two screens drifted apart — which is the single failure the shared map exists to prevent.
+        foreach (RecordingTypeLabels::all() as $label) {
+            $I->see($label, '.store-card__audio-label');
+        }
+
         $I->see('Other', '.store-card__audio-label');
     }
 
@@ -438,7 +448,7 @@ final class AudioToTextStoreCest
             'An upload with no recording type belongs under Other.',
         );
         Assert::assertMatchesRegularExpression(
-            '~Mixed</dt>\s*<dd[^>]*>0</dd>~',
+            $this->breakdownCell('MIXED', 0),
             $source,
             'It must NOT be counted as Mixed.',
         );
@@ -453,7 +463,7 @@ final class AudioToTextStoreCest
         $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
 
         $source = $I->grabPageSource();
-        Assert::assertMatchesRegularExpression('~Mixed</dt>\s*<dd[^>]*>1</dd>~', $source);
+        Assert::assertMatchesRegularExpression($this->breakdownCell('MIXED', 1), $source);
         Assert::assertMatchesRegularExpression('~Other</dt>\s*<dd[^>]*>0</dd>~', $source);
     }
 
@@ -884,7 +894,7 @@ final class AudioToTextStoreCest
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Order ID');
         $I->see('#16513791');
-        $this->seeRecordingInColumn($I, (string) $example[0]);
+        $this->seeRecordingInColumn($I, (string) $example[0], canAdd: true);
     }
 
     /**
@@ -910,7 +920,7 @@ final class AudioToTextStoreCest
         // Said in words rather than left blank, which would read as missing data — and it is still a
         // row of its own rather than a shared "no order" bucket.
         $I->see('No order');
-        $this->seeRecordingInColumn($I, (string) $example[0]);
+        $this->seeRecordingInColumn($I, (string) $example[0], canAdd: false);
     }
 
     /**
@@ -939,6 +949,118 @@ final class AudioToTextStoreCest
         $I->seeElement('.a2t-upload-dialog[open]');
     }
 
+    // ------------------------------------------------------------------ add audio to an empty slot
+
+    /**
+     * An empty column offers to fill itself, carrying its own recording type.
+     *
+     * The button opens the SAME Manage Audio dialog the row's own button opens — `RecordingsAction`
+     * already emits an entry for all three types whether or not a recording exists — so this is an
+     * affordance, not a second upload path. `data-a2t-manage-focus` is the only thing it adds.
+     */
+    public function anEmptySlotOffersToAddAudioForItsOwnType(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        // Column numbers from self::TYPE_COLUMN: MIXED 2, CALLER 3, CALLEE 4.
+        $row = '.a2t-orders tbody tr:first-child';
+        $I->seeElement($row . ' td:nth-child(2) .a2t-slot__add[data-a2t-manage-focus="MIXED"]');
+        $I->seeElement($row . ' td:nth-child(4) .a2t-slot__add[data-a2t-manage-focus="CALLEE"]');
+        // The occupied column offers no such thing.
+        $I->dontSeeElement($row . ' td:nth-child(3) .a2t-slot__add');
+    }
+
+    /** It points at the recordings fragment, which is what the dialog already fetches. */
+    public function theAddAudioButtonOpensTheExistingManageDialog(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('.a2t-slot__add[data-a2t-manage][data-a2t-order="16513791"]');
+    }
+
+    /**
+     * Adding a recording to an empty slot goes through the existing replace endpoint, and the type it
+     * records is the column's — not whatever the browser felt like posting.
+     *
+     * @dataProvider addableTypeProvider
+     */
+    public function addingAudioToAnEmptySlotPersistsThatColumnsType(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $type = (string) $example[0];
+
+        $this->signIn($I);
+        // Seed the order with a DIFFERENT recording, so the slot under test is genuinely empty.
+        $this->uploadCard($I, self::STORE_A, $type === 'MIXED' ? 'CALLER' : 'MIXED', '16513791');
+
+        $before = count($this->conversationsFor(self::STORE_A));
+        $this->replace($I, self::STORE_A, 'order:16513791', $type);
+
+        $rows = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount($before + 1, $rows, 'The upload creates its own conversation.');
+
+        $added = $rows[0];
+        Assert::assertSame($type, $added['recording_type'], 'The column decides the type.');
+        Assert::assertSame('16513791', $added['order_id'], 'It joins the order it was added from.');
+        Assert::assertSame('COMMON', $added['mode'], 'CALLER/CALLEE are recording types, never roles.');
+    }
+
+    /** @return list<array{string}> */
+    protected function addableTypeProvider(): array
+    {
+        return [['MIXED'], ['CALLER'], ['CALLEE']];
+    }
+
+    /**
+     * Adding never disturbs what is already there.
+     *
+     * The replacement flow is additive by construction — a new conversation with a new public id — so
+     * the recording already in another column keeps its own job, audio and transcript.
+     */
+    public function addingAudioLeavesTheExistingRecordingUntouched(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $original = $this->conversationsFor(self::STORE_A)[0];
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLEE');
+
+        $rows = $this->conversationsFor(self::STORE_A);
+        $survivor = null;
+        foreach ($rows as $row) {
+            if ($row['public_id'] === $original['public_id']) {
+                $survivor = $row;
+            }
+        }
+
+        Assert::assertNotNull($survivor, 'The recording that was already there must still exist.');
+        Assert::assertSame('CALLER', $survivor['recording_type'], 'And must still be what it was.');
+    }
+
+    /** A tampered type on the add/replace endpoint cannot become a fourth kind of recording. */
+    public function aTamperedTypeOnTheAddEndpointIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        $before = count($this->conversationsFor(self::STORE_A));
+        $this->replace($I, self::STORE_A, 'order:16513791', 'PRESIDENT');
+
+        Assert::assertCount(
+            $before,
+            $this->conversationsFor(self::STORE_A),
+            'An unknown recording type must create nothing at all.',
+        );
+    }
+
     /** A posted type outside the allow-list records nothing and is never stored. */
     public function aTamperedRecordingTypeIsNeverPersisted(WebTester $I): void
     {
@@ -956,7 +1078,8 @@ final class AudioToTextStoreCest
         // always meant — read that way on the page, never written back to the database.
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Mix / Common');
-        $this->seeRecordingInColumn($I, 'MIXED');
+        // No order id was posted, so the other two columns cannot offer to add a recording.
+        $this->seeRecordingInColumn($I, 'MIXED', canAdd: false);
     }
 
     /** A Customer + Agent pair records no type: its mode already describes it, and still does. */
@@ -2177,6 +2300,796 @@ final class AudioToTextStoreCest
         Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
     }
 
+    // ------------------------------------------------------ what a recording type is called on screen
+
+    /**
+     * The table's three columns are headed in the client's vocabulary, from the one place it lives.
+     *
+     * The words are read from the shared map rather than written here, so a later rename is one edit and
+     * this test follows it. What is asserted outright is the pair that changed: the columns no longer say
+     * Caller and Callee.
+     */
+    public function theTableColumnsAreHeadedInTheClientsVocabulary(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        foreach (RecordingTypeLabels::all() as $label) {
+            $I->see($label, '.a2t-orders thead th');
+        }
+
+        $I->dontSee('Caller', '.a2t-orders thead th');
+        $I->dontSee('Callee', '.a2t-orders thead th');
+    }
+
+    /**
+     * The Details dialog names the recording in the same words, and the column underneath does not move.
+     *
+     * Both halves in one test on purpose. A display change that reached the stored value would still
+     * show "Customer" on screen and would have refiled the recording, so the page and the row are read
+     * together — the label is the client's, the value is the call's.
+     *
+     * @dataProvider displayedTypes
+     */
+    public function theDetailsDialogNamesTheRecordingInTheClientsVocabulary(
+        WebTester $I,
+        \Codeception\Example $case,
+    ): void {
+        $stored = (string) $case['stored'];
+
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, $stored, '16513791');
+
+        $conversation = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertSame($stored, $conversation['recording_type'], 'The column keeps the call\'s word.');
+
+        $job = $this->childrenOf((int) $conversation['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+
+        // The label the row's Details button carries, which is what the dialog's title becomes.
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        Assert::assertSame(
+            $case['shown'],
+            $I->grabAttributeFrom('[data-a2t-details]', 'data-a2t-details-label'),
+        );
+
+        // And the dialog's own payload: the Update dialog's read-only type, and the sentence that says
+        // whose words these are, both in the same vocabulary.
+        $payload = $this->fragment($I, $job['public_id']);
+        Assert::assertSame($case['shown'], $payload['replace']['recordingTypeLabel']);
+        Assert::assertSame($stored, $payload['replace']['recordingType'], 'The posted value is unchanged.');
+
+        if ($case['voiced']) {
+            Assert::assertSame(
+                $case['shown'],
+                $payload['voice'],
+                'The browser composes "This recording is the ... side of the call" from this.',
+            );
+        }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function displayedTypes(): array
+    {
+        return [
+            // A mixed recording holds a conversation, so it names no single voice.
+            ['stored' => 'MIXED', 'shown' => 'Mix / Common', 'voiced' => false],
+            ['stored' => 'CALLER', 'shown' => 'Customer', 'voiced' => true],
+            ['stored' => 'CALLEE', 'shown' => 'Agent', 'voiced' => true],
+        ];
+    }
+
+    /**
+     * Adding audio to an empty slot still posts the stored value, whatever the button is called.
+     *
+     * The button's accessible name is now "Add Customer audio…" while the request it makes still says
+     * CALLER. That is the whole shape of this change — the words moved and nothing underneath them did —
+     * and it is the one place a careless rename would have swapped the two.
+     */
+    public function addingAudioStillPostsTheStoredValueNotTheLabel(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        // The accessible name, which is where the label reaches a reader on this control — the visible
+        // text is the same "+ Add audio" in all three columns.
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->seeElement('button[aria-label="Add Customer audio for order 16513791"]');
+        $I->dontSeeElement('button[aria-label="Add Caller audio for order 16513791"]');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+        $I->seeInSource('"success":true');
+
+        Assert::assertSame(
+            'CALLER',
+            $this->conversationsFor(self::STORE_A)[0]['recording_type'],
+            'Displayed as Customer, stored as CALLER.',
+        );
+    }
+
+    // ---------------------------------------------- Update Audio, from inside the Details dialog
+
+    /**
+     * The Details dialog is told how to replace the recording it is open on, whichever side that is.
+     *
+     * Asserted on the payload because the payload is the contract: the dialog shows the recording type
+     * as a fact and posts `replaces`, and the browser never works out which of the three it is looking
+     * at. All three types are covered because "the caller recording" and "this order's recordings" are
+     * one query apart, and getting them confused would file an update under the wrong side.
+     *
+     * @dataProvider recordingTypes
+     */
+    public function theDetailsDialogIsToldHowToUpdateThisRecording(
+        WebTester $I,
+        \Codeception\Example $example,
+    ): void {
+        $type = (string) $example[0];
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, $type, '16513791');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+
+        $replace = $this->fragment($I, $job['public_id'])['replace'];
+
+        Assert::assertSame($type, $replace['recordingType'], 'The server names the side, not the browser.');
+        Assert::assertSame(
+            $job['public_id'],
+            $replace['replaces'],
+            'It replaces THIS recording, which is what the endpoint derives the type from.',
+        );
+        Assert::assertSame('16513791', $replace['orderId']);
+        Assert::assertSame(self::STORE_A, $replace['storeSourceId']);
+        // Percent-encoded by the router, exactly as the page's own Manage Audio and Text to Audio URLs
+        // are — `generate()` escapes the colon, and the matcher decodes it. Asserted in the form the
+        // dialog actually posts to rather than the readable one, because that is what has to work.
+        Assert::assertSame(
+            '/audio-to-text/store/' . self::STORE_A . '/group/order%3A16513791/replace',
+            $replace['url'],
+            'The existing additive endpoint, keyed by the group the page already groups by.',
+        );
+    }
+
+    /**
+     * The URL the dialog was handed, posted back verbatim, is accepted.
+     *
+     * The test above asserts the string; this one closes the loop on it. A percent-encoded group key
+     * that the router generated but could not match would fail only here, in the one request an
+     * administrator makes — and the readable form works, so nothing else would notice.
+     */
+    public function anUpdatePostedToTheUrlTheDialogWasGivenIsAccepted(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+        $replace = $this->fragment($I, $job['public_id'])['replace'];
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $token = (string) $I->grabAttributeFrom(
+            '#a2t-upload-form input[type="hidden"][name="_csrf"]',
+            'value',
+        );
+
+        $this->audioBrowser->_loadPage(
+            'POST',
+            (string) $replace['url'],
+            ['_csrf' => $token, 'replaces' => (string) $replace['replaces']],
+            ['audio' => [
+                'name' => 'kf_store_valid.wav',
+                'tmp_name' => codecept_data_dir('kf_store_valid.wav'),
+            ]],
+        );
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(2, $after);
+        Assert::assertSame('CALLER', $after[0]['recording_type']);
+    }
+
+    /**
+     * A recording with no order id is offered no update at all.
+     *
+     * There is nothing to group a replacement under — the same refusal `ReplaceAction` enforces — and
+     * the dialog is told so by a null rather than by being given a URL that would be refused.
+     */
+    public function aRecordingWithNoOrderIsOfferedNoUpdate(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+
+        Assert::assertNull($this->fragment($I, $job['public_id'])['replace']);
+    }
+
+    /**
+     * The Update dialog has no recording type to choose.
+     *
+     * The absence is the feature. A dialog opened on the caller recording that offered a type select
+     * would let an administrator replace a different side than the one they were reading, and the type
+     * they picked would be the one the server used — so the control is not rendered, not posted, and
+     * ignored if it arrives anyway (see the two tests below).
+     */
+    public function theUpdateDialogOffersNoRecordingTypeToChoose(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $form = 'dialog#a2t-update-dialog form[data-a2t-update-form]';
+        $I->seeElement($form);
+        $I->seeElement($form . ' input[type="hidden"][name="replaces"][value=""]');
+        $I->seeElement($form . ' input[type="file"][name="audio"][required]');
+        $I->seeElement($form . ' input[type="hidden"][name="_csrf"]');
+
+        $I->dontSeeElement($form . ' [name="recording_type"]');
+        $I->dontSeeElement($form . ' select[name="recording_type"]');
+    }
+
+    /**
+     * The type comes from the recording being updated, with nothing in the body saying so.
+     *
+     * This is the whole of the server-side safety change: before it, the type was whatever the form
+     * posted, and the dialog's read-only label was the only thing keeping the two in step.
+     */
+    public function anUpdateTakesItsTypeFromTheRecordingItNames(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLEE', '16513791');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        $this->update($I, self::STORE_A, 'order:16513791', $job['public_id']);
+
+        $I->seeResponseCodeIs(200);
+        $I->seeInSource('"success":true');
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(2, $after, 'Additive, exactly as a replacement always was.');
+        Assert::assertSame('CALLEE', $after[0]['recording_type'], 'Derived, with no posted type at all.');
+        Assert::assertSame('16513791', $after[0]['order_id']);
+    }
+
+    /**
+     * A posted type that contradicts the recording being updated changes nothing.
+     *
+     * The tampered request cannot corrupt the mixed recording either — this flow only ever writes a new
+     * conversation — but it must not file the callee's replacement under Mix, which is a recording
+     * quietly appearing on the wrong side of a call nobody will think to check.
+     */
+    public function anUpdateIgnoresAPostedTypeThatContradictsWhatItNames(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLEE', '16513791');
+
+        $callee = $this->conversationsFor(self::STORE_A)[0];
+        Assert::assertSame('CALLEE', $callee['recording_type'], 'Arranged as expected.');
+        $calleeJob = $this->childrenOf((int) $callee['id'])[0];
+
+        $mixedBefore = $this->conversationsFor(self::STORE_A)[1];
+
+        $this->update($I, self::STORE_A, 'order:16513791', $calleeJob['public_id'], [
+            'recording_type' => 'MIXED',
+        ]);
+
+        $I->seeResponseCodeIs(200);
+
+        $after = $this->conversationsFor(self::STORE_A);
+        Assert::assertCount(3, $after);
+        Assert::assertSame(
+            'CALLEE',
+            $after[0]['recording_type'],
+            'The posted MIXED was ignored in favour of the recording named by `replaces`.',
+        );
+
+        // And the recording the tampered type pointed at is untouched, down to its public id.
+        $mixedAfter = $this->conversationsFor(self::STORE_A)[2];
+        Assert::assertSame($mixedBefore['public_id'], $mixedAfter['public_id']);
+        Assert::assertSame($mixedBefore['recording_type'], $mixedAfter['recording_type']);
+    }
+
+    /**
+     * `replaces` naming a recording from somewhere else is refused, and queues nothing.
+     *
+     * The id is looked up in the group that was already resolved for this store and order, so a job
+     * belonging to another order — or another store — simply is not among its recordings. The lookup is
+     * the ownership check.
+     */
+    public function anUpdateNamingARecordingFromAnotherOrderIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513792');
+
+        $stranger = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        Assert::assertSame(2, count($this->conversationsFor(self::STORE_A)), 'Arranged as expected.');
+
+        // Order 16513791's group, naming order 16513792's recording.
+        $this->update($I, self::STORE_A, 'order:16513791', $stranger['public_id']);
+
+        $I->seeResponseCodeIs(422);
+        $I->seeInSource('"success":false');
+        Assert::assertCount(2, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
+    }
+
+    /** An id that is not a recording at all is refused the same way. */
+    public function anUpdateNamingNothingAtAllIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $this->update($I, self::STORE_A, 'order:16513791', str_repeat('a', 32));
+
+        $I->seeResponseCodeIs(422);
+        Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
+    }
+
+    /**
+     * The answer names the NEW recording and where to watch it.
+     *
+     * The dialog polls the job it just created, not the one it was opened on — a replacement is a new
+     * recording with a new public id, and watching the old one would report a recording that finished
+     * long ago. The URL is generated by the router rather than assembled in the browser.
+     */
+    public function anUpdateAnswersWithTheNewRecordingsOwnStatusUrl(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $before = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        $this->update($I, self::STORE_A, 'order:16513791', $before['public_id']);
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        $newJob = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        Assert::assertSame($newJob['public_id'], $payload['jobPublicId']);
+        Assert::assertNotSame($before['public_id'], $payload['jobPublicId']);
+        Assert::assertSame(
+            '/audio-to-text/job/' . $newJob['public_id'] . '/status',
+            $payload['statusUrl'],
+        );
+
+        // And that URL answers, with the stage vocabulary the dialog shows and nothing else.
+        $I->amOnPage($payload['statusUrl']);
+        $I->seeResponseCodeIs(200);
+
+        /** @var array<string, mixed> $state */
+        $state = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+        Assert::assertSame(['status', 'stage', 'speakerSeparation'], array_keys($state));
+        Assert::assertSame('QUEUED', $state['status'], 'Queued only. The web request converted nothing.');
+    }
+
+    // ------------------------------------------- Generate / Regenerate, from the Details dialog
+
+    /**
+     * A recording with no AI audio is offered a generation, and it is a paid one.
+     *
+     * `paid` is what the confirmation dialog reads to decide whether its final button does anything.
+     */
+    public function theDetailsDialogOffersGenerationWhenThereIsNoAiAudioYet(WebTester $I): void
+    {
+        $this->signIn($I);
+        $generated = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($generated === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        Assert::assertTrue($generated['canGenerate']);
+        Assert::assertSame('Generate', $generated['buttonLabel']);
+        Assert::assertFalse($generated['alreadyCurrent'], 'There is nothing on disk to be current.');
+        Assert::assertTrue($generated['paid'], 'Pressing this would reach a provider.');
+        Assert::assertSame('NotGenerated', $generated['state']);
+    }
+
+    /**
+     * Audio that already matches the latest transcript is still OFFERED a regeneration — and told so.
+     *
+     * This is the behaviour that changed. The button used to be withheld for current audio, which is a
+     * correct cost decision expressed as a missing control: an administrator who came to regenerate
+     * found nothing and could not tell whether the feature was broken or the audio was fine. It is now
+     * offered, and `alreadyCurrent` is what the confirmation dialog uses to say so and to disable its own
+     * final button. `paid` stays false, so nothing about the cost decision moved into the browser.
+     */
+    public function currentAiAudioIsOfferedARegenerationThatWouldSpendNothing(WebTester $I): void
+    {
+        $this->signIn($I);
+        $generated = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($generated === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        // A finished rendition of exactly the transcript the dialog was just rendered from. Its digest
+        // is the application's own, read back from the payload rather than recomputed here — a second
+        // implementation of that hash is the one thing that would make this test lie.
+        $this->completeRendition($this->latestJob(self::STORE_A), (string) $generated['expectedHash']);
+
+        $current = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        Assert::assertSame('Ready', $current['state']);
+        Assert::assertTrue($current['canGenerate'], 'Offered, which it was not before.');
+        Assert::assertSame('Regenerate', $current['buttonLabel']);
+        Assert::assertTrue($current['alreadyCurrent'], 'And the dialog is told there is nothing to do.');
+        Assert::assertFalse($current['paid'], 'So no paid identical re-run can be reached from here.');
+    }
+
+    /**
+     * Audio made from an older transcript is a paid regeneration, and says which transcript it would read.
+     *
+     * The distinction between this and the test above is the entire cost guard: same button, same
+     * endpoint, and the only difference is whether the digest still matches.
+     */
+    public function staleAiAudioIsOfferedAPaidRegeneration(WebTester $I): void
+    {
+        $this->signIn($I);
+        $generated = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($generated === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        // Made from something else entirely: a digest of the right shape that is not this transcript's.
+        $this->completeRendition($this->latestJob(self::STORE_A), str_repeat('b', 64));
+
+        $stale = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        Assert::assertSame('Stale', $stale['state']);
+        Assert::assertTrue($stale['canGenerate']);
+        Assert::assertSame('Regenerate', $stale['buttonLabel']);
+        Assert::assertFalse($stale['alreadyCurrent']);
+        Assert::assertTrue($stale['paid']);
+    }
+
+    /**
+     * The confirmation says which transcript would be read aloud.
+     *
+     * The one thing about a generation an administrator cannot see from the button, and the thing that
+     * makes a regeneration worth paying for: a corrected transcript wins over the machine's, which is
+     * `EffectiveConversationReader`'s rule and is not restated in the browser.
+     */
+    public function theConfirmationNamesWhichTranscriptWouldBeReadAloud(WebTester $I): void
+    {
+        $this->signIn($I);
+        $generated = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($generated === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        Assert::assertSame('Machine transcript', $generated['transcriptSource']);
+
+        $job = $this->latestJob(self::STORE_A);
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            [
+                'reviewed_segments' => json_encode([
+                    ['start_ms' => 0, 'end_ms' => 2000, 'speaker' => 'A', 'role' => 'CUSTOMER',
+                        'text' => 'CORRECTED BY A HUMAN', 'confidence' => 0.9, 'approx' => false],
+                ], JSON_THROW_ON_ERROR),
+                'review_count' => 1,
+            ],
+            ['id' => $job],
+        )->execute();
+
+        Assert::assertSame(
+            'Reviewed / corrected transcript',
+            $this->generatedFor($I, self::STORE_A, 'MIXED')['transcriptSource'],
+        );
+    }
+
+    /**
+     * Every TTS state maps to a control that is still there, and says what is happening.
+     *
+     * The regression this exists for: the control was drawn on `canGenerate` alone, which is false while
+     * a worker holds the job — so pressing Regenerate made the button disappear. The request had worked,
+     * but its only visible effect was the loss of the thing that had been pressed.
+     *
+     * `offered` is now "draw it" and `canGenerate` is "it may be pressed". The pair is asserted for every
+     * state, because getting one right and the other wrong is exactly how this came back.
+     *
+     * @dataProvider generatedStates
+     */
+    public function everyGeneratedStateKeepsAControlAndNamesIt(WebTester $I, \Codeception\Example $case): void
+    {
+        $this->signIn($I);
+        $first = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($first === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        $hash = $case['current'] ? (string) $first['expectedHash'] : str_repeat('b', 64);
+
+        if ($case['status'] !== null) {
+            $this->writeRendition($this->latestJob(self::STORE_A), $case['status'], $hash, $case['file']);
+        }
+
+        $generated = $this->fragment(
+            $I,
+            $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0]['public_id'],
+        )['audio']['generated'];
+
+        Assert::assertSame($case['state'], $generated['state'], 'Arranged the state this case is about.');
+        Assert::assertTrue($generated['offered'], 'The control is drawn in every one of these states.');
+        Assert::assertSame($case['enabled'], $generated['canGenerate'], 'Whether it may be pressed.');
+        Assert::assertSame($case['inFlight'], $generated['inFlight']);
+        Assert::assertSame($case['label'], $generated['actionLabel']);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function generatedStates(): array
+    {
+        return [
+            // No rendition row at all.
+            ['status' => null, 'file' => false, 'current' => true, 'state' => 'NotGenerated',
+                'enabled' => true, 'inFlight' => false, 'label' => 'Generate AI Audio'],
+
+            ['status' => 'READY', 'file' => true, 'current' => true, 'state' => 'Ready',
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+
+            // A finished file made from a transcript that has since changed.
+            ['status' => 'READY', 'file' => true, 'current' => false, 'state' => 'Stale',
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+
+            // The two a worker holds. Drawn, named, and NOT pressable — this is the whole fix.
+            ['status' => 'QUEUED', 'file' => false, 'current' => true, 'state' => 'Queued',
+                'enabled' => false, 'inFlight' => true, 'label' => 'Queued…'],
+            ['status' => 'GENERATING', 'file' => false, 'current' => true, 'state' => 'Generating',
+                'enabled' => false, 'inFlight' => true, 'label' => 'Generating…'],
+
+            // Failed with nothing behind it is a first attempt: there is nothing to RE-generate.
+            ['status' => 'FAILED', 'file' => false, 'current' => true, 'state' => 'Failed',
+                'enabled' => true, 'inFlight' => false, 'label' => 'Generate AI Audio'],
+
+            // Failed after a regeneration keeps the file it was replacing, so it is a Regenerate.
+            ['status' => 'FAILED', 'file' => true, 'current' => true, 'state' => 'Failed',
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+        ];
+    }
+
+    /**
+     * A generation cannot be asked for twice while a worker already has it.
+     *
+     * The disabled button is a courtesy; this is the rule. Asserted at the endpoint, because a disabled
+     * control in a browser stops nobody with a second tab open.
+     */
+    public function asecondGenerationIsRefusedWhileOneIsInFlight(WebTester $I): void
+    {
+        $this->signIn($I);
+        $generated = $this->generatedFor($I, self::STORE_A, 'MIXED');
+
+        if ($generated === null) {
+            $I->markTestSkipped('Text to speech is not configured on this machine.');
+        }
+
+        $jobId = $this->latestJob(self::STORE_A);
+        $this->writeRendition($jobId, 'GENERATING', (string) $generated['expectedHash'], false);
+
+        $before = (int) (new Query($this->connection))
+            ->from('{{%audio_tts_renditions}}')
+            ->where(['job_id' => $jobId])
+            ->count();
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $token = (string) $I->grabAttributeFrom(
+            '#a2t-upload-form input[type="hidden"][name="_csrf"]',
+            'value',
+        );
+
+        $this->audioBrowser->_loadPage('POST', (string) $generated['action'], [
+            '_csrf' => $token,
+            'output_type' => (string) $generated['outputType'],
+            'expected_hash' => (string) $generated['expectedHash'],
+        ]);
+
+        Assert::assertSame(
+            $before,
+            (int) (new Query($this->connection))
+                ->from('{{%audio_tts_renditions}}')
+                ->where(['job_id' => $jobId])
+                ->count(),
+            'No second rendition row: the one in flight is the one that finishes.',
+        );
+
+        Assert::assertSame(
+            'GENERATING',
+            (string) (new Query($this->connection))
+                ->select('status')
+                ->from('{{%audio_tts_renditions}}')
+                ->where(['job_id' => $jobId])
+                ->scalar(),
+            'And the attempt under way was not restarted underneath the worker.',
+        );
+    }
+
+    /**
+     * A recording that can produce nothing is offered no control at all.
+     *
+     * The other half of `offered`: it is not "always true". A generation in flight is the one state that
+     * keeps the control while refusing the press; nothing said on this side of the call keeps neither.
+     */
+    public function arecordingWithUnpublishedSpeakersIsOfferedNoControl(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+
+        // Transcribed and readable — the dialog opens and shows the turns — but the speakers were never
+        // published, so no voice may be put to them and `TtsGenerationService::isEligible()` says no.
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['speaker_separation_status' => 'PENDING', 'roles_confirmed_at' => null],
+            ['public_id' => $job['public_id']],
+        )->execute();
+
+        $generated = $this->fragment($I, $job['public_id'])['audio']['generated'];
+
+        Assert::assertFalse($generated['offered'], 'No voice may be assigned, so there is nothing to press.');
+        Assert::assertFalse($generated['canGenerate']);
+        Assert::assertFalse($generated['inFlight']);
+        Assert::assertNotNull($generated['reason'], 'And the panel is told why, since no control says it.');
+    }
+
+    /**
+     * One cell of a store card's breakdown strip, named by the shared label rather than by a literal.
+     *
+     * `preg_quote` because the labels are display text and one of them already contains a slash and
+     * spaces — a rename to something with a metacharacter in it must not turn this into a broken
+     * pattern that silently matches nothing.
+     */
+    private function breakdownCell(string $storedType, int $count): string
+    {
+        $label = RecordingTypeLabels::forStorageValue($storedType);
+        Assert::assertNotNull($label, $storedType . ' has no display label.');
+
+        return '~' . preg_quote($label, '~') . '</dt>\s*<dd[^>]*>' . $count . '</dd>~';
+    }
+
+    /** The three sides of a call, as the grouped table names them. */
+    protected function recordingTypes(): array
+    {
+        return [['MIXED'], ['CALLER'], ['CALLEE']];
+    }
+
+    /**
+     * The Details dialog's payload for one recording.
+     *
+     * @return array<string, mixed>
+     */
+    private function fragment(WebTester $I, string $jobPublicId): array
+    {
+        $I->amOnPage('/audio-to-text/job/' . $jobPublicId . '/review/fragment');
+        $I->seeResponseCodeIs(200);
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        return $payload;
+    }
+
+    /**
+     * One completed recording of `$type`, and what its Details dialog says about generating AI audio.
+     *
+     * Null when this machine has no text-to-speech configured, which is the one state in which the
+     * server withholds the whole block — the tests that call this skip rather than assert a control that
+     * is correctly absent.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function generatedFor(WebTester $I, int $sourceId, string $type): ?array
+    {
+        if ($this->conversationsFor($sourceId) === []) {
+            $this->uploadCard($I, $sourceId, $type, '16513791');
+            $this->completeWithSeparation(
+                $this->childrenOf((int) $this->conversationsFor($sourceId)[0]['id'])[0]['public_id'],
+            );
+        }
+
+        $job = $this->childrenOf((int) $this->conversationsFor($sourceId)[0]['id'])[0];
+
+        /** @var array<string, mixed>|null $generated */
+        $generated = $this->fragment($I, $job['public_id'])['audio']['generated'];
+
+        return $generated === null || $generated['canGenerate'] === false && $generated['reason'] !== null
+            ? null
+            : $generated;
+    }
+
+    private function latestJob(int $sourceId): int
+    {
+        return (int) $this->childrenOf((int) $this->conversationsFor($sourceId)[0]['id'])[0]['id'];
+    }
+
+    /**
+     * A finished rendition on disk, made from `$sourceHash`.
+     *
+     * Written directly because generating one means paying a provider. The two columns that matter are
+     * the status and `file_hash` — the hash of the transcript the FILE was made from, which is what the
+     * staleness rule compares against the transcript as it stands now.
+     */
+    private function completeRendition(int $jobId, string $sourceHash): void
+    {
+        $this->writeRendition($jobId, 'READY', $sourceHash, true);
+    }
+
+    /**
+     * One rendition row in whatever state the test is about.
+     *
+     * `$withFile` is what separates "Failed after a first attempt" from "Failed after a regeneration":
+     * the second still has the file it was replacing, and the page calls that Regenerate rather than
+     * Generate. Written directly because reaching these states for real means paying a provider.
+     */
+    private function writeRendition(int $jobId, string $status, string $sourceHash, bool $withFile): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%audio_tts_renditions}}', [
+            'job_id' => $jobId,
+            'output_type' => 'MIXED',
+            'status' => $status,
+            'attempt_token' => str_repeat('c', 32),
+            'requested_hash' => $sourceHash,
+            'file_name' => $withFile ? 'kf_tts_test.mp3' : null,
+            'file_hash' => $withFile ? $sourceHash : null,
+            // The key the running configuration yields. Anything else is a rendition the page correctly
+            // calls "generated with a different voice setting", which is not the state under test.
+            'file_render_key' => $withFile
+                ? TtsRenderKey::for(TtsRenderSettings::fromParams(), TtsOutputType::Mixed)
+                : null,
+            'file_bytes' => $withFile ? 1024 : null,
+            'provider' => 'DEEPGRAM',
+            'created_at' => $now,
+            'updated_at' => $now,
+            'generated_at' => $withFile ? $now : null,
+        ])->execute();
+    }
+
+    /**
+     * An Update, as the Details dialog sends it: `replaces` and a file, and no recording type.
+     *
+     * @param array<string, string> $fields anything else the request should carry, including a
+     *                                      contradicting `recording_type` for the tampering tests
+     */
+    private function update(
+        WebTester $I,
+        int $sourceId,
+        string $groupKey,
+        string $replaces,
+        array $fields = [],
+    ): void {
+        $I->amOnPage($this->storeUrl($sourceId));
+        $token = (string) $I->grabAttributeFrom(
+            '#a2t-upload-form input[type="hidden"][name="_csrf"]',
+            'value',
+        );
+
+        $this->audioBrowser->_loadPage(
+            'POST',
+            '/audio-to-text/store/' . $sourceId . '/group/' . $groupKey . '/replace',
+            ['_csrf' => $token, 'replaces' => $replaces] + $fields,
+            ['audio' => [
+                'name' => 'kf_store_valid.wav',
+                'tmp_name' => codecept_data_dir('kf_store_valid.wav'),
+            ]],
+        );
+    }
+
     /**
      * @param array<string, mixed> $payload
      *
@@ -2301,7 +3214,12 @@ final class AudioToTextStoreCest
      * in the other two columns, and a caller recording showing up under Mix / Common is precisely the
      * confusion this table was rebuilt to end.
      */
-    private function seeRecordingInColumn(WebTester $I, string $type): void
+    /**
+     * @param bool $canAdd whether the empty columns may offer "+ Add audio". False for a row with no
+     *                     order id, which has nothing to group a second recording under — the same
+     *                     refusal `ReplaceAction` enforces server-side.
+     */
+    private function seeRecordingInColumn(WebTester $I, string $type, bool $canAdd = true): void
     {
         $row = '.a2t-orders tbody tr:first-child';
 
@@ -2311,9 +3229,21 @@ final class AudioToTextStoreCest
             if ($candidate === $type) {
                 // Queued, so there is no audio to play yet — but the cell is occupied and says so.
                 $I->seeElement($cell . ' .a2t-slot');
+                $I->dontSeeElement($cell . ' .a2t-slot__add');
+
+                continue;
+            }
+
+            $I->dontSeeElement($cell . ' .a2t-slot');
+
+            if ($canAdd) {
+                // Nothing was uploaded for this side of the call, so the cell offers to add it —
+                // carrying THIS column's own recording type, which is the point of the affordance.
+                $I->seeElement($cell . ' .a2t-slot__add[data-a2t-manage-focus="' . $candidate . '"]');
             } else {
-                // An em dash: nothing was uploaded for this side of the call.
+                // An em dash, as before: there is nothing here and nothing that could be added.
                 $I->seeElement($cell . ' .util-muted');
+                $I->dontSeeElement($cell . ' .a2t-slot__add');
             }
         }
     }

@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace App\Tests\Web;
 
+use App\AudioToText\Application\Tts\TtsRenderKey;
+use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
+use App\Shared\Audio\RecordingTypeLabels;
 use App\Tests\Support\IntegrationDb;
+use App\Tests\Support\TtsRenderSettings;
 use App\Tests\Support\WebTester;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -25,6 +29,7 @@ use function is_dir;
 use function mkdir;
 use function pack;
 use function str_repeat;
+use function str_replace;
 use function strlen;
 use function substr;
 
@@ -291,6 +296,36 @@ final class AudioToTextAiAudioCest
         $I->dontSeeElement('audio[src*="ai-audio/file"]');
     }
 
+    /**
+     * Audio that already matches the transcript offers no button on THIS page, and says why.
+     *
+     * The store page's Details dialog does offer one for the same recording, because it asks for a
+     * confirmation first and can explain there that nothing would be generated. This page posts on the
+     * press, and the sentence beside its button promises characters "will be sent to the speech
+     * provider. This is a paid action." — which for current audio is untrue. So it keeps the behaviour
+     * it has always had.
+     *
+     * Pinned because the offer rule is now SHARED with that dialog: widening it for the dialog reached
+     * this page too, and the only symptom was a page inviting a charge that could not occur.
+     */
+    public function currentAudioIsNotOfferedAPaidButtonOnThisPage(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->pageUrl());
+
+        // The digest this page would generate from, read from the page rather than recomputed.
+        $hash = (string) $I->grabAttributeFrom('input[name="expected_hash"]', 'value');
+        $I->seeElement('form.a2t-generate');
+
+        $this->writeReadyRendition($hash);
+
+        $I->amOnPage($this->pageUrl());
+
+        $I->dontSeeElement('form.a2t-generate');
+        $I->dontSee('will be sent to the speech provider');
+        $I->see('Up to date with the current transcript.');
+    }
+
     /** The cost is shown before the click, not discovered after it. */
     public function theCharacterCountIsStatedBeforeTheButton(WebTester $I): void
     {
@@ -541,8 +576,12 @@ final class AudioToTextAiAudioCest
         $I->seeInSource('"queued":true');
         // The recording, not the row it is stored under: this one really is a mixed recording, and
         // `anAjaxGenerateNamesTheRecordingNotTheOutputType` covers the case where the two differ.
-        $I->seeInSource('"recording":"Common \/ Mixed"');
-        $I->seeInSource('Common \/ Mixed text-to-audio has been queued');
+        // The label from the shared map rather than typed out here: the name in this answer is the one
+        // the page shows beside the button, and a test with its own copy would keep passing while the
+        // two drifted. Escaped because PHP's json_encode escapes the slash in "Mix / Common".
+        $mixed = str_replace('/', '\/', (string) RecordingTypeLabels::forStorageValue('MIXED'));
+        $I->seeInSource('"recording":"' . $mixed . '"');
+        $I->seeInSource($mixed . ' text-to-audio has been queued');
         $I->seeInSource('"outputType":"MIXED"');
 
         // It really enqueued, exactly once, and rendered nothing.
@@ -732,6 +771,40 @@ final class AudioToTextAiAudioCest
             'created_at' => $now,
             'started_at' => $now,
             'completed_at' => $now,
+        ])->execute();
+    }
+
+    /**
+     * A finished rendition of exactly `$sourceHash`, as the worker would have left it.
+     *
+     * The render key is the one the running configuration yields; anything else is a rendition the page
+     * correctly reports as "generated with a different voice setting", which is a different state.
+     */
+    private function writeReadyRendition(string $sourceHash): void
+    {
+        $jobId = (int) $this->connection
+            ->createCommand(
+                'SELECT id FROM {{%audio_transcription_jobs}} WHERE public_id = :p',
+                [':p' => $this->jobPublicId],
+            )
+            ->queryScalar();
+
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%audio_tts_renditions}}', [
+            'job_id' => $jobId,
+            'output_type' => 'MIXED',
+            'status' => 'READY',
+            'attempt_token' => str_repeat('d', 32),
+            'requested_hash' => $sourceHash,
+            'file_name' => 'kf_tts_ready.mp3',
+            'file_hash' => $sourceHash,
+            'file_render_key' => TtsRenderKey::for(TtsRenderSettings::fromParams(), TtsOutputType::Mixed),
+            'file_bytes' => 2048,
+            'provider' => 'DEEPGRAM',
+            'created_at' => $now,
+            'updated_at' => $now,
+            'generated_at' => $now,
         ])->execute();
     }
 

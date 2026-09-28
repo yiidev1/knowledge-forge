@@ -7,6 +7,7 @@ use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
 use App\Order58\Domain\StoreSourceStatusFilter;
+use App\Shared\Audio\RecordingTypeLabels;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -283,17 +284,25 @@ $audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store
                     // 36 does not jag as the counts change. The four cells share one width for the same
                     // reason: the numbers line up down the grid and can be compared by eye.
             ?>
+                    <?php
+                    // The same three words the Audio-to-Text pages use for these, read from the shared
+                    // map rather than typed out again here. This page may not name that module at all
+                    // (see RecordingTypeLabels), and three counts labelled one way on this card and
+                    // another on the page they link to is exactly the confusion the shared map prevents.
+                    $typeLabel = static fn(string $stored): string
+                        => RecordingTypeLabels::forStorageValue($stored) ?? $stored;
+            ?>
                     <dl class="store-card__audio" aria-label="Recordings by type">
                         <div class="store-card__audio-cell">
-                            <dt class="store-card__audio-label">Mixed</dt>
+                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('MIXED')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->mixed) ?>"><?= $breakdown->mixed ?></dd>
                         </div>
                         <div class="store-card__audio-cell">
-                            <dt class="store-card__audio-label">Caller</dt>
+                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLER')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->caller) ?>"><?= $breakdown->caller ?></dd>
                         </div>
                         <div class="store-card__audio-cell">
-                            <dt class="store-card__audio-label">Callee</dt>
+                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLEE')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->callee) ?>"><?= $breakdown->callee ?></dd>
                         </div>
                         <?php
@@ -302,7 +311,7 @@ $audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store
                 // would claim a channel the uploader never stated.
             ?>
                         <div class="store-card__audio-cell"
-                             title="Other includes recordings without a MIXED/CALLER/CALLEE recording type, including older recordings and separate Customer + Agent uploads.">
+                             title="Other includes recordings that named no type at all, including older recordings and separate uploads. The stored types are MIXED, CALLER and CALLEE.">
                             <dt class="store-card__audio-label">Other</dt>
                             <dd class="<?= $audioValue($breakdown->other()) ?>"><?= $breakdown->other() ?></dd>
                         </div>

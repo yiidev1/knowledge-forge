@@ -116,27 +116,44 @@ final class StoreOrderGroupTest extends Unit
 
     public function testARecordingIsCalledWhatItsTypeCallsIt(): void
     {
-        self::assertSame('Caller', $this->slot(RecordingType::Caller)->label());
-        self::assertSame('Callee', $this->slot(RecordingType::Callee)->label());
-        self::assertSame('Common / Mixed', $this->slot(RecordingType::Mixed)->label());
+        self::assertSame('Customer', $this->slot(RecordingType::Caller)->label());
+        self::assertSame('Agent', $this->slot(RecordingType::Callee)->label());
+        self::assertSame('Mix / Common', $this->slot(RecordingType::Mixed)->label());
     }
 
     /**
-     * A legacy half keeps the name the administrator gave it.
+     * A legacy half is described by its own field, and now reads the same word as a caller recording.
      *
-     * Customer is not Caller and Agent is not Callee: nothing in this application has ever recorded
-     * which side placed the call, so relabelling a legacy pair into the new vocabulary would be
-     * inventing a fact to fill a column.
+     * **This test used to assert the opposite, and the change is deliberate.** It read
+     * `assertNotSame('Caller', $customer->label())`, guarding a rule that no longer holds on screen:
+     * the client's operators think in Customer and Agent, so CALLER is displayed as "Customer" — which
+     * is also what `SourceRole::Customer` has always displayed.
+     *
+     * So two different facts now share one word in the interface:
+     *
+     *   `source_role`     = CUSTOMER   the customer's own microphone, in a separate two-file upload
+     *   `recording_type`  = CALLER     the side that dialled, in a single-file upload
+     *
+     * The collision is presentational and was accepted knowingly. What it must not become is a collision
+     * in the code, so that is what this now asserts instead: the label a legacy half shows still comes
+     * from its own `SourceRole` and nothing maps one vocabulary onto the other. A change that made
+     * `StoreRecordingSlot` reach for a recording type to describe a legacy pair — inventing which side
+     * placed a call nobody recorded — would still fail here.
      */
-    public function testALegacyHalfIsNotRelabelledIntoTheNewVocabulary(): void
+    public function testALegacyHalfIsStillDescribedByItsOwnFieldDespiteSharingTheWord(): void
     {
         $customer = $this->slot(null, SourceRole::Customer);
         $agent = $this->slot(null, SourceRole::Agent);
 
         self::assertSame(SourceRole::Customer->label(), $customer->label());
         self::assertSame(SourceRole::Agent->label(), $agent->label());
-        self::assertNotSame('Caller', $customer->label());
-        self::assertNotSame('Callee', $agent->label());
+
+        // It has no recording type at all, which is the fact that matters: its label is not borrowed.
+        self::assertNull($this->slot(null, SourceRole::Customer)->recordingType);
+
+        // And the word it shows is the same one a CALLER recording shows — accepted, presentational.
+        self::assertSame(RecordingType::Caller->label(), $customer->label());
+        self::assertSame(RecordingType::Callee->label(), $agent->label());
     }
 
     // ------------------------------------------------------------------------- what a row holds

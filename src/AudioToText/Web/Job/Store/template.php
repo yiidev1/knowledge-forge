@@ -282,18 +282,44 @@ $slotCellInner = static function (StoreRecordingSlot $slot) use (
     return $html . '</div>';
 };
 
-$slotCell = static function (?StoreRecordingSlot $slot) use (
+$slotCell = static function (
+    ?StoreRecordingSlot $slot,
+    ?RecordingType $emptyType = null,
+    ?StoreOrderGroup $group = null,
+) use (
     $clock,
     $originalUrl,
     $fragmentUrl,
     $fullReviewUrl,
     $slotCellInner,
-    $appTimeZone
+    $appTimeZone,
+    $groupUrl
 ): string {
     if ($slot === null) {
-        // An em dash, not a disabled button: there is nothing here, and offering a dead control would
-        // suggest otherwise.
-        return '<span class="util-muted">&mdash;</span>';
+        // Nothing here yet — so offer to put something here, rather than printing a dash and leaving
+        // the administrator to find the Manage Audio dialog and work out which slot they wanted.
+        //
+        // It opens THE SAME dialog that button opens, carrying the type this column stands for.
+        // `RecordingsAction` already emits an entry for every one of the three types whether or not a
+        // recording exists — an empty slot is already offered for upload there — so this adds an
+        // affordance and no new endpoint, no second upload path and no new validation.
+        //
+        // A ghost button: sixty of these on a page of twenty orders must not read as sixty calls to
+        // action, so it stays quiet until the row is hovered or the button is focused.
+        //
+        // Callable only where the group can accept one at all. A legacy Customer + Agent pair has no
+        // mixed/caller/callee shape to add to, and an upload that named no order has nothing to group a
+        // second recording under — the same two refusals ReplaceAction enforces server-side.
+        if ($emptyType === null || $group === null || $group->orderId === null || $group->isLegacySeparate()) {
+            return '<span class="util-muted">&mdash;</span>';
+        }
+
+        return '<button class="a2t-slot__add" type="button"'
+            . ' data-a2t-manage="' . Html::encode($groupUrl(AudioToTextRoute::STORE_GROUP_RECORDINGS, $group->key)) . '"'
+            . ' data-a2t-order="' . Html::encode($group->orderId) . '"'
+            . ' data-a2t-manage-focus="' . Html::encode($emptyType->value) . '"'
+            . ' aria-label="' . Html::encode('Add ' . $emptyType->label() . ' audio for order ' . $group->orderId) . '">'
+            . '<span aria-hidden="true">+</span> Add audio</button>';
     }
 
     $html = '<div class="a2t-slot">';
@@ -461,9 +487,12 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 <thead>
                     <tr>
                         <th>Order ID</th>
-                        <th>Mix / Common</th>
-                        <th>Caller</th>
-                        <th>Callee</th>
+                        <?php // From the enum, not typed out. These three headers and the label inside?>
+                        <?php // every dialog below name the same three things, and a header carrying its?>
+                        <?php // own copy is the one that gets missed when a client renames them.?>
+                        <th><?= Html::encode(RecordingType::Mixed->label()) ?></th>
+                        <th><?= Html::encode(RecordingType::Caller->label()) ?></th>
+                        <th><?= Html::encode(RecordingType::Callee->label()) ?></th>
                         <th>Status</th>
                         <th>Text to Audio</th>
                         <th>Actions</th>
@@ -493,8 +522,14 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 <?php
                                 // A pair uploaded before recording types existed. Its halves are
                                 // Customer and Agent — roles the administrator supplied — and this
-                                // application has never known which of them called whom, so they are
-                                // shown under their own names rather than as Caller and Callee.
+                                // application has never known which of them called whom, so each is
+                                // described by its own `source_role` and never by a recording type.
+                                //
+                                // Those two words are now also what CALLER and CALLEE display as, so a
+                                // legacy half and a caller recording read alike here while meaning
+                                // different things: who works for the restaurant, against who dialled.
+                                // The collision is in the wording only — see RecordingTypeLabels — and
+                                // nothing on this page converts one into the other.
                                 ?>
                                 <div class="a2t-legacy">
                                     <span class="a2t-legacy__tag">Customer + Agent</span>
@@ -503,11 +538,11 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                     <?php endforeach; ?>
                                 </div>
                             <?php else: ?>
-                                <?= $slotCell($group->mixed) ?>
+                                <?= $slotCell($group->mixed, RecordingType::Mixed, $group) ?>
                             <?php endif; ?>
                         </td>
-                        <td><?= $slotCell($group->caller) ?></td>
-                        <td><?= $slotCell($group->callee) ?></td>
+                        <td><?= $slotCell($group->caller, RecordingType::Caller, $group) ?></td>
+                        <td><?= $slotCell($group->callee, RecordingType::Callee, $group) ?></td>
                         <td>
                             <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
                                 <?= Html::encode($status->label()) ?>
@@ -718,13 +753,28 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         </div>
         <div class="a2t-dialog__actions">
             <?php
+            // What can be DONE to this recording, filled by the script from the same payload the panel
+            // below is drawn from. In the header rather than in a row of its own under the players:
+            // those players are three ways of hearing one recording and read as a unit, and a strip of
+            // buttons beneath them cost a line of the dialog's height to say something the header had
+            // room for. Left empty here — a recording that cannot be replaced or generated from gets no
+            // buttons at all, and an empty container is nothing on screen.
+?>
+            <div class="a2t-dialog__acts" data-a2t-review-actions></div>
+            <?php
             // Drag-to-move and select-to-merge measure the review page's own scroll container and
             // cannot work in a dialog, so they stay where they work and this is the way to them.
 ?>
             <a class="btn btn--sm" data-a2t-full-editor href="#">Open full editor</a>
-            <button class="source-modal__close" type="button" data-a2t-dialog-close
-                title="Close" aria-label="Close">&times;</button>
         </div>
+        <?php
+        // A child of the header, NOT of the actions beside it. When the header runs out of width the
+        // actions drop to a line of their own, and a close button inside them would go with them — so
+        // the one control every dialog is expected to have in its top-right corner would be somewhere
+        // else, on exactly the screens where it is hardest to find.
+?>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+            title="Close" aria-label="Close">&times;</button>
     </div>
     <p class="source-modal__status" data-a2t-review-status hidden></p>
     <?php
@@ -797,6 +847,149 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
 ?>
     <div class="source-modal__body" data-a2t-transcript-body hidden>
         <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-transcript-scroll></div>
+    </div>
+</dialog>
+
+<?php
+// Update Audio — one recording, opened from its own Details modal.
+//
+// Deliberately NOT the Manage Audio dialog. That one is the whole order: three sections, every version
+// of each, and a type to choose. Opened from a transcript an administrator has just decided is wrong,
+// it asks them to find the recording they were already looking at and say again which one it was.
+//
+// So the type is a LABEL here, never a control. It is carried as `replaces` — this recording's own job
+// public id — and `ReplaceAction` derives the recording type from that job rather than from anything
+// this form posts. A tampered body cannot file the upload under a different slot.
+//
+// The same endpoint, the same ingestion, the same validation and the same provider rule as every other
+// upload. Nothing about replacement is restated here.
+?>
+<dialog class="source-modal a2t-update-dialog" id="a2t-update-dialog" data-a2t-dialog
+        aria-labelledby="a2t-update-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-update-title">Update Audio</h2>
+            <p class="source-modal__meta" data-a2t-update-meta></p>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                aria-label="Close">&times;</button>
+    </div>
+
+    <p class="source-modal__status" data-a2t-update-status hidden></p>
+
+    <form class="source-modal__body a2t-update" method="post" enctype="multipart/form-data"
+          data-a2t-update-form>
+        <?= $csrf->hiddenInput() ?>
+        <?php // Named by the server when the dialog opens. Never a control the reader can change.?>
+        <input type="hidden" name="replaces" data-a2t-update-replaces value="">
+
+        <?php
+        // The same three-class row the other confirmation dialogs use for a key and its value, rather
+        // than a fourth arrangement of the same thing. Facts, not fields: the recording being updated is
+        // decided by the button that opened this dialog, and none of it is for the reader to change.
+?>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Store</span>
+            <span class="a2t-confirm__value"><?= Html::encode($store->name) ?></span>
+        </div>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Order</span>
+            <span class="a2t-confirm__value" data-a2t-update-order></span>
+        </div>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Recording</span>
+            <span class="a2t-confirm__value" data-a2t-update-type></span>
+        </div>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Current file</span>
+            <span class="a2t-confirm__value" data-a2t-update-current></span>
+        </div>
+
+        <div class="field">
+            <label class="field__label" for="a2t-update-file">New audio file</label>
+            <input class="field__control" type="file" id="a2t-update-file" name="audio"
+                   accept="audio/*" required>
+        </div>
+
+        <?php
+        // The same two closures the page's own upload form uses, so the three rules — which engines
+        // exist, which this machine can run, and whether AI audio may be asked for — are stated once in
+        // this application rather than restated for a second form.
+        //
+        // The provider starts on this server's default rather than on the recording being replaced's,
+        // because the dialog is rendered with the page and has no one recording in mind. `UploadOptions`
+        // falls back to the replaced recording's own engine when the field posts nothing, and re-checks
+        // that the chosen one can actually run.
+?>
+        <?= $providerField('a2t-update-provider') ?>
+        <?= $aiAudioField('a2t-update-ai-audio') ?>
+
+        <p class="field__hint">
+            Replacing this recording starts a new transcription. The recording it replaces stays in use,
+            and keeps its transcript, corrections and generated audio, until the new one finishes.
+        </p>
+
+        <div class="a2t-confirm__actions">
+            <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
+            <button class="btn btn--primary btn--sm" type="submit" data-a2t-update-submit>Update Audio</button>
+        </div>
+    </form>
+</dialog>
+
+<?php
+// Generate / Regenerate AI audio — one recording, one question.
+//
+// Small on purpose. The big AI-audio page exists and is unchanged; this is the confirmation an
+// administrator gets when they press the button inside a transcript they are already reading, and it
+// needs to say three things: which recording, which transcript it will be read from, and what the audio
+// on disk is right now.
+//
+// The button is offered even when the audio is already current. That is not an invitation to pay twice:
+// the dialog says so, disables its own confirm, and `TtsGenerationService::enqueue()` still answers
+// AlreadyCurrent for a matching digest and queues nothing. Offering it and explaining is a better answer
+// than hiding it and leaving the reader to wonder.
+?>
+<dialog class="source-modal a2t-tts-confirm-dialog" id="a2t-tts-confirm-dialog" data-a2t-dialog
+        aria-labelledby="a2t-tts-confirm-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-tts-confirm-title" data-a2t-tts-confirm-title>
+                Generate AI Audio
+            </h2>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                aria-label="Close">&times;</button>
+    </div>
+
+    <p class="source-modal__status" data-a2t-tts-confirm-status hidden></p>
+
+    <div class="source-modal__body">
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Recording</span>
+            <span class="a2t-confirm__value" data-a2t-tts-confirm-recording></span>
+        </div>
+        <?php
+        // Which transcript gets read aloud, in the words `EffectiveConversationReader` decides it by:
+        // a corrected transcript if this recording has one, otherwise the machine's. Shown because it is
+        // the one thing about a generation an administrator cannot see from the button.
+?>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Reads</span>
+            <span class="a2t-confirm__value" data-a2t-tts-confirm-source></span>
+        </div>
+        <div class="a2t-confirm__row">
+            <span class="a2t-confirm__key">Existing audio</span>
+            <span class="a2t-confirm__value" data-a2t-tts-confirm-state></span>
+        </div>
+
+        <p class="field__hint" data-a2t-tts-confirm-note></p>
+
+        <div class="a2t-confirm__actions">
+            <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
+            <button class="btn btn--primary btn--sm" type="button" data-a2t-tts-confirm-submit>
+                Generate
+            </button>
+        </div>
     </div>
 </dialog>
 

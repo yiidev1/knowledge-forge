@@ -12,12 +12,14 @@ use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\StoreOrderGroup;
 use App\AudioToText\Domain\TranscriptionProvider;
+use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\JobPageGuard;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
+use Yiisoft\Router\UrlGeneratorInterface;
 
 use function is_array;
 use function is_string;
@@ -89,6 +91,14 @@ final readonly class ReplaceAction
         private AudioToTextSettingsRepositoryInterface $settingsRepository,
         private CurrentAdmin $currentAdmin,
         private JobPageGuard $guard,
+        /**
+         * Only to build the new recording's polling URL.
+         *
+         * Generated here rather than assembled in the browser, because a URL put together from string
+         * pieces in JavaScript is a second, silent copy of the routing table — it keeps working until a
+         * path changes, and then fails at the one moment the operator is watching progress.
+         */
+        private UrlGeneratorInterface $urlGenerator,
         private ResponseFactoryInterface $responseFactory,
     ) {}
 
@@ -112,10 +122,34 @@ final readonly class ReplaceAction
         }
 
         $body = $request->getParsedBody();
-        $type = RecordingType::fromStorage($this->field($body, 'recording_type'));
+        $replaces = $this->field($body, 'replaces');
 
-        if ($type === null) {
-            return $this->refused('Choose which recording to replace.');
+        if ($replaces !== null && $replaces !== '') {
+            // UPDATING A NAMED RECORDING. The type is the one that recording already has, read from
+            // this group, and the posted `recording_type` is not consulted at all.
+            //
+            // Why the server derives it rather than trusting the form: the Update dialog opens from one
+            // recording's own Details modal and shows its type as a label precisely so it cannot be
+            // changed. A request that said CALLER in the dialog and MIXED in the body could not corrupt
+            // the caller recording — this flow is additive, it writes a new conversation and never
+            // touches an existing one — but it would quietly file a recording under a slot the operator
+            // did not choose, which is its own kind of wrong.
+            //
+            // Looked up in the group that was already loaded, so a job id belonging to another store or
+            // another order simply is not found. That is the ownership check as well as the lookup.
+            $type = $this->typeOfExisting($group, $replaces);
+
+            if ($type === null) {
+                return $this->refused('That recording is not one of this order\'s, so it cannot be updated.');
+            }
+        } else {
+            // ADDING, or any caller that names no existing recording. Unchanged: the posted value, run
+            // through the same allow-list of exactly three it always was.
+            $type = RecordingType::fromStorage($this->field($body, 'recording_type'));
+
+            if ($type === null) {
+                return $this->refused('Choose which recording to replace.');
+            }
         }
 
         [$provider, $problem] = $this->uploadOptions->provider($body, $this->previous($group, $type));
@@ -166,11 +200,28 @@ final readonly class ReplaceAction
             return $this->refused($result->problems[0]);
         }
 
+        $jobPublicId = $this->newJobPublicId($sourceId, $groupKey, $result->conversationPublicId);
+
         return $this->json(200, [
             'success' => true,
             'message' => sprintf(
                 '%s replacement uploaded. The current recording stays in use until the new one finishes.',
                 $type->label(),
+            ),
+            // The new recording's JOB public id, which is what `/job/{publicId}/status` is keyed by —
+            // `ingest()` hands back the CONVERSATION's, and the two are different ids.
+            //
+            // Resolved by re-reading the group rather than by injecting a job repository for one field:
+            // the finder is already here, the row was written a moment ago, and a caller that cannot
+            // find it simply gets null and falls back to re-reading the dialog, which is what it did
+            // before this field existed.
+            'jobPublicId' => $jobPublicId,
+            // Where to watch it. Null together with the id, so a caller that got neither falls back to
+            // telling the operator the upload worked and leaving the page to be reloaded — which is what
+            // this dialog did before it could follow progress at all.
+            'statusUrl' => $jobPublicId === null ? null : $this->urlGenerator->generate(
+                AudioToTextRoute::JOB_STATUS,
+                ['publicId' => $jobPublicId],
             ),
         ]);
     }
@@ -191,6 +242,51 @@ final readonly class ReplaceAction
         };
 
         return $slot?->provider ?? $this->settingsRepository->defaultProvider();
+    }
+
+    /**
+     * The job public id of the recording just uploaded, so the dialog can watch it finish.
+     *
+     * Null rather than an exception when it cannot be found: the upload itself already succeeded, and
+     * failing the response over a progress convenience would turn a working upload into an error the
+     * operator would reasonably re-try.
+     */
+    private function newJobPublicId(int $sourceId, string $groupKey, ?string $conversationPublicId): ?string
+    {
+        if ($conversationPublicId === null) {
+            return null;
+        }
+
+        $group = $this->finder->find($sourceId, $groupKey);
+
+        foreach ($group?->allRecordings() ?? [] as $slot) {
+            if ($slot->conversationPublicId === $conversationPublicId) {
+                return $slot->jobPublicId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The recording type of an existing recording in this group, or null when it is not one of them.
+     *
+     * Walks `allRecordings()` rather than the three named slots, so a recording that has since been
+     * superseded can still be named — an administrator looking at an older version's Details and
+     * pressing Update means "another one of these", and the type is the same either way.
+     *
+     * Null for a legacy Customer + Agent half, which carries no recording type at all. Those cannot be
+     * updated from here, which is the refusal the group-level guard above already states.
+     */
+    private function typeOfExisting(StoreOrderGroup $group, string $jobPublicId): ?RecordingType
+    {
+        foreach ($group->allRecordings() as $slot) {
+            if ($slot->jobPublicId === $jobPublicId) {
+                return $slot->recordingType;
+            }
+        }
+
+        return null;
     }
 
     /** One posted field, as a string or not at all. The body is whatever a browser sent. */

@@ -567,7 +567,10 @@ foreach ($page->rows as $countRow) {
                 </p>
             <?php endif; ?>
 
-            <?php if ($row->canGenerate): ?>
+            <?php // `isPaidAction()`, not `canGenerate`: see that method. This page posts with no?>
+            <?php // confirmation step, and its note calls the press a paid action - untrue for audio?>
+            <?php // that is already current, which therefore gets the note below instead.?>
+            <?php if ($row->isPaidAction()): ?>
                 <form class="a2t-generate" method="post" action="<?= Html::encode($urlGenerator->generate(
                     AudioToTextRoute::JOB_AI_AUDIO_GENERATE,
                     ['publicId' => $row->job->publicId],

@@ -28,11 +28,15 @@ use function sprintf;
  *
  * Neither is ever acted on automatically. Both offer a button; the money is spent by a person.
  *
- * ## Why the chunk size is in here
+ * ## Why the chunk size and the gap are in here
  *
  * Deepgram reads each request as a self-contained piece of text, so where the splits fall changes the
  * phrasing and the pauses. Two files built from identical words with different `DEEPGRAM_TTS_MAX_CHARS`
  * genuinely do not sound the same, which makes it a render input rather than an implementation detail.
+ *
+ * The inter-turn gap is here for the same reason and not in {@see TtsSourceDigest}: lengthening the
+ * breath between two turns changes the file without changing one word of what is said, so it is a render
+ * setting. Putting it in the digest would announce a transcript change that never happened.
  *
  * Stored as a short readable string rather than a hash so that an operator reading the database row can
  * see what a file was made with, which is the only time anybody looks at this column.
@@ -56,24 +60,27 @@ final class TtsRenderKey
         ];
 
         if ($voice !== null) {
-            // One voice throughout, so the other three settings cannot invalidate this file. The gap
-            // still counts: a single-side recording has several turns and a breath between them.
+            // One voice throughout, so the other three settings cannot invalidate this file.
             $parts[] = 'voice=' . $settings->modelForVoice($voice);
-            $parts[] = sprintf('gap%d', $settings->gapMilliseconds);
-
-            return implode('|', $parts);
-        }
-
-        if ($outputType === TtsOutputType::Mixed) {
+        } elseif ($outputType === TtsOutputType::Mixed) {
             $parts[] = 'c=' . $settings->customerModel;
             $parts[] = 'a=' . $settings->agentModel;
-            // Only a mixed file has gaps between turns, so only a mixed file is affected when that
-            // setting moves. Including it everywhere would invalidate per-role audio for no reason.
-            $parts[] = sprintf('gap%d', $settings->gapMilliseconds);
         } else {
             $parts[] = ($outputType === TtsOutputType::Agent ? 'a=' : 'c=')
                 . $settings->modelFor($outputType === TtsOutputType::Agent);
         }
+
+        // Last, and on every output.
+        //
+        // It used to be on the two branches above and not on the third, because the assembler only put
+        // gaps in a mixed file. It now puts one between any two turns whatever the output is, so the
+        // setting can change how a per-role file sounds too — and a render input that is missing from
+        // the key is audio the page calls current while it no longer matches the configuration.
+        //
+        // The one-time cost of adding it here is that existing per-role renditions read as "generated
+        // with a different voice setting" once. That is true of them: generated again today, a
+        // multi-turn one would come out with breaths it does not have.
+        $parts[] = sprintf('gap%d', $settings->gapMilliseconds);
 
         return implode('|', $parts);
     }

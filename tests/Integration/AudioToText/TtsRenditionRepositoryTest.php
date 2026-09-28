@@ -377,6 +377,110 @@ final class TtsRenditionRepositoryTest extends Unit
         $this->assertSame(0, $this->rowCount(), 'Generated audio is meaningless without the recording.');
     }
 
+    // ------------------------------------------------------------------ claim priority
+
+    /**
+     * Somebody who pressed Generate goes ahead of the automatic backlog.
+     *
+     * `requested_by_admin_id` already tells the two apart honestly - the automatic path passes null and
+     * only a human supplies an id - so this needed no new column. The manual rendition here has the
+     * HIGHEST id, which under plain FIFO would put it last.
+     */
+    public function testAnAdminRequestIsClaimedBeforeOlderAutomaticWork(): void
+    {
+        $this->enqueueAs(TtsOutputType::Mixed, null);
+        $this->enqueueAs(TtsOutputType::Customer, null);
+        $this->enqueueAs(TtsOutputType::Agent, $this->adminId);
+
+        $claimed = $this->renditions->claim();
+
+        self::assertNotNull($claimed);
+        self::assertSame(
+            TtsOutputType::Agent,
+            $claimed->outputType,
+            'The newest rendition wins when a human asked for it.',
+        );
+    }
+
+    /** Within the automatic band, oldest still goes first. */
+    public function testFifoIsPreservedAmongAutomaticRenditions(): void
+    {
+        $this->enqueueAs(TtsOutputType::Mixed, null);
+        $this->enqueueAs(TtsOutputType::Customer, null);
+
+        self::assertSame(TtsOutputType::Mixed, $this->renditions->claim()?->outputType);
+        self::assertSame(TtsOutputType::Customer, $this->renditions->claim()?->outputType);
+    }
+
+    /** And within the manual band: two administrators are served in the order they pressed. */
+    public function testFifoIsPreservedAmongAdminRequests(): void
+    {
+        $this->enqueueAs(TtsOutputType::Mixed, $this->adminId);
+        $this->enqueueAs(TtsOutputType::Customer, $this->adminId);
+
+        self::assertSame(TtsOutputType::Mixed, $this->renditions->claim()?->outputType);
+        self::assertSame(TtsOutputType::Customer, $this->renditions->claim()?->outputType);
+    }
+
+    /**
+     * PRIORITISING THE NEXT CLAIM IS NOT PREEMPTION.
+     *
+     * A rendition already GENERATING is not the claim query's business - the status filter never sees
+     * it - so a later manual request cannot disturb it. It waits, and goes next.
+     */
+    public function testWorkAlreadyGeneratingIsNeverInterruptedByAManualRequest(): void
+    {
+        $this->enqueueAs(TtsOutputType::Mixed, null);
+
+        $running = $this->renditions->claim();
+        self::assertNotNull($running);
+        self::assertSame(TtsStatus::Generating, $running->status);
+
+        // A human presses Generate while that one is mid-flight.
+        $this->enqueueAs(TtsOutputType::Agent, $this->adminId);
+
+        $next = $this->renditions->claim();
+
+        self::assertSame(TtsOutputType::Agent, $next?->outputType, 'The manual request is claimed next.');
+        self::assertSame(
+            TtsStatus::Generating->value,
+            $this->statusOf(TtsOutputType::Mixed),
+            'The rendition already generating must be left exactly as it was.',
+        );
+    }
+
+    /** An admin request queued while nothing else waits behaves exactly as before. */
+    public function testASoleAdminRequestIsClaimedNormally(): void
+    {
+        $this->enqueueAs(TtsOutputType::Mixed, $this->adminId);
+
+        self::assertSame(TtsOutputType::Mixed, $this->renditions->claim()?->outputType);
+    }
+
+    private function enqueueAs(TtsOutputType $type, ?int $adminId): TtsEnqueueOutcome
+    {
+        return $this->renditions->enqueue(
+            $this->jobId,
+            $type,
+            bin2hex(random_bytes(32)),
+            $adminId,
+            'DEEPGRAM',
+        );
+    }
+
+    private function statusOf(TtsOutputType $type): string
+    {
+        /** @var array<string, mixed> $row */
+        $row = $this->connection
+            ->createCommand(
+                'SELECT status FROM {{%audio_tts_renditions}} WHERE job_id = :j AND output_type = :t',
+                [':j' => $this->jobId, ':t' => $type->value],
+            )
+            ->queryOne();
+
+        return (string) $row['status'];
+    }
+
     private function enqueue(string $hash): TtsEnqueueOutcome
     {
         return $this->renditions->enqueue($this->jobId, TtsOutputType::Mixed, $hash, $this->adminId, 'DEEPGRAM');

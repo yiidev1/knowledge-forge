@@ -36,8 +36,13 @@ final class TranscriptVoiceTest extends Unit
 
         self::assertNotNull($caller);
         self::assertNotNull($callee);
-        self::assertSame('Caller', $caller->label);
-        self::assertSame('Callee', $callee->label);
+        // The recording type's own display words, not a second set written down here — CALLER reads
+        // "Customer" and CALLEE reads "Agent" for an administrator, while the types stay CALLER and
+        // CALLEE. Asserted through the enum so this test follows a relabelling instead of blocking it.
+        self::assertSame(RecordingType::Caller->label(), $caller->label);
+        self::assertSame(RecordingType::Callee->label(), $callee->label);
+        self::assertSame('Customer', $caller->label);
+        self::assertSame('Agent', $callee->label);
         // Opposite sides, so the two kinds of recording are told apart at a glance.
         self::assertSame(ConversationSide::Left, $caller->side);
         self::assertSame(ConversationSide::Right, $callee->side);
@@ -63,7 +68,7 @@ final class TranscriptVoiceTest extends Unit
         self::assertCount(3, $view->turns);
 
         foreach ($view->turns as $turn) {
-            self::assertSame('Caller', $turn->label);
+            self::assertSame(RecordingType::Caller->label(), $turn->label);
             self::assertSame(ConversationSide::Left, $turn->side);
             // Nothing is provisional: the fact came from a person, not from a threshold.
             self::assertTrue($turn->confirmed);
@@ -86,7 +91,7 @@ final class TranscriptVoiceTest extends Unit
         );
 
         foreach ($view->turns as $turn) {
-            self::assertSame('Callee', $turn->label);
+            self::assertSame(RecordingType::Callee->label(), $turn->label);
             self::assertSame(ConversationSide::Right, $turn->side);
         }
 

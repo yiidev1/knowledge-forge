@@ -49,6 +49,20 @@ final readonly class TtsScript
     }
 
     /**
+     * Whether this script has a boundary between turns to put a breath at.
+     *
+     * Named for the question rather than exposing the count, because it is the question the assembler
+     * actually asks — and because it is the whole rule. A gap belongs between two things somebody said,
+     * so a script holding one utterance gets none, and one holding several gets one between each pair.
+     * Which output type this is has nothing to do with it: a single-side recording is one person taking
+     * several turns, with real pauses between them, exactly like a conversation.
+     */
+    public function hasSeveralUtterances(): bool
+    {
+        return $this->turnCount() > 1;
+    }
+
+    /**
      * Characters that will be billed.
      *
      * Counted here, before chunking, because chunking preserves its input exactly — so the sum of the

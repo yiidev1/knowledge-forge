@@ -35,14 +35,50 @@ final class RecordingTypeAndOrderIdTest extends TestCase
      */
     public function testAMixedRecordingIsLabelledTheSameAsAPlainCommonUpload(): void
     {
-        self::assertSame('Common / Mixed', RecordingType::Mixed->label());
+        self::assertSame('Mix / Common', RecordingType::Mixed->label());
         self::assertSame(ConversationMode::Common->label(), RecordingType::Mixed->label());
     }
 
-    public function testCallerAndCalleeAreLabelledByTheirOwnNames(): void
+    /**
+     * The two are shown to an administrator as Customer and Agent — and stored as CALLER and CALLEE.
+     *
+     * The display vocabulary is the client's: their operators think in Customer and Agent, and asking
+     * them to read "Callee" is asking them to translate. The stored vocabulary is the call's: CALLER is
+     * whoever dialled, which is a different fact and the only one this application actually knows.
+     *
+     * Both halves are asserted together on purpose. A change that renamed the cases or the column to
+     * match the labels would pass one of these and fail the other, which is the whole point — the words
+     * on the screen are allowed to move and the values underneath them are not.
+     */
+    public function testCallerAndCalleeAreShownInTheClientsVocabularyAndStoredInTheCalls(): void
     {
-        self::assertSame('Caller', RecordingType::Caller->label());
-        self::assertSame('Callee', RecordingType::Callee->label());
+        self::assertSame('Customer', RecordingType::Caller->label());
+        self::assertSame('Agent', RecordingType::Callee->label());
+
+        self::assertSame('CALLER', RecordingType::Caller->value);
+        self::assertSame('CALLEE', RecordingType::Callee->value);
+    }
+
+    /**
+     * The display labels collide with {@see SourceRole}'s and the types do not. Accepted, deliberately.
+     *
+     * `SourceRole::Customer` has always read "Customer": it is the half of a legacy SEPARATE upload that
+     * holds the customer's own microphone. `RecordingType::Caller` now reads "Customer" too, meaning the
+     * person who dialled. On screen they are the same word; in the code they are two enums that no
+     * branch maps onto each other, and a caller recording is still not a customer recording.
+     *
+     * Asserted rather than left implicit, because the collision is the sort of thing a later reader
+     * would take for a bug and "fix" by making one of them defer to the other.
+     */
+    public function testTheDisplayLabelsCollideWithSourceRoleButTheTypesDoNot(): void
+    {
+        self::assertSame(SourceRole::Customer->label(), RecordingType::Caller->label());
+        self::assertSame(SourceRole::Agent->label(), RecordingType::Callee->label());
+
+        // Presentation only. Nothing converts between the two vocabularies, and the stored values of
+        // the one say nothing about the other.
+        self::assertNotSame(SourceRole::Customer->value, RecordingType::Caller->value);
+        self::assertNotSame(SourceRole::Agent->value, RecordingType::Callee->value);
     }
 
     public function testTheThreeStoredValuesAreTheOnesTheColumnAllows(): void
@@ -93,18 +129,24 @@ final class RecordingTypeAndOrderIdTest extends TestCase
 
     public function testAConversationReportsTheCardItCameThrough(): void
     {
-        self::assertSame('Caller', $this->conversation(RecordingType::Caller)->typeLabel());
-        self::assertSame('Callee', $this->conversation(RecordingType::Callee)->typeLabel());
-        self::assertSame('Common / Mixed', $this->conversation(RecordingType::Mixed)->typeLabel());
+        self::assertSame('Customer', $this->conversation(RecordingType::Caller)->typeLabel());
+        self::assertSame('Agent', $this->conversation(RecordingType::Callee)->typeLabel());
+        self::assertSame('Mix / Common', $this->conversation(RecordingType::Mixed)->typeLabel());
     }
 
-    /** An upload from before the column: no type recorded, so it reads as its mode, exactly as before. */
+    /**
+     * An upload from before the column: no type recorded, so it reads as its mode.
+     *
+     * And its mode reads exactly what a mixed recording reads, which is what keeps a legacy upload and
+     * one made today indistinguishable in the same table — they are the same thing.
+     */
     public function testAConversationWithNoRecordedTypeFallsBackToItsMode(): void
     {
         $conversation = $this->conversation(null);
 
         self::assertNull($conversation->recordingType);
-        self::assertSame('Common / Mixed', $conversation->typeLabel());
+        self::assertSame('Mix / Common', $conversation->typeLabel());
+        self::assertSame(RecordingType::Mixed->label(), $conversation->typeLabel());
     }
 
     /** A Customer + Agent pair is described by its mode, and these three values do not apply to it. */

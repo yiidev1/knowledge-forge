@@ -98,7 +98,7 @@ final readonly class TtsRenditionGenerator
         $rawPath = $this->storage->beginWork($jobPublicId, $token, 'raw');
 
         try {
-            [$rawBytes, $characters, $requests] = $this->synthesizeTo($rawPath, $script, $outputType);
+            [$rawBytes, $characters, $requests] = $this->synthesizeTo($rawPath, $script);
 
             $encodedPath = $this->storage->beginWork($jobPublicId, $token, $tts->outputFormat->extension());
             $this->encoder->encode($rawPath, $encodedPath, $tts->sampleRate, $tts->outputFormat);
@@ -129,7 +129,7 @@ final readonly class TtsRenditionGenerator
      *
      * @throws TtsException
      */
-    private function synthesizeTo(string $rawPath, TtsScript $script, TtsOutputType $outputType): array
+    private function synthesizeTo(string $rawPath, TtsScript $script): array
     {
         $tts = $this->settings->tts;
         $handle = @fopen($rawPath, 'wb');
@@ -138,11 +138,19 @@ final readonly class TtsRenditionGenerator
             throw TtsException::writeFailed('the audio workspace could not be opened for writing');
         }
 
-        // A breath between turns wherever there is more than one. That is every mixed rendition, and
-        // also a single-side recording, which is one person taking several turns with real pauses
-        // between them. A per-role file from a separate upload is one whole utterance and has no
-        // boundary to place a gap at, so the condition below costs it nothing either way.
-        $gap = $outputType === TtsOutputType::Mixed
+        // A breath between turns wherever there is more than one — decided by the SCRIPT, not by the
+        // output type.
+        //
+        // It used to be `$outputType === Mixed`, which was right about every case that exists today and
+        // wrong about the reason. A mixed rendition has turns; so does a single-side recording, which is
+        // one person taking several turns with real pauses between them; and `TtsScriptBuilder::
+        // singleRole()` returns one utterance per turn when it has turns to work from. That last one
+        // would have been assembled with no breath anywhere in it the day a CUSTOMER or AGENT output is
+        // offered for a mixed recording — which the enum already records as a later step.
+        //
+        // Asking the script how many utterances it holds cannot drift from that, because it is the same
+        // list this loop is about to walk.
+        $gap = $script->hasSeveralUtterances()
             ? PcmAudio::silence($tts->gapMilliseconds, $tts->sampleRate)
             : '';
 

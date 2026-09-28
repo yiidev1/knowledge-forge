@@ -1,5 +1,5 @@
 /* Text to Audio for a recording that holds one side of a call. */
-const { BASE, launch, signIn, sleep } = require('./lib');
+const { BASE, LABELS, launch, signIn, sleep } = require('./lib');
 const { execFileSync } = require('child_process');
 const fx = require('./fixtures.json');
 
@@ -79,7 +79,7 @@ async function generate(page, label) {
         disabled: o.hasAttribute('data-disabled'),
         reason: (o.querySelector('.a2t-tts-option__reason') || {}).textContent || '',
     })));
-    for (const label of ['Common / Mixed', 'Caller', 'Callee']) {
+    for (const label of [LABELS.MIXED, LABELS.CALLER, LABELS.CALLEE]) {
         const o = shown.find((x) => x.label === label);
         check(label + ' offered', !!o);
         check(label + ' selectable', o && !o.disabled, o && o.reason);
@@ -88,13 +88,13 @@ async function generate(page, label) {
 
     console.log('\nB. GENERATE CALLER');
     let data = await options(page);
-    const caller = byLabel(data, 'Caller');
+    const caller = byLabel(data, LABELS.CALLER);
     check('backend says selectable', caller.selectable === true, caller.reason);
     check('output type is MIXED for this recording', caller.outputType === 'MIXED', caller.outputType);
     check('names the caller job', caller.jobPublicId === fx.callerJob, caller.jobPublicId);
     check('carries an expected hash', typeof caller.expectedHash === 'string' && caller.expectedHash.length === 64);
 
-    await generate(page, 'Caller');
+    await generate(page, LABELS.CALLER);
     check('URL is still the store page', page.url() === store(), page.url());
     check('never visited the ai-audio page', !visited.some((u) => u.includes('/ai-audio')),
         visited.filter((u) => u.includes('ai-audio')).join(', '));
@@ -106,25 +106,25 @@ async function generate(page, label) {
 
     const cells = await readCell(page);
     check('caller cell now says Queued', cells.Caller === 'Queued', JSON.stringify(cells));
-    check('mixed cell untouched', cells['Common / Mixed'] === 'Not generated');
+    check('mixed cell untouched', cells[LABELS.MIXED] === 'Not generated');
     check('callee cell untouched', cells.Callee === 'Not generated');
 
     data = await options(page);
-    const queued = byLabel(data, 'Caller');
+    const queued = byLabel(data, LABELS.CALLER);
     check('caller is now in flight', queued.state === 'in-flight', queued.state + ' / ' + queued.reason);
-    check('mixed unaffected', byLabel(data, 'Common / Mixed').state === 'ready');
-    check('callee unaffected', byLabel(data, 'Callee').state === 'ready');
+    check('mixed unaffected', byLabel(data, LABELS.MIXED).state === 'ready');
+    check('callee unaffected', byLabel(data, LABELS.CALLEE).state === 'ready');
 
     console.log('\nC. THE WORKER FINISHES (stand-in: no provider is called)');
     execFileSync('php', [__dirname + '/complete-tts.php', fx.callerJob], { encoding: 'utf8' });
     await page.goto(store(), { waitUntil: 'networkidle0' });
     const ready = await readCell(page);
     check('caller row now offers play', ready.Caller === 'PLAY', JSON.stringify(ready));
-    check('mixed still not generated', ready['Common / Mixed'] === 'Not generated');
+    check('mixed still not generated', ready[LABELS.MIXED] === 'Not generated');
     check('callee still not generated', ready.Callee === 'Not generated');
     data = await options(page);
-    check('caller reports current', byLabel(data, 'Caller').state === 'current', byLabel(data, 'Caller').state);
-    check('caller not selectable while current', byLabel(data, 'Caller').selectable === false);
+    check('caller reports current', byLabel(data, LABELS.CALLER).state === 'current', byLabel(data, LABELS.CALLER).state);
+    check('caller not selectable while current', byLabel(data, LABELS.CALLER).selectable === false);
 
     console.log('\nD. EDIT MAKES IT STALE');
     await page.goto(BASE + '/audio-to-text/job/' + fx.callerJob + '/review', { waitUntil: 'networkidle0' });
@@ -136,12 +136,12 @@ async function generate(page, label) {
         page.click('[data-a2t-turn="0"] [data-a2t-edit-save]'),
     ]);
     data = await options(page);
-    const stale = byLabel(data, 'Caller');
+    const stale = byLabel(data, LABELS.CALLER);
     check('caller is selectable again', stale.selectable === true, stale.state + ' / ' + stale.reason);
     check('its hash changed', stale.expectedHash !== caller.expectedHash);
 
     console.log('\nE. THE OTHER TWO RECORDINGS');
-    for (const label of ['Common / Mixed', 'Callee']) {
+    for (const label of [LABELS.MIXED, LABELS.CALLEE]) {
         await generate(page, label);
         check(label + ': stayed on the store page', page.url() === store(), page.url());
         const c = await readCell(page);
@@ -166,7 +166,7 @@ async function generate(page, label) {
     await page.waitForSelector('.a2t-tts-dialog .a2t-tts-option', { timeout: 5000 });
     await page.evaluate(() => {
         const o = [...document.querySelectorAll('.a2t-tts-dialog .a2t-tts-option')]
-            .find((x) => x.querySelector('.a2t-tts-option__label').textContent.trim() === 'Caller');
+            .find((x) => x.querySelector('.a2t-tts-option__label').textContent.trim() === LABELS.CALLER);
         o.querySelector('input[type=radio]').click();
         // What a hand-made request looks like: an output this recording cannot produce.
         document.querySelector('[data-a2t-tts-output]').value = 'BANJO';
@@ -211,10 +211,10 @@ async function generate(page, label) {
     `], { encoding: 'utf8' });
 
     data = await options(page);
-    const mixed = byLabel(data, 'Common / Mixed');
+    const mixed = byLabel(data, LABELS.MIXED);
     check('mixed is blocked', mixed.selectable === false, mixed.state + ' / ' + mixed.reason);
     check('and says why', /Speaker confirmation required/.test(mixed.reason || ''), mixed.reason);
-    check('caller is still fine', byLabel(data, 'Caller').selectable === true);
+    check('caller is still fine', byLabel(data, LABELS.CALLER).selectable === true);
 
     console.log('\nJS errors: ' + (errors.length ? JSON.stringify(errors.slice(0, 4)) : 'none'));
     console.log('\n' + (failures === 0 ? 'ALL PASS' : failures + ' FAILURE(S)'));

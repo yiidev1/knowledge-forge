@@ -23,6 +23,7 @@ use App\AudioToText\Application\Tts\TtsSourceDigest;
 use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\Environment;
 use App\Shared\Domain\Clock\SystemClock;
+use App\Tests\Support\TtsRenderSettings;
 use App\Shared\Infrastructure\Db\DbConnectionFactory;
 use App\Shared\Infrastructure\Db\DbParams;
 use App\AudioToText\Infrastructure\DbAudioConversationRepository;
@@ -62,22 +63,7 @@ $script = $builder->build($job, TtsOutputType::Mixed);
 $hash = TtsSourceDigest::for(TtsOutputType::Mixed, $script->utterances);
 
 // The settings the app is running with, so the render key matches what the page will compute.
-$params = require dirname(__DIR__, 2) . '/config/common/params.php';
-$ttsParams = $params['app/audio-deepgram-tts'];
-$tts = new App\AudioToText\Application\Settings\TtsSettings(
-    apiKey: new App\Shared\Domain\ValueObject\SecretValue($ttsParams['apiKey']),
-    url: $ttsParams['url'],
-    customerModel: $ttsParams['customerModel'],
-    agentModel: $ttsParams['agentModel'],
-    callerModel: $ttsParams['callerModel'],
-    calleeModel: $ttsParams['calleeModel'],
-    sampleRate: $ttsParams['sampleRate'],
-    maxCharactersPerRequest: $ttsParams['maxCharactersPerRequest'],
-    timeoutSeconds: $ttsParams['timeoutSeconds'],
-    gapMilliseconds: $ttsParams['gapMilliseconds'],
-    outputFormat: App\AudioToText\Domain\Tts\TtsOutputFormat::fromConfig($ttsParams['outputFormat']),
-    maxAttempts: $ttsParams['maxAttempts'],
-);
+$tts = TtsRenderSettings::fromParams();
 
 $renderKey = TtsRenderKey::for($tts, TtsOutputType::Mixed, $voice);
 $fileName = $job->publicId . '-mixed.wav';

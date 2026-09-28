@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\Shared\Audio\RecordingTypeLabels;
+
 /**
  * How the recordings for one conversation were supplied.
  *
@@ -20,10 +22,19 @@ enum ConversationMode: string
     case Common = 'COMMON';
     case Separate = 'SEPARATE';
 
+    /**
+     * Common reads "Mix / Common" — the same words {@see RecordingType::Mixed} uses.
+     *
+     * The two have to agree. This label is the fallback {@see AudioConversation::typeLabel()} falls back
+     * to for every upload made before recording types existed, and those were all mixed recordings. If
+     * the two drifted, a legacy mixed upload and one made today would sit in the same table under
+     * different names while being the same thing, which is the confusion the invariant test guards.
+     */
     public function label(): string
     {
         return match ($this) {
-            self::Common => 'Common / Mixed',
+            self::Common => RecordingTypeLabels::forStorageValue(RecordingType::Mixed->value)
+                ?? 'Mix / Common',
             self::Separate => 'Separate Customer + Agent',
         };
     }

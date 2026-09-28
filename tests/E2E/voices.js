@@ -1,5 +1,5 @@
 /* An explicit Caller or Callee recording is one person's words — on every screen that shows it. */
-const { BASE, launch, signIn, selectTurnText, sleep } = require('./lib');
+const { BASE, LABELS, launch, selectTurnText, signIn, sleep } = require('./lib');
 const fx = require('./fixtures.json');
 
 const R = '.a2t-review-dialog';
@@ -36,7 +36,7 @@ async function oneSided(page, root, name, expectedSide) {
     const { browser, page, errors } = await launch();
     await signIn(page, fx);
 
-    for (const [label, side] of [['Caller', 'left'], ['Callee', 'right']]) {
+    for (const [label, side] of [[LABELS.CALLER, 'left'], [LABELS.CALLEE, 'right']]) {
         console.log('\n' + label.toUpperCase() + ': DETAILS');
         check('opened', await openDetailsFor(page, label));
         await oneSided(page, R, label, side);
@@ -121,7 +121,7 @@ async function oneSided(page, root, name, expectedSide) {
     }
 
     console.log('\nMIXED: UNCHANGED');
-    check('opened', await openDetailsFor(page, 'Common / Mixed'));
+    check('opened', await openDetailsFor(page, LABELS.MIXED));
     const mixedLabels = await labels(page, R);
     check('mixed keeps two speakers',
         new Set(mixedLabels).size === 2, JSON.stringify([...new Set(mixedLabels)]));

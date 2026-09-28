@@ -1902,6 +1902,354 @@ RELATED TESTS
       the strip rendering, SEPARATE -> Other, COMMON -> Mixed)
 
 ======================================================================================
+8.2c PAGE: Store audio detail - empty-slot "+ Add audio", and manual TTS priority
+======================================================================================
+
+URL      GET /audio-to-text/store/{sourceId}
+ACTION   src/AudioToText/Web/Job/Store/Action.php   TEMPLATE  .../Store/template.php
+
+EMPTY SLOT NOW OFFERS "+ ADD AUDIO"
+
+  A MIX/COMMON, CALLER or CALLEE cell with no recording used to render an em dash. It now renders a
+  quiet ghost button carrying THAT COLUMN'S recording type:
+
+      <button class="a2t-slot__add" data-a2t-manage="<recordings fragment>"
+              data-a2t-order="<orderId>" data-a2t-manage-focus="CALLER">+ Add audio</button>
+
+  IT ADDS NO ENDPOINT AND NO SECOND UPLOAD PATH. It opens the SAME Manage Audio dialog the row's own
+  button opens, and `RecordingsAction::slots()` already emitted an entry for all three types whether or
+  not a recording exists - an empty slot was already offered for upload there. The only new thing is
+  `data-a2t-manage-focus`, which `audio-store.js` consumes once to open that slot's form and scroll to
+  it. The upload itself goes through the existing `ReplaceAction`, whose `previous()` was already
+  null-safe for an absent slot [CODE].
+
+  NOT OFFERED, and refused server-side for the same two reasons, when:
+    - the group has no order id      - there is nothing to group a second recording under
+    - the group is a legacy separate pair - it has no mixed/caller/callee shape at all
+  Those rows keep the em dash.
+
+  THE TYPE IS THE COLUMN'S, NOT THE BROWSER'S. `RecordingType::fromStorage()` is an allow-list of
+  exactly three values, so a tampered `recording_type` becomes one of MIXED/CALLER/CALLEE or nothing.
+  CALLER/CALLEE remain RECORDING TYPES, never speaker roles - every upload is still `mode = COMMON`,
+  `source_role = COMMON` (INV-10).
+
+  CSS `.a2t-slot__add` in assets/audio-store/audio-store.css - a ghost control that resolves into a
+  button on row hover OR keyboard focus (handled separately, because a keyboard user never hovers). A
+  page of twenty orders can show sixty of these and must not read as sixty calls to action.
+
+TRANSCRIPTION TIMER: 2 MINUTES -> 30 SECONDS
+
+  So a recording somebody just uploaded starts converting while they are still looking at the page.
+
+  SAFE BECAUSE OF `Type=oneshot`, NOT because the work is short. A transcription takes 90-400 seconds,
+  far longer than the interval, and systemd will not start a second run of a unit that is still active
+  - ticks landing during a job are skipped and the effective cadence stays max(30s, job duration). The
+  tick that matters is the one on an EMPTY queue: ~0.1 s and 45 MB, without starting ffmpeg or whisper
+  [DEV]. `AccuracySec` 10s -> 5s and `RandomizedDelaySec` 15s -> 5s, scaled with the interval; 15s of
+  jitter on a 30-second period is half the period.
+
+  The flock on runtime/audio-to-text/worker.lock remains the authority regardless (INV-5). The TTS
+  timer is unchanged at 5 minutes.
+
+DEFERRED: TRANSCRIPTION QUEUE PRIORITY
+
+  `audio_transcription_jobs` has NO priority column and its claim is still plain `ORDER BY id ASC`
+  (FIFO). Manual TTS got priority for free because `requested_by_admin_id` is null for automatic work;
+  transcription has no such discriminator - `uploaded_by_admin_id` is NOT NULL and Order58 imports set
+  the acting admin too.
+
+  Giving transcription the same behaviour therefore REQUIRES A MIGRATION (a `priority` column plus an
+  index on `(status, priority, id)`). It was deliberately NOT added: a manual upload is already the
+  newest row, so on an idle queue it is already next, and priority only matters against a backlog. The
+  decision is deferred until production queue depth has been measured [UNVERIFIED-PROD].
+
+======================================================================================
+8.2d MODAL: Recording Details - "Update Audio" and "Generate / Regenerate AI Audio"
+======================================================================================
+
+WHERE      The Details dialog on GET /audio-to-text/store/{sourceId}
+PAYLOAD    src/AudioToText/Web/Job/Review/Fragment/Action.php  (GET .../job/{publicId}/review/fragment)
+MARKUP     src/AudioToText/Web/Job/Store/template.php   #a2t-update-dialog, #a2t-tts-confirm-dialog
+SCRIPT     assets/audio-store/audio-store.js            "Updating this recording's audio", and the
+                                                        "Generating this recording's AI audio" section
+
+THE PROBLEM IT FIXES
+  An administrator reading a transcript in the Details dialog and deciding the recording was wrong had
+  to close the dialog, find the row again, and open Manage Audio. Both actions now sit in a row under
+  the three players, in the dialog where the decision is made.
+
+  NO NEW ENDPOINT. Update posts to the existing `ReplaceAction`; Generate posts to the existing
+  `.../ai-audio/generate`. Nothing about eligibility, cost or duplicate suppression moved.
+
+(1) UPDATE AUDIO - THE TYPE IS DERIVED SERVER-SIDE FROM `replaces`
+
+  The dialog has NO recording-type selector. It shows the type as a read-only fact, and posts the job
+  public id of the recording it was opened on:
+
+      <input type="hidden" name="replaces" value="<job public id>">
+
+  `ReplaceAction` then derives the type from THAT recording:
+
+      replaces present and non-empty  ->  typeOfExisting($group, $replaces)
+                                          walks $group->allRecordings(); null => 422
+      replaces absent or empty        ->  RecordingType::fromStorage($body['recording_type'])
+                                          the unchanged "+ Add audio" path
+
+  A POSTED `recording_type` IS NOT CONSULTED AT ALL when `replaces` is present. The lookup happens in
+  the group already resolved for this store and order, so a job id from another order - or another
+  store - simply is not among its recordings: THE LOOKUP IS THE OWNERSHIP CHECK.
+
+  A tampered request could never have corrupted the recording it named (this flow is additive - it
+  writes a NEW conversation and touches nothing existing, INV-*), but it could have filed the
+  replacement under the wrong side of the call, which is a recording quietly appearing where nobody
+  will think to check.
+
+  The URL the payload hands the dialog is router-generated, so the group key arrives percent-encoded
+  (`order%3A16513791`) exactly as the page's own Manage Audio and Text to Audio URLs do. Built via
+  `GroupKey::forOrder()`, never assembled from `'order:' . $id` - that format lives in one file [CODE].
+
+  `replace` IS NULL, and no button is rendered, when the recording has no conversation, no store, no
+  ORDER ID or no recording type. Same four refusals `ReplaceAction` enforces anyway.
+
+  PROGRESS. The response now also carries:
+      jobPublicId  the NEW job's public id (not the conversation's - they are different ids)
+      statusUrl    UrlGenerator(JOB_STATUS, publicId) - the existing polling endpoint
+
+  The dialog polls `statusUrl`, NOT the id it was opened on: a replacement is a new recording, and
+  watching the old one would report a job that finished long ago - success within one poll, which is
+  indistinguishable from working. Both fields are null together when the row cannot be re-read; the
+  dialog then reports the upload and stops, which is what it did before it could follow progress.
+
+  Stages shown are `ProcessingStage`'s own values via `window.KFAudioStages` (one map for this page,
+  shared with the upload form at the top of the same file). COMPLETED and FAILED are branches, not
+  labels. NO PERCENTAGE ANYWHERE - the status endpoint publishes a status and a stage and no duration,
+  so a bar would be invented. Pinned by tests/Unit/AudioToText/UpdateAudioProgressTest.php.
+
+  On COMPLETED the page RELOADS to `#a2t-recording=<new job public id>`, and the script reopens Details
+  on that recording. The row behind the dialog is server-rendered and nothing re-renders one row, so a
+  reload is the only truthful way to refresh it; the fragment is what stops the reader losing their
+  place. Consumed once via `history.replaceState`, and only ever used to find a button the server
+  already rendered - a fragment naming a recording that is not on this page opens nothing.
+
+(2) GENERATE / REGENERATE - OFFERED WHEN CURRENT, AND TOLD IT IS CURRENT
+
+  BEFORE: `AiAudioPage::canGenerate` included `&& $state !== AiAudioState::Ready`, so current audio got
+  no button. A correct cost decision expressed as a MISSING CONTROL - an administrator who came to
+  regenerate found nothing and could not tell whether the audio was fine or the feature was broken.
+
+  NOW: the button is always offered for a generable recording, and the confirmation dialog explains.
+  Two new fields on `audio.generated`:
+
+      alreadyCurrent   $row->state === AiAudioState::Ready
+      paid             $row->canGenerate && !isAlreadyCurrent()
+
+  When `alreadyCurrent`, the confirm dialog says "This AI audio is already current and matches the
+  latest transcript. Nothing would be generated." and DISABLES its own button, which reads
+  "Already current".
+
+  THREE GUARDS, NONE OF WHICH IS THE ONLY ONE:
+      1. the disabled button (browser)
+      2. `expected_hash` - the digest the dialog was rendered from, revalidated server-side, UNCHANGED
+      3. `TtsGenerationService::enqueue()` answers AlreadyCurrent for a matching digest and queues
+         nothing, whatever reaches it
+  There is NO way to force a paid identical re-run. None was added.
+
+  Stale / Failed / NotGenerated behave exactly as before: `paid` is true, the latest EFFECTIVE
+  transcript is used, and manual TTS keeps its queue priority (`requested_by_admin_id IS NOT NULL`).
+
+  THE AI AUDIO PAGE (/audio-to-text/conversion/{publicId}/ai-audio) IS UNCHANGED. Widening
+  `canGenerate` reached it too - it renders from the same `AiAudioRow` - and its button posts with NO
+  confirmation step while its note reads "will be sent to the speech provider. This is a paid action."
+  For current audio that sentence is false, so that template now renders on `isPaidAction()`, which is
+  EXACTLY the condition it carried before. Current audio there still shows "Up to date with the current
+  transcript." The confirmation-and-explain behaviour is the store page's Details dialog only.
+
+  The dialog also names which transcript would be read aloud - "Reviewed / corrected transcript" when
+  `$job->isReviewed()`, else "Machine transcript". `EffectiveConversationReader`'s rule, stated once on
+  the server; the browser does not decide it.
+
+(3) WHERE THE ACTIONS LIVE, AND WHY THE CONTROL NO LONGER DISAPPEARS
+
+  IN THE DIALOG HEADER, beside "Open full editor" - `<div class="a2t-dialog__acts"
+  data-a2t-review-actions>` inside `.a2t-dialog__actions`, filled by `paintRecordingActions()`. There is
+  NO row under the players; `.a2t-listen__actions` is gone from the script and the stylesheet.
+
+  The close button is a SIBLING of `.a2t-dialog__actions`, not a child. Under 620px the header becomes a
+  two-row grid - title + close on row 1, actions on row 2 - and a close button inside the actions would
+  travel with them, off the corner every dialog keeps it in. Flex wrapping cannot express that (items
+  wrap in order), which is why that one breakpoint is a grid.
+
+  THE DISAPPEARING BUTTON. `AiAudioRow::$canGenerate` is
+  `$providerConfigured && !$nothingToSay && !$state->isInFlight()` - FALSE while a worker holds the job.
+  The control was drawn on it, so pressing Regenerate removed it: request queued, panel re-read, state
+  Queued, button gone. The fix separates two questions that had been one:
+
+      isActionOffered()  canGenerate || state->isInFlight()   -> is the control DRAWN
+      canGenerate        unchanged                            -> may it be PRESSED
+
+  Both ride on the fragment as `offered` / `canGenerate`, with `inFlight` and `actionLabel` beside them.
+  The browser draws on `offered` and sets `disabled = !canGenerate`. `actionLabel` is the WHOLE button
+  text for the state, from `AiAudioRow::actionLabel()`:
+
+      NotGenerated   Generate AI Audio            Queued        Queued...      (disabled)
+      Ready          Regenerate AI Audio          Generating    Generating...  (disabled)
+      Stale          Regenerate AI Audio          Blocked       - not offered -
+      DifferentVoice Regenerate AI Audio          Unavailable   - not offered -
+      Failed         Regenerate AI Audio when a previous file survives, Generate when it does not
+                     (`buttonLabel()`'s existing `isPlayable()` rule - there is nothing to RE-generate
+                      after a first attempt that produced no file)
+
+  POLLING. `watchGenerated()` re-reads the SAME fragment endpoint every 3s while the server says
+  `inFlight`, and calls `paintListen()` only - NEVER `renderReview()`, which rebuilds every turn and
+  would discard an open editor, a mid-merge selection and the scroll position to report a state change
+  in a strip at the top. Self-terminating (the server stops saying `inFlight`), and stopped by the
+  dialog closing or moving to another recording. No second timer: the Update dialog's watcher polls the
+  job status endpoint for a REPLACEMENT and is a different thing entirely.
+
+  UPDATE AUDIO STAYS ENABLED DURING A GENERATION. Verified, not assumed: renditions are keyed by
+  `audio_tts_renditions.job_id`, a replacement writes a NEW conversation and a NEW job, and
+  `ReplaceAction` contains no TTS reference at all - so the generation under way stays bound to the
+  recording it was asked for and finishes there. Disabling it would refuse a safe action.
+
+  The "A generation is already under way." note is suppressed in the AI-audio player group while
+  in-flight, because the header control says "Queued…"/"Generating…" in the same breath. Every other
+  blocked reason is still shown there, since no control states those.
+
+NO SCHEMA MIGRATION. No table, column, index or enum value was added or altered for any of this.
+
+KNOWN LABELLING COLLISION - "Version 0" IN THE DETAILS SUBTITLE  [reported, NOT changed]
+  The subtitle reads `<filename> · <provider> · Version 0`. That number is `ReviewPageView::$version`,
+  which is `audio_transcription_jobs.review_count` - THE NUMBER OF CORRECTIONS MADE, so 0 is correct
+  and expected for an uncorrected transcript. It is unrelated to Manage Audio's `v1`/`v2`, which is
+  `StoreRecordingSlot::$version` - which upload of this slot it is, and never 0. One word, two
+  meanings, in two dialogs opened from the same row. The data is right; the label is ambiguous.
+  Left alone pending a decision on the wording.
+
+RELATED TESTS
+  tests/Web/AudioToTextStoreCest.php      the Details payload per type, no order => no update, no type
+      selector in the markup, type derived from `replaces`, a contradicting posted type ignored, a
+      recording from another order refused, an unknown id refused, the returned statusUrl and that the
+      encoded URL round-trips, Generate when absent, Regenerate-but-not-paid when current, paid when
+      stale, and the transcript source for machine vs reviewed
+  tests/Unit/AudioToText/UpdateAudioProgressTest.php   the stage vocabulary equals the enum, terminal
+      states are branches, no invented percentage, and the poll target is the server's URL
+  tests/Unit/AudioToText/DetailsHeaderActionsTest.php  the actions render in the header, the close button
+      is outside them, `.a2t-listen__actions` is gone from script AND stylesheet, the control is drawn on
+      `offered` and disabled on `canGenerate` (never drawn on `canGenerate`), the watcher is driven by
+      `inFlight` and repaints the panel without rebuilding the transcript, and the narrow header places
+      the actions rather than hiding them
+  tests/Web/AudioToTextStoreCest.php (states)   a data provider over all seven generated states asserting
+      offered/canGenerate/inFlight/actionLabel; a second generation while one is GENERATING creates no
+      row and does not restart the attempt; unpublished speakers are offered no control at all
+  tests/Support/TtsRenderSettings.php     the running TTS settings, so a test can write a rendition the
+      page reads as CURRENT rather than as "different voice setting" (shared with tests/E2E/complete-tts.php)
+
+======================================================================================
+8.2e TTS UTTERANCE GAP, and RECORDING TYPE DISPLAY LABELS
+======================================================================================
+
+(1) THE 2-SECOND GAP BETWEEN UTTERANCES
+
+CONFIG   DEEPGRAM_TTS_GAP_MS      default 2000, range 0-5000, 0 disables
+         src/Environment.php -> config/common/params.php['app/audio-deepgram-tts']['gapMilliseconds']
+         -> TtsSettings::$gapMilliseconds.  ONE value; nothing else names a number.
+
+  Milliseconds, not seconds, so 1500 is expressible without a float through an int-typed reader. The
+  key was NOT renamed: it matches its siblings (DEEPGRAM_TTS_MAX_CHARS, _SAMPLE_RATE, _TIMEOUT) and is
+  read in one place.
+
+WHERE THE SILENCE IS MADE
+  `TtsRenditionGenerator::synthesizeTo()`, as `PcmAudio::silence($ms, $sampleRate)` - a run of zero
+  bytes in raw signed-16-bit mono PCM, written between utterances while the file is assembled.
+
+  NOT Deepgram SSML. `/v1/speak` takes `{"text": ...}` plain text with `container=none&encoding=linear16`;
+  SSML would mean altering the text sent, which would change the SOURCE DIGEST and the spoken words.
+  The transcript is never touched to create a pause - no invented punctuation, no markers.
+
+THE RULE, exactly
+      utterance 1  ->  gap  ->  utterance 2  ->  gap  ->  utterance 3
+  - BETWEEN logical utterances (transcript turns) only.
+  - NEVER between the technical chunks of one utterance. Those splits are `TtsTextChunker` working
+    around the provider's per-request ceiling; a pause there is audible mid-sentence.
+  - NO leading silence (the loop writes a gap only when index > 0) and NO trailing silence.
+
+  DECIDED BY THE SCRIPT, NOT THE OUTPUT TYPE. `TtsScript::hasSeveralUtterances()`. It was previously
+  `$outputType === TtsOutputType::Mixed`, which was right about every case that exists and wrong about
+  the reason: `TtsScriptBuilder::singleRole()` returns one utterance per turn when it has turns, so a
+  CUSTOMER/AGENT output built from a mixed recording would have been assembled with no breath anywhere.
+  A CALLER or CALLEE upload is unaffected either way - its `source_role` is COMMON, so its output type
+  is MIXED and it always had gaps.
+
+RENDER KEY, NOT SOURCE DIGEST
+  `TtsRenderKey` now appends `gap<N>` to EVERY output (it was on the mixed and named-voice branches
+  only). Changing 2000 -> 3000 therefore makes existing audio read "Generated with a different voice
+  setting" and offer a regeneration; it does NOT claim the transcript changed. `TtsSourceDigest` cannot
+  see the setting at all - it is computed from the output type and the utterances.
+
+  One-time cost: existing per-role renditions gain `gap<N>` in their key and so read as stale-by-setting
+  once. That is true of them - regenerated today, a multi-turn one would have breaths it does not have.
+  Nothing regenerates on its own; every regeneration is still a paid button pressed by a person.
+
+(2) RECORDING TYPE DISPLAY LABELS - CALLER reads "Customer", CALLEE reads "Agent"
+
+SOURCE OF TRUTH   src/Shared/Audio/RecordingTypeLabels.php
+
+      MIXED  => 'Mix / Common'      CALLER => 'Customer'      CALLEE => 'Agent'
+
+  In `Shared` because Order58's store cards show the same three counts and `ModuleIsolationTest`
+  forbids any directory outside src/AudioToText/ from naming that module. Keyed by the STORED STRING,
+  the same seam `AudioIngestionPortInterface` uses. `RecordingType::label()` delegates to it, so inside
+  the module there is still one method to call.
+
+  `ConversationMode::Common->label()` delegates to the same MIXED entry: it is the fallback for every
+  upload made before the column existed, all of which were mixed recordings, and a legacy upload must
+  not read differently from one made today in the same table.
+
+  Everything user-facing already routed through `label()` - `StoreRecordingSlot::label()`,
+  `TranscriptVoice::forRecording()` (which drives the bubble names AND "This recording is the ... side
+  of the call"), `RecordingsAction`, `Fragment::replaceTarget()`, `AudioConversation::typeLabel()`,
+  `TtsOptionsAction`. Only three places had their own copy and now do not: the store table's three
+  `<th>`, and the Order58 store-card breakdown plus its Other tooltip. The browser receives resolved
+  labels from the server; no mapping is duplicated in JavaScript. `tests/E2E/lib.js` exports `LABELS`
+  for the Node scripts, which cannot read PHP.
+
+DISPLAY ONLY. NOTHING UNDERNEATH MOVED.
+  - `audio_conversations.recording_type` still stores MIXED / CALLER / CALLEE.
+  - `RecordingType`, `SourceRole` and `RecordingChannel` are the same three separate concepts (INV-10).
+  - `RecordingType::fromStorage()` is unchanged and is still the only writer.
+  - The `replaces` type derivation, the tamper protection and the provider channel mapping in
+    `RecordingImportProcessor` (RecordingChannel::Caller => 'CALLER') are untouched.
+  - Order58 Calls / Sync History / test-recording-channels keep Caller/Callee: those name the
+    PROVIDER'S CHANNEL, not this application's recording type.
+
+THE ACCEPTED COLLISION
+  `SourceRole::Customer->label()` has always been "Customer" and `SourceRole::Agent->label()` "Agent".
+  CALLER now reads "Customer" too. So on screen:
+
+      source_role    = CUSTOMER   the customer's own mic, in a legacy SEPARATE two-file upload
+      recording_type = CALLER     the side that dialled, in a single-file upload
+
+  read as the same word while meaning different things. ACCEPTED DELIBERATELY - the client's operators
+  think in Customer and Agent, and separate pairs are historical. The collision is presentational only:
+  nothing converts between the two enums, and `StoreOrderGroupTest::
+  testALegacyHalfIsStillDescribedByItsOwnFieldDespiteSharingTheWord` (which previously asserted the
+  opposite) now pins that a legacy half is still described by its OWN field.
+
+NO MIGRATION for either half of 8.2e. No table, column, index or enum value was added or altered.
+
+RELATED TESTS
+  tests/Unit/Shared/RecordingTypeLabelsTest.php            the map, the enum's delegation, unknown
+      values refused, stored values untouched, the accepted collision, legacy == new mixed
+  tests/Unit/AudioToText/TtsAudioAssemblyTest.php          2000 ms default from configuration, 1500 is
+      expressible, the gap changes EVERY output's render key, and never reaches the source digest
+  tests/Unit/AudioToText/TtsRenditionGeneratorTest.php     one gap between two turns and not one per
+      chunk, two gaps for three turns, none for a single utterance, none leading or trailing, a
+      single-role script with two turns gets one too, and the configured value is the one written
+  tests/Web/AudioToTextStoreCest.php                       column headers and the Details dialog in the
+      client's vocabulary while `recording_type` stays CALLER/CALLEE; Add Audio's accessible name says
+      Customer and its request still posts CALLER
+
+======================================================================================
 8.3 THE o58-wide LAYOUT PATTERN        [NEW - missing from all prior documentation]
 ======================================================================================
 
@@ -2049,6 +2397,21 @@ All 19 classes on disk are registered - there are no orphan commands.
     Does NOT read AudioToTextSettings::problems() - a mistyped voice name has no
       business stopping every transcription on the machine.
 
+  CLAIM ORDER - AN ADMINISTRATOR'S OWN REQUEST GOES FIRST
+    `DbTtsRenditionRepository::claim()` orders by
+        `requested_by_admin_id IS NOT NULL` DESC, then `id` ASC
+    so a rendition somebody pressed Generate for is claimed before automatic work that was queued
+    earlier. No migration was needed: `TtsGenerationService::enqueueRequested()` - the automatic path,
+    run by the transcription worker and by speaker confirmation - passes `adminId = null`, and only a
+    human request supplies an id. The distinction was already in the data [CODE].
+
+    THIS PRIORITISES THE NEXT CLAIM; IT DOES NOT PREEMPT. A rendition already GENERATING is not the
+    query's business - the status filter never sees it - so a manual request waits for the file in
+    flight and then goes next, rather than behind the whole backlog. FIFO is intact inside each band.
+
+    Guarded by five tests in `tests/Integration/AudioToText/TtsRenditionRepositoryTest.php`, including
+    one asserting that a rendition already GENERATING is left untouched.
+
 --------------------------------------------------------------------------------------
 9.2.3  kf:order58:import-recordings  - recording import
 --------------------------------------------------------------------------------------
@@ -2182,7 +2545,7 @@ All 19 classes on disk are registered - there are no orphan commands.
 
   TASK                        TRIGGER            FREQ     COMMAND
   -------------------------   ----------------   ------   ---------------------------
-  Audio transcription         systemd timer      2 min    kf:audio:worker --once
+  Audio transcription         systemd timer      30 s     kf:audio:worker --once
   AI training audio (TTS)     systemd timer      5 min    kf:audio:tts-worker --once
   Order58 recording import    systemd timer      2 min    kf:order58:import-recordings
                                                           --once
@@ -2719,8 +3082,9 @@ All 19 classes on disk are registered - there are no orphan commands.
 
   GENERATION: the text is CHUNKED (DEEPGRAM_TTS_MAX_CHARS, default ~1900), each chunk
   is one POST to https://api.deepgram.com/v1/speak returning raw PCM, the chunks are
-  concatenated with DEEPGRAM_TTS_GAP_MS of silence between turns, and ffmpeg encodes
-  the result to MP3.
+  concatenated with DEEPGRAM_TTS_GAP_MS of silence between TURNS, and ffmpeg encodes
+  the result to MP3. See 8.2e for the gap rule - it is between utterances, never
+  between the technical chunks of one utterance, and never at either end of the file.
 
   COST PROTECTION, and this is why the state machine is as rich as it is:
     - `AlreadyCurrent` - a rendition matching the current transcript already exists, so
@@ -4026,7 +4390,7 @@ DEEPGRAM_MODEL                                 string   'nova-3'
 DEEPGRAM_NUMERALS                              bool     false                                       
 DEEPGRAM_SMART_FORMAT                          bool     true                                        
 DEEPGRAM_TIMEOUT                               int      120                            1..7200      
-DEEPGRAM_TTS_GAP_MS                            int      350                            0..5000      
+DEEPGRAM_TTS_GAP_MS                            int      2000                           0..5000      
 DEEPGRAM_TTS_MAX_ATTEMPTS                      int      3                              1..10        
 DEEPGRAM_TTS_MAX_CHARS                         int      1900                           100..2000    
 DEEPGRAM_TTS_MODEL_AGENT                       string   'aura-2-arcas-en'                           

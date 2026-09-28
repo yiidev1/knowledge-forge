@@ -1,5 +1,5 @@
 /* The three ways to hear one recording, inside the Details dialog. */
-const { BASE, launch, signIn, sleep } = require('./lib');
+const { BASE, LABELS, launch, signIn, sleep } = require('./lib');
 const fx = require('./fixtures.json');
 
 const R = '.a2t-review-dialog';
@@ -77,7 +77,7 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
     await signIn(page, fx);
 
     console.log('\nA. THE PANEL');
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     check('panel visible', await page.$eval(R + ' [data-a2t-listen]', (n) => !n.hidden));
     check('three labelled groups', JSON.stringify(await rows(page))
         === JSON.stringify(['Original', 'AI audio', 'System']),
@@ -115,14 +115,14 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
     })));
 
     await page.setViewport({ width: 1024, height: 900 });
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     const mid = await layout();
     check('medium drops the voice to its own row', mid[2].top > mid[0].top + 10, JSON.stringify(mid.map((g) => g.top)));
     check('and it carries no stray divider', mid[2].border === '0px', mid[2].border);
     check('the players still share the first row', Math.abs(mid[0].top - mid[1].top) <= 3);
 
     await page.setViewport({ width: 520, height: 900 });
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     const narrow = await layout();
     check('small stacks all three', new Set(narrow.map((g) => g.top)).size === 3,
         JSON.stringify(narrow.map((g) => g.top)));
@@ -134,7 +134,7 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
     check('the player is still a usable size', narrowPlayer >= 170, narrowPlayer + 'px');
 
     await page.setViewport({ width: 1500, height: 1000 });
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
 
     console.log('\nB. IT READS THE TRANSCRIPT, IN ORDER');
     const onScreen = await page.$$eval(R + ' [data-a2t-turn] [data-a2t-text]', (n) =>
@@ -186,7 +186,7 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
         await page.click(R + ' [data-a2t-speak="play"]');
     };
 
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     const lines = await page.$$eval(R + ' [data-a2t-turn] [data-a2t-text]', (n) =>
         n.map((x) => x.textContent.trim()));
 
@@ -264,7 +264,7 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
     await page.click(R + ' [data-a2t-speak="pause"]');
     await page.click(R + ' [data-a2t-dialog-close]');
     await sleep(200);
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     await page.evaluate(() => { window.__spoken = []; });
     await page.click(R + ' [data-a2t-speak="play"]');
     await sleep(400);
@@ -303,10 +303,10 @@ const rows = (page) => page.$$eval(R + ' [data-a2t-listen] .a2t-listen__label', 
     await sleep(2600);
     check('closing stops the voice', (await page.evaluate(() => window.__spoken.length)) === 0);
 
-    await openDetails(page, 'Common / Mixed');
+    await openDetails(page, LABELS.MIXED);
     await page.click(R + ' [data-a2t-speak="play"]');
     await sleep(300);
-    await openDetails(page, 'Caller');
+    await openDetails(page, LABELS.CALLER);
     await page.evaluate(() => { window.__spoken = []; });
     await sleep(2600);
     check('switching modal stops the previous voice',

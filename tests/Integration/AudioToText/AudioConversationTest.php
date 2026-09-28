@@ -170,7 +170,9 @@ final class AudioConversationTest extends Unit
 
         self::assertNotNull($conversation);
         self::assertSame(RecordingType::Caller, $conversation->recordingType);
-        self::assertSame('Caller', $conversation->typeLabel());
+        // Stored CALLER, displayed "Customer" — the client's vocabulary on screen, the call's in the
+        // column. The stored value is asserted above and on the row itself below.
+        self::assertSame('Customer', $conversation->typeLabel());
         self::assertSame('16513791', $conversation->orderId);
         // None of it reaches the job: the worker's view of this recording is unchanged.
         self::assertSame(SourceRole::Common, $conversation->children[0]->sourceRole);
@@ -192,7 +194,9 @@ final class AudioConversationTest extends Unit
         self::assertNotNull($conversation);
         self::assertNull($conversation->recordingType);
         self::assertNull($conversation->orderId);
-        self::assertSame('Common / Mixed', $conversation->typeLabel());
+        // Its mode's label, which says the same words a MIXED recording does — an upload from before
+        // the column and one made today are the same thing and must not read differently.
+        self::assertSame('Mix / Common', $conversation->typeLabel());
     }
 
     /** A pair can carry an order id too — one upload, one order, however many recordings. */

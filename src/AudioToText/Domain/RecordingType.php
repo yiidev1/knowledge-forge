@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\Shared\Audio\RecordingTypeLabels;
+
 /**
  * Which of the store page's three upload cards a recording arrived through.
  *
@@ -25,11 +27,11 @@ namespace App\AudioToText\Domain;
  * transcribed by the same code path, with the same provider, as it was before this existed. Keeping
  * those separate is the point: a display label must never be able to change what the worker does.
  *
- * ## Mixed says "Common / Mixed" on purpose
+ * ## Mixed says "Mix / Common" on purpose
  *
- * That is what {@see ConversationMode::Common} already labels itself, and every upload made before
- * this column existed is a COMMON conversation that still reads exactly that way. A new mixed upload
- * and an old one are the same thing and say the same thing.
+ * That is what the store page's own column has always been headed, and a mixed upload should not be
+ * called one thing in a table and another inside a dialog. It also keeps the tie to
+ * {@see ConversationMode::Common}, which is what every upload made before this column existed is.
  *
  * Null — the absence of this — means "not recorded": every conversation uploaded before the cards were
  * told apart, and every separate Customer + Agent pair, which its mode describes instead.
@@ -40,13 +42,26 @@ enum RecordingType: string
     case Caller = 'CALLER';
     case Callee = 'CALLEE';
 
+    /**
+     * What this is called on screen — Mix / Common, Customer, Agent.
+     *
+     * Delegated to {@see RecordingTypeLabels}, which is in `Shared` because Order58's store cards show
+     * the same three counts and may not name this module. The words are therefore written down once for
+     * the whole application, and changing what a client calls these is one edit in one file.
+     *
+     * **The display names are not the stored values.** CALLER reads "Customer" and CALLEE reads "Agent"
+     * because that is the vocabulary the client's operators use; the cases, the column and every query
+     * still say CALLER and CALLEE. Those two words also belong to {@see SourceRole}, where they mean
+     * something else — who works for the restaurant, rather than who dialled — so a legacy separate pair
+     * and a caller recording now read alike. That was accepted deliberately; see `RecordingTypeLabels`.
+     * Nothing in the code collides, and nothing maps one onto the other.
+     *
+     * The fallback can only be reached by a case being added above without a label beside it, which the
+     * enum's own test refuses.
+     */
     public function label(): string
     {
-        return match ($this) {
-            self::Mixed => 'Common / Mixed',
-            self::Caller => 'Caller',
-            self::Callee => 'Callee',
-        };
+        return RecordingTypeLabels::forStorageValue($this->value) ?? $this->value;
     }
 
     /**
