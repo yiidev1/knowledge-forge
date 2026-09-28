@@ -161,6 +161,25 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
 
 <div class="dir-toolbar">
     <form class="dir-search" method="get" action="<?= Html::encode($base) ?>" role="search">
+        <?php
+        // A GET form submits ONLY its own fields, so without these the other two filters and the
+        // letter would be dropped on every search — narrowing by name would silently widen the source
+        // and audio axes back to everything. Emitted only when they are not already at their neutral
+        // value, which keeps a plain search on a plain page at `?q=…` rather than carrying three
+        // parameters that say nothing.
+        //
+        // `page` is deliberately NOT carried: a new search is a new result set, and page 7 of the old
+        // one means nothing in it.
+?>
+        <?php if ($sourceStatus !== StoreSourceStatusFilter::All): ?>
+            <input type="hidden" name="status" value="<?= Html::encode($sourceStatus->value) ?>">
+        <?php endif; ?>
+        <?php if ($audio !== StoreAudioFilter::All): ?>
+            <input type="hidden" name="audio" value="<?= Html::encode($audio->value) ?>">
+        <?php endif; ?>
+        <?php if ($letter !== AlphabetIndex::ALL): ?>
+            <input type="hidden" name="letter" value="<?= Html::encode($letter) ?>">
+        <?php endif; ?>
         <input class="field__control" type="search" name="q" value="<?= Html::encode($search) ?>"
                placeholder="Search stores by name, company, city or address" aria-label="Search stores">
         <button class="btn btn--secondary" type="submit">Search</button>

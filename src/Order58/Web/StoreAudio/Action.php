@@ -17,7 +17,6 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
-use function array_key_exists;
 use function array_map;
 use function is_string;
 use function max;
@@ -62,7 +61,9 @@ final readonly class Action
         $sourceStatus = StoreSourceStatusFilter::fromRequest(
             is_string($params['status'] ?? null) ? (string) $params['status'] : null,
         );
-        $audio = $this->audioFilter($params);
+        $audio = StoreAudioFilter::fromRequest(
+            is_string($params['audio'] ?? null) ? (string) $params['audio'] : null,
+        );
         $letter = AlphabetIndex::normalize(is_string($params['letter'] ?? null) ? (string) $params['letter'] : null);
         $page = is_string($params['page'] ?? null) ? max(1, (int) $params['page']) : 1;
 
@@ -122,37 +123,5 @@ final readonly class Action
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
             ]);
-    }
-
-    /**
-     * Which audio axis this request asked for, defaulting to the stores that actually have recordings.
-     *
-     * ## Why the default lives here and not in the enum
-     *
-     * {@see StoreAudioFilter::fromRequest()} cannot tell "no filter was asked for" from "a filter was
-     * asked for and it was not a value we know" — both arrive as a string it does not recognise. Those
-     * are different questions, and only one of them should land on Uploaded audio. Changing the enum's
-     * fallback would make `?audio=typo` silently mean Uploaded audio, which is a second decision
-     * smuggled in behind the first.
-     *
-     * So the enum keeps `All` as its neutral value and this method applies the PAGE's policy: the key
-     * being ABSENT is what means "show me the stores with audio". Anything present is parsed exactly as
-     * it always was, so `?audio=all` still shows every store and a bookmark keeps working.
-     *
-     * ## Why Uploaded audio is the better landing state
-     *
-     * Of the mirrored stores, only a handful have ever had a recording uploaded. Opening on All stores
-     * meant an administrator arriving to manage audio was shown mostly stores with none, and had to
-     * click before seeing the ones they came for.
-     *
-     * @param array<array-key, mixed> $params the request's query parameters, as PSR-7 hands them over
-     */
-    private function audioFilter(array $params): StoreAudioFilter
-    {
-        if (!array_key_exists('audio', $params)) {
-            return StoreAudioFilter::WithAudio;
-        }
-
-        return StoreAudioFilter::fromRequest(is_string($params['audio']) ? $params['audio'] : null);
     }
 }

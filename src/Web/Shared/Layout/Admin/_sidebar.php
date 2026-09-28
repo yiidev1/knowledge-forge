@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Auth\Domain\AdminUser;
+use App\Order58\Domain\StoreAudioFilter;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
@@ -32,8 +33,29 @@ $items = [
     // Prefix is the whole `admin.reports.` namespace, so a future second report lights the same entry and
     // no sibling route lights this one.
     ['label' => 'Chat Reports', 'icon' => '📊', 'route' => 'admin.reports.chat', 'match' => ['admin.reports.']],
-    // Prefix matches the job, list, status and download routes too, so the entry stays lit throughout.
-    ['label' => 'Audio to Text', 'icon' => '🎙', 'route' => 'audio-to-text', 'match' => ['audio-to-text']],
+    // Straight to the store picker rather than through the `audio-to-text` redirect, because this entry
+    // carries a query parameter and a redirect would drop it.
+    //
+    // `audio=with` is the LANDING STATE, and it belongs here rather than in the page: an administrator
+    // arriving from this menu wants the stores that actually have recordings, and only a handful of the
+    // mirrored stores ever do. Setting it on the page instead — "no filter means Uploaded audio" — was
+    // tried and reverted, because every filter link omits a parameter that equals its own default, so
+    // clicking "All stores" produced a bare URL that the page read straight back as Uploaded audio and
+    // the click appeared to do nothing.
+    //
+    // A bare /admin/order58/store-audio therefore stays NEUTRAL. The menu establishes the initial state
+    // once; every click after it is the user's.
+    //
+    // The match list covers both the picker's own route and the whole `audio-to-text` namespace (job,
+    // list, status, download, review), so the entry stays lit across all of them — including the picker
+    // itself, which it did not before.
+    [
+        'label' => 'Audio to Text',
+        'icon' => '🎙',
+        'route' => 'order58.store-audio',
+        'query' => ['audio' => StoreAudioFilter::WithAudio->value],
+        'match' => ['order58.store-audio', 'audio-to-text'],
+    ],
     // Its own entry rather than a link inside Audio to Text: the page is about Order58 calls, and the
     // prefix covers its two POST routes so they stay highlighted after a redirect.
     ['label' => 'Order58 calls', 'icon' => '📞', 'route' => 'order58.calls', 'match' => ['order58.calls']],
@@ -42,7 +64,9 @@ $items = [
 $navItems = [];
 foreach ($items as $item) {
     try {
-        $href = $urlGenerator->generate($item['route']);
+        // The third argument is query parameters, distinct from route placeholders. Built by the
+        // generator rather than concatenated, so a value needing encoding is encoded once and correctly.
+        $href = $urlGenerator->generate($item['route'], [], $item['query'] ?? []);
     } catch (Throwable) {
         continue;
     }

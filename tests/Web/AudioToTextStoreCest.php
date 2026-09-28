@@ -97,7 +97,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all');
+        $I->amOnPage(self::PICKER_URL);
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
         $I->see('Manage audio');
@@ -113,7 +113,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
         $I->dontSee('Chat unavailable');
         $I->seeElement('a.store-card[href="' . $this->storeUrl(self::STORE_A) . '"]');
     }
@@ -123,7 +123,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_C_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_C_NAME));
         $I->see(self::STORE_C_NAME);
         $I->see('Audio unavailable — source inactive');
         $I->dontSeeElement('a.store-card[href="' . $this->storeUrl(self::STORE_C) . '"]');
@@ -203,18 +203,18 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 0');
 
         $this->uploadSeparate($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 1');
         Assert::assertSame(2, $this->jobCountFor(self::STORE_A), 'One conversion, two jobs.');
 
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 2');
     }
 
@@ -230,15 +230,16 @@ final class AudioToTextStoreCest
         $I->dontSee(self::STORE_C_NAME);
     }
 
-    // ------------------------------------------------------- the default audio filter
+    // --------------------------------------------- the landing state and filter independence
 
     /**
-     * Opening the picker with no audio filter lands on Uploaded audio, not All stores.
+     * A bare URL is NEUTRAL. The landing state belongs to the menu, not to the page.
      *
-     * Of the mirrored stores only a handful have ever had a recording uploaded, so All stores meant an
-     * administrator arriving to manage audio was shown mostly stores with none.
+     * This was briefly the other way round - the page treated an absent `audio` as Uploaded audio - and
+     * it broke every filter link, because `$dirUrl` omits a parameter that equals its own default. See
+     * the two tests below for the exact failure that caused.
      */
-    public function theBarePickerDefaultsToUploadedAudio(WebTester $I): void
+    public function aBareUrlIsNeutralAndDoesNotForceUploadedAudio(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
@@ -246,43 +247,100 @@ final class AudioToTextStoreCest
         $I->amOnPage(self::PICKER_URL);
 
         $I->seeResponseCodeIs(200);
+        $I->see('All stores', '.filter-chip--active');
+        $I->dontSee('Uploaded audio', '.filter-chip--active');
+        $I->see(self::STORE_B_NAME, '.store-card');
+    }
+
+    /** The sidebar is what establishes the landing state, and it says so in the href. */
+    public function theSidebarAudioEntryCarriesTheUploadedAudioFilter(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage(self::PICKER_URL);
+
+        $I->seeElement('.sidebar__link[href="' . self::PICKER_URL . '?audio=with"]');
+    }
+
+    /** And following it lands on Uploaded audio. */
+    public function followingTheSidebarEntryLandsOnUploadedAudio(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?audio=with');
+
+        $I->see('Uploaded audio', '.filter-chip--active');
         $I->see(self::STORE_A_NAME, '.store-card');
         $I->dontSee(self::STORE_B_NAME, '.store-card');
     }
 
-    /** And the pill says so, so the state the page is in is visible rather than implied. */
-    public function theUploadedAudioPillIsMarkedActiveByDefault(WebTester $I): void
+    /**
+     * THE REGRESSION THIS SUITE EXISTS FOR.
+     *
+     * From Uploaded audio, clicking All stores must actually switch. The link it generates carries no
+     * `audio` parameter at all - the builder omits a value equal to its own default - so a page that
+     * read absence as Uploaded audio sent the user straight back where they started and the click
+     * looked broken.
+     */
+    public function clickingAllStoresFromUploadedAudioActuallySwitches(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL);
+        $I->amOnPage(self::PICKER_URL . '?audio=with');
+        $I->click('All stores', '.filter-bar');
 
-        $I->see('Uploaded audio', '.filter-chip--active');
-        $I->dontSee('All stores', '.filter-chip--active');
+        $I->see('All stores', '.filter-chip--active');
+        $I->dontSee('Uploaded audio', '.filter-chip--active');
+        $I->see(self::STORE_B_NAME, '.store-card');
     }
 
-    /**
-     * An explicit choice always wins. `?audio=all` is what the All stores pill links to, and every
-     * bookmark carrying it must keep working exactly as before.
-     */
-    public function anExplicitAllStoresRequestStillShowsStoresWithoutAudio(WebTester $I): void
+    /** Changing the audio axis must not reset the source axis. */
+    public function switchingTheAudioFilterPreservesTheSourceFilter(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all');
+        $I->amOnPage(self::PICKER_URL . '?status=active&audio=with');
+        $I->click('All stores', '.filter-bar');
 
-        $I->see(self::STORE_A_NAME);
-        $I->see(self::STORE_B_NAME);
+        $I->see('Source active', '.filter-chip--active');
         $I->see('All stores', '.filter-chip--active');
     }
 
     /**
-     * The default is page policy, not enum behaviour: an unrecognised value keeps falling back to All,
-     * exactly as it did before. Only ABSENCE means Uploaded audio.
+     * And the mirror image: changing the source axis must not reset the audio axis - including when
+     * the audio axis is at its DEFAULT value, which is the case the omitted parameter used to eat.
      */
-    public function anUnrecognisedAudioValueStillFallsBackToAllStores(WebTester $I): void
+    public function switchingTheSourceFilterPreservesTheAudioFilter(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?audio=with');
+        $I->click('Source active', '.filter-bar');
+        $I->see('Source active', '.filter-chip--active');
+        $I->see('Uploaded audio', '.filter-chip--active');
+
+        $I->amOnPage(self::PICKER_URL . '?status=active&audio=all');
+        $I->click('All sources', '.filter-bar');
+        $I->see('All sources', '.filter-chip--active');
+        $I->see('All stores', '.filter-chip--active');
+    }
+
+    /** The alphabet is a third independent axis and carries both of the others through. */
+    public function theAlphabetPreservesBothFilterGroups(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?status=active&audio=with');
+        $I->seeElement('a.alpha-nav__item[href*="status=active"][href*="audio=with"]');
+    }
+
+    /** An unrecognised value falls back to All, exactly as the enum always did. */
+    public function anUnrecognisedAudioValueFallsBackToAllStores(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
@@ -293,21 +351,47 @@ final class AudioToTextStoreCest
         $I->see('All stores', '.filter-chip--active');
     }
 
-    /** The other axes keep working alongside the new default. */
-    public function searchAndSourceFiltersStillWorkUnderTheDefault(WebTester $I): void
+    // --------------------------------------------- search preserves the active filters
+
+    /**
+     * A GET form submits only its own fields, so the other filters need hidden inputs or a search
+     * silently widens the source and audio axes back to everything.
+     */
+    public function searchPreservesTheSourceAndAudioFilters(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
-        $I->see(self::STORE_A_NAME);
+        $I->amOnPage(self::PICKER_URL . '?status=active&audio=with');
+        $I->submitForm('.dir-search', ['q' => self::STORE_A_NAME]);
 
-        $I->amOnPage(self::PICKER_URL . '?status=active');
+        $I->see('Source active', '.filter-chip--active');
+        $I->see('Uploaded audio', '.filter-chip--active');
         $I->see(self::STORE_A_NAME);
-        $I->dontSee(self::STORE_C_NAME, '.store-card');
+    }
 
-        $I->amOnPage(self::PICKER_URL . '?letter=all');
-        $I->see(self::STORE_A_NAME);
+    /** A plain search on a plain page stays plain - no parameters that say nothing. */
+    public function searchFromANeutralPageCarriesNoFilterParameters(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage(self::PICKER_URL);
+        $I->submitForm('.dir-search', ['q' => self::STORE_A_NAME]);
+
+        $I->seeInCurrentUrl('q=');
+        $I->dontSeeInCurrentUrl('audio=');
+        $I->dontSeeInCurrentUrl('status=');
+    }
+
+    /** Search resets pagination: page 7 of the old result set means nothing in the new one. */
+    public function searchDoesNotCarryThePageNumber(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage(self::PICKER_URL . '?audio=with&page=2');
+        $I->submitForm('.dir-search', ['q' => self::STORE_A_NAME]);
+
+        $I->dontSeeInCurrentUrl('page=');
     }
 
     // ------------------------------------------------------- the card breakdown
@@ -404,7 +488,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_B_NAME));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_B_NAME));
         $I->see(self::STORE_B_NAME);
         $I->see('🎙 0');
     }
@@ -413,7 +497,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode('Audio Store Alpha'));
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode('Audio Store Alpha'));
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
         $I->dontSee(self::STORE_B_NAME);
