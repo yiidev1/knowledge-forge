@@ -1002,7 +1002,7 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .store-card__chat {
     position: absolute; top: .55rem; right: .55rem; z-index: 1;
     display: inline-flex; align-items: center; justify-content: center;
-    width: 2rem; height: 2rem; border-radius: var(--radius-sm, .4rem);
+    width: 2rem; height: 2rem; border-radius: var(--radius-sm);
     font-size: 1.05rem; line-height: 1; text-decoration: none;
     color: var(--text); background: var(--surface-2);
     border: 1px solid var(--border);
@@ -1014,6 +1014,15 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 }
 .store-card--has-chat .store-card__body { padding-right: 2.75rem; }
 .store-card__body { padding: 1.1rem 1.15rem .75rem; flex: 1 1 auto; min-width: 0; }
+/* A flex column ONLY on the cards that carry the audio strip, so a child can be pushed to the body's
+   bottom edge with `margin-top: auto`.
+ *
+ * Scoped with `:has()` rather than applied to every `.store-card__body`, because this class is shared
+ * with the Order58 stores and Store chat pickers and a flex container does NOT collapse its children's
+ * margins — turning those bodies into flex columns would quietly add a couple of millimetres between
+ * the meta lines and the badges on two unrelated pages. A browser without `:has()` simply keeps the
+ * old block layout here, which is the behaviour this page had before. */
+.store-card__body:has(.store-card__audio) { display: flex; flex-direction: column; }
 .store-card__name { font-size: 1.02rem; font-weight: 700; line-height: 1.3; margin: 0 0 .35rem; overflow-wrap: anywhere; }
 .store-card__name a { color: var(--text); }
 .store-card__name a:hover { color: var(--primary); }
@@ -1045,27 +1054,64 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
  */
 .store-card__audio {
     display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: .2rem .5rem; margin: .7rem 0 .2rem; padding: .5rem .1rem 0;
-    border-top: 1px solid var(--border);
+    /* No gap: the cells meet, and the hairline below is what separates them. A gap plus a border
+       would read as two separators. */
+    margin: .75rem 0 .25rem; padding: .4rem 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+
+    /* ALIGNMENT ACROSS A ROW OF CARDS.
+     *
+     * `margin-top: auto` absorbs whatever vertical space is left in the body, so the strip sits on the
+     * body's bottom edge however many lines the name and address took. Cards in a grid row are already
+     * equal height — `.store-grid` is a CSS grid, whose rows stretch — so "bottom of the body" is the
+     * same line on every card in that row. No fixed heights, no clamping, and a long name still wraps
+     * freely because the space it takes is simply space the margin no longer absorbs.
+     *
+     * `order: 1` moves the strip after the badges VISUALLY while leaving the markup alone. It sits
+     * before them in the DOM, and without this the badges — which follow it — would be pushed below
+     * the strip, so an inactive store's strip would land lower than an active one's. Ordering also
+     * restores the badges to where they sat before the strip existed.
+     *
+     * When the card IS full, `auto` resolves to zero. The gap is then supplied by `.store-card__badges`
+     * above, which is always rendered (only its contents are conditional) and carries its own margin.
+     */
+    order: 1; margin-top: auto;
 }
-.store-card__audio-cell { min-width: 0; text-align: center; }
+/* `column-reverse`, so the NUMBER sits above its label and the strip reads as a metric rather than a
+   table row. The markup stays `<dt>` then `<dd>`, which is the only order a `<dl>` may use — this is
+   presentation, not source order. */
+.store-card__audio-cell {
+    display: flex; flex-direction: column-reverse; align-items: center; justify-content: center;
+    min-width: 0; padding: .1rem .25rem; text-align: center;
+}
+/* Hairline dividers between columns, never before the first. */
+.store-card__audio-cell + .store-card__audio-cell { border-left: 1px solid var(--border); }
 .store-card__audio-label {
-    font-size: .66rem; text-transform: uppercase; letter-spacing: .04em;
-    color: var(--text-faint); margin: 0; white-space: nowrap;
+    /* --text-muted, not --text-faint: faint reads as disabled, and these labels are the legend for
+       the numbers above them. */
+    font-size: .64rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-muted); margin: 0; white-space: nowrap; line-height: 1.3;
 }
 /* `dd` carries a browser default margin that would push the numbers out of alignment with the row. */
 .store-card__audio-value {
-    margin: .1rem 0 0; font-size: .95rem; font-weight: 650;
+    margin: 0 0 .05rem; font-size: 1.15rem; font-weight: 700; line-height: 1.15;
     /* Tabular figures so a 1 and a 7 occupy the same width and the columns stay straight. */
     font-variant-numeric: tabular-nums; color: var(--text);
 }
 /* A zero is information, not an error: always shown, but receded so the non-zero values read first.
    The modifier comes from the template — CSS cannot match on a number's value. */
-.store-card__audio-value--zero { color: var(--text-faint); font-weight: 500; }
+.store-card__audio-value--zero { color: var(--text-faint); font-weight: 600; }
 
 @media (max-width: 420px) {
     /* Two columns rather than four when a card gets narrow, so the labels never truncate. */
     .store-card__audio { grid-template-columns: repeat(2, 1fr); }
+    /* The divider rule above follows source order, which now puts one down the middle of the left
+       column. Re-draw it per position: a left edge only on the right-hand cell, a top edge on the
+       second row. */
+    .store-card__audio-cell + .store-card__audio-cell { border-left: 0; }
+    .store-card__audio-cell:nth-child(even) { border-left: 1px solid var(--border); }
+    .store-card__audio-cell:nth-child(n + 3) { border-top: 1px solid var(--border); padding-top: .3rem; }
 }
 .store-card__actions {
     display: flex; flex-wrap: wrap; gap: .4rem;
