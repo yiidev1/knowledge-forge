@@ -25,9 +25,14 @@ interface StoreAudioCountsInterface
      * round trips to print 36 numbers. Stores with nothing uploaded are absent from the result rather
      * than present as zero — the caller defaults, and an absent key and a zero mean the same thing.
      *
+     * Returns a {@see StoreAudioBreakdown} rather than a bare int so the card can show how the total
+     * splits by recording type. The breakdown is gathered by the SAME query — conditional aggregates
+     * alongside the existing `COUNT(*)` — so the round-trip count did not change when it was added.
+     * `$total` still means exactly what it meant before: rows in `audio_conversations` for the store.
+     *
      * @param list<int> $sourceIds
      *
-     * @return array<int, int>
+     * @return array<int, StoreAudioBreakdown>
      */
     public function countsFor(array $sourceIds): array;
 

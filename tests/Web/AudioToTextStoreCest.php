@@ -97,7 +97,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL);
+        $I->amOnPage(self::PICKER_URL . '?audio=all');
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
         $I->see('Manage audio');
@@ -113,7 +113,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
         $I->dontSee('Chat unavailable');
         $I->seeElement('a.store-card[href="' . $this->storeUrl(self::STORE_A) . '"]');
     }
@@ -123,7 +123,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_C_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_C_NAME));
         $I->see(self::STORE_C_NAME);
         $I->see('Audio unavailable — source inactive');
         $I->dontSeeElement('a.store-card[href="' . $this->storeUrl(self::STORE_C) . '"]');
@@ -203,18 +203,18 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 0');
 
         $this->uploadSeparate($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 1');
         Assert::assertSame(2, $this->jobCountFor(self::STORE_A), 'One conversion, two jobs.');
 
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_A_NAME));
         $I->see('🎙 2');
     }
 
@@ -230,6 +230,149 @@ final class AudioToTextStoreCest
         $I->dontSee(self::STORE_C_NAME);
     }
 
+    // ------------------------------------------------------- the default audio filter
+
+    /**
+     * Opening the picker with no audio filter lands on Uploaded audio, not All stores.
+     *
+     * Of the mirrored stores only a handful have ever had a recording uploaded, so All stores meant an
+     * administrator arriving to manage audio was shown mostly stores with none.
+     */
+    public function theBarePickerDefaultsToUploadedAudio(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL);
+
+        $I->seeResponseCodeIs(200);
+        $I->see(self::STORE_A_NAME, '.store-card');
+        $I->dontSee(self::STORE_B_NAME, '.store-card');
+    }
+
+    /** And the pill says so, so the state the page is in is visible rather than implied. */
+    public function theUploadedAudioPillIsMarkedActiveByDefault(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL);
+
+        $I->see('Uploaded audio', '.filter-chip--active');
+        $I->dontSee('All stores', '.filter-chip--active');
+    }
+
+    /**
+     * An explicit choice always wins. `?audio=all` is what the All stores pill links to, and every
+     * bookmark carrying it must keep working exactly as before.
+     */
+    public function anExplicitAllStoresRequestStillShowsStoresWithoutAudio(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?audio=all');
+
+        $I->see(self::STORE_A_NAME);
+        $I->see(self::STORE_B_NAME);
+        $I->see('All stores', '.filter-chip--active');
+    }
+
+    /**
+     * The default is page policy, not enum behaviour: an unrecognised value keeps falling back to All,
+     * exactly as it did before. Only ABSENCE means Uploaded audio.
+     */
+    public function anUnrecognisedAudioValueStillFallsBackToAllStores(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?audio=not-a-real-filter');
+
+        $I->see(self::STORE_B_NAME, '.store-card');
+        $I->see('All stores', '.filter-chip--active');
+    }
+
+    /** The other axes keep working alongside the new default. */
+    public function searchAndSourceFiltersStillWorkUnderTheDefault(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+        $I->see(self::STORE_A_NAME);
+
+        $I->amOnPage(self::PICKER_URL . '?status=active');
+        $I->see(self::STORE_A_NAME);
+        $I->dontSee(self::STORE_C_NAME, '.store-card');
+
+        $I->amOnPage(self::PICKER_URL . '?letter=all');
+        $I->see(self::STORE_A_NAME);
+    }
+
+    // ------------------------------------------------------- the card breakdown
+
+    /**
+     * Every card carries the four-cell strip, zeros included, so the grid keeps one height.
+     *
+     * The total is deliberately NOT in the strip - it is the pill beside the name, and the same
+     * number in two places is two places that can disagree.
+     */
+    public function eachCardShowsTheRecordingTypeBreakdown(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL);
+
+        $I->seeElement('.store-card__audio');
+        $I->see('Mixed', '.store-card__audio-label');
+        $I->see('Caller', '.store-card__audio-label');
+        $I->see('Callee', '.store-card__audio-label');
+        $I->see('Other', '.store-card__audio-label');
+    }
+
+    /**
+     * A SEPARATE (Customer + Agent) upload is reported under Other, never as Mixed.
+     *
+     * This is the live untyped path, not a legacy one: none of MIXED/CALLER/CALLEE describes a pair,
+     * so the upload records no recording type at all and its `mode` carries the meaning instead.
+     * Counting it as Mixed would claim a channel the uploader never stated - and would still look
+     * entirely plausible on screen, which is why it needs a test.
+     */
+    public function aSeparateUploadIsCountedUnderOtherNotMixed(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadSeparate($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+
+        $source = $I->grabPageSource();
+        Assert::assertMatchesRegularExpression(
+            '~Other</dt>\s*<dd[^>]*>1</dd>~',
+            $source,
+            'An upload with no recording type belongs under Other.',
+        );
+        Assert::assertMatchesRegularExpression(
+            '~Mixed</dt>\s*<dd[^>]*>0</dd>~',
+            $source,
+            'It must NOT be counted as Mixed.',
+        );
+    }
+
+    /** And a COMMON upload, which does post a recording type, lands in its own named cell. */
+    public function aCommonUploadIsCountedUnderItsRecordingType(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_A_NAME));
+
+        $source = $I->grabPageSource();
+        Assert::assertMatchesRegularExpression('~Mixed</dt>\s*<dd[^>]*>1</dd>~', $source);
+        Assert::assertMatchesRegularExpression('~Other</dt>\s*<dd[^>]*>0</dd>~', $source);
+    }
+
     /**
      * The filter narrows the rows, the total **and** the alphabet counts together.
      *
@@ -242,7 +385,7 @@ final class AudioToTextStoreCest
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
-        $I->amOnPage(self::PICKER_URL);
+        $I->amOnPage(self::PICKER_URL . '?audio=all');
         $unfiltered = $this->alphabetTotal($I);
 
         $I->amOnPage(self::PICKER_URL . '?audio=with');
@@ -261,7 +404,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode(self::STORE_B_NAME));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode(self::STORE_B_NAME));
         $I->see(self::STORE_B_NAME);
         $I->see('🎙 0');
     }
@@ -270,7 +413,7 @@ final class AudioToTextStoreCest
     {
         $this->signIn($I);
 
-        $I->amOnPage(self::PICKER_URL . '?q=' . urlencode('Audio Store Alpha'));
+        $I->amOnPage(self::PICKER_URL . '?audio=all&q=' . urlencode('Audio Store Alpha'));
         $I->seeResponseCodeIs(200);
         $I->see(self::STORE_A_NAME);
         $I->dontSee(self::STORE_B_NAME);

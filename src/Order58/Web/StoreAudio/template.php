@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
@@ -21,7 +22,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var StoreAudioFilter $audio
  * @var string $letter
  * @var int $page
- * @var array<int, int> $audioCounts store source id => conversions, absent when none
+ * @var array<int, StoreAudioBreakdown> $audioCounts store source id => conversion breakdown,
+ *      absent when the store has none. `total` is the same conversation count it always was.
  * @var string $providerDefault storage value of the current default transcription provider
  * @var array<string, string> $providerChoices storage value => label, in offer order
  * @var bool $settingsOpen render the settings dialog already open (the no-JavaScript path)
@@ -215,7 +217,12 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
 // written.
 $audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store->sourceId]);
             $location = $store->locationLine();
-            $conversions = $audioCounts[$store->sourceId] ?? 0;
+            // Absent key and zero mean the same thing, which is why the reader omits empty stores.
+            $breakdown = $audioCounts[$store->sourceId] ?? StoreAudioBreakdown::none();
+            $conversions = $breakdown->total;
+            // CSS cannot match on a number's value, so the zero state is a class from here.
+            $audioValue = static fn(int $n): string => 'store-card__audio-value'
+                . ($n === 0 ? ' store-card__audio-value--zero' : '');
 
             // Knowledge is not a gate here — a store with no documents can still have a recording
             // transcribed — but source-active is: a store Order58 reports as inactive is not
@@ -248,6 +255,39 @@ $audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store
                         <div class="store-card__meta util-muted">📍 <?= Html::encode($location) ?></div>
                     <?php endif; ?>
                     <div class="store-card__meta util-mono util-muted">Store #<?= $store->sourceId ?></div>
+                    <?php
+                    // How the total above splits by recording type. Total is NOT repeated here — it is
+                    // the badge beside the name, and the same number in two places is two places that
+                    // can disagree.
+                    //
+                    // Always rendered, zeros included, so every card is the same height and a page of
+                    // 36 does not jag as the counts change. The four cells share one width for the same
+                    // reason: the numbers line up down the grid and can be compared by eye.
+            ?>
+                    <dl class="store-card__audio" aria-label="Recordings by type">
+                        <div class="store-card__audio-cell">
+                            <dt class="store-card__audio-label">Mixed</dt>
+                            <dd class="<?= $audioValue($breakdown->mixed) ?>"><?= $breakdown->mixed ?></dd>
+                        </div>
+                        <div class="store-card__audio-cell">
+                            <dt class="store-card__audio-label">Caller</dt>
+                            <dd class="<?= $audioValue($breakdown->caller) ?>"><?= $breakdown->caller ?></dd>
+                        </div>
+                        <div class="store-card__audio-cell">
+                            <dt class="store-card__audio-label">Callee</dt>
+                            <dd class="<?= $audioValue($breakdown->callee) ?>"><?= $breakdown->callee ?></dd>
+                        </div>
+                        <?php
+                // `recording_type` is nullable, so these three do not add up to the total.
+                // What is left over is reported honestly rather than folded into Mixed, which
+                // would claim a channel the uploader never stated.
+            ?>
+                        <div class="store-card__audio-cell"
+                             title="Other includes recordings without a MIXED/CALLER/CALLEE recording type, including older recordings and separate Customer + Agent uploads.">
+                            <dt class="store-card__audio-label">Other</dt>
+                            <dd class="<?= $audioValue($breakdown->other()) ?>"><?= $breakdown->other() ?></dd>
+                        </div>
+                    </dl>
                     <div class="store-card__badges">
                         <?php if (!$store->sourceActive): ?>
                             <span class="badge badge--error" title="Order58 reports this store as inactive">🔴 Source inactive</span>

@@ -1032,6 +1032,41 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .store-card__kb-count--ok { color: var(--success-text); background: var(--success-bg); border-color: var(--success-border); }
 .store-card__stats { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .82rem; color: var(--text-muted); }
 .store-card__stats strong { color: var(--text); }
+
+/* Store audio: how a store's conversion total splits by recording type.
+ *
+ * FOUR EQUAL COLUMNS, not a flex row. `1fr` each means the numbers line up down the whole grid of
+ * cards, so two stores can be compared by eye without reading the labels. A flex row would size each
+ * cell to its own content and every card would align differently.
+ *
+ * The strip is always rendered, zeros included, so cards keep one height and a page of 36 does not
+ * jag as counts change. The total is NOT here — it is the pill in the card header, and the same
+ * number in two places is two places that can disagree.
+ */
+.store-card__audio {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: .2rem .5rem; margin: .7rem 0 .2rem; padding: .5rem .1rem 0;
+    border-top: 1px solid var(--border);
+}
+.store-card__audio-cell { min-width: 0; text-align: center; }
+.store-card__audio-label {
+    font-size: .66rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-faint); margin: 0; white-space: nowrap;
+}
+/* `dd` carries a browser default margin that would push the numbers out of alignment with the row. */
+.store-card__audio-value {
+    margin: .1rem 0 0; font-size: .95rem; font-weight: 650;
+    /* Tabular figures so a 1 and a 7 occupy the same width and the columns stay straight. */
+    font-variant-numeric: tabular-nums; color: var(--text);
+}
+/* A zero is information, not an error: always shown, but receded so the non-zero values read first.
+   The modifier comes from the template — CSS cannot match on a number's value. */
+.store-card__audio-value--zero { color: var(--text-faint); font-weight: 500; }
+
+@media (max-width: 420px) {
+    /* Two columns rather than four when a card gets narrow, so the labels never truncate. */
+    .store-card__audio { grid-template-columns: repeat(2, 1fr); }
+}
 .store-card__actions {
     display: flex; flex-wrap: wrap; gap: .4rem;
     padding: .8rem 1.15rem; border-top: 1px solid var(--border); background: var(--surface-2);

@@ -1800,6 +1800,108 @@ RELATED TESTS  tests/Web/Order58CallHistoryCest.php (12 tests, 44 assertions), i
                there IN FULL and not on page 1.
 
 ======================================================================================
+8.2b PAGE: Store audio - default filter and the card breakdown
+======================================================================================
+
+URL      GET /admin/order58/store-audio      ROUTE NAME  order58.store-audio
+ACTION   src/Order58/Web/StoreAudio/Action.php
+TEMPLATE src/Order58/Web/StoreAudio/template.php
+
+DEFAULT FILTER - "Uploaded audio", applied as page policy
+
+  When the `audio` query parameter is COMPLETELY ABSENT the page defaults to
+  StoreAudioFilter::WithAudio (`?audio=with`). Anything present is parsed exactly as it
+  always was.
+
+      absent                -> WithAudio   (the new default)
+      ?audio=with           -> WithAudio
+      ?audio=all            -> All         (unchanged; every bookmark keeps working)
+      ?audio=<unrecognised> -> All         (unchanged enum fallback)
+
+  WHY IN THE ACTION AND NOT IN THE ENUM: `StoreAudioFilter::fromRequest()` cannot tell
+  "no filter was asked for" from "a filter was asked for and we do not know it" - both
+  arrive as a string it does not recognise. Those are different questions and only one
+  should land on Uploaded audio. Changing the enum's fallback would make `?audio=typo`
+  silently mean Uploaded audio, which is a second decision smuggled in behind the first.
+  So the enum keeps `All` as its neutral value and `Action::audioFilter()` applies the
+  page's policy on ABSENCE alone [CODE].
+
+  WHY THE DEFAULT CHANGED: of the mirrored stores only a handful have ever had a
+  recording uploaded, so landing on All stores showed an administrator mostly stores
+  with none.
+
+  FILTER SEMANTICS ARE UNCHANGED. "Uploaded audio" still means "has at least one row in
+  `audio_conversations`", via `StoreAudioCountsInterface::storesWithAudio()`, which was
+  not touched. It is still applied as an id restriction INSIDE the directory query, so
+  rows, total and letter counts narrow together.
+
+CARD BREAKDOWN - Mixed / Caller / Callee / Other
+
+  The top-right pill is still TOTAL and still means conversions in
+  `audio_conversations`. Below the store meta a four-cell strip shows how that total
+  splits by `audio_conversations.recording_type`.
+
+  Total is deliberately NOT repeated in the strip: the same number in two places is two
+  places that can disagree.
+
+  TOTAL IS NOT MIXED + CALLER + CALLEE, and never will be. `recording_type` is NULLABLE
+  and three populations legitimately carry no type:
+
+    1. Every conversation created before the column existed
+       (M260921100000AddConversationRecordingType, 21 Sep 2026). On the dev database
+       that was 46 of 59 rows at the time of writing [DEV].
+    2. A SEPARATE (Customer + Agent) upload. None of MIXED/CALLER/CALLEE describes a
+       pair, and the conversation's `mode` already says what it is [CODE].
+    3. A COMMON upload whose posted recording type was not one of the three allowed
+       values. Deliberately not an error - refusing the recording would let a stale open
+       tab cost somebody their upload over a caption [CODE].
+
+  So the fourth cell is `Other`, defined as:
+
+      Other = total - mixed - caller - callee          (clamped at zero)
+
+  DERIVED, not selected, so the four values cannot disagree with each other. Counting
+  null as Mixed would claim a channel the uploader never stated, and would still look
+  entirely plausible on screen - which is why
+  `tests/Integration/Order58/StoreAudioCountsTest.php` asserts it explicitly.
+
+  The `Other` cell carries a title explaining it covers recordings without a
+  MIXED/CALLER/CALLEE type, including older recordings and separate Customer + Agent
+  uploads.
+
+QUERY - still ONE for the whole page
+
+  `DbStoreAudioCounts::countsFor()` gained three conditional aggregates on the SAME
+  grouped scan that already produced the total:
+
+      SELECT store_source_id,
+             COUNT(*)                        AS total,
+             SUM(recording_type = 'MIXED')   AS mixed,
+             SUM(recording_type = 'CALLER')  AS caller,
+             SUM(recording_type = 'CALLEE')  AS callee
+      FROM audio_conversations
+      WHERE store_source_id IN (:page_ids)
+      GROUP BY store_source_id
+
+  The round-trip count did not change: one query for a page of up to 36 stores, guarded
+  by a test that measures MySQL's own `Questions` counter. `Expression` is required -
+  the builder reads a bare string in `select()` as a column name and quotes it into a
+  syntax error. Returns `array<int, StoreAudioBreakdown>`; an absent key and a zero mean
+  the same thing, so stores with nothing are omitted.
+
+CSS  `.store-card__audio*` in assets/main/admin.css - a four-column grid (`1fr` each) so
+     values align down the whole card grid, always rendered with zeros so cards keep one
+     height, collapsing to two columns under 420px. Zeros carry
+     `.store-card__audio-value--zero` because CSS cannot match on a number's value.
+
+RELATED TESTS
+  tests/Integration/Order58/StoreAudioCountsTest.php  (9 tests - counts, isolation,
+      the Other bucket, absent-means-zero, and the one-query N+1 guard)
+  tests/Web/AudioToTextStoreCest.php  (default landing state, pill active state,
+      explicit ?audio=all, unrecognised value, search/status/letter under the default,
+      the strip rendering, SEPARATE -> Other, COMMON -> Mixed)
+
+======================================================================================
 8.3 THE o58-wide LAYOUT PATTERN        [NEW - missing from all prior documentation]
 ======================================================================================
 
