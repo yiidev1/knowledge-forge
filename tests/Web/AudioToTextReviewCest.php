@@ -1541,6 +1541,9 @@ final class AudioToTextReviewCest
         Assert::assertSame(
             [
                 'version', 'isReviewed', 'rolesPublished', 'canConfirm', 'confirmBlockedReason',
+                // Why the speakers were left open, in words for the reader. Null for a recording that
+                // was not left open, and for every row transcribed before the diagnosis was recorded.
+                'reviewExplanation',
                 'confirmedLine', 'voice', 'audio', 'filename', 'provider',
                 // Everything the Update Audio dialog needs to replace this recording, or null when it
                 // cannot be replaced. Named by the server so the browser never decides which of the

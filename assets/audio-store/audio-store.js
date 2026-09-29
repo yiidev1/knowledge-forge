@@ -1179,8 +1179,12 @@ window.KFAudioStages = {
             strip.appendChild(el(
                 'span',
                 'a2t-review__state a2t-review__state--unconfirmed',
-                'The system could not tell which speaker is the agent. Corrections are saved, but the '
-                    + 'conversation stays labelled by speaker until you confirm the roles.'
+                // The server's own sentence when it recorded why, and the general one otherwise — every
+                // recording transcribed before the diagnosis was kept has nothing to say here, and
+                // guessing a reason from the status would be inventing one.
+                data.reviewExplanation
+                    || 'The system could not tell which speaker is the agent. Corrections are saved, '
+                        + 'but the conversation stays labelled by speaker until you confirm the roles.'
             ));
         }
 

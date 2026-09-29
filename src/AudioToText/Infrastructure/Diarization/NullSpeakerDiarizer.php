@@ -28,7 +28,7 @@ final readonly class NullSpeakerDiarizer implements SpeakerDiarizerInterface
     /**
      * @return list<never>
      */
-    public function diarize(string $wavPath): array
+    public function diarize(string $wavPath, ?int $maxSpeakers = null): array
     {
         return [];
     }

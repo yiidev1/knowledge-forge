@@ -11,6 +11,7 @@ use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use Closure;
 use DateTimeImmutable;
@@ -211,4 +212,19 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
     {
         $this->inner->delete($id);
     }
+
+    /**
+     * Not part of what this fake is for.
+     *
+     * The diagnosis is written after an outcome is settled and read only to explain it, so the worker
+     * paths these fakes stand in for never touch it.
+     *
+     * @return list<TranscriptionJob>
+     */
+    public function needingSpeakerReviewDiagnosis(int $limit): array
+    {
+        return [];
+    }
+
+    public function recordSpeakerReviewDiagnosis(int $id, SeparationReviewReason $reason): void {}
 }

@@ -6,10 +6,12 @@ namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
+use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Infrastructure\DbTranscriptionJobRepository;
 use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Environment;
@@ -547,6 +549,140 @@ final class TranscriptionJobRepositoryTest extends Unit
         $publicId = $this->createJob($this->adminA);
 
         $this->assertContains($publicId, $this->repository->activePublicIds());
+    }
+
+    // ------------------------------------------- why a recording was left for speaker review
+
+    /**
+     * The diagnosis survives a round trip, and only ever sits beside NEEDS_REVIEW.
+     *
+     * It is written by `markCompleted()` from the outcome the separation service produced, so a
+     * recording that was published or that failed outright must come back with nothing here — the
+     * column answers "why was this left for a person", and those were not.
+     */
+    public function testTheReviewDiagnosisIsStoredAndReadBack(): void
+    {
+        $publicId = $this->createJob($this->adminA);
+        $job = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($job);
+
+        $this->repository->markTranscribed($job->id, 'Hello there.', 'en');
+        $this->repository->markCompleted(
+            $job->id,
+            SpeakerSeparatedTranscript::needsReview(
+                [],
+                0.21,
+                'sherpa-onnx',
+                'role confidence 0.21 is below the 0.55 threshold',
+                SeparationReviewReason::ROLE_CONFIDENCE_LOW,
+            ),
+            'source.wav',
+        );
+
+        $reread = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($reread);
+
+        self::assertSame(SeparationReviewReason::ROLE_CONFIDENCE_LOW, $reread->separationReviewReason);
+        self::assertSame(SpeakerSeparationStatus::NEEDS_REVIEW, $reread->speakerSeparationStatus);
+        self::assertSame(0.21, $reread->speakerRoleConfidence);
+    }
+
+    /** A published recording has nothing to explain, so the column stays empty. */
+    public function testAPublishedRecordingStoresNoReviewDiagnosis(): void
+    {
+        $publicId = $this->createJob($this->adminA);
+        $job = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($job);
+
+        $this->repository->markTranscribed($job->id, 'Hello there.', 'en');
+        $this->repository->markCompleted($job->id, SpeakerSeparatedTranscript::completed(
+            'Agent line.',
+            'Customer line.',
+            [],
+            0.9,
+            'sherpa-onnx',
+        ), 'source.wav');
+
+        $reread = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($reread);
+
+        self::assertNull($reread->separationReviewReason);
+        self::assertSame(SpeakerSeparationStatus::COMPLETED, $reread->speakerSeparationStatus);
+    }
+
+    /**
+     * Recording a diagnosis afterwards touches one column and nothing else.
+     *
+     * This is what `kf:audio:diagnose-speaker-review --write` calls, against rows transcribed before
+     * the column existed. If it could move a status, a confidence or a role, running a diagnostic on
+     * live data would be changing what an administrator sees rather than explaining it.
+     */
+    public function testRecordingADiagnosisLeavesEveryOtherColumnAlone(): void
+    {
+        $publicId = $this->createJob($this->adminA);
+        $job = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($job);
+
+        $this->repository->markTranscribed($job->id, 'Hello there.', 'en');
+        $this->repository->markCompleted(
+            $job->id,
+            SpeakerSeparatedTranscript::needsReview([], 0.21, 'sherpa-onnx', 'below threshold'),
+            'source.wav',
+        );
+
+        $before = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($before);
+        self::assertNull($before->separationReviewReason, 'Arranged as a row with no diagnosis yet.');
+
+        $this->repository->recordSpeakerReviewDiagnosis(
+            $job->id,
+            SeparationReviewReason::UNUSABLE_SPEAKER_BALANCE,
+        );
+
+        $after = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($after);
+
+        self::assertSame(SeparationReviewReason::UNUSABLE_SPEAKER_BALANCE, $after->separationReviewReason);
+
+        // Everything a decision is made from, unchanged.
+        self::assertSame($before->status, $after->status);
+        self::assertSame($before->speakerSeparationStatus, $after->speakerSeparationStatus);
+        self::assertSame($before->speakerRoleConfidence, $after->speakerRoleConfidence);
+        self::assertSame($before->speakerSegmentsJson, $after->speakerSegmentsJson);
+        self::assertSame($before->transcript, $after->transcript);
+        self::assertSame($before->agentText, $after->agentText);
+        self::assertSame($before->customerText, $after->customerText);
+        self::assertSame($before->rolesConfirmedAt, $after->rolesConfirmedAt);
+        self::assertSame($before->reviewCount, $after->reviewCount);
+    }
+
+    /** Only rows that still need one are offered, so a second run does not revisit the first run's work. */
+    public function testOnlyUndiagnosedReviewRowsAreOffered(): void
+    {
+        $publicId = $this->createJob($this->adminA);
+        $job = $this->repository->findByPublicId($publicId);
+        self::assertNotNull($job);
+
+        $this->repository->markTranscribed($job->id, 'Hello there.', 'en');
+        $this->repository->markCompleted(
+            $job->id,
+            SpeakerSeparatedTranscript::needsReview([], 0.21, 'sherpa-onnx', 'below threshold'),
+            'source.wav',
+        );
+
+        $ids = array_map(
+            static fn(TranscriptionJob $one): int => $one->id,
+            $this->repository->needingSpeakerReviewDiagnosis(100),
+        );
+        self::assertContains($job->id, $ids);
+
+        $this->repository->recordSpeakerReviewDiagnosis($job->id, SeparationReviewReason::NO_ROLE_SIGNALS);
+
+        $after = array_map(
+            static fn(TranscriptionJob $one): int => $one->id,
+            $this->repository->needingSpeakerReviewDiagnosis(100),
+        );
+        self::assertNotContains($job->id, $after, 'A row that has an answer is not asked about again.');
     }
 
     private function createJob(int $adminId, ?string $expiresAt = null): string

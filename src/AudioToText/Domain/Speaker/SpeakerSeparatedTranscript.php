@@ -37,6 +37,16 @@ final readonly class SpeakerSeparatedTranscript
         public ?float $confidence,
         public string $method,
         public ?string $reason,
+        /**
+         * The same fact as `$reason`, in the one shape that can be counted.
+         *
+         * `$reason` carries the measured numbers and is written for a person; this is the stable half.
+         * Set only alongside NEEDS_REVIEW — every other status already says what happened in one word,
+         * and a code beside FAILED would be a second vocabulary for the same thing.
+         *
+         * A diagnosis, never an input. Nothing downstream may branch on it; see the enum.
+         */
+        public ?SeparationReviewReason $reviewReason = null,
     ) {}
 
     /**
@@ -71,6 +81,7 @@ final readonly class SpeakerSeparatedTranscript
         ?float $confidence,
         string $method,
         string $reason,
+        ?SeparationReviewReason $reviewReason = null,
     ): self {
         return new self(
             SpeakerSeparationStatus::NEEDS_REVIEW,
@@ -80,6 +91,7 @@ final readonly class SpeakerSeparatedTranscript
             $confidence,
             $method,
             $reason,
+            $reviewReason,
         );
     }
 

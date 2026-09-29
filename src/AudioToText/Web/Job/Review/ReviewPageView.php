@@ -57,6 +57,18 @@ final readonly class ReviewPageView
          * is no other speaker, so `canConfirm` is false and no turn offers a move.
          */
         public ?TranscriptVoice $voice = null,
+        /**
+         * Why the speakers were left for a person, in words for that person.
+         *
+         * Null for a recording that was not left for review, and for every row written before the
+         * diagnosis was recorded — the screen simply says less about those, which is honest, rather
+         * than inventing a reason from a status that never carried one.
+         *
+         * Presentation of a fact already settled. It does not decide whether Confirm is offered; that
+         * is {@see $canConfirm}, unchanged. Last in the list and defaulted, so every existing caller
+         * constructs exactly as it did.
+         */
+        public ?string $reviewExplanation = null,
     ) {}
 
     /**
@@ -136,6 +148,11 @@ final readonly class ReviewPageView
             self::blockedReason($confirmedAt !== null, $conversation->rolesPublished, $hasBothRoles),
             $job->reviewCount,
             null,
+            // Only while the roles are genuinely open. A published or confirmed recording has nothing
+            // to explain, and saying why it once needed review would read as though it still did.
+            $conversation->rolesPublished || $confirmedAt !== null
+                ? null
+                : $job->separationReviewReason?->explanation(),
         );
     }
 

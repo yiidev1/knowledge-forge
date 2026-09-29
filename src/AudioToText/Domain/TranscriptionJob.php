@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use DateTimeImmutable;
 
 /**
@@ -87,6 +88,18 @@ final readonly class TranscriptionJob
          * without a back-fill inventing a decision nobody made.
          */
         public ?TranscriptionProvider $transcriptionProviderOrNull = null,
+        /**
+         * Why the speakers were left for a person to confirm, when they were.
+         *
+         * A **diagnosis of an outcome already settled**, never an input to one. Nothing branches on it,
+         * and nothing may: the moment a decision reads this it stops being an observation and becomes
+         * part of the classifier. See {@see SeparationReviewReason}.
+         *
+         * NULL for three quite different rows and deliberately not distinguishing them here, because
+         * each already says so elsewhere: a recording that needed no review, one written before the
+         * column existed, and one whose separation failed outright rather than being inconclusive.
+         */
+        public ?SeparationReviewReason $separationReviewReason = null,
     ) {}
 
     /**

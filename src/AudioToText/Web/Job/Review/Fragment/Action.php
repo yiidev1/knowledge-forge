@@ -197,6 +197,11 @@ final readonly class Action
             'rolesPublished' => $page->rolesPublished,
             'canConfirm' => $page->canConfirm,
             'confirmBlockedReason' => $page->confirmBlockedReason,
+            // Why the speakers were left open, in words for the person looking at them. Null for a
+            // recording that was not left open, and for every row transcribed before the diagnosis was
+            // recorded — the panel then says what it always said and no more, rather than inventing a
+            // reason. It explains the state; it does not decide it.
+            'reviewExplanation' => $page->reviewExplanation,
             // Formatted here, in the application's timezone, because that is the timezone the page
             // beside it prints. A browser left to format the instant itself would date the same
             // confirmation differently for a reader in another country.

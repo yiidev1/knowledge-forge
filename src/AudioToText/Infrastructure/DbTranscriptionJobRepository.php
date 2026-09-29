@@ -9,6 +9,7 @@ use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\QueueSummary;
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
@@ -346,6 +347,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 : null,
             'speaker_separation_method' => null,
             'speaker_role_confidence' => null,
+            'speaker_review_reason' => null,
             'speaker_separation_completed_at' => null,
             'created_at' => DbDateTime::format($this->clock->now()),
             'started_at' => null,
@@ -465,10 +467,13 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             // No turns: a single-speaker recording has no exchange to segment, and inventing one
             // boundary per sentence would be a timeline nobody measured.
             'speaker_segments' => null,
-            // Every separation column stays NULL. Nothing was inferred, so nothing is claimed.
+            // Every separation column stays NULL. Nothing was inferred, so nothing is claimed — and
+            // that includes the diagnosis, which answers "why was this left for review" about a
+            // recording that was never up for review.
             'speaker_separation_status' => null,
             'speaker_separation_method' => null,
             'speaker_role_confidence' => null,
+            'speaker_review_reason' => null,
             'speaker_separation_completed_at' => null,
             'stored_audio_path' => null,
             'retained_audio_path' => $retainedAudioPath,
@@ -493,6 +498,9 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             'speaker_separation_status' => $separation->status->value,
             'speaker_separation_method' => $separation->method,
             'speaker_role_confidence' => $separation->confidence,
+            // Set only alongside NEEDS_REVIEW; null for every other outcome, which already says what
+            // happened in one word. Nothing reads this to decide anything — see SeparationReviewReason.
+            'speaker_review_reason' => $separation->reviewReason?->value,
             'speaker_separation_completed_at' => $now,
             // The recording has moved out of the temporary workspace into permanent storage, so the
             // temporary column is cleared and the retained one takes over. The file itself is kept.
@@ -699,6 +707,37 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             ->leftJoin(['r' => self::ADMINS], 'r.id = j.reviewed_by_admin_id');
     }
 
+    /**
+     * @return list<TranscriptionJob>
+     */
+    public function needingSpeakerReviewDiagnosis(int $limit): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->baseQuery()
+            ->where([
+                'j.status' => JobStatus::COMPLETED->value,
+                'j.speaker_separation_status' => SpeakerSeparationStatus::NEEDS_REVIEW->value,
+                'j.speaker_review_reason' => null,
+            ])
+            ->orderBy(['j.id' => SORT_DESC])
+            ->limit($limit)
+            ->all();
+
+        return $this->hydrateAll($rows);
+    }
+
+    public function recordSpeakerReviewDiagnosis(int $id, SeparationReviewReason $reason): void
+    {
+        // One column. Deliberately not a general-purpose update: a method that could also touch the
+        // status or the confidence would be a way for a diagnostic to change a decision, which is the
+        // one thing this must never do.
+        $this->connection->createCommand()->update(
+            self::TABLE,
+            ['speaker_review_reason' => $reason->value],
+            ['id' => $id],
+        )->execute();
+    }
+
     private function enqueueLockName(): string
     {
         try {
@@ -773,6 +812,9 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             ($row['conversation_id'] ?? null) === null ? null : (int) $row['conversation_id'],
             SourceRole::fromStorage($this->str($row['source_role'] ?? null)),
             TranscriptionProvider::fromStorage($this->str($row['transcription_provider'] ?? null)),
+            // A value this application no longer recognises reads back as null rather than as a label
+            // nobody can account for — the same rule every other enum column here follows.
+            SeparationReviewReason::fromStorage($this->str($row['speaker_review_reason'] ?? null)),
         );
     }
 

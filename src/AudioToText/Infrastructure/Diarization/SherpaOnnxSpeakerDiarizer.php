@@ -67,9 +67,11 @@ final readonly class SherpaOnnxSpeakerDiarizer implements SpeakerDiarizerInterfa
     }
 
     /**
+     * @param int|null $maxSpeakers overrides the configured cluster count for this one run
+     *
      * @return list<SpeakerSegment>
      */
-    public function diarize(string $wavPath): array
+    public function diarize(string $wavPath, ?int $maxSpeakers = null): array
     {
         if (!is_file($this->settings->diarization->binary) || !is_executable($this->settings->diarization->binary)) {
             throw AudioTranscriptionException::temporaryDirectoryNotWritable(
@@ -90,7 +92,10 @@ final readonly class SherpaOnnxSpeakerDiarizer implements SpeakerDiarizerInterfa
             '--audio', $wavPath,
             '--segmentation-model', $this->settings->diarization->segmentationModel,
             '--embedding-model', $this->settings->diarization->embeddingModel,
-            '--max-speakers', (string) $this->settings->diarization->maxSpeakers,
+            // A fixed count, not a ceiling — sherpa-onnx returns exactly this many clusters. The
+            // override exists for the one retry described in DegenerateSpeakerClusters; null means the
+            // configured count, which is what every ordinary run uses.
+            '--max-speakers', (string) ($maxSpeakers ?? $this->settings->diarization->maxSpeakers),
             // Explicit, not inherited from a default. sherpa-onnx already defaults both ONNX Runtime
             // thread pools to one, but a default is not a contract, and a future release widening it
             // would quietly hand this job eight cores. The number is the module's one CPU budget.

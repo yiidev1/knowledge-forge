@@ -2292,6 +2292,82 @@ RELATED TESTS
       own CURRENT recording after a replacement
 
 ======================================================================================
+8.2h DIAGNOSTIC: why a recording was left for speaker-role review
+======================================================================================
+
+ENUM      src/AudioToText/Domain/Speaker/SeparationReviewReason.php
+COLUMN    audio_transcription_jobs.speaker_review_reason   VARCHAR(40) NULL
+MIGRATION src/Migration/M260929120000AddJobSeparationReviewReason.php   (additive, nullable, no backfill)
+COMMAND   kf:audio:diagnose-speaker-review [--write] [--limit=N]
+
+  OBSERVABILITY ONLY. No classification behaviour changed: not the threshold (still 0.55), not the
+  diarizer, not SpeakerRoleMapper's scoring, not which recordings auto-publish.
+
+THE PROBLEM
+  `speaker_separation_status` only ever said NEEDS_REVIEW - one word for six situations reached at six
+  different points, which want different answers. A recording the diarizer heard as one voice cannot be
+  rescued by better role rules; a cleanly separated call that never reached an address question is not a
+  diarization problem. The distinction was computed on every run and thrown away into a log sentence, so
+  nothing could count them and deciding where to spend effort meant guessing at proportions.
+
+GATE -> REASON (the first gate a recording fails is the one recorded)
+
+  gate                                              status         reason
+  ----------------------------------------------   ------------   --------------------------
+  1. no token matched any speaker segment          FAILED         (none - see below)
+  2. attributedShare < 0.75                        NEEDS_REVIEW   LOW_ATTRIBUTED_SHARE
+  3. SeparationBalance not usable                  NEEDS_REVIEW   UNUSABLE_SPEAKER_BALANCE
+  4a. mapper: 0/1 cluster, or no two carried it    NEEDS_REVIEW   ONE_SPEAKER_DETECTED
+  4b. mapper: no role signals in either speaker    NEEDS_REVIEW   NO_ROLE_SIGNALS
+  5. confidence < AUDIO_DIARIZATION_MIN_CONFIDENCE NEEDS_REVIEW   ROLE_CONFIDENCE_LOW
+  6. one role had no attributed speech             NEEDS_REVIEW   EMPTY_ROLE_TEXT
+
+  GATE 1 HAS NO REASON ON PURPOSE. It returns FAILED, not NEEDS_REVIEW - the stage produced no result
+  at all, which that status already says in one word, and the recording offers a person nothing to
+  confirm because there are no two sides to choose between.
+
+  The mapper returns its own `reasonCode` beside the sentence it already returned, so the service reads
+  a code rather than matching on wording. Its scoring is untouched.
+
+IT CANNOT CHANGE A DECISION
+  Written after the outcome is settled, read only to explain it. Nothing branches on it and nothing may:
+  the moment a decision reads this value it stops being an observation and becomes part of the
+  classifier. Set only alongside NEEDS_REVIEW; NULL for everything else.
+
+UI
+  `ReviewPageView::$reviewExplanation` -> the Details dialog (`reviewExplanation` in the fragment
+  payload) and the full review page. Shown ONLY while the roles are genuinely open - a published or
+  confirmed recording says nothing, since explaining why it once needed review would read as though it
+  still did. A row with no recorded diagnosis falls back to the sentence the screen always showed.
+  The `Confirm speaker roles` flow is unchanged; `$canConfirm` does not read this.
+
+THE COMMAND
+  Read-only by default. `--write` touches exactly ONE column via
+  `recordSpeakerReviewDiagnosis()`, which cannot write a status, confidence, role, segment or
+  transcript - guarded by a test that re-reads every one of them.
+
+  It recomputes only what IS derivable. The diarizer's raw segments are not retained, so gates 2 and 3
+  cannot be re-measured for old rows; what survives is `speaker_segments` (the aligned output), enough
+  to re-run the balance check and the mapper. Rows it cannot decide stay NULL and are counted separately
+  as "(not derivable)" - a migration that wrote a value for every row would be writing a figure that
+  looks measured and is not.
+
+  On this database (29 Sep 2026, read-only run) it reconciled exactly with an independent probe:
+      ROLE_CONFIDENCE_LOW        17     <- role classification failed (stage C)
+      UNUSABLE_SPEAKER_BALANCE    8     <- diarization/alignment failed (stage A/B)
+      NO_ROLE_SIGNALS             1
+  17 + 9 = 26, the exact NEEDS_REVIEW count.
+
+RELATED TESTS
+  tests/Unit/AudioToText/SpeakerSeparationServiceTest.php   a published separation and a failure carry
+      no diagnosis; one voice is diagnosed as a speaker problem and two unoriented voices as a role
+      problem; thin evidence at the REAL threshold is ROLE_CONFIDENCE_LOW; the same call at two
+      thresholds keeps the same confidence and segments; every reason is a sentence with no jargon
+  tests/Integration/AudioToText/TranscriptionJobRepositoryTest.php   round trip; a published recording
+      stores none; recording one afterwards leaves status, confidence, segments, transcript, role text,
+      roles_confirmed_at and review_count untouched; a diagnosed row is not offered again
+
+======================================================================================
 8.2e TTS UTTERANCE GAP, and RECORDING TYPE DISPLAY LABELS
 ======================================================================================
 

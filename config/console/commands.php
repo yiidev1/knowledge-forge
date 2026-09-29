@@ -19,6 +19,10 @@ return [
     // recordings turn into text. The two do not contend either — transcription is CPU-bound, this waits
     // on HTTPS — so they run side by side, each with its own lock file and schedule.
     'kf:audio:tts-worker' => App\AudioToText\Console\AudioTtsWorkerCommand::class,
+    // Read-only unless asked otherwise, and even then it writes one diagnostic column and nothing
+    // else. Not scheduled: it answers a question somebody is asking, rather than keeping anything
+    // up to date.
+    'kf:audio:diagnose-speaker-review' => App\AudioToText\Console\SpeakerReviewDiagnosisCommand::class,
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,

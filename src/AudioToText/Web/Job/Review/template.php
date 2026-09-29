@@ -126,8 +126,17 @@ $grip = AudioToTextIcons::GRIP;
                 </span>
             <?php else: ?>
                 <span class="a2t-review__state a2t-review__state--unconfirmed">
-                    The system could not tell which speaker is the agent. Your corrections are saved,
-                    but the conversation stays labelled by speaker until you confirm the roles.
+                    <?php // Why this one was left open, when that was recorded. A recording?>
+                    <?php // transcribed before the diagnosis was kept says nothing here and falls?>
+                    <?php // back to the sentence this screen has always shown; guessing a reason?>
+                    <?php // from the status would invent one.?>
+                    <?php if ($page->reviewExplanation !== null): ?>
+                        <?= Html::encode($page->reviewExplanation) ?>
+                    <?php else: ?>
+                        The system could not tell which speaker is the agent. Your corrections are
+                        saved, but the conversation stays labelled by speaker until you confirm the
+                        roles.
+                    <?php endif; ?>
                 </span>
             <?php endif; ?>
 

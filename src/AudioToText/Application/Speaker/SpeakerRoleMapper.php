@@ -6,6 +6,7 @@ namespace App\AudioToText\Application\Speaker;
 
 use App\AudioToText\Domain\Speaker\DialogueAct;
 use App\AudioToText\Domain\Speaker\RoleScoreWeights;
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\SpeakerRole;
 
@@ -66,7 +67,8 @@ final readonly class SpeakerRoleMapper
      *     utterances: list<SpeakerUtterance>,
      *     confidence: float,
      *     speakers: int,
-     *     reason: string|null
+     *     reason: string|null,
+     *     reasonCode: SeparationReviewReason|null
      * }
      */
     public function map(array $utterances): array
@@ -75,14 +77,24 @@ final readonly class SpeakerRoleMapper
         $speakerCount = count($clusters);
 
         if ($speakerCount === 0) {
-            return $this->unresolved($utterances, 0, 'no speaker clusters were produced');
+            return $this->unresolved(
+                $utterances,
+                0,
+                'no speaker clusters were produced',
+                SeparationReviewReason::ONE_SPEAKER_DETECTED,
+            );
         }
 
         if ($speakerCount === 1) {
             // One voice is not a conversation. It may be a monologue, a voicemail, or a diarizer that
             // failed to separate two similar-sounding speakers — and there is no way to tell which from
             // here, so neither role column is filled.
-            return $this->unresolved($utterances, 1, 'only one speaker was detected');
+            return $this->unresolved(
+                $utterances,
+                1,
+                'only one speaker was detected',
+                SeparationReviewReason::ONE_SPEAKER_DETECTED,
+            );
         }
 
         // With three or more voices, map only the two carrying the conversation and leave the rest as
@@ -91,7 +103,12 @@ final readonly class SpeakerRoleMapper
         // remarks should not displace a participant, hence length rather than utterance count.
         $primary = $this->primarySpeakers($clusters);
         if (count($primary) < 2) {
-            return $this->unresolved($utterances, $speakerCount, 'no two speakers carried the conversation');
+            return $this->unresolved(
+                $utterances,
+                $speakerCount,
+                'no two speakers carried the conversation',
+                SeparationReviewReason::ONE_SPEAKER_DETECTED,
+            );
         }
 
         [$first, $second] = $primary;
@@ -103,7 +120,12 @@ final readonly class SpeakerRoleMapper
         $total = $forward + $backward;
 
         if ($total <= 0.0) {
-            return $this->unresolved($utterances, $speakerCount, 'no role signals were found in either speaker');
+            return $this->unresolved(
+                $utterances,
+                $speakerCount,
+                'no role signals were found in either speaker',
+                SeparationReviewReason::NO_ROLE_SIGNALS,
+            );
         }
 
         // Two independent requirements, multiplied so that neither can carry a weak case alone.
@@ -137,6 +159,7 @@ final readonly class SpeakerRoleMapper
             'confidence' => $confidence,
             'speakers' => $speakerCount,
             'reason' => null,
+            'reasonCode' => null,
         ];
     }
 
@@ -282,10 +305,20 @@ final readonly class SpeakerRoleMapper
     /**
      * @param list<SpeakerUtterance> $utterances
      *
-     * @return array{utterances: list<SpeakerUtterance>, confidence: float, speakers: int, reason: string}
+     * @return array{
+     *     utterances: list<SpeakerUtterance>,
+     *     confidence: float,
+     *     speakers: int,
+     *     reason: string,
+     *     reasonCode: SeparationReviewReason
+     * }
      */
-    private function unresolved(array $utterances, int $speakers, string $reason): array
-    {
+    private function unresolved(
+        array $utterances,
+        int $speakers,
+        string $reason,
+        SeparationReviewReason $code,
+    ): array {
         $mapped = [];
         foreach ($utterances as $utterance) {
             $mapped[] = $utterance->withRole(SpeakerRole::UNKNOWN);
@@ -296,6 +329,9 @@ final readonly class SpeakerRoleMapper
             'confidence' => 0.0,
             'speakers' => $speakers,
             'reason' => $reason,
+            // The same fact as `reason`, in the shape a caller can group by. Returned rather than
+            // re-derived from the sentence, which would make the wording load-bearing.
+            'reasonCode' => $code,
         ];
     }
 

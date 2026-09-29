@@ -19,8 +19,13 @@ interface SpeakerDiarizerInterface
     public function method(): string;
 
     /**
-     * @param string $wavPath 16 kHz mono PCM WAV — the same file whisper.cpp transcribed, so the two
-     *                        timelines share an origin and alignment needs no offset correction
+     * @param string   $wavPath     16 kHz mono PCM WAV — the same file whisper.cpp transcribed, so the
+     *                              two timelines share an origin and alignment needs no offset correction
+     * @param int|null $maxSpeakers how many clusters to ask for, or null for the configured count.
+     *                              Only ever passed by a caller that has already seen a degenerate
+     *                              result from the configured count and is retrying it once; there is
+     *                              no setting for it and no caller decides it per recording otherwise.
+     *                              See {@see \App\AudioToText\Domain\Speaker\DegenerateSpeakerClusters}.
      *
      * @return list<SpeakerSegment> chronological
      *
@@ -28,5 +33,5 @@ interface SpeakerDiarizerInterface
      *                                                            it to a separation status rather than
      *                                                            failing the transcription
      */
-    public function diarize(string $wavPath): array;
+    public function diarize(string $wavPath, ?int $maxSpeakers = null): array;
 }

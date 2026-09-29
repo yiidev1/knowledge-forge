@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use Closure;
 use DateTimeImmutable;
@@ -198,4 +199,24 @@ interface TranscriptionJobRepositoryInterface
     public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool;
 
     public function delete(int $id): void;
+
+    /**
+     * Completed recordings left for speaker review that carry no diagnosis yet.
+     *
+     * For `kf:audio:diagnose-speaker-review` alone. Newest first, bounded, and narrowed to the one
+     * state the diagnosis describes — a recording that was published, failed outright or already has an
+     * answer is not asked about again.
+     *
+     * @return list<TranscriptionJob>
+     */
+    public function needingSpeakerReviewDiagnosis(int $limit): array;
+
+    /**
+     * Record why one recording was left for speaker review.
+     *
+     * Writes `speaker_review_reason` and nothing else — not a status, not a confidence, not a role, not
+     * a segment. It cannot move a recording between COMPLETED and NEEDS_REVIEW, which is what makes
+     * running it against live data safe.
+     */
+    public function recordSpeakerReviewDiagnosis(int $id, SeparationReviewReason $reason): void;
 }
