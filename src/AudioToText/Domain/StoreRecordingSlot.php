@@ -104,6 +104,39 @@ final readonly class StoreRecordingSlot
         return $this->recordingType?->label() ?? $this->sourceRole->label();
     }
 
+    /**
+     * Which channel of the call this is, as a position — 0 mixed, 1 the customer's side, 2 the agent's.
+     *
+     * For ORDERING a set of recordings, and for nothing else. The order dialog puts one tab per channel
+     * and has to place them in a fixed sequence; without this it would place them in whatever order the
+     * page happened to render, which for the three named columns is right by accident and for a legacy
+     * Customer + Agent pair is wrong by accident — both of its halves sit in one cell, in the order
+     * their jobs were inserted, so whichever was enqueued first led.
+     *
+     * ## The two vocabularies are still separate
+     *
+     * A recording type is asked first because it is the stronger fact: it was stated at upload. Only a
+     * legacy pair reaches the source role, and only because it has no recording type at all — that is
+     * precisely the case {@see $recordingType} is documented as null for.
+     *
+     * This does NOT say a CALLER recording is a Customer recording. It says both are the second thing
+     * shown, which is a decision about a row of tabs and not a claim about who spoke. Nothing converts
+     * between the two enums here or anywhere else.
+     */
+    public function channelRank(): int
+    {
+        return match ($this->recordingType) {
+            RecordingType::Mixed => 0,
+            RecordingType::Caller => 1,
+            RecordingType::Callee => 2,
+            null => match ($this->sourceRole) {
+                SourceRole::Common => 0,
+                SourceRole::Customer => 1,
+                SourceRole::Agent => 2,
+            },
+        };
+    }
+
     /** Whether a correction screen has anything to show for this recording. */
     public function isReviewable(): bool
     {

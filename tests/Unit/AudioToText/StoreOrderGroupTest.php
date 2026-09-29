@@ -156,6 +156,77 @@ final class StoreOrderGroupTest extends Unit
         self::assertSame(RecordingType::Callee->label(), $agent->label());
     }
 
+    // ------------------------------------------------------------- which channel a recording is
+
+    /**
+     * A recording's place in the row of tabs comes from the channel, never from the cell it landed in.
+     *
+     * The three named columns render in this order anyway, so for them the rank only restates what the
+     * page does. It exists for the case where the page does NOT: a legacy Customer + Agent pair puts
+     * both of its halves in the FIRST cell — the one headed Mix / Common — in the order their jobs were
+     * inserted. Ordering the tabs by where the buttons sit would put those two under Mix and let
+     * whichever half was enqueued first lead, both of which are accidents of storage.
+     */
+    public function testAChannelsPositionComesFromTheChannelAndNotTheCell(): void
+    {
+        self::assertSame(0, $this->slot(RecordingType::Mixed)->channelRank());
+        self::assertSame(1, $this->slot(RecordingType::Caller)->channelRank());
+        self::assertSame(2, $this->slot(RecordingType::Callee)->channelRank());
+
+        // A legacy half has no recording type at all, so its own role answers — and lands it in the
+        // same second and third places, which is where Customer and Agent belong in a row of tabs.
+        self::assertSame(1, $this->slot(null, SourceRole::Customer)->channelRank());
+        self::assertSame(2, $this->slot(null, SourceRole::Agent)->channelRank());
+        self::assertSame(0, $this->slot(null, SourceRole::Common)->channelRank());
+    }
+
+    /**
+     * Customer leads Agent whichever way round the pair was stored.
+     *
+     * `legacySeparate` is filled in job-id order, so a pair whose Agent half was enqueued first arrives
+     * Agent-then-Customer. The rank is what makes the tabs read the same either way.
+     */
+    public function testALegacyPairIsOrderedCustomerThenAgentHoweverItWasStored(): void
+    {
+        $customer = $this->slot(null, SourceRole::Customer);
+        $agent = $this->slot(null, SourceRole::Agent);
+
+        foreach ([[$customer, $agent], [$agent, $customer]] as $stored) {
+            $ranks = array_map(
+                static fn(StoreRecordingSlot $slot): int => $slot->channelRank(),
+                $stored,
+            );
+
+            sort($ranks);
+
+            self::assertSame([1, 2], $ranks, 'Customer is always the first of the two.');
+        }
+
+        self::assertLessThan(
+            $agent->channelRank(),
+            $customer->channelRank(),
+            'And never the other way round, whatever order the row rendered them in.',
+        );
+    }
+
+    /**
+     * Neither half of a legacy pair is ever named after the column holding it.
+     *
+     * Both are drawn inside the Mix / Common cell. They are described by their own `source_role`, so
+     * they read Customer and Agent — and a rank that put them at 1 and 2 must not have dragged the
+     * LABEL along with it.
+     */
+    public function testALegacyHalfIsNeverLabelledAfterTheColumnItSitsIn(): void
+    {
+        foreach ([SourceRole::Customer, SourceRole::Agent] as $role) {
+            $half = $this->slot(null, $role);
+
+            self::assertSame($role->label(), $half->label());
+            self::assertNotSame(RecordingType::Mixed->label(), $half->label());
+            self::assertNull($half->recordingType, 'It has no recording type to be named by.');
+        }
+    }
+
     // ------------------------------------------------------------------------- what a row holds
 
     public function testEveryRecordingOfAnOrderIsCountedIncludingTheOlderOnes(): void

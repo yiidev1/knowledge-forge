@@ -69,6 +69,28 @@ final readonly class StoreOrderGroup
     }
 
     /**
+     * Whether anything in this row can be opened for reading and correction.
+     *
+     * Asked by the template to decide whether the order id is a way in or plain text. A row whose only
+     * recording is still being transcribed has nothing a details view could show — that endpoint
+     * answers 404 for a recording with nothing to correct — so the id stays inert and Manage Audio
+     * remains the place to watch it finish.
+     *
+     * Over the primaries alone, which is what the row shows. A superseded version is reachable from
+     * Manage Audio and is not what the order id opens.
+     */
+    public function hasReviewableRecording(): bool
+    {
+        foreach ($this->primaries() as $slot) {
+            if ($slot->isReviewable()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * The primary recording of each kind — what the table's cells and the group modals speak about.
      *
      * @return list<StoreRecordingSlot>

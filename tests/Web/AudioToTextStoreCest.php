@@ -9,6 +9,8 @@ use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\AudioToText\Application\Tts\TtsRenderKey;
+use App\AudioToText\Domain\RecordingType;
+use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\Shared\Audio\RecordingTypeLabels;
 use App\Tests\Support\LegacySeparateAudioUpload;
@@ -19,6 +21,7 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function array_keys;
+use function array_unique;
 use function array_map;
 use function codecept_data_dir;
 use function file_put_contents;
@@ -2302,6 +2305,259 @@ final class AudioToTextStoreCest
         $I->seeResponseCodeIs(422);
         $I->seeInSource('"success":false');
         Assert::assertCount(1, $this->conversationsFor(self::STORE_A), 'Nothing was queued.');
+    }
+
+    // ------------------------------------------------------------------- the order-level details modal
+
+    /**
+     * The order id is a way in to every recording of the call, and the row carries the channels.
+     *
+     * Asserted on the markup rather than by clicking, because the markup IS the contract: the modal
+     * builds its tabs from this row's own Details buttons, in the order the columns run. Nothing is
+     * fetched to discover them, so nothing about the page's cost changes.
+     */
+    public function theOrderIdOpensEveryRecordingOfTheCall(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->completedOrder($I, ['MIXED', 'CALLER', 'CALLEE']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('button.a2t-order-id--open[data-a2t-order-open="16513791"]');
+        $I->see('#16513791', 'button.a2t-order-id--open');
+
+        // The dialog's tab strip is rendered empty and hidden; the script fills it on open.
+        $I->seeElement('#a2t-review-dialog .a2t-tabs[data-a2t-review-tabs][hidden]');
+
+        // Three channels in the row, in column order — which is the priority the modal selects by:
+        // Mix / Common, then Customer, then Agent. Marked recordings only: a superseded upload sits in
+        // the same cell with its own Details button, and it is not a channel.
+        Assert::assertSame(
+            ['Mix / Common', 'Customer', 'Agent'],
+            $this->channelLabels($I),
+        );
+    }
+
+    /**
+     * Fewer recordings means fewer tabs, and the first one still leads.
+     *
+     * The default channel is whichever comes first in that order, so an order with no mixed recording
+     * opens on Customer without anything having to say so.
+     *
+     * @dataProvider orderChannelSets
+     */
+    public function theRowOffersOnlyTheChannelsTheOrderHas(WebTester $I, \Codeception\Example $case): void
+    {
+        $this->signIn($I);
+        $this->completedOrder($I, (array) $case['upload']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        Assert::assertSame(
+            (array) $case['tabs'],
+            $this->channelLabels($I),
+            'The first of these is the tab the modal opens on.',
+        );
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function orderChannelSets(): array
+    {
+        return [
+            ['upload' => ['MIXED', 'CALLER', 'CALLEE'], 'tabs' => ['Mix / Common', 'Customer', 'Agent']],
+            ['upload' => ['CALLER', 'CALLEE'], 'tabs' => ['Customer', 'Agent']],
+            ['upload' => ['CALLEE'], 'tabs' => ['Agent']],
+            ['upload' => ['MIXED', 'CALLEE'], 'tabs' => ['Mix / Common', 'Agent']],
+            ['upload' => ['CALLER'], 'tabs' => ['Customer']],
+        ];
+    }
+
+    /**
+     * An order with nothing finished is not a way in — it is a row to watch.
+     *
+     * The details endpoint answers 404 for a recording with nothing to correct, so an order id that
+     * opened a dialog on one would open an error. It stays plain text, and Manage Audio remains where
+     * a recording still being transcribed is inspected — which is the behaviour that already existed.
+     */
+    public function anOrderWithNothingFinishedIsNotAWayIn(WebTester $I): void
+    {
+        $this->signIn($I);
+        // Uploaded, never completed: the job stays QUEUED, so nothing in the row is reviewable.
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->dontSeeElement('button.a2t-order-id--open');
+        $I->see('#16513791', '.a2t-order-id');
+        $I->dontSeeElement('.a2t-orders tbody tr:first-child [data-a2t-current-channel]');
+
+        // And the way to watch it is still there.
+        $I->seeElement('.a2t-orders tbody tr:first-child [data-a2t-manage]');
+    }
+
+    /** A row that named no order has one recording, so its id opens nothing it does not already show. */
+    public function arowWithNoOrderIdIsNotAWayIn(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED');
+
+        $job = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($job['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->dontSeeElement('button.a2t-order-id--open');
+        $I->see('No order');
+    }
+
+    /**
+     * Each tab points at its OWN recording, and the current version of it.
+     *
+     * The modal reads whichever url the tab carries, so two tabs pointing at one recording — or at a
+     * superseded version of one — would show the same transcript under two names. The urls are the
+     * row's, which the repository built from the group's current recordings.
+     */
+    public function eachChannelPointsAtItsOwnCurrentRecording(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->completedOrder($I, ['MIXED', 'CALLER']);
+
+        // A second caller upload, completed, which becomes the current caller recording.
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER');
+        $rows = $this->conversationsFor(self::STORE_A);
+        $newest = $this->childrenOf((int) $rows[0]['id'])[0];
+        $this->completeWithSeparation($newest['public_id']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        // The row now holds THREE Details buttons — Mix, the current Customer, and the Customer
+        // recording it superseded, which is drawn inside the fold Manage Audio opens.
+        Assert::assertCount(
+            3,
+            $I->grabMultiple('.a2t-orders tbody tr:first-child [data-a2t-details]', 'data-a2t-details'),
+            'Arranged as expected: a replacement leaves the recording it replaced in the cell.',
+        );
+
+        // Two of them are channels. A side uploaded twice is one tab, not two both called Customer.
+        $urls = $I->grabMultiple(
+            '.a2t-orders tbody tr:first-child [data-a2t-current-channel]',
+            'data-a2t-details',
+        );
+
+        Assert::assertSame(['Mix / Common', 'Customer'], $this->channelLabels($I));
+        Assert::assertCount(2, $urls);
+        Assert::assertSame($urls, array_unique($urls), 'No two tabs may open the same recording.');
+        Assert::assertStringContainsString(
+            $newest['public_id'],
+            $urls[1],
+            'The Customer tab opens the newest FINISHED caller recording, not the one it replaced.',
+        );
+    }
+
+    /**
+     * The channel names this row offers, in the order the modal would place its tabs.
+     *
+     * Marked recordings only — see `data-a2t-current-channel`. Reading every Details button instead
+     * would count a superseded upload as a channel, which is the mistake this selector exists to stop.
+     *
+     * @return list<string>
+     */
+    private function channelLabels(WebTester $I): array
+    {
+        return $I->grabMultiple(
+            '.a2t-orders tbody tr:first-child [data-a2t-current-channel]',
+            'data-a2t-details-label',
+        );
+    }
+
+    /**
+     * A legacy Customer + Agent pair offers two tabs, named for what they are and in that order.
+     *
+     * The case the tab ordering had to be rewritten for. Both halves render inside the FIRST cell — the
+     * one headed Mix / Common — because a pre-recording-type pair belongs in no named column. Ordering
+     * the tabs by where the buttons sit would therefore have put both under Mix, in the order their
+     * jobs happened to be inserted.
+     *
+     * So this asserts the three things that could go wrong at once: the names are Customer and Agent
+     * and not Mix, Customer leads, and neither appears twice.
+     */
+    public function alegacyPairOffersCustomerThenAgentAndNeverMix(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadSeparate($I, self::STORE_A);
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->completeWithSeparation($job['public_id']);
+            }
+        }
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        // Both halves really are in the first cell, which is what makes position useless here.
+        $I->seeElement('.a2t-orders tbody tr:first-child td:nth-of-type(2) .a2t-legacy');
+        Assert::assertCount(
+            2,
+            $I->grabMultiple(
+                '.a2t-orders tbody tr:first-child td:nth-of-type(2) [data-a2t-current-channel]',
+                'data-a2t-details',
+            ),
+            'Arranged as expected: a legacy pair puts both halves in the Mix / Common column.',
+        );
+
+        $labels = $this->channelLabels($I);
+
+        Assert::assertSame(
+            [SourceRole::Customer->label(), SourceRole::Agent->label()],
+            $labels,
+            'Customer leads Agent, and neither is named after the column holding them.',
+        );
+        Assert::assertSame($labels, array_unique($labels), 'Neither name appears twice.');
+        Assert::assertNotContains(
+            RecordingType::Mixed->label(),
+            $labels,
+            'A legacy pair has no mixed recording, so it offers no Mix / Common tab.',
+        );
+
+        // And the ranks the script sorts on are the channel positions, not 0 and 1 by arrival.
+        Assert::assertSame(
+            ['1', '2'],
+            $this->channelRanks($I),
+            'Customer is the second channel and Agent the third, exactly as a typed row would be.',
+        );
+    }
+
+    /**
+     * The channel positions this row published, in the order the tabs would be drawn.
+     *
+     * @return list<string>
+     */
+    private function channelRanks(WebTester $I): array
+    {
+        return $I->grabMultiple(
+            '.a2t-orders tbody tr:first-child [data-a2t-current-channel]',
+            'data-a2t-current-channel',
+        );
+    }
+
+    /**
+     * One upload per named type for one order, all completed.
+     *
+     * @param list<string> $types
+     */
+    private function completedOrder(WebTester $I, array $types): void
+    {
+        foreach ($types as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->completeWithSeparation($job['public_id']);
+            }
+        }
     }
 
     // ------------------------------------------------------ what a recording type is called on screen

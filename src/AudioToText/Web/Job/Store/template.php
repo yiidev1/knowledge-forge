@@ -255,7 +255,7 @@ $groupUrl = static fn(string $route, GroupKey $key): string => $urlGenerator->ge
  * is sixty pieces of browser chrome and sixty preloads. One shared controller in
  * `audio-store.js` plays them, which is also what makes "only one at a time" possible.
  */
-$slotCellInner = static function (StoreRecordingSlot $slot) use (
+$slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = false) use (
     $clock,
     $originalUrl,
     $fragmentUrl,
@@ -273,7 +273,13 @@ $slotCellInner = static function (StoreRecordingSlot $slot) use (
     }
 
     if ($slot->isReviewable()) {
+        // `data-a2t-current-channel` marks THE recording this column is about, as opposed to one it
+        // superseded — the same closure draws both, and the older ones sit in the hidden fold below.
+        // The order dialog builds its tabs from the marked ones, so a side uploaded twice offers one
+        // tab rather than two named the same thing. Empty value: it is a marker, and the name it would
+        // carry is already on `data-a2t-details-label`.
         $html .= '<button class="a2t-slot__link" type="button"'
+            . ($isCurrent ? ' data-a2t-current-channel="' . $slot->channelRank() . '"' : '')
             . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
@@ -339,7 +345,15 @@ $slotCell = static function (
     }
 
     if ($slot->isReviewable()) {
+        // THE recording this column is about, and WHICH channel it is — 0 mixed, 1 the customer's
+        // side, 2 the agent's, from the slot rather than from the cell it landed in.
+        //
+        // The superseded recordings below it are drawn by `$slotCellInner`, which leaves the marker off,
+        // so the order dialog builds one tab per channel rather than one per upload. It sorts on the
+        // value, which is what stops a legacy Customer + Agent pair — whose halves share ONE cell and
+        // are rendered in the order their jobs were inserted — from being ordered by that accident.
         $html .= '<button class="a2t-slot__link" type="button"'
+            . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
             . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
@@ -503,7 +517,16 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                     <?php $status = $group->aggregateStatus(); ?>
                     <tr>
                         <td>
-                            <?php if ($group->orderId !== null): ?>
+                            <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
+                                <?php // One way in to every recording of this call. The channels it?>
+                                <?php // offers are the Details buttons already in this row, so the?>
+                                <?php // page carries nothing extra for it and nothing is fetched?>
+                                <?php // until it is opened.?>
+                                <button class="a2t-order-id a2t-order-id--open" type="button"
+                                        data-a2t-order-open="<?= Html::encode($group->orderId) ?>">#<?= Html::encode($group->orderId) ?></button>
+                            <?php elseif ($group->orderId !== null): ?>
+                                <?php // Nothing in this row has finished, so there is nothing for a?>
+                                <?php // details view to show. Manage Audio is where it is watched.?>
                                 <span class="a2t-order-id">#<?= Html::encode($group->orderId) ?></span>
                             <?php else: ?>
                                 <?php
@@ -776,6 +799,16 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         <button class="source-modal__close" type="button" data-a2t-dialog-close
             title="Close" aria-label="Close">&times;</button>
     </div>
+    <?php
+    // One tab per recording of the call, when this dialog was opened from an order id. Built by the
+    // script from the Details buttons the row already carries, so nothing is rendered here and nothing
+    // is fetched until a tab is chosen.
+    //
+    // Hidden throughout the single-recording path, and hidden for an order with only one recording:
+    // the Original transcript dialog above draws its tab bar on the same rule, and a tab strip holding
+    // one tab is a control that cannot do anything.
+?>
+    <div class="a2t-tabs" role="tablist" data-a2t-review-tabs hidden></div>
     <p class="source-modal__status" data-a2t-review-status hidden></p>
     <?php
     // The token this dialog's corrections are sent with. A rendered input, exactly as every form on

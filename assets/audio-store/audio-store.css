@@ -172,6 +172,30 @@
 .a2t-orders td { vertical-align: top; }
 
 .a2t-order-id { display: block; font-weight: 650; font-size: .95rem; letter-spacing: -.01em; }
+
+/* The order id as a way in to every recording of the call.
+   A `<button>`, because it opens a dialog and does not navigate — so it is stripped back to the text it
+   replaced rather than dressed as a button. It reads as an ordinary heading until it is pointed at,
+   which is what keeps a column of twenty from reading as twenty calls to action; the underline on hover
+   and focus is what says it does something. `text-align: left` and the zeroed padding are undoing the
+   browser's own button defaults, which would otherwise centre it away from the row beneath. */
+.a2t-order-id--open {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 650;
+    letter-spacing: -.01em;
+    text-align: left;
+    cursor: pointer;
+}
+.a2t-order-id--open:hover { color: var(--primary); text-decoration: underline; }
+.a2t-order-id--open:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
 .a2t-order-when { display: block; margin-top: .15rem; font-size: .74rem; color: var(--text-faint); }
 
 /* One recording inside a cell: a play control, a way in, and — when there are older recordings of the

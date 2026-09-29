@@ -2145,6 +2145,101 @@ RELATED TESTS
       page reads as CURRENT rather than as "different voice setting" (shared with tests/E2E/complete-tts.php)
 
 ======================================================================================
+8.2f MODAL: Order-level details - one dialog, a tab per recording of the call
+======================================================================================
+
+WHERE     The ORDER ID cell on GET /audio-to-text/store/{sourceId}
+MARKUP    src/AudioToText/Web/Job/Store/template.php   (the order id, and #a2t-review-dialog's tab strip)
+SCRIPT    assets/audio-store/audio-store.js            openOrder / showChannels / chooseChannel /
+                                                       openReviewOn / renderReview + paintReview
+DOMAIN    StoreOrderGroup::hasReviewableRecording()
+
+  NO NEW ROUTE, NO NEW ACTION, NO NEW ENDPOINT, NO MIGRATION.
+
+THE ONE IDEA
+  The Details dialog was ALREADY a single reusable modal driven by one url: `openReview()` read
+  `data-a2t-details` off a button and `renderReview()` drew everything from that fragment - players,
+  AI audio state, Update Audio, Regenerate, transcript turns, corrections, versions. So an order-level
+  view needed no new rendering at all, only a tab strip that re-points that url.
+
+  A Details button opens ONE recording and draws no tabs (unchanged). The order id opens the same
+  dialog with a tab per recording.
+
+WHERE THE TABS COME FROM - and why nothing is fetched to find them
+  `openOrder()` reads the `[data-a2t-details]` buttons IN ITS OWN ROW. Those buttons are the server's
+  answer to "what can be opened here": the row renders `$group->mixed / caller / callee`, which are the
+  repository's CURRENT recordings (newest COMPLETED by conversation id - see 8.2c / `primary()`), and a
+  button exists only where `isReviewable()`. Document order is the required priority, because the
+  columns run Mix / Common, Customer, Agent.
+
+  Re-asking an endpoint for the same three labels would be a second round trip whose only possible
+  outcome is agreeing with the page. Security is unchanged either way: each url is server-generated and
+  the fragment action revalidates the job by public id, so a tampered one 404s.
+
+LOADING - one request to open, one per tab, then none
+      open an order     -> 1 fetch  (the default channel's fragment)
+      choose a tab      -> 1 fetch  (that channel's), cached for the life of the dialog
+      choose it again   -> 0 fetches
+  `channelCache` is keyed by fragment url. ONLY a tab switch reads from it - `renderReview()` takes the
+  cache flag as its third argument and every action path passes two, so a correction, a generation
+  request and the generation watcher all re-read and OVERWRITE the entry by construction. The cache is
+  emptied when the dialog closes and when a different call is opened.
+
+  The store page itself is unchanged: 4 fixed queries for a whole page (keys -> conversations -> jobs ->
+  renditions, all IN-lists, guarded by the existing `Questions`-counter test), and the order id adds one
+  attribute to a span that was already rendered. NO extra query, NO extra payload, NO preloading.
+
+WHICH TAB IS WHICH - by channel, never by cell
+  The marked button carries the channel's POSITION: `data-a2t-current-channel="0|1|2"` from
+  `StoreRecordingSlot::channelRank()` - 0 mixed, 1 the customer's side, 2 the agent's. `channelsIn()`
+  indexes a sparse array by it, so ordering has no sort to get wrong and a second recording claiming a
+  taken position is dropped.
+
+  THIS EXISTS FOR LEGACY CUSTOMER + AGENT PAIRS. A pre-recording-type pair belongs in no named column,
+  so BOTH halves render inside the FIRST cell - the one headed Mix / Common - in the order
+  `$legacySeparate` was filled, which is `ORDER BY j.id ASC`. Ordering tabs by document position would
+  therefore have put both under Mix and let whichever half was ENQUEUED FIRST lead. Both are accidents
+  of storage.
+
+  `channelRank()` asks `recordingType` first (stated at upload, the stronger fact) and reaches
+  `source_role` only for a legacy half - the case `recordingType` is documented as null for. It does NOT
+  say CALLER is a Customer; it says both are the second thing shown, which is a decision about a row of
+  tabs. The LABEL is untouched: a legacy half still reads its own `SourceRole::label()`, never "Mix".
+
+DEFAULT TAB AND AVAILABILITY
+  First channel in the row = Mix / Common -> Customer -> Agent. A channel with no reviewable current
+  recording gets NO TAB (hidden, not disabled - the rule `openTranscripts` already follows), and the
+  strip itself is hidden below two tabs, so an order with one recording opens straight onto it.
+
+  An order with NOTHING finished is not a way in at all: `hasReviewableRecording()` is false, the id
+  stays a plain `<span>`, and Manage Audio remains where a recording still transcribing is watched -
+  which is the behaviour that already existed. A row that named no order holds one recording and is
+  likewise left inert.
+
+TITLE AND META
+  Title: "Order #123123". The channel is named by the selected tab, and `channelLabel` is prefixed to
+  the existing meta line: "Customer · 22449119-caller.wav · Deepgram (cloud) · Version 3". Single-
+  recording opens are unchanged - title is the recording's label and no channel is prefixed.
+
+UNCHANGED
+  Original transcript, Generate Text to Audio, Manage Audio, the individual Details buttons, the full
+  editor, ReplaceAction, the fragment action, every worker/queue/lock, and the immutability of the
+  machine transcript. No heavy work moved into the web request.
+
+RELATED TESTS
+  tests/Unit/AudioToText/OrderChannelTabsTest.php   channels read from the row and not fetched; opening
+      loads only the default channel; a tab switch is the only cached caller; every action re-reads; a
+      fresh read overwrites the cache; the cache dies with the dialog; one recording gets no strip
+  tests/Unit/AudioToText/StoreOrderGroupTest.php    a channel's position comes from the channel and not
+      the cell; a legacy pair is Customer-then-Agent whichever way round it was STORED (both orders
+      exercised); a legacy half is never labelled after the column holding it
+  tests/Web/AudioToTextStoreCest.php                the order id is a button carrying its order; a
+      legacy pair offers Customer then Agent, never Mix, never duplicated, with ranks 1 and 2; the
+      row lists exactly the available channels in priority order (5 cases); an unfinished order is not
+      a way in and still offers Manage Audio; a no-order row is not a way in; each tab points at its
+      own CURRENT recording after a replacement
+
+======================================================================================
 8.2e TTS UTTERANCE GAP, and RECORDING TYPE DISPLAY LABELS
 ======================================================================================
 

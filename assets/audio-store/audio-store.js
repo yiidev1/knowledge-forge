@@ -1016,6 +1016,19 @@ window.KFAudioStages = {
     var reviewDialog = dialogOf(reviewBody);
 
     var reviewUrl = null;
+    var reviewTabs = document.querySelector('[data-a2t-review-tabs]');
+    /**
+     * Payloads already read in THIS open dialog, keyed by their fragment url.
+     *
+     * Only a tab switch reads from it, and only for the lifetime of the dialog. Every path that
+     * changes a recording — a correction, a generation request, the watcher following one — re-reads
+     * and overwrites the entry, so nothing here can be older than the last thing that happened.
+     */
+    var channelCache = {};
+    /** The revision trail that goes with each of those, keyed the same way and cleared with them. */
+    var historyCache = {};
+    var orderLabel = null;     // "Order #123123" while a whole call is open; null for one recording
+    var channelLabel = null;   // the channel's own name, for the meta line when tabs are in play
     var version = -1;
     var busy = false;
 
@@ -1808,6 +1821,9 @@ window.KFAudioStages = {
                     return;
                 }
 
+                // The cached copy too, or switching away and back would show the state this read just
+                // replaced. The panel is repainted; the transcript is deliberately left alone.
+                channelCache[requested] = fresh;
                 paintListen(fresh);
             }).catch(function () {
                 // A lost poll is not a lost generation. Ask again; the panel says nothing new meanwhile.
@@ -2622,45 +2638,66 @@ window.KFAudioStages = {
         window.speechSynthesis.resume();
     }
 
-    function renderReview(message, resumeAt) {
+    /**
+     * @param {boolean} fromCache true only when switching back to a channel already read in this
+     *                            dialog. Every other caller re-reads, which is what keeps a cached
+     *                            payload from outliving a correction or a generation.
+     */
+    function renderReview(message, resumeAt, fromCache) {
         if (reviewUrl === null) {
             return;
         }
         var requested = reviewUrl;
+
+        if (fromCache === true && channelCache[requested] !== undefined) {
+            paintReview(channelCache[requested], requested, message, resumeAt, true);
+
+            return;
+        }
+
         say(reviewStatus, message || 'Loading transcript…');
 
         load(requested).then(function (data) {
             if (reviewUrl !== requested) {
                 return; // The dialog moved on to another recording while this was in flight.
             }
-            version = data.version;
-            reviewMeta.textContent = [data.filename, data.provider, 'Version ' + data.version]
-                .filter(function (part) { return part; })
-                .join(' · ');
 
-            reviewNotice(data);
-            // Whatever was being read aloud belonged to the turns about to be replaced.
-            speechStop();
-            paintListen(data);
-            empty(reviewScroll);
-            var thread = el('div', 'a2t-thread');
-            data.turns.forEach(function (turn) { thread.appendChild(reviewTurn(turn)); });
-            reviewScroll.appendChild(thread);
-            reviewBody.hidden = false;
-            // Back to where the reader was, once the new turns have a height to scroll through.
-            reviewScroll.scrollTop = resumeAt || 0;
-            loadHistory(data.urls.history, requested);
-
-            if (message) {
-                say(reviewStatus, message);
-            } else {
-                quiet(reviewStatus);
-            }
+            // Overwrites whatever was cached for this recording, so the entry is always the newest
+            // answer the server gave rather than the first one.
+            channelCache[requested] = data;
+            paintReview(data, requested, message, resumeAt);
         }).catch(function (error) {
             if (reviewUrl === requested) {
                 fail(reviewStatus, error.message, function () { renderReview(null, resumeAt); });
             }
         });
+    }
+
+    /** Draw one recording's payload into the dialog. Reached from a fresh read and from the cache. */
+    function paintReview(data, requested, message, resumeAt, fromCache) {
+        version = data.version;
+        reviewMeta.textContent = [channelLabel, data.filename, data.provider, 'Version ' + data.version]
+            .filter(function (part) { return part; })
+            .join(' · ');
+
+        reviewNotice(data);
+        // Whatever was being read aloud belonged to the turns about to be replaced.
+        speechStop();
+        paintListen(data);
+        empty(reviewScroll);
+        var thread = el('div', 'a2t-thread');
+        data.turns.forEach(function (turn) { thread.appendChild(reviewTurn(turn)); });
+        reviewScroll.appendChild(thread);
+        reviewBody.hidden = false;
+        // Back to where the reader was, once the new turns have a height to scroll through.
+        reviewScroll.scrollTop = resumeAt || 0;
+        loadHistory(data.urls.history, requested, fromCache);
+
+        if (message) {
+            say(reviewStatus, message);
+        } else {
+            quiet(reviewStatus);
+        }
     }
 
     /**
@@ -2674,8 +2711,14 @@ window.KFAudioStages = {
      * Re-fetched after each read rather than once, because a correction *creates* history — a message
      * with no clock icon a moment ago has one now, and its dialog has to exist for it.
      */
-    function loadHistory(url, requested) {
+    function loadHistory(url, requested, fromCache) {
         if (!historyHost || !url) {
+            return;
+        }
+
+        if (fromCache === true && historyCache[url] !== undefined) {
+            historyHost.innerHTML = historyCache[url];
+
             return;
         }
 
@@ -2686,6 +2729,10 @@ window.KFAudioStages = {
         }).then(function (response) {
             return response.ok ? response.text() : '';
         }).then(function (html) {
+            // Overwritten rather than kept, for the same reason the payload is: a correction creates
+            // history, so the newest answer is the only one worth remembering.
+            historyCache[url] = html;
+
             // Another recording may have been opened while this was in flight; its dialogs win.
             if (reviewUrl === requested) {
                 historyHost.innerHTML = html;
@@ -2696,13 +2743,131 @@ window.KFAudioStages = {
         });
     }
 
+    /**
+     * Open the dialog on one recording — the single-recording path, unchanged.
+     *
+     * The tab strip is cleared and hidden, so this reads exactly as it did before orders could be
+     * opened: one recording, its own title, no way to reach another.
+     */
     function openReview(button) {
-        reviewUrl = button.getAttribute('data-a2t-details');
+        orderLabel = null;
+        showChannels([], null);
+
+        openReviewOn(
+            button.getAttribute('data-a2t-details'),
+            button.getAttribute('data-a2t-details-label') || 'Recording details',
+            button.getAttribute('data-a2t-details-full'),
+        );
+    }
+
+    /**
+     * Open the dialog on a whole order, with a tab per recording of the call.
+     *
+     * The channels come from the Details buttons THIS ROW already rendered, and only the ones marked
+     * `data-a2t-current-channel`. That is not a shortcut around the server: those buttons are the
+     * server's own answer to "what can be opened here", built from the group's current recordings — the
+     * newest FINISHED version of each kind — and a button exists only where there is something to show.
+     * Re-asking an endpoint for the same three labels would be a second round trip that could only
+     * agree with what is already on the page.
+     *
+     * The marker is what separates a channel from an upload. A side recorded twice renders its
+     * superseded version in the same cell, inside the fold that Manage Audio opens, and those carry a
+     * Details button too — collecting every one of them would offer two tabs both called "Customer".
+     *
+     * Its VALUE is the channel's position, so the tabs are ordered by what they are rather than by
+     * where they were drawn. See `channelsIn`.
+     *
+     * Document order is the priority the request asked for, because the columns are in that order:
+     * Mix / Common, then Customer, then Agent. Nothing sorts it.
+     *
+     * ONE fetch happens here — the default channel's. The others are fetched when their tab is chosen,
+     * and then only once. See `channelCache`.
+     */
+    function openOrder(button) {
+        var channels = channelsIn(button.closest('tr'));
+
+        if (channels.length === 0) {
+            return; // The order id is not rendered as a way in without one; belt and braces.
+        }
+
+        orderLabel = 'Order #' + button.getAttribute('data-a2t-order-open');
+        showChannels(channels, channels[0]);
+        openReviewOn(channels[0].url, orderLabel, channels[0].full, channels[0].label);
+    }
+
+    /**
+     * Draw the tab strip, or take it away.
+     *
+     * Hidden below two, which is the rule the Original transcript dialog above already follows: an
+     * order with one recording opens straight onto it, and a strip holding a single tab would be a
+     * control that cannot do anything.
+     */
+    function showChannels(channels, selected) {
+        // A different call, so nothing read for the last one may be reused.
+        channelCache = {};
+        historyCache = {};
+
+        if (!reviewTabs) {
+            return;
+        }
+
+        empty(reviewTabs);
+        reviewTabs.hidden = channels.length < 2;
+
+        if (channels.length < 2) {
+            return;
+        }
+
+        channels.forEach(function (channel) {
+            var tab = el('button', 'a2t-tab', channel.label);
+            tab.type = 'button';
+            tab.setAttribute('role', 'tab');
+            // Set at creation, so a tab nobody has pressed yet still says what it is rather than
+            // carrying no state until the first switch.
+            tab.setAttribute('aria-selected', channel === selected ? 'true' : 'false');
+            tab.addEventListener('click', function () { chooseChannel(channel, tab); });
+            reviewTabs.appendChild(tab);
+        });
+    }
+
+    /**
+     * Switch the dialog to another recording of the same call, without closing it.
+     *
+     * Served from `channelCache` when this channel has been read once already, so Customer → Agent →
+     * Customer is two requests rather than three. The cache holds only what a tab switch put there and
+     * is thrown away when the dialog closes; every action that CHANGES a recording — a correction, a
+     * generation, the watcher following one — re-reads and overwrites its entry, so a cached payload
+     * can never be older than the last thing that happened to it.
+     */
+    function chooseChannel(channel, tab) {
+        if (reviewUrl === channel.url) {
+            return; // Already showing. Re-rendering would only lose the reader's scroll position.
+        }
+
+        Array.from(reviewTabs.children).forEach(function (other) {
+            other.setAttribute('aria-selected', other === tab ? 'true' : 'false');
+        });
+
+        openReviewOn(channel.url, orderLabel || channel.label, channel.full, channel.label, true);
+    }
+
+    /**
+     * Everything both ways in have in common: point the dialog at one recording and read it.
+     *
+     * @param {string}  url        the recording's fragment endpoint
+     * @param {string}  title      what the dialog is about — a recording, or the order it belongs to
+     * @param {?string} full       where "Open full editor" goes for this recording
+     * @param {?string} label      the channel's own name, shown in the meta line when tabs are in play
+     * @param {boolean} fromCache  whether a payload already read for this url may be reused
+     */
+    function openReviewOn(url, title, full, label, fromCache) {
+        reviewUrl = url;
+        channelLabel = label || null;
         version = -1;
         busy = false;
-        reviewTitle.textContent = button.getAttribute('data-a2t-details-label') || 'Recording details';
+        reviewTitle.textContent = title;
         reviewMeta.textContent = '';
-        fullEditor.href = button.getAttribute('data-a2t-details-full');
+        fullEditor.href = full;
         empty(reviewNoticeBox);
         empty(reviewScroll);
         // A dialog opening on another recording must not inherit the last one's audio, spoken or
@@ -2725,7 +2890,7 @@ window.KFAudioStages = {
         }
         reviewBody.hidden = true;
         openDialog(reviewDialog);
-        renderReview(null, 0);
+        renderReview(null, 0, fromCache === true);
     }
 
     /**
@@ -2752,9 +2917,86 @@ window.KFAudioStages = {
 
         var button = document.querySelector('[data-a2t-details*="' + wanted[1] + '"]');
 
-        if (button) {
-            openReview(button);
+        if (!button) {
+            return;
         }
+
+        // Back into the order view when that is where the reader was — the row's own order id, then the
+        // tab whose recording this is. Update Audio reloads the page because the row is server-rendered
+        // and nothing re-renders one row, and dropping the reader into a single recording afterwards
+        // would take away the other two channels they had open a moment earlier.
+        var row = button.closest('tr');
+        var order = row === null ? null : row.querySelector('[data-a2t-order-open]');
+
+        if (order === null) {
+            openReview(button);
+
+            return;
+        }
+
+        openOrder(order);
+        selectChannelFor(button.getAttribute('data-a2t-details'));
+    }
+
+    /** Move the open order dialog to the tab holding one recording, if it is not already there. */
+    function selectChannelFor(url) {
+        if (!reviewTabs || reviewTabs.hidden || reviewUrl === url) {
+            return;
+        }
+
+        Array.from(reviewTabs.children).forEach(function (tab, index) {
+            if (index === channelIndexOf(url)) {
+                tab.click();
+            }
+        });
+    }
+
+    /** Which tab a recording's url belongs to. Through `channelsIn`, so it agrees with what was drawn. */
+    function channelIndexOf(url) {
+        var control = document.querySelector('[data-a2t-details="' + url + '"]');
+
+        return channelsIn(control === null ? null : control.closest('tr'))
+            .map(function (channel) { return channel.url; })
+            .indexOf(url);
+    }
+
+    /**
+     * The channels one row offers, in the order their tabs belong in.
+     *
+     * Ordered by the rank the SERVER put on each marker — 0 mixed, 1 the customer's side, 2 the
+     * agent's — and never by where the button sits. The three named columns happen to render in that
+     * order, but a legacy Customer + Agent pair puts BOTH of its halves in the first cell, in the order
+     * their jobs were inserted; ordering by position would let whichever was enqueued first lead, and
+     * would place them under the column that holds them rather than under what they are.
+     *
+     * One channel per rank. Two recordings claiming the same position would be two tabs with one name,
+     * and the first drawn is the one the row leads with.
+     */
+    function channelsIn(row) {
+        if (row === null) {
+            return [];
+        }
+
+        var byRank = [];
+
+        Array.from(row.querySelectorAll('[data-a2t-current-channel]')).forEach(function (control) {
+            var rank = parseInt(control.getAttribute('data-a2t-current-channel'), 10);
+
+            if (isNaN(rank) || byRank[rank] !== undefined) {
+                return;
+            }
+
+            byRank[rank] = {
+                rank: rank,
+                url: control.getAttribute('data-a2t-details'),
+                label: control.getAttribute('data-a2t-details-label') || 'Recording',
+                full: control.getAttribute('data-a2t-details-full')
+            };
+        });
+
+        // A sparse array indexed by rank: filtering it yields ascending order with no sort to get wrong,
+        // and an order with no mixed recording simply has nothing at 0.
+        return byRank.filter(function (channel) { return channel !== undefined; });
     }
 
     if (reviewDialog) {
@@ -2766,6 +3008,12 @@ window.KFAudioStages = {
             speechStop();
             // Nothing to keep asking for once there is nowhere to show the answer.
             stopWatchingGenerated();
+            // And nothing read for this call survives it: the next open re-reads, so a recording that
+            // changed while the dialog was shut is never shown from memory.
+            channelCache = {};
+            historyCache = {};
+            orderLabel = null;
+            channelLabel = null;
         });
 
         openRequestedRecording();
@@ -2988,6 +3236,15 @@ window.KFAudioStages = {
         if (details && reviewDialog) {
             event.preventDefault();
             openReview(details);
+            return;
+        }
+
+        // The order id. Checked after the Details buttons rather than before, because both live in the
+        // same row and the more specific control must win if the two ever nest.
+        var order = target.closest('[data-a2t-order-open]');
+        if (order && reviewDialog) {
+            event.preventDefault();
+            openOrder(order);
             return;
         }
 
