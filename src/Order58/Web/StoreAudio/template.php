@@ -285,23 +285,40 @@ $audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store
                     // reason: the numbers line up down the grid and can be compared by eye.
             ?>
                     <?php
-                    // The same three words the Audio-to-Text pages use for these, read from the shared
-                    // map rather than typed out again here. This page may not name that module at all
-                    // (see RecordingTypeLabels), and three counts labelled one way on this card and
-                    // another on the page they link to is exactly the confusion the shared map prevents.
+                    // The same three names the Audio-to-Text pages use, read from the shared map rather
+                    // than typed out again here. This page may not name that module at all (see
+                    // RecordingTypeLabels), and three counts labelled one way on this card and another
+                    // on the page they link to is exactly the confusion the shared map prevents.
+                    //
+                    // The SHORT form, because this strip gives each label a quarter of a card and the
+                    // labels are `white-space: nowrap`: "Mix / Common" was wider than its column and so
+                    // drew over "Customer" beside it rather than wrapping or clipping. Only that one
+                    // differs; the other two are the same single words either way.
                     $typeLabel = static fn(string $stored): string
-                        => RecordingTypeLabels::forStorageValue($stored) ?? $stored;
+                        => RecordingTypeLabels::shortForStorageValue($stored) ?? $stored;
+
+            // The full wording on hover, but only where shortening actually dropped something.
+            // A tooltip on "Customer" that reads "Customer" is noise; one on "Mix" that reads
+            // "Mix / Common" is the word this cell had to give up to fit, and it is the word
+            // that explains why uploads made before recording types existed are counted here.
+            $typeTitle = static function (string $stored): string {
+                $full = RecordingTypeLabels::forStorageValue($stored);
+
+                return $full === null || $full === RecordingTypeLabels::shortForStorageValue($stored)
+                    ? ''
+                    : ' title="' . Html::encode($full) . '"';
+            };
             ?>
                     <dl class="store-card__audio" aria-label="Recordings by type">
-                        <div class="store-card__audio-cell">
+                        <div class="store-card__audio-cell"<?= $typeTitle('MIXED') ?>>
                             <dt class="store-card__audio-label"><?= Html::encode($typeLabel('MIXED')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->mixed) ?>"><?= $breakdown->mixed ?></dd>
                         </div>
-                        <div class="store-card__audio-cell">
+                        <div class="store-card__audio-cell"<?= $typeTitle('CALLER') ?>>
                             <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLER')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->caller) ?>"><?= $breakdown->caller ?></dd>
                         </div>
-                        <div class="store-card__audio-cell">
+                        <div class="store-card__audio-cell"<?= $typeTitle('CALLEE') ?>>
                             <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLEE')) ?></dt>
                             <dd class="<?= $audioValue($breakdown->callee) ?>"><?= $breakdown->callee ?></dd>
                         </div>

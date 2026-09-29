@@ -52,6 +52,42 @@ final class RecordingTypeLabelsTest extends TestCase
         self::assertSame($cases, array_keys(RecordingTypeLabels::all()));
     }
 
+    /**
+     * The short form exists for one reason: a strip that gives each label a quarter of a card.
+     *
+     * Only MIXED differs. "Mix / Common" is wider than that column, and the label is
+     * `white-space: nowrap`, so it did not wrap or clip — it drew over the cell beside it. The other
+     * two are single words and are the same either way, which is asserted so that a future "tidy-up"
+     * that shortens them further has to be a deliberate decision rather than a silent one.
+     */
+    public function testTheShortFormDiffersOnlyWhereTheFullOneDoesNotFit(): void
+    {
+        self::assertSame('Mix', RecordingTypeLabels::shortForStorageValue('MIXED'));
+        self::assertNotSame(
+            RecordingTypeLabels::forStorageValue('MIXED'),
+            RecordingTypeLabels::shortForStorageValue('MIXED'),
+        );
+
+        foreach (['CALLER', 'CALLEE'] as $stored) {
+            self::assertSame(
+                RecordingTypeLabels::forStorageValue($stored),
+                RecordingTypeLabels::shortForStorageValue($stored),
+                $stored . ' is one word already; there is nothing to shorten.',
+            );
+        }
+    }
+
+    /** Both forms cover exactly the values the column can hold, and refuse anything else. */
+    public function testEveryStoredValueHasAShortLabelToo(): void
+    {
+        foreach (RecordingType::cases() as $case) {
+            self::assertNotNull(RecordingTypeLabels::shortForStorageValue($case->value));
+        }
+
+        self::assertNull(RecordingTypeLabels::shortForStorageValue('CALLER_2'));
+        self::assertNull(RecordingTypeLabels::shortForStorageValue(null));
+    }
+
     /** An unknown value is refused rather than echoed onto a page. */
     public function testAnUnknownValueHasNoLabel(): void
     {

@@ -2205,6 +2205,12 @@ SOURCE OF TRUTH   src/Shared/Audio/RecordingTypeLabels.php
   upload made before the column existed, all of which were mixed recordings, and a legacy upload must
   not read differently from one made today in the same table.
 
+  SHORT FORM. `RecordingTypeLabels::shortForStorageValue()` returns 'Mix' / 'Customer' / 'Agent'. Used
+  only by the Order58 store-card breakdown strip, which gives each label a quarter of a card: the labels
+  are `white-space: nowrap`, so the full "Mix / Common" did not wrap or clip - it drew over "CUSTOMER"
+  in the next cell. Only MIXED differs; the other two are the same word either way. Both forms live in
+  the one file, so a client rename still updates everything.
+
   Everything user-facing already routed through `label()` - `StoreRecordingSlot::label()`,
   `TranscriptVoice::forRecording()` (which drives the bubble names AND "This recording is the ... side
   of the call"), `RecordingsAction`, `Fragment::replaceTarget()`, `AudioConversation::typeLabel()`,

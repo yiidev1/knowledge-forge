@@ -419,11 +419,15 @@ final class AudioToTextStoreCest
         // Read from the shared map, not typed out. These cells and the Audio-to-Text table headers name
         // the same three things, and a test carrying its own copy of the words would keep passing while
         // the two screens drifted apart — which is the single failure the shared map exists to prevent.
-        foreach (RecordingTypeLabels::all() as $label) {
-            $I->see($label, '.store-card__audio-label');
+        //
+        // The SHORT form: this strip gives each label a quarter of a card, and the full "Mix / Common"
+        // was wider than that — with `white-space: nowrap` it overlapped the cell beside it.
+        foreach (array_keys(RecordingTypeLabels::all()) as $stored) {
+            $I->see((string) RecordingTypeLabels::shortForStorageValue($stored), '.store-card__audio-label');
         }
 
         $I->see('Other', '.store-card__audio-label');
+        $I->dontSee('Mix / Common', '.store-card__audio-label');
     }
 
     /**
@@ -2955,8 +2959,9 @@ final class AudioToTextStoreCest
      */
     private function breakdownCell(string $storedType, int $count): string
     {
-        $label = RecordingTypeLabels::forStorageValue($storedType);
-        Assert::assertNotNull($label, $storedType . ' has no display label.');
+        // The short form, which is what this strip renders — see `eachCardShowsTheRecordingTypeBreakdown`.
+        $label = RecordingTypeLabels::shortForStorageValue($storedType);
+        Assert::assertNotNull($label, $storedType . ' has no short display label.');
 
         return '~' . preg_quote($label, '~') . '</dt>\s*<dd[^>]*>' . $count . '</dd>~';
     }

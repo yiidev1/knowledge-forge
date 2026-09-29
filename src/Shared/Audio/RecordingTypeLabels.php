@@ -51,6 +51,24 @@ final class RecordingTypeLabels
     ];
 
     /**
+     * The same three, shortened for somewhere there is no room for the full form.
+     *
+     * Only MIXED differs. "Mix / Common" is two words and a separator, and in the store card's
+     * four-column metric strip it is wider than the quarter of a card it gets — the label is
+     * `white-space: nowrap`, so it did not wrap or clip, it drew straight over "CUSTOMER" next to it.
+     * The other two are single words and are already as short as they go, so they are repeated here
+     * rather than special-cased: a caller asking for short labels gets a full set back.
+     *
+     * Kept beside {@see LABELS} on purpose. A client renaming these renames both forms in one file,
+     * which is the whole reason this class exists.
+     */
+    private const SHORT_LABELS = [
+        'MIXED' => 'Mix',
+        'CALLER' => 'Customer',
+        'CALLEE' => 'Agent',
+    ];
+
+    /**
      * The display name for a stored recording type, or null when it is not one of the three.
      *
      * Null rather than the raw value: a caller that has something else has a bug or a legacy row, and
@@ -60,6 +78,20 @@ final class RecordingTypeLabels
     public static function forStorageValue(?string $value): ?string
     {
         return $value === null ? null : (self::LABELS[$value] ?? null);
+    }
+
+    /**
+     * The display name for a stored recording type where space is tight, or null when it is not one of
+     * the three.
+     *
+     * Callers with room should use {@see forStorageValue()}. This exists for the compact strip on a
+     * store card and should not spread beyond places that genuinely cannot fit the full words — two
+     * names for the same thing is a cost, and it is only worth paying where the alternative is a label
+     * that overlaps its neighbour.
+     */
+    public static function shortForStorageValue(?string $value): ?string
+    {
+        return $value === null ? null : (self::SHORT_LABELS[$value] ?? null);
     }
 
     /**
