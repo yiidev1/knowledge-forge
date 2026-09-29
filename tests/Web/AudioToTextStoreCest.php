@@ -992,6 +992,32 @@ final class AudioToTextStoreCest
     }
 
     /**
+     * Manage Audio names no channel, which is what keeps it showing all of them.
+     *
+     * The dialog now renders one channel when it was opened from a column, and the ONLY thing that
+     * tells it which mode it is in is `data-a2t-manage-focus`. So the Actions button must not carry
+     * one — a focus attribute added here would quietly turn the full dialog into a single-channel one,
+     * and the two other channels would simply stop being reachable from the row.
+     */
+    public function manageAudioNamesNoChannelSoItStillShowsAllOfThem(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $actions = '.a2t-orders tbody tr:first-child td:last-child';
+
+        $I->seeElement($actions . ' [data-a2t-manage]');
+        $I->dontSeeElement($actions . ' [data-a2t-manage-focus]');
+
+        // And the column buttons do carry one, each naming its own column — the pair of facts that
+        // makes the two modes distinguishable at all.
+        $I->seeElement('.a2t-slot__add[data-a2t-manage-focus="CALLER"]');
+        $I->seeElement('.a2t-slot__add[data-a2t-manage-focus="CALLEE"]');
+    }
+
+    /**
      * Adding a recording to an empty slot goes through the existing replace endpoint, and the type it
      * records is the column's — not whatever the browser felt like posting.
      *

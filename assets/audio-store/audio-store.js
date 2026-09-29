@@ -1353,7 +1353,23 @@ window.KFAudioStages = {
     var manageDialog = dialogOf(manageBody);
     var manageUrl = null;
     var manageBusy = false;
+    var manageTitle = document.querySelector('[data-a2t-manage-title]');
+    /**
+     * One-shot: open the upload form of the channel that was clicked, then forget it.
+     *
+     * Consumed by `revealRequestedSlot` so a re-read after an upload does not spring the form open
+     * again underneath the confirmation it is showing.
+     */
     var manageFocus = null;
+    /**
+     * The MODE, which lasts as long as the dialog is open: one channel, or all of them.
+     *
+     * Deliberately separate from `manageFocus`. That one is consumed on first paint; this must not be,
+     * or the re-read after a successful upload would suddenly reveal the two channels the operator did
+     * not ask about. Reset on every open, so a Manage Audio press after an "+ Add audio" press shows
+     * everything and nothing leaks between openings.
+     */
+    var manageOnly = null;
 
     function openManage(button) {
         if (!manageDialog) {
@@ -1364,11 +1380,23 @@ window.KFAudioStages = {
         manageBody.hidden = true;
         manageUrl = button.getAttribute('data-a2t-manage');
         // Set only by the "+ Add audio" button in an empty table cell, which names the column it stands
-        // for. The dialog already lists all three types whether or not a recording exists; this just
-        // saves the administrator finding the one they clicked.
-        manageFocus = button.getAttribute('data-a2t-manage-focus');
+        // for. Pressed from there, the dialog shows THAT channel and nothing else: the operator asked to
+        // add one recording, and offering the other two is an invitation to upload against the wrong
+        // column. `Manage Audio` carries no such attribute and still lists all three.
+        //
+        // Read once into both: the mode lasts while the dialog is open, the reveal is spent on the
+        // first paint. Assigned on every open, so neither survives into the next one.
+        manageOnly = button.getAttribute('data-a2t-manage-focus');
+        manageFocus = manageOnly;
         var order = button.getAttribute('data-a2t-order');
         manageMeta.textContent = order ? 'Order ' + order : 'No order id';
+
+        if (manageTitle) {
+            // Named later from the payload, which is where the channel's own label lives — the button
+            // carries the stored value, and turning MIXED into "Mix / Common" here would be a second
+            // copy of a mapping the server already sends.
+            manageTitle.textContent = manageOnly === null ? 'Manage Audio' : 'Add audio';
+        }
         say(manageStatus, 'Loading…');
 
         loadManage();
@@ -1405,14 +1433,30 @@ window.KFAudioStages = {
     function paintManage(data) {
         empty(manageSlots);
 
+        // Opened from one column: that channel alone. Filtered on the SERVER'S value for each slot
+        // rather than on anything the browser worked out, and an unknown mode matches nothing and is
+        // shown as the whole dialog — the same answer as not asking for a channel at all.
+        var slots = manageOnly === null
+            ? data.slots
+            : data.slots.filter(function (slot) { return slot.recordingType === manageOnly; });
+
+        if (slots.length === 0) {
+            slots = data.slots;
+        }
+
         // Why nothing here can be replaced, said once at the top rather than three times over.
         if (!data.canReplace && data.reason) {
             manageSlots.appendChild(el('p', 'a2t-manage__note', data.reason));
         }
 
-        data.slots.forEach(function (slot) {
+        slots.forEach(function (slot) {
             manageSlots.appendChild(manageSlot(slot, data));
         });
+
+        if (manageTitle && manageOnly !== null && slots.length === 1) {
+            // The channel's own name, as the server spells it.
+            manageTitle.textContent = 'Add ' + slots[0].label + ' audio';
+        }
 
         revealRequestedSlot();
     }

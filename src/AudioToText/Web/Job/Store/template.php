@@ -1039,7 +1039,11 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         aria-labelledby="a2t-manage-title">
     <div class="source-modal__head">
         <div>
-            <h2 class="source-modal__title" id="a2t-manage-title">Manage Audio</h2>
+            <?php
+            // Renamed by the script when the dialog is opened from one column's "+ Add audio": it then
+            // shows that channel alone, and calling that "Manage Audio" would promise the other two.
+?>
+            <h2 class="source-modal__title" id="a2t-manage-title" data-a2t-manage-title>Manage Audio</h2>
             <p class="source-modal__meta" data-a2t-manage-meta></p>
         </div>
         <button class="source-modal__close" type="button" data-a2t-dialog-close

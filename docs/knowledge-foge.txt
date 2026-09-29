@@ -2145,6 +2145,58 @@ RELATED TESTS
       page reads as CURRENT rather than as "different voice setting" (shared with tests/E2E/complete-tts.php)
 
 ======================================================================================
+8.2g MODAL: Manage Audio - one channel when added from a column, all three otherwise
+======================================================================================
+
+MARKUP   src/AudioToText/Web/Job/Store/template.php   (`data-a2t-manage-focus`, `data-a2t-manage-title`)
+SCRIPT   assets/audio-store/audio-store.js            openManage / paintManage / revealRequestedSlot
+
+  PRESENTATION ONLY. No route, action, endpoint, query, request, schema or worker change.
+
+TWO MODES, ONE DIALOG
+      "+ Add audio" in a column   -> that channel alone      (mode = its recording type)
+      "Manage Audio" in Actions   -> every channel, as today  (mode = null)
+
+  The operator pressing "+ Add audio" in the Agent column has already said which recording they are
+  adding. Offering the other two is an invitation to upload against the wrong column, and since the
+  upload form is identical in all three the mistake looks like success until somebody plays the file.
+
+  `data-a2t-manage-focus` (the column's stored type) is the ONLY thing distinguishing the modes. The
+  Actions button does not carry it - guarded by
+  `AudioToTextStoreCest::manageAudioNamesNoChannelSoItStillShowsAllOfThem`, because adding one there
+  would silently make the other two channels unreachable from the row.
+
+TWO PIECES OF STATE, ONLY ONE CONSUMED
+      manageFocus  one-shot: opens the clicked channel's upload form, spent on the first paint so a
+                   re-read after an upload does not spring it open under the confirmation
+      manageOnly   the MODE: lasts while the dialog is open. Consuming it would make the other two
+                   channels appear the moment an upload succeeded
+  Both are assigned on every open, so nothing leaks from one press to the next.
+
+FILTERING
+  `paintManage` filters `data.slots` on `slot.recordingType === manageOnly` - the SERVER's value for
+  each slot against the column the SERVER rendered the button in. The browser matches two server-
+  supplied values and decides neither. A mode matching no slot falls back to the whole dialog rather
+  than an empty one: only reachable if the column and the payload ever disagreed, and the full dialog is
+  the answer Manage Audio would have given, which is never wrong.
+
+  Legacy Customer + Agent pairs cannot reach single-channel mode at all: `+ Add audio` is not rendered
+  for a legacy group (nor for one with no order id), which is the same refusal `ReplaceAction` enforces.
+
+UNCHANGED
+  One request builds either mode - the payload is the same `/group/{key}/recordings` fetch. The upload
+  still posts the slot's own `recording_type` to the same endpoint, and `ReplaceAction` still decides
+  what that means (allow-list of exactly three, plus `StoreGroupFinder` for ownership). Replace inside
+  Manage Audio is a different control (`data-a2t-replace`) and was not touched.
+
+RELATED TESTS
+  tests/Unit/AudioToText/ManageAudioFocusTest.php   the filter and its server-side inputs; the mode
+      survives the re-read that the reveal does not; neither leaks between openings; an unmatched mode
+      shows everything; the title names the mode; painting fetches nothing and posts the same field
+  tests/Web/AudioToTextStoreCest.php                Manage Audio carries no focus attribute while each
+      column button carries its own; the existing per-type upload and tamper tests are unchanged
+
+======================================================================================
 8.2f MODAL: Order-level details - one dialog, a tab per recording of the call
 ======================================================================================
 
