@@ -453,6 +453,13 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
 /** Accepts every recording without touching the queue, so the test never needs the audio pipeline. */
 final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
 {
+    /**
+     * What the importer handed over, per call, in order.
+     *
+     * @var list<array{recordingType: string, orderId: string|null, callSessionId: string|null}>
+     */
+    public array $received = [];
+
     public function ingestFile(
         int $storeSourceId,
         string $path,
@@ -462,7 +469,14 @@ final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
         string $provider,
         bool $generateAiAudio,
         int $adminUserId,
+        ?string $callSessionId = null,
     ): AudioIngestionOutcome {
+        $this->received[] = [
+            'recordingType' => $recordingType,
+            'orderId' => $orderId,
+            'callSessionId' => $callSessionId,
+        ];
+
         return AudioIngestionOutcome::queued('c0ffee00c0ffee00c0ffee00c0ffee00');
     }
 }

@@ -44,7 +44,28 @@ final class FixedRecordingTypes implements AudioConversationRepositoryInterface
         bool $generateAiAudio = false,
         ?RecordingType $recordingType = null,
         ?string $orderId = null,
+        ?string $callSessionId = null,
     ): int {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function callSessionFor(int $conversationId): ?string
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function confirmedMixedJobIdForCallSession(int $storeSourceId, string $callSessionId): ?int
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function unlinkedForCallSessionBackfill(int $limit): array
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function recordCallSession(int $conversationId, string $callSessionId): bool
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 

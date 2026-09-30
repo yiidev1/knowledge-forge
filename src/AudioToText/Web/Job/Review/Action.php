@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review;
 
+use App\AudioToText\Application\ConversationPresenter;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\ConversationHistoryBuilder;
 use App\AudioToText\Application\EffectiveConversationReader;
@@ -11,7 +12,6 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\JobStatus;
-use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
@@ -50,6 +50,7 @@ final readonly class Action
         private AppTimeZone $appTimeZone,
         private Redirect $redirect,
         private RecordingVoiceReader $voices,
+        private ConversationPresenter $presenter,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -74,16 +75,12 @@ final readonly class Action
 
         $voice = $this->voices->for($job);
 
-        $conversation = ConversationView::from(
-            $job->speakerSeparationStatus,
-            $effective->utterances,
-            $job->speakerRoleConfidence,
-            $effective->hasSeparatedText(),
-            $effective->rolesConfirmed,
-            // Named at upload time: a Caller or Callee recording is one person's words, whatever
-            // the diarizer found inside it, and nothing below may offer to re-decide that.
-            $voice,
-        );
+        // The call's mixed conversation, when this recording belongs to a call that has exactly one
+        // with confirmed roles. Null otherwise, which is every recording until the importer runs — and
+        // null is what keeps this page exactly as it is today.
+        $derived = $this->presenter->derivedFor($job, $voice);
+
+        $conversation = $this->presenter->for($job, $effective, $voice, $derived);
 
         // The same turns the service will load when a button is pressed, so what is offered on screen
         // and what is permitted on submit are computed from one object.
@@ -100,6 +97,9 @@ final readonly class Action
                 // One read of the audit trail, used twice: who confirmed the roles, and what has
                 // happened to each message. Loading it a second time for the history would be the same
                 // rows fetched twice on every render.
+                // Passed beside the page view because the borrowed-conversation branch renders it
+                // through the shared read-only thread partial, exactly as the detail page does.
+                'conversation' => $conversation,
                 'page' => ReviewPageView::build(
                     $job,
                     $conversation,
@@ -107,6 +107,7 @@ final readonly class Action
                     $this->confirmedBy($revisions),
                     $this->history->build($revisions, $turns),
                     $voice,
+                    $derived,
                 ),
                 // Page chrome, not review state, so it is passed beside ReviewPageView rather than into
                 // it — the same shape the conversion page uses.

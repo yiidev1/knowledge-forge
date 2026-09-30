@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review\Fragment;
 
+use App\AudioToText\Application\ConversationPresenter;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\ConversationHistoryBuilder;
 use App\AudioToText\Application\AudioToTextSettings;
@@ -18,7 +19,6 @@ use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Application\Tts\TtsScriptBuilder;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
-use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -72,6 +72,7 @@ final readonly class Action
         private AppTimeZone $appTimeZone,
         private ResponseFactoryInterface $responseFactory,
         private RecordingVoiceReader $voices,
+        private ConversationPresenter $presenter,
         private TtsGenerationService $generation,
         private TtsScriptBuilder $scripts,
         private TtsRenditionRepositoryInterface $renditions,
@@ -110,23 +111,57 @@ final readonly class Action
         // diarizer found inside it, and nothing below may offer to re-decide that.
         $voice = $this->voices->for($job);
 
+        // The call's mixed conversation, where this recording belongs to a call that has exactly one
+        // with confirmed roles. Null for every recording that does not, which is the state the dialog
+        // has always been in.
+        $derived = $this->presenter->derivedFor($job, $voice);
+
+        $conversation = $this->presenter->for($job, $effective, $voice, $derived);
+
         $page = ReviewPageView::build(
             $job,
-            ConversationView::from(
-                $job->speakerSeparationStatus,
-                $effective->utterances,
-                $job->speakerRoleConfidence,
-                $effective->hasSeparatedText(),
-                $effective->rolesConfirmed,
-                $voice,
-            ),
+            $conversation,
             $turns,
             $this->confirmedBy($revisions),
             $this->history->build($revisions, $turns),
             $voice,
+            $derived,
         );
 
         $rows = [];
+
+        // A borrowed conversation renders as text and nothing else. These words are the mixed
+        // recording's, and every control here writes to *this* job — so the dialog offers none of them
+        // and says where corrections are made instead. `ReviewPageView` has already emptied
+        // `$page->turns` for the same reason, so the loop below draws nothing.
+        if ($page->isDerived()) {
+            foreach ($conversation->turns as $index => $turn) {
+                $rows[] = [
+                    'index' => $index,
+                    'label' => $turn->label,
+                    'confirmed' => $turn->confirmed,
+                    'display' => $turn->text,
+                    'text' => $turn->text,
+                    'role' => $page->derived?->role->value,
+                    'side' => $turn->side->value,
+                    'time' => $turn->timing->rangeLabel(),
+                    'delay' => $turn->timing->delayLabel(),
+                    'edited' => $turn->edited,
+                    'approx' => false,
+                    'hasHistory' => false,
+                    'canEdit' => false,
+                    'canMove' => false,
+                    'targetRole' => null,
+                    'targetLabel' => null,
+                    'moveMerges' => false,
+                    // NoNeighbour, so the dialog omits the control entirely rather than drawing a
+                    // disabled one that would have to explain itself.
+                    'mergePrevious' => $this->merge(MergeRefusal::NoNeighbour),
+                    'mergeNext' => $this->merge(MergeRefusal::NoNeighbour),
+                    'urls' => ['moveText' => null, 'text' => null, 'merge' => null],
+                ];
+            }
+        }
 
         // A recording with a named speaker has no other speaker to move a turn to, so the control is
         // withheld from the payload rather than hidden in the browser: an operation the server would
@@ -164,6 +199,9 @@ final readonly class Action
                 // decides, from the audit trail — not from whether the turn looks edited, which a
                 // revert or a confirmation would both get wrong.
                 'hasHistory' => $turn->hasHistory(),
+                // Always true here: these rows are this recording's own turns, so the editor writes
+                // where the reader is looking. Only a borrowed conversation withholds it.
+                'canEdit' => true,
                 'canMove' => $canMove,
                 'targetRole' => $canMove ? $other->value : null,
                 'targetLabel' => $canMove ? $other->label() : null,
@@ -212,6 +250,16 @@ final readonly class Action
             ),
             // What this recording is, when the upload said. Null for a conversation.
             'voice' => $page->voice?->label,
+            // Where these words come from, when they are not this recording's own. The dialog prints
+            // the line and links to the conversation corrections are made on; null is the ordinary case
+            // and the dialog behaves exactly as it always has.
+            'derivedFrom' => $page->derived === null ? null : [
+                'role' => $page->derived->role->label(),
+                'url' => $this->urlGenerator->generate(
+                    AudioToTextRoute::JOB_REVIEW,
+                    ['publicId' => $page->derived->sourcePublicId],
+                ),
+            ],
             // The three ways to hear this recording. Computed here so the dialog renders decisions
             // rather than making them — in particular the staleness rule, which has exactly one home.
             'audio' => $this->audio($job, $publicId),

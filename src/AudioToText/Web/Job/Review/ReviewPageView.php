@@ -6,6 +6,7 @@ namespace App\AudioToText\Web\Job\Review;
 
 use App\AudioToText\Domain\Speaker\ConversationSide;
 use App\AudioToText\Domain\Speaker\ConversationView;
+use App\AudioToText\Domain\Speaker\DerivedConversation;
 use App\AudioToText\Domain\Speaker\MergeDirection;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\Speaker\SpeakerMarkers;
@@ -69,7 +70,24 @@ final readonly class ReviewPageView
          * constructs exactly as it did.
          */
         public ?string $reviewExplanation = null,
+        /**
+         * The mixed conversation this page is borrowing, when it is borrowing one.
+         *
+         * Set only for a Caller or Callee recording whose call has exactly one mixed conversation with
+         * confirmed roles. When it is set, {@see $turns} is **empty**: the words on screen belong to a
+         * different recording, and offering controls that would write to this one is the arrangement
+         * guaranteed to lose an edit. The page renders the borrowed conversation read-only and says
+         * where corrections are made; this recording's own transcript and history stay reachable and
+         * unchanged.
+         */
+        public ?DerivedConversation $derived = null,
     ) {}
+
+    /** Whether this page is showing words borrowed from the call's mixed recording. */
+    public function isDerived(): bool
+    {
+        return $this->derived !== null;
+    }
 
     /**
      * @param list<TurnLineage> $lineages one per turn, positionally, as the history builder returns them
@@ -81,6 +99,7 @@ final readonly class ReviewPageView
         ?string $confirmedByUsername = null,
         array $lineages = [],
         ?TranscriptVoice $voice = null,
+        ?DerivedConversation $derived = null,
     ): self {
         $views = [];
 
@@ -124,7 +143,10 @@ final readonly class ReviewPageView
         // screen can offer an operation this recording has no meaning for.
         if ($voice !== null) {
             return new self(
-                $views,
+                // No editable rows while the conversation is borrowed. The rows would be this
+                // recording's own turns, which are a different transcription with a different number
+                // of them, sitting under text that came from somewhere else.
+                $derived === null ? $views : [],
                 $job->isReviewed(),
                 true,
                 $confirmedAt,
@@ -133,6 +155,8 @@ final readonly class ReviewPageView
                 null,
                 $job->reviewCount,
                 $voice,
+                null,
+                $derived,
             );
         }
 

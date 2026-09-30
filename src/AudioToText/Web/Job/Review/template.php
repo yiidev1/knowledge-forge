@@ -23,6 +23,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var Csrf $csrf
  * @var TranscriptionJob $job
  * @var ReviewPageView $page
+ * @var App\AudioToText\Domain\Speaker\ConversationView $conversation what to show, own or borrowed
  * @var AudioStore|null $store the store this job was uploaded against, or null when it was not
  * @var AppTimeZone $appTimeZone
  */
@@ -169,6 +170,31 @@ $grip = AudioToTextIcons::GRIP;
         </div>
     </div>
 
+    <?php $derived = $page->derived; ?>
+    <?php if ($derived !== null): ?>
+        <?php
+        // These words are the call's mixed recording's, filtered to this side and already confirmed
+        // there. Rendered through the same partial the read-only pages use, with no correction
+        // controls: every control on this page writes to *this* job, and offering one under borrowed
+        // text is how an edit gets lost. This recording's own transcript and its own revision history
+        // are unchanged and still reachable from the actions beside this page.
+        ?>
+        <p class="a2t-review__lede">
+            Showing the <?= Html::encode($derived->role->label()) ?> side of this call, from
+            the mixed recording where the speakers were separated and confirmed.
+            <a href="<?= Html::encode($urlGenerator->generate(
+                AudioToTextRoute::JOB_REVIEW,
+                ['publicId' => $derived->sourcePublicId],
+            )) ?>">Correct it there</a>.
+        </p>
+
+        <div class="a2t-chat__scroll" data-a2t-scroll>
+            <?= $this->render(AudioToTextViews::thread(), [
+                'turns' => $conversation->turns,
+                'normalisePrices' => false,
+            ]) ?>
+        </div>
+    <?php else: ?>
     <div class="a2t-chat__scroll" data-a2t-scroll>
         <div class="a2t-thread">
             <?php foreach ($page->turns as $turn): ?>
@@ -389,6 +415,7 @@ $grip = AudioToTextIcons::GRIP;
             <?php endforeach; ?>
         </div>
     </div>
+    <?php endif; ?>
 
     <?php // Shown by the script only once the reader has scrolled away from the newest turn.?>
     <button class="a2t-chat__jump" type="button" data-a2t-jump hidden>&darr; Jump to latest</button>

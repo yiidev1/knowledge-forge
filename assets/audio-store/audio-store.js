@@ -1155,6 +1155,26 @@ window.KFAudioStages = {
 
         var strip = el('div', 'a2t-review__status');
 
+        // Borrowed words come first, because it is the stronger statement about what is on screen:
+        // these are not this recording's own turns, and there is nowhere here to correct them.
+        if (data.derivedFrom) {
+            strip.appendChild(el(
+                'span',
+                'a2t-review__state a2t-review__state--confirmed',
+                'Showing the ' + data.derivedFrom.role + ' side of this call, from the mixed recording '
+                    + 'where the speakers were separated and confirmed.'
+            ));
+
+            var where = document.createElement('a');
+            where.className = 'btn btn--sm';
+            where.href = data.derivedFrom.url;
+            where.textContent = 'Correct it there';
+            strip.appendChild(where);
+
+            reviewNoticeBox.appendChild(strip);
+            return;
+        }
+
         if (data.voice) {
             // The upload named the speaker, so there is nothing to establish and nothing to confirm.
             strip.appendChild(el(
@@ -1239,7 +1259,9 @@ window.KFAudioStages = {
             row.setAttribute('data-a2t-merges', turn.moveMerges ? '1' : '0');
             row.setAttribute('data-a2t-move-url', turn.urls.moveText);
         }
-        row.setAttribute('data-a2t-merge-url', turn.urls.merge);
+        if (turn.urls.merge) {
+            row.setAttribute('data-a2t-merge-url', turn.urls.merge);
+        }
 
         // The rendered wording carries the stored one alongside it, so Cancel restores what was
         // typed rather than the normalised reading of it.
@@ -1258,9 +1280,15 @@ window.KFAudioStages = {
             tools.appendChild(move);
         }
 
-        var edit = iconButton('edit', 'Correct the wording');
-        edit.setAttribute('data-a2t-edit', '');
-        tools.appendChild(edit);
+        // Withheld where the server says these words are not this recording's to correct. A borrowed
+        // conversation is shown read-only and names the page corrections are made on, so a pencil here
+        // would post an edit against the wrong job — `canEdit` is that answer rather than this script's
+        // guess, exactly like `canMove` above.
+        if (turn.canEdit) {
+            var edit = iconButton('edit', 'Correct the wording');
+            edit.setAttribute('data-a2t-edit', '');
+            tools.appendChild(edit);
+        }
 
         // Only where there is something to show. `hasHistory` is TurnLineage's answer, read from the
         // audit trail — a revert clears a message's history and an edit gives it one, neither of
@@ -1272,8 +1300,11 @@ window.KFAudioStages = {
         }
 
         drawn.body.appendChild(tools);
-        row.appendChild(editorFor(turn));
-        row.appendChild(mergeControlsFor(turn));
+
+        if (turn.canEdit) {
+            row.appendChild(editorFor(turn));
+            row.appendChild(mergeControlsFor(turn));
+        }
 
         return row;
     }

@@ -37,9 +37,10 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         return $this->job !== null && $this->job->publicId === $publicId ? $this->job : null;
     }
 
+    /** Matched on the id, for the readers that hold one rather than a public id. */
     public function findById(int $id): ?TranscriptionJob
     {
-        throw new RuntimeException('Not used by these tests.');
+        return $this->job !== null && $this->job->id === $id ? $this->job : null;
     }
 
     public function recent(int $limit, int $previewLength, int $offset = 0): array

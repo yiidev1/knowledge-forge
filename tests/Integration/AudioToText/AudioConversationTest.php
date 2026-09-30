@@ -99,6 +99,48 @@ final class AudioConversationTest extends Unit
         $this->temporaryDirectory = sys_get_temp_dir() . '/a2t-conv-' . bin2hex(random_bytes(6));
     }
 
+    /** A mixed recording of one call, enqueued the way the importer would. */
+    private function mixedFor(string $session): string
+    {
+        return $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Mixed,
+            null,
+            $session,
+        );
+    }
+
+    private function jobIdOf(string $conversationPublicId): int
+    {
+        return (int) $this->connection->createCommand(
+            'SELECT j.id FROM {{%audio_transcription_jobs}} j
+               INNER JOIN {{%audio_conversations}} c ON c.id = j.conversation_id
+             WHERE c.public_id = :p',
+            ['p' => $conversationPublicId],
+        )->queryScalar();
+    }
+
+    /**
+     * Stand in for an administrator pressing Confirm.
+     *
+     * Written straight to the column rather than through `ReviewConversationService`, because what is
+     * under test is the query that reads it: routing through the service would also need a completed
+     * transcription, segments and a reviewed layer, none of which this question depends on.
+     */
+    private function confirmRoles(int $jobId): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['roles_confirmed_at' => '2026-09-23 11:20:50'],
+            ['id' => $jobId],
+        )->execute();
+    }
+
     protected function _after(): void
     {
         // Children first: the conversation foreign key is RESTRICT.
@@ -177,6 +219,115 @@ final class AudioConversationTest extends Unit
         // None of it reaches the job: the worker's view of this recording is unchanged.
         self::assertSame(SourceRole::Common, $conversation->children[0]->sourceRole);
         self::assertSame(JobStatus::QUEUED, $conversation->children[0]->status);
+    }
+
+    /**
+     * 15. The call session survives the enqueue, and a manual upload records none.
+     *
+     * The only value that says three recordings are one call, written in the same transaction as the
+     * children. Read back rather than trusted: a value dropped there would lose the relationship
+     * silently — the upload would still succeed and the Agent view would simply never derive.
+     */
+    public function testTheCallSessionIsStoredWithTheConversation(): void
+    {
+        $session = '22449119';
+
+        $linked = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('22449119-callee.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Callee,
+            '123123',
+            $session,
+        );
+
+        // The manual upload form passes no session, because it has none to pass.
+        $unlinked = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('by-hand.wav')],
+            $this->adminId,
+        );
+
+        self::assertSame($session, $this->conversations->findByPublicId($linked)?->callSessionId);
+        self::assertNull(
+            $this->conversations->findByPublicId($unlinked)?->callSessionId,
+            'Not known to belong to a call, which is what every hand-made upload is.',
+        );
+    }
+
+    /**
+     * 11 / 5. Exactly one confirmed mixed recording, or no answer at all.
+     *
+     * The question the derived views turn on, asked of real MySQL because the failure it guards is a
+     * query returning the first of several as though it were the only one. Two confirmed mixed
+     * recordings of one call is a normal state — the same file uploaded twice produces it — and the
+     * honest answer to "which one speaks for this call" is then that none of them does.
+     */
+    public function testOnlyAnUnambiguousConfirmedMixedRecordingAnswersForACall(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+
+        // Unconfirmed: the speakers were never established, so it has nothing to lend.
+        $first = $this->mixedFor($session);
+        self::assertNull(
+            $this->conversations->confirmedMixedJobIdForCallSession($this->storeSourceId, $session),
+        );
+
+        $firstJobId = $this->jobIdOf($first);
+        $this->confirmRoles($firstJobId);
+
+        self::assertSame(
+            $firstJobId,
+            $this->conversations->confirmedMixedJobIdForCallSession($this->storeSourceId, $session),
+        );
+
+        // A second confirmed mixed recording of the same call: now nothing is unambiguous.
+        $this->confirmRoles($this->jobIdOf($this->mixedFor($session)));
+
+        self::assertNull(
+            $this->conversations->confirmedMixedJobIdForCallSession($this->storeSourceId, $session),
+            'Two candidates is not a reason to pick one.',
+        );
+
+        // Another store's call with the same session id is never the answer for this one.
+        self::assertNull(
+            $this->conversations->confirmedMixedJobIdForCallSession($this->storeSourceId + 1, $session),
+        );
+    }
+
+    /**
+     * The backfill writes once and only into an empty column, so a second run does nothing.
+     *
+     * The `IS NULL` guard is in the UPDATE, not only in the read that found the row: the importer may
+     * link the same conversation between the two, and the provider's own value outranks one recovered
+     * from a filename.
+     */
+    public function testLinkingACallIsIdempotentAndNeverOverwrites(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('22449119.wav')],
+            $this->adminId,
+        );
+
+        $id = (int) $this->connection
+            ->createCommand(
+                'SELECT id FROM {{%audio_conversations}} WHERE public_id = :p',
+                ['p' => $publicId],
+            )
+            ->queryScalar();
+
+        self::assertTrue($this->conversations->recordCallSession($id, '22449119'));
+        self::assertFalse(
+            $this->conversations->recordCallSession($id, '99999999'),
+            'Already linked: the second attempt changes nothing and says so.',
+        );
+        self::assertSame('22449119', $this->conversations->callSessionFor($id));
     }
 
     /** An upload that named neither: both stay null, and the conversation reads as it always did. */

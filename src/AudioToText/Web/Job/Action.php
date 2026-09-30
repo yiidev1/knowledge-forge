@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job;
 
+use App\AudioToText\Application\ConversationPresenter;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\EffectiveConversationReader;
-use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\Shared\Application\Time\AppTimeZone;
 use Psr\Http\Message\ResponseInterface;
@@ -31,6 +31,7 @@ final readonly class Action
         private AppTimeZone $appTimeZone,
         private EffectiveConversationReader $conversations,
         private RecordingVoiceReader $voices,
+        private ConversationPresenter $presenter,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -50,19 +51,9 @@ final readonly class Action
                 // The view decides how much may be claimed about each speaker, from the separation
                 // status rather than from the roles stored on the utterances. The template receives
                 // labels it can print verbatim and makes no judgement of its own.
-                'conversation' => ConversationView::from(
-                    $job->speakerSeparationStatus,
-                    $effective->utterances,
-                    $job->speakerRoleConfidence,
-                    $effective->hasSeparatedText(),
-                    // The second route to publication: an administrator who checked the conversation
-                    // and stood behind the labels. Without this the machine's own status would be the
-                    // only arbiter, and a confirmation would change nothing a reader could see.
-                    $effective->rolesConfirmed,
-                    // Named at upload time: a Caller recording reads as that one person,
-                    // whatever the diarizer found inside it.
-                    $this->voices->for($job),
-                ),
+                // One decision, made in the application layer: this recording's own conversation, or
+                // the one the call's mixed recording holds. See ConversationPresenter.
+                'conversation' => $this->presenter->for($job, $effective, $this->voices->for($job)),
                 // The agent/customer blocks read from the same object as the turns above them, so a
                 // corrected attribution can never show in one and not the other.
                 'effective' => $effective,

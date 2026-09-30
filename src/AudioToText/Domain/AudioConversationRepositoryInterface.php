@@ -42,6 +42,13 @@ interface AudioConversationRepositoryInterface
         ?RecordingType $recordingType = null,
         /** The order this upload belongs to, already validated, or null when none was given. */
         ?string $orderId = null,
+        /**
+         * The provider's call session id, or null when whatever created this upload did not know one.
+         *
+         * Only ever a value handed over by the importer. Nothing derives it, and nothing writes it from
+         * a browser — see {@see AudioConversation::$callSessionId}.
+         */
+        ?string $callSessionId = null,
     ): int;
 
     public function findByPublicId(string $publicId): ?AudioConversation;
@@ -82,6 +89,44 @@ interface AudioConversationRepositoryInterface
      * that need it hold a job and not its upload — the same shape as the two lookups above.
      */
     public function recordingTypeFor(int $conversationId): ?RecordingType;
+
+    /** Which call this conversation is a recording of, or null when nothing recorded that. */
+    public function callSessionFor(int $conversationId): ?string;
+
+    /**
+     * The job of the one confirmed mixed recording of a call, or null when there is not exactly one.
+     *
+     * The question a derived view has to ask, asked in one place so that "exactly one" cannot be
+     * answered differently by two callers. **Null is returned for none and for several alike**, because
+     * both mean the same thing to a reader: this call has no single mixed conversation that speaks for
+     * it, so nothing may be derived from one. Several is a real state — the same recording uploaded
+     * twice produces it — and resolving it by picking the newest would be inventing an answer.
+     *
+     * Confirmed means an administrator stood behind the roles. A mixed conversation whose speakers were
+     * never established says nothing about which side is the agent, so it cannot lend that to anybody.
+     */
+    public function confirmedMixedJobIdForCallSession(int $storeSourceId, string $callSessionId): ?int;
+
+    /**
+     * Conversations that record no call session yet, with the filename their recording was uploaded as.
+     *
+     * For `kf:audio:link-call-sessions` and nothing else. Only rows where the column is still NULL are
+     * returned, which is what makes the backfill idempotent: a second run has nothing left to consider,
+     * and a value written by the importer is never a candidate to be overwritten.
+     *
+     * @return list<array{id: int, storeSourceId: int|null, recordingType: string|null, filename: string|null}>
+     */
+    public function unlinkedForCallSessionBackfill(int $limit): array;
+
+    /**
+     * Record which call a conversation belongs to.
+     *
+     * Writes only where the column is still NULL, so a race with the importer cannot overwrite the
+     * provider's own value with one read out of a filename.
+     *
+     * @return bool whether the row was still unlinked and has now been linked
+     */
+    public function recordCallSession(int $conversationId, string $callSessionId): bool;
 
     /**
      * Whether this upload asked for clean AI audio.

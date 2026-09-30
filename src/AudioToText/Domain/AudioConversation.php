@@ -61,6 +61,19 @@ final readonly class AudioConversation
          * state for a recording rather than missing data.
          */
         public ?string $orderId = null,
+        /**
+         * Which call this recording is of, or null when nothing recorded that.
+         *
+         * The provider's own call session id, the same value `order58_call_imports` keys on. Up to three
+         * conversations — mixed, caller, callee — share it, and that shared value is the only thing in
+         * this database that says they are three recordings of one call. `order_id` above is not: an
+         * order is the larger unit and can hold several calls.
+         *
+         * Null for every conversation uploaded by hand, which is all of them until the importer runs, and
+         * null means "not known to belong to a call" rather than missing data — a recording on its own is
+         * a normal recording.
+         */
+        public ?string $callSessionId = null,
     ) {}
 
     /**

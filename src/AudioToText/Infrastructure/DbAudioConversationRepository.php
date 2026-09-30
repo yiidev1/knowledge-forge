@@ -19,6 +19,7 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function array_column;
+use function count;
 use function is_string;
 
 use const SORT_ASC;
@@ -52,6 +53,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         bool $generateAiAudio = false,
         ?RecordingType $recordingType = null,
         ?string $orderId = null,
+        ?string $callSessionId = null,
     ): int {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
@@ -63,6 +65,10 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             // NULL rather than '' or 0 for an upload with no order: both of those are values that look
             // like answers, and the history would have to tell them apart from a real one.
             'order_id' => $orderId,
+            // The provider's call session id, or NULL for an upload made by hand — which is every
+            // upload until the importer runs. NULL means "not known to belong to a call", and the
+            // derived views read it as "show this recording on its own".
+            'call_session_id' => $callSessionId,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'created_at' => DbDateTime::format($createdAt),
             // Written once, at upload, and never rewritten. The generation itself is decided later and
@@ -133,6 +139,86 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         return is_string($value) ? RecordingType::fromStorage($value) : null;
     }
 
+    public function callSessionFor(int $conversationId): ?string
+    {
+        $value = (new Query($this->connection))
+            ->select('call_session_id')
+            ->from(['c' => self::TABLE])
+            ->where(['c.id' => $conversationId])
+            ->limit(1)
+            ->scalar();
+
+        // Nullable column, and a missing row returns false. Both mean "not known to belong to a call".
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    public function confirmedMixedJobIdForCallSession(int $storeSourceId, string $callSessionId): ?int
+    {
+        // Two rows are fetched to answer a question about one. LIMIT 1 would report the first of several
+        // as though it were the only one, which is the failure this method exists to make impossible:
+        // the same recording uploaded twice is a normal state, and it must read as "no single answer"
+        // rather than as whichever row the optimiser happened to return.
+        $rows = (new Query($this->connection))
+            ->select(['j.id'])
+            ->from(['c' => self::TABLE])
+            ->innerJoin(['j' => self::JOBS], 'j.conversation_id = c.id')
+            ->where([
+                'c.store_source_id' => $storeSourceId,
+                'c.call_session_id' => $callSessionId,
+                'c.recording_type' => RecordingType::Mixed->value,
+            ])
+            ->andWhere(['not', ['j.roles_confirmed_at' => null]])
+            ->limit(2)
+            ->column();
+
+        return count($rows) === 1 ? (int) $rows[0] : null;
+    }
+
+    public function unlinkedForCallSessionBackfill(int $limit): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = (new Query($this->connection))
+            ->select([
+                'id' => 'c.id',
+                'store_source_id' => 'c.store_source_id',
+                'recording_type' => 'c.recording_type',
+                'original_filename' => 'j.original_filename',
+            ])
+            ->from(['c' => self::TABLE])
+            ->innerJoin(['j' => self::JOBS], 'j.conversation_id = c.id')
+            ->where(['c.call_session_id' => null])
+            ->orderBy(['c.id' => SORT_ASC])
+            ->limit($limit)
+            ->all();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            $out[] = [
+                'id' => (int) $row['id'],
+                'storeSourceId' => $row['store_source_id'] === null ? null : (int) $row['store_source_id'],
+                'recordingType' => $this->nullableString($row['recording_type'] ?? null),
+                'filename' => $this->nullableString($row['original_filename'] ?? null),
+            ];
+        }
+
+        return $out;
+    }
+
+    public function recordCallSession(int $conversationId, string $callSessionId): bool
+    {
+        // `call_session_id IS NULL` in the WHERE, not just in the reading query above: between the read
+        // and this write the importer may have linked the same row with the provider's own value, and
+        // that value outranks one recovered from a filename.
+        $affected = $this->connection->createCommand()->update(
+            self::TABLE,
+            ['call_session_id' => $callSessionId],
+            ['id' => $conversationId, 'call_session_id' => null],
+        )->execute();
+
+        return $affected === 1;
+    }
+
     public function storeSourceIdFor(int $conversationId): ?int
     {
         $value = (new Query($this->connection))
@@ -195,6 +281,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'mode' => 'c.mode',
                 'recording_type' => 'c.recording_type',
                 'order_id' => 'c.order_id',
+                'call_session_id' => 'c.call_session_id',
                 'uploaded_by_admin_id' => 'c.uploaded_by_admin_id',
                 'created_at' => 'c.created_at',
                 'generate_ai_audio' => 'c.generate_ai_audio',
@@ -288,6 +375,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             // MIXED, and the conversation falls back to its mode's label. See RecordingType.
             RecordingType::fromStorage($this->nullableString($row['recording_type'] ?? null)),
             $this->nullableString($row['order_id'] ?? null),
+            $this->nullableString($row['call_session_id'] ?? null),
         );
     }
 

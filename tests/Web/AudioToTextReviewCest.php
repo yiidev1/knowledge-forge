@@ -1544,7 +1544,12 @@ final class AudioToTextReviewCest
                 // Why the speakers were left open, in words for the reader. Null for a recording that
                 // was not left open, and for every row transcribed before the diagnosis was recorded.
                 'reviewExplanation',
-                'confirmedLine', 'voice', 'audio', 'filename', 'provider',
+                'confirmedLine', 'voice',
+                // Where the words come from when they are not this recording's own: the mixed
+                // conversation of the same call, once its roles have been confirmed. Null here and for
+                // every recording that belongs to no call, which is the ordinary state.
+                'derivedFrom',
+                'audio', 'filename', 'provider',
                 // Everything the Update Audio dialog needs to replace this recording, or null when it
                 // cannot be replaced. Named by the server so the browser never decides which of the
                 // three sides of a call it is looking at.
@@ -1581,7 +1586,11 @@ final class AudioToTextReviewCest
         Assert::assertSame(
             [
                 'index', 'label', 'confirmed', 'display', 'text', 'role', 'side', 'time', 'delay',
-                'edited', 'approx', 'hasHistory', 'canMove', 'targetRole', 'targetLabel',
+                'edited', 'approx', 'hasHistory',
+                // Whether this turn's wording may be corrected here. False only for a borrowed turn,
+                // whose words belong to the call's mixed recording and are corrected on its page.
+                'canEdit',
+                'canMove', 'targetRole', 'targetLabel',
                 'moveMerges', 'mergePrevious', 'mergeNext', 'urls',
             ],
             array_keys($turns[0]),

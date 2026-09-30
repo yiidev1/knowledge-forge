@@ -40,6 +40,12 @@ interface AudioIngestionPortInterface
      * @param ?string $orderId       digits, or null when the call names no order
      * @param string  $provider      `WHISPER` or `DEEPGRAM`
      * @param bool    $generateAiAudio whether clean audio was asked for **on this request**
+     * @param ?string $callSessionId the provider's identifier for the call this recording is part of,
+     *                               or null when the caller does not know one. Up to three recordings
+     *                               of one call carry the same value, and that is the only thing that
+     *                               says they belong together — an order id is a larger unit and can
+     *                               hold several calls. Recorded verbatim; nothing on this side derives
+     *                               it, validates its shape or reads meaning into it.
      */
     public function ingestFile(
         int $storeSourceId,
@@ -50,5 +56,6 @@ interface AudioIngestionPortInterface
         string $provider,
         bool $generateAiAudio,
         int $adminUserId,
+        ?string $callSessionId = null,
     ): AudioIngestionOutcome;
 }

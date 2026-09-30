@@ -23,6 +23,7 @@ return [
     // else. Not scheduled: it answers a question somebody is asking, rather than keeping anything
     // up to date.
     'kf:audio:diagnose-speaker-review' => App\AudioToText\Console\SpeakerReviewDiagnosisCommand::class,
+    'kf:audio:link-call-sessions' => App\AudioToText\Console\LinkCallSessionsCommand::class,
     'kf:documents:recover' => App\Worker\Console\RecoverDocumentsCommand::class,
     'kf:ai:reconcile' => App\Worker\Console\ReconcileCommand::class,
     'kf:order58:reconcile-active' => App\Order58\Console\ReconcileActiveStatusCommand::class,

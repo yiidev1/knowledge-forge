@@ -121,6 +121,15 @@ final readonly class TranscriptionQueue
          * need to.
          */
         ?string $orderId = null,
+        /**
+         * Which call this recording is of, handed over by whatever created the upload, or null.
+         *
+         * Only the Order58 importer supplies it — it is the provider's own call session id, and the
+         * manual upload form neither renders it nor accepts one. Written with the conversation inside
+         * the same transaction as its children, exactly like the order id above; the workers never read
+         * it. See {@see \App\AudioToText\Domain\AudioConversation::$callSessionId}.
+         */
+        ?string $callSessionId = null,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
@@ -162,7 +171,8 @@ final readonly class TranscriptionQueue
                 $provider,
                 $generateAiAudio,
                 $recordingType,
-                $orderId
+                $orderId,
+                $callSessionId
             ): string {
                 // Parent and children in one transaction: a pair whose second insert failed would
                 // otherwise leave a conversation promising two recordings and holding one.
@@ -175,7 +185,8 @@ final readonly class TranscriptionQueue
                     $provider,
                     $generateAiAudio,
                     $recordingType,
-                    $orderId
+                    $orderId,
+                    $callSessionId
                 ): string {
                     $conversationId = $this->conversations->create(
                         $conversationPublicId,
@@ -186,6 +197,7 @@ final readonly class TranscriptionQueue
                         $generateAiAudio,
                         $recordingType,
                         $orderId,
+                        $callSessionId,
                     );
 
                     foreach ($children as $child) {

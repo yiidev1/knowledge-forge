@@ -134,6 +134,9 @@ final readonly class RecordingImportProcessor
                 $item->provider,
                 $item->generateAiAudio,
                 $item->requestedByAdminId,
+                // The identity of the call, carried across the seam so the audio side can tell which
+                // recordings belong together. Already in hand — it is what this whole item is keyed on.
+                $item->callSessionId,
             );
         } catch (Throwable $e) {
             @unlink($path);

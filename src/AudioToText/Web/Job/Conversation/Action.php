@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Conversation;
 
+use App\AudioToText\Application\ConversationPresenter;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Domain\JobStatus;
-use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\JobPageGuard;
@@ -40,6 +40,7 @@ final readonly class Action
         private EffectiveConversationReader $conversations,
         private Redirect $redirect,
         private RecordingVoiceReader $voices,
+        private ConversationPresenter $presenter,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -64,16 +65,9 @@ final readonly class Action
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
                 'job' => $job,
-                'conversation' => ConversationView::from(
-                    $job->speakerSeparationStatus,
-                    $effective->utterances,
-                    $job->speakerRoleConfidence,
-                    $effective->hasSeparatedText(),
-                    $effective->rolesConfirmed,
-                    // Named at upload time: a Caller recording reads as that one person,
-                    // whatever the diarizer found inside it.
-                    $this->voices->for($job),
-                ),
+                // Own conversation or the call's, decided once in ConversationPresenter so this page
+                // and the dialog beside it cannot reach different answers.
+                'conversation' => $this->presenter->for($job, $effective, $this->voices->for($job)),
                 'effective' => $effective,
             ])
             ->withHeader('Cache-Control', 'no-store, private');

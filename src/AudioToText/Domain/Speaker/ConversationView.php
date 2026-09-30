@@ -131,6 +131,47 @@ final readonly class ConversationView
     }
 
     /**
+     * One side of a call, borrowed from the mixed recording that holds the whole of it.
+     *
+     * Every turn is a role label and every turn is confirmed, because the roles were established and
+     * confirmed on the conversation these words come from. Nothing about this recording's own
+     * separation is consulted or shown: its status, its confidence and its clusters describe a
+     * different transcription of a different file, and mixing them in would put two accounts of the
+     * call on one screen.
+     *
+     * See {@see DerivedConversation} for why this borrows rather than copies.
+     *
+     * @param list<SpeakerUtterance> $utterances the borrowed turns, already filtered to `$role`
+     */
+    public static function derived(array $utterances, SpeakerRole $role, TranscriptVoice $voice): self
+    {
+        $timings = ResponseTiming::forUtterances($utterances);
+        $turns = [];
+
+        foreach ($utterances as $index => $utterance) {
+            $turns[] = new ConversationTurn(
+                // The role, not the recording type. These words were attributed to this person on the
+                // mixed conversation and confirmed there, which is a stronger fact than "this is the
+                // Callee file" — and it is the fact the reader came here for.
+                $role->label(),
+                SpeakerMarkers::strip($utterance->text),
+                true,
+                // The side the channel recording already reads on, kept so switching between the tabs
+                // of one call does not make the thread jump from one margin to the other.
+                $voice->side,
+                $timings[$index] ?? TurnTiming::untimed(),
+                $utterance->edited,
+            );
+        }
+
+        // Published, because a person confirmed these roles on the conversation they were separated in.
+        // No confidence: the machine's score belongs to the mixed recording's own page, where it can be
+        // read next to the result it describes, and repeating it here would attach a number to a
+        // recording it was never measured on.
+        return new self($turns, true, [], null);
+    }
+
+    /**
      * One side of a call, every turn of it.
      *
      * `rolesPublished` is true and every turn is `confirmed`, and both mean the same thing here: there

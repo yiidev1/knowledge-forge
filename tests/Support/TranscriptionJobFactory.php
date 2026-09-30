@@ -53,6 +53,9 @@ final class TranscriptionJobFactory
         int $reviewCount = 0,
         int $id = 1,
         string $publicId = 'a0652255c038ba123ae6e3d177edbbe9',
+        // Which upload this recording hangs off. Only the tests about recordings of one call care, and
+        // they need two different values; every other test keeps the single one it always had.
+        int $conversationId = 42,
     ): TranscriptionJob {
         return self::build(
             id: $id,
@@ -69,6 +72,7 @@ final class TranscriptionJobFactory
             rolesConfirmedAt: $rolesConfirmedAt,
             reviewCount: $reviewCount,
             sourceRole: SourceRole::Common,
+            conversationId: $conversationId,
         );
     }
 
@@ -120,6 +124,7 @@ final class TranscriptionJobFactory
         ?DateTimeImmutable $rolesConfirmedAt,
         int $reviewCount,
         SourceRole $sourceRole,
+        int $conversationId = 42,
     ): TranscriptionJob {
         $now = new DateTimeImmutable('2026-09-18 12:00:00', new DateTimeZone('UTC'));
 
@@ -154,7 +159,7 @@ final class TranscriptionJobFactory
             $reviewedSegmentsJson === null ? null : 'reviewer',
             $rolesConfirmedAt,
             $reviewCount,
-            42,
+            $conversationId,
             $sourceRole,
             null,
         );
