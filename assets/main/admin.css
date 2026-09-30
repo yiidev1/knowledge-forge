@@ -7,6 +7,17 @@
  */
 
 :root {
+    /*
+     * Tell the browser the page has both themes, so it draws NATIVE controls to match the one in use.
+     *
+     * Without this a `<input type="date">` gets its calendar icon and its pop-up calendar rendered for a
+     * light page whatever the tokens below say — a near-black glyph on a near-black field, which is what
+     * it was. The alternative, `filter: invert(1)` on the indicator, fixes dark by breaking light: a
+     * white icon on a white field. This is the property the browser actually consults, it costs one
+     * line, and it applies to every native control the admin ever renders rather than to one input.
+     */
+    color-scheme: light dark;
+
     --bg: #f4f6fb;
     --surface: #ffffff;
     --surface-2: #f8fafc;
