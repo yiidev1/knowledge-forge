@@ -10,15 +10,19 @@ use App\Integration\Order58Recording\FixtureAvailability;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use DateTimeImmutable;
+use DateTimeZone;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function array_keys;
+use function file_get_contents;
 use function gmdate;
 use function sort;
 use function str_contains;
 use function str_repeat;
+use function urlencode;
 
 use const SORT_DESC;
 
@@ -57,6 +61,12 @@ final class Order58CallsCest
     private const STORE_NO_COMPANY = 987655201;
 
     private const PAGE = '/admin/order58/calls';
+
+    /** The calendar the application's business day is kept in — see AppTimeZone. */
+    private const APP_TIMEZONE = 'America/New_York';
+
+    /** One of the three ids FixtureCallSource produces, dated today. */
+    private const FIXTURE_SESSION = '22487129';
 
     /** The fixture call list, which {@see \App\Integration\Order58Recording\FixtureCallSource} generates. */
     private const CALLS = ['22487129', '22487119', '22487109'];
@@ -506,6 +516,109 @@ final class Order58CallsCest
      * `?source=fixture` is refused outright unless `APP_ENV` is dev or test, so this cannot reach a
      * production page even by accident — see {@see FixtureAvailability}.
      */
+    /* ---- The date field ------------------------------------------------------------------- */
+
+    /**
+     * The field is there, defaults to today, and offers nothing later.
+     *
+     * A call the provider has not recorded yet cannot be looked up, so the ceiling is today rather than
+     * a validation message after the fact.
+     */
+    public function theDateFieldDefaultsToTodayAndOffersNothingLater(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage(self::PAGE);
+
+        $today = (new DateTimeImmutable('now', new DateTimeZone(self::APP_TIMEZONE)))->format('Y-m-d');
+
+        $I->seeElement('input[type="date"][name="date"]');
+        Assert::assertSame($today, $I->grabAttributeFrom('input[name="date"]', 'value'));
+        Assert::assertSame($today, $I->grabAttributeFrom('input[name="date"]', 'max'));
+    }
+
+    /**
+     * Pressing the button without touching the field asks exactly what it always asked.
+     *
+     * The behaviour this change must not alter: the existing URL, with no `date` at all, still lists the
+     * same calls under the same day.
+     */
+    public function omittingTheDateBehavesExactlyAsBefore(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage($this->loadUrl());
+
+        $today = (new DateTimeImmutable('now', new DateTimeZone(self::APP_TIMEZONE)))->format('Y-m-d');
+
+        $I->see('Calls — ' . $today);
+        $I->see(self::FIXTURE_SESSION);
+        Assert::assertSame($today, $I->grabAttributeFrom('input[name="date"]', 'value'));
+    }
+
+    /**
+     * A chosen date reaches the filter, stays in the field, and names the heading.
+     *
+     * The fixtures are dated today, so asking for another day correctly lists nothing — which is the
+     * proof that the date reached the filter rather than being ignored.
+     */
+    public function aChosenDateIsUsedAndKept(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage($this->loadUrl() . '&date=2026-01-15');
+
+        $I->see('Calls — 2026-01-15');
+        Assert::assertSame('2026-01-15', $I->grabAttributeFrom('input[name="date"]', 'value'));
+        $I->dontSee(self::FIXTURE_SESSION);
+
+        // And the store survives the round trip, so the next press asks about the same one.
+        Assert::assertSame(
+            (string) self::STORE,
+            $I->grabAttributeFrom('select[name="store"] option[selected]', 'value'),
+        );
+    }
+
+    /**
+     * Anything that is not a real calendar day falls back to today, without an error.
+     *
+     * `2026-02-30` is the case a pattern check would pass: it is the right shape and not a date. The
+     * field shows which day was actually used, so nothing is silently wrong.
+     */
+    public function aMalformedDateFallsBackToToday(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $today = (new DateTimeImmutable('now', new DateTimeZone(self::APP_TIMEZONE)))->format('Y-m-d');
+
+        foreach (['2026-02-30', 'yesterday', '2026-9-1', '', '../../etc/passwd'] as $rubbish) {
+            $I->amOnPage($this->loadUrl() . '&date=' . urlencode($rubbish));
+
+            $I->seeResponseCodeIs(200);
+            $I->see('Calls — ' . $today);
+            Assert::assertSame($today, $I->grabAttributeFrom('input[name="date"]', 'value'));
+        }
+    }
+
+    /**
+     * The provider is still asked for a store and a limit, and nothing else.
+     *
+     * The date is applied **here**, to the calls that came back — the endpoint takes none. This pins
+     * that, because sending a date the provider does not document would be a contract change wearing
+     * the clothes of a filter.
+     */
+    public function theProviderRequestIsUnchangedByTheDate(WebTester $I): void
+    {
+        $source = file_get_contents(codecept_root_dir('src/Order58/Web/Calls/Action.php'));
+
+        Assert::assertStringContainsString(
+            'LatestCallsRequest::fromStrings((string) $storeId, (string) self::LIMIT)',
+            (string) $source,
+            'The request carries a store and a limit. A date there would be a new API contract.',
+        );
+        Assert::assertStringContainsString('$this->today->onDate($result->calls, $date)', (string) $source);
+    }
+
     private function loadUrl(int $store = self::STORE): string
     {
         return self::PAGE . '?store=' . $store . '&load=1&source=' . FixtureAvailability::FIXTURE;

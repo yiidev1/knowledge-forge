@@ -21,10 +21,11 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var array<int, string> $stores source id => name, active stores only
  * @var int|null $selectedStore
  * @var bool $loaded whether the provider was asked for calls on this request
+ * @var string $today the current business date, as the date field's ceiling
  * @var list<CallSummary> $calls today's calls, already filtered
  * @var array<string, non-empty-list<Order58ImportStatus>> $statuses keyed by call session id
  * @var string|null $problem why there are no calls to show
- * @var string $businessDate
+ * @var string $businessDate the day being shown — today unless the operator chose another
  * @var string $provider the preselected transcription provider, a storage value
  * @var array<string, string> $providerChoices storage value => label
  * @var bool $importEnabled
@@ -148,7 +149,15 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 </option>
             <?php endforeach; ?>
         </select>
-        <button class="btn btn--primary" type="submit">Load today's calls</button>
+        <?php
+        // Defaults to today and never offers a later day: the provider cannot have recorded a call that
+        // has not happened. Leaving it alone and pressing the button is exactly the request this page
+        // made before the field existed.
+?>
+        <label class="field__label store-picker__label" for="o58-date">Date</label>
+        <input class="field__control store-picker__date" type="date" id="o58-date" name="date"
+               value="<?= Html::encode($businessDate) ?>" max="<?= Html::encode($today) ?>">
+        <button class="btn btn--primary" type="submit">Load calls</button>
     </form>
 
     <?php if ($stores === []): ?>
@@ -161,7 +170,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
 <?php if ($loaded): ?>
     <section class="card">
         <h2 class="card__title">
-            Today's calls — <?= Html::encode($businessDate) ?>
+            Calls — <?= Html::encode($businessDate) ?>
         </h2>
 
         <?php if ($usingFixtures): ?>
@@ -219,8 +228,8 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                                 <td><?= Html::encode($call->callTime) ?></td>
                                 <td>
                                     <?= $call->orderId === ''
-                                    ? '<span class="util-muted">—</span>'
-                                    : Html::encode($call->orderId) ?>
+                            ? '<span class="util-muted">—</span>'
+                            : Html::encode($call->orderId) ?>
                                 </td>
                                 <td><?= $callState($statuses[$call->callSessionId] ?? null) ?></td>
                             </tr>
@@ -248,8 +257,8 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 </div>
 
                 <?php
-            // Unticked every render, never remembered: it spends money, and an unticked checkbox
-            // posts nothing at all, which is what makes "off" the reliable default.
+    // Unticked every render, never remembered: it spends money, and an unticked checkbox
+    // posts nothing at all, which is what makes "off" the reliable default.
 ?>
                 <div class="field">
                     <label class="a2t-checkbox" for="o58-ai-audio">

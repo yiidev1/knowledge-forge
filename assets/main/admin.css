@@ -950,9 +950,14 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .review-group .field__hint { margin-top: .6rem; }
 .store-picker { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
 .store-picker__select { flex: 0 1 380px; max-width: 420px; min-width: 0; }
+/* The date beside the store, on the same row. The label is inline here rather than stacked, because the
+   row is a group of controls and a stacked label would break its baseline. */
+.store-picker__label { margin: 0; font-size: .82rem; color: var(--text-muted); }
+.store-picker__date { flex: 0 0 auto; width: auto; min-width: 0; }
 @media (max-width: 560px) {
     .store-picker { flex-direction: column; align-items: stretch; }
     .store-picker__select { flex: 1 1 auto; max-width: none; }
+    .store-picker__date { width: 100%; }
     .store-picker .btn { width: 100%; }
 }
 

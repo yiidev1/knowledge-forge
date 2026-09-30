@@ -29,6 +29,7 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 use function array_map;
 use function is_string;
 use function preg_match;
+use function sprintf;
 
 /**
  * Manage Order58 Calls (GET /admin/order58/calls).
@@ -75,6 +76,11 @@ final readonly class Action
         $wantsCalls = ($params['load'] ?? null) === '1' && $storeId !== null;
 
         $now = $this->clock->now();
+
+        // Which day the operator asked for. Today unless they said otherwise, and today again for
+        // anything that is not a real calendar date — a malformed value is a typed URL rather than a
+        // state worth reporting, and the field shows which day was actually used.
+        $date = $this->requestedDate($params['date'] ?? null, $now);
         $calls = [];
         $statuses = [];
         $problem = null;
@@ -84,8 +90,8 @@ final readonly class Action
         if ($wantsCalls) {
             [$calls, $problem] = $usingFixtures
                 // Dev and test only, and only when asked for on this request. See FixtureAvailability.
-                ? [$this->today->today($this->fixtures->today($now), $now), null]
-                : $this->loadCalls($storeId, $now);
+                ? [$this->today->onDate($this->fixtures->today($now), $date), null]
+                : $this->loadCalls($storeId, $date);
 
             if ($calls !== []) {
                 $statuses = $this->imports->statusesFor(
@@ -106,7 +112,11 @@ final readonly class Action
                 'calls' => $calls,
                 'statuses' => $statuses,
                 'problem' => $problem,
-                'businessDate' => $this->today->businessDate($now),
+                // The day being shown, which is what the heading prints and the field keeps.
+                'businessDate' => $date,
+                // Today, separately: the date field offers nothing later, because the provider cannot
+                // have recorded a call that has not happened.
+                'today' => $this->today->businessDate($now),
                 'provider' => $this->providerDefault->current(),
                 'providerChoices' => $this->providerDefault->choices(),
                 'importEnabled' => $this->importEnabled,
@@ -130,7 +140,7 @@ final readonly class Action
      *
      * @return array{list<CallSummary>, ?string}
      */
-    private function loadCalls(int $storeId, DateTimeImmutable $now): array
+    private function loadCalls(int $storeId, string $date): array
     {
         $request = LatestCallsRequest::fromStrings((string) $storeId, (string) self::LIMIT);
 
@@ -148,16 +158,50 @@ final readonly class Action
             return [[], $result->diagnosis->headline . ' ' . $result->diagnosis->advice];
         }
 
-        $calls = $this->today->today($result->calls, $now);
+        $calls = $this->today->onDate($result->calls, $date);
 
         return [
             $calls,
             $calls === [] && $result->calls !== []
-                // Worth distinguishing: an account with no calls at all and an account whose calls are
-                // all from earlier days are different situations, and only one of them is a surprise.
-                ? 'This store has recent calls, but none from today.'
+                // Worth distinguishing: an account with no calls at all and an account whose recent
+                // calls are all from other days are different situations, and only one is a surprise.
+                //
+                // The window matters and is stated. The provider is asked for the latest LIMIT calls and
+                // this filters them here — it takes no date — so a day far enough back can fall outside
+                // that window entirely. "None on that date" would then be a claim this page cannot
+                // actually make.
+                ? sprintf(
+                    'This store has recent calls, but none from %s. Only its most recent %d calls are '
+                    . 'searched, so an older date may fall outside that window.',
+                    $date,
+                    self::LIMIT,
+                )
                 : null,
         ];
+    }
+
+    /**
+     * The `YYYY-MM-DD` the operator asked for, or today.
+     *
+     * Checked by reconstruction rather than by a pattern: `2026-02-30` matches any reasonable regular
+     * expression and is not a day. Re-formatting what was parsed and comparing it back is what rejects
+     * that, and it rejects `2026-9-1` too — a shape this page never produces and the provider's own
+     * dates never take.
+     *
+     * Anything else is today. A malformed value here is a typed URL, not a state worth an error
+     * message, and the field shows which day was actually used.
+     */
+    private function requestedDate(mixed $value, DateTimeImmutable $now): string
+    {
+        if (!is_string($value) || $value === '') {
+            return $this->today->businessDate($now);
+        }
+
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+        return $parsed !== false && $parsed->format('Y-m-d') === $value
+            ? $value
+            : $this->today->businessDate($now);
     }
 
     /**
