@@ -28,7 +28,7 @@ Unit=knowledge-forge-audio-tts-worker.service
 
 # Offset from the transcription timer's OnBootSec=2min so the two do not start together on boot.
 OnBootSec=4min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1min
 
 # A 5-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
 AccuracySec=30s
