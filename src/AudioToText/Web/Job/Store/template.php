@@ -236,6 +236,12 @@ $fragmentUrl = static fn(string $jobPublicId): string => $urlGenerator->generate
     AudioToTextRoute::JOB_REVIEW_FRAGMENT,
     ['publicId' => $jobPublicId],
 );
+// The polling endpoint, for a recording that is still being transcribed. The same one the Update
+// dialog follows — there is one status endpoint and every surface that shows progress reads it.
+$statusUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_STATUS,
+    ['publicId' => $jobPublicId],
+);
 $fullReviewUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
     AudioToTextRoute::JOB_REVIEW,
     ['publicId' => $jobPublicId],
@@ -255,11 +261,38 @@ $groupUrl = static fn(string $route, GroupKey $key): string => $urlGenerator->ge
  * is sixty pieces of browser chrome and sixty preloads. One shared controller in
  * `audio-store.js` plays them, which is also what makes "only one at a time" possible.
  */
+/**
+ * One numbered row of the shared progress card, with generic hooks the manual cards are driven by.
+ *
+ * The upload card below passes its own long-standing attribute names instead, so its script keeps
+ * working exactly as it did — the structure is shared, the wiring is each surface's own.
+ */
+$progressStep = static fn(string $number, string $key, string $label, string $detail): array => [
+    'number' => $number,
+    'label' => $label,
+    'detail' => $detail,
+    'value' => 'Waiting',
+    'stepAttrs' => ['data-a2t-processing-step' => $key],
+    'valueAttrs' => ['data-a2t-processing-value' => true],
+    'barAttrs' => ['data-a2t-processing-bar' => true],
+    'detailAttrs' => ['data-a2t-processing-detail' => true],
+];
+
+/** The five stages a transcription reports, in the order the worker reaches them. */
+$transcriptionSteps = static fn(): array => [
+    $progressStep('01', 'PREPARING', 'Preparing', 'Getting the recording ready for transcription'),
+    $progressStep('02', 'TRANSCRIBING', 'Transcribing', 'Converting speech into text'),
+    $progressStep('03', 'DIARIZING', 'Separating speakers', 'Telling the two voices apart'),
+    $progressStep('04', 'MAPPING_SPEAKERS', 'Identifying speakers', 'Working out which voice is the agent'),
+    $progressStep('05', 'SAVING', 'Saving', 'Writing the finished transcript'),
+];
+
 $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = false) use (
     $clock,
     $originalUrl,
     $fragmentUrl,
-    $fullReviewUrl
+    $fullReviewUrl,
+    $statusUrl
 ): string {
     $html = '<div class="a2t-slot">';
 
@@ -270,6 +303,16 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
             . '<span class="a2t-play__icon" aria-hidden="true"></span>'
             . '<span class="a2t-play__time">' . Html::encode($clock($slot->durationSeconds)) . '</span>'
             . '</button>';
+    }
+
+    // Still being transcribed. It has no transcript to review, so `isReviewable()` is false and the
+    // Details button below is not drawn — which used to leave the word "Processing" as the only thing
+    // anywhere about it. This opens the same Details dialog straight into its progress card, polling
+    // the status endpoint that already exists.
+    if ($slot->isProcessing()) {
+        $html .= '<button class="a2t-slot__link" type="button"'
+            . ' data-a2t-progress="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Progress</button>';
     }
 
     if ($slot->isReviewable()) {
@@ -728,32 +771,50 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 <?= $providerField('a2t-provider') ?>
                 <?= $aiAudioField('a2t-ai-audio') ?>
 
-                <div class="a2t-upload-feedback" data-a2t-feedback data-a2t-state="idle" hidden>
-                    <div class="a2t-upload-feedback__heading">
-                        <strong>Recording progress</strong>
-                        <span class="a2t-upload-state" data-a2t-state-label>Ready</span>
-                    </div>
-                    <div class="a2t-upload-step" data-a2t-step="upload" data-state="pending">
-                        <div class="a2t-upload-feedback__label">
-                            <span class="a2t-upload-step__title"><span aria-hidden="true">01</span> Upload</span>
-                            <span data-a2t-upload-percent aria-hidden="true">0%</span>
-                        </div>
-                        <progress class="a2t-upload-progress" data-a2t-upload-progress max="100" value="0"
-                                  aria-label="Upload progress"></progress>
-                        <p class="a2t-upload-step__detail" data-a2t-upload-status role="status">Awaiting audio file</p>
-                    </div>
-                    <div class="a2t-upload-step" data-a2t-step="conversion" data-state="pending">
-                        <div class="a2t-upload-feedback__label">
-                            <span class="a2t-upload-step__title"><span aria-hidden="true">02</span> Conversion</span>
-                            <span data-a2t-conversion-percent aria-hidden="true">Pending</span>
-                        </div>
-                        <progress class="a2t-upload-progress" data-a2t-conversion-progress max="100" value="0"
-                                  aria-label="Conversion progress"></progress>
-                        <p class="a2t-upload-step__detail" data-a2t-conversion-status role="status">Starts after upload</p>
-                    </div>
-                    <p class="a2t-upload-error" data-a2t-upload-error role="alert" hidden></p>
-                    <a class="a2t-upload-result" data-a2t-upload-result hidden>View conversion <span aria-hidden="true">&#8599;</span></a>
-                </div>
+                <?php
+                // The same card the manual dialogs render — one file, one structure. This one names the
+                // attribute hooks its own script has always used, so nothing about the upload flow
+                // changes; what is shared is the markup, not the wiring.
+    ?>
+                <?= $this->render(AudioToTextViews::processingCard(), [
+                    'title' => 'Recording progress',
+                    'cardAttrs' => ['data-a2t-feedback' => true],
+                    'badgeAttrs' => ['data-a2t-state-label' => true],
+                    'badgeText' => 'Ready',
+                    'steps' => [
+                        [
+                            'number' => '01',
+                            'label' => 'Upload',
+                            'detail' => 'Awaiting audio file',
+                            'value' => '0%',
+                            'stepAttrs' => ['data-a2t-step' => 'upload'],
+                            'valueAttrs' => ['data-a2t-upload-percent' => true],
+                            'barAttrs' => ['data-a2t-upload-progress' => true],
+                            'detailAttrs' => ['data-a2t-upload-status' => true],
+                        ],
+                        [
+                            'number' => '02',
+                            'label' => 'Conversion',
+                            'detail' => 'Starts after upload',
+                            'value' => 'Pending',
+                            'stepAttrs' => ['data-a2t-step' => 'conversion'],
+                            'valueAttrs' => ['data-a2t-conversion-percent' => true],
+                            'barAttrs' => ['data-a2t-conversion-progress' => true],
+                            'detailAttrs' => ['data-a2t-conversion-status' => true],
+                        ],
+                    ],
+                    'errorAttrs' => ['data-a2t-upload-error' => true],
+                    // Two steps that really are separate — bytes arriving, then a worker converting
+                    // — so a bar each is the honest shape here.
+                    'layout' => 'steps',
+                    // Inline in a form, not in a dialog: no estimate row, no close-is-safe note and no
+                    // buttons of its own — the form's own submit is right beneath it.
+                    'meta' => false,
+                    'note' => false,
+                    'closable' => false,
+                    'extra' => '<a class="a2t-upload-result" data-a2t-upload-result hidden>'
+                        . 'View conversion <span aria-hidden="true">&#8599;</span></a>',
+                ]) ?>
 
                 <button class="btn btn--primary a2t-upload-submit" type="submit">Upload &amp; Transcribe</button>
             </form>
@@ -762,10 +823,10 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
 <?php endif; ?>
 
 <?php
-// The three read/edit dialogs are rendered empty and filled on demand: a store page must not carry
-// every transcript of every row it lists. Each one follows the shell the chat source dialog
-// established — a `<dialog>` with data hooks, no ids printed, closed by its own button or a backdrop
-// click, and filled with textContent rather than markup.
+    // The three read/edit dialogs are rendered empty and filled on demand: a store page must not carry
+    // every transcript of every row it lists. Each one follows the shell the chat source dialog
+    // established — a `<dialog>` with data hooks, no ids printed, closed by its own button or a backdrop
+    // click, and filled with textContent rather than markup.
 ?>
 <dialog class="source-modal a2t-review-dialog" id="a2t-review-dialog" data-a2t-dialog
         aria-labelledby="a2t-review-title">
@@ -790,6 +851,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
 ?>
             <a class="btn btn--sm" data-a2t-full-editor href="#">Open full editor</a>
         </div>
+
         <?php
         // A child of the header, NOT of the actions beside it. When the header runs out of width the
         // actions drop to a line of their own, and a close button inside them would go with them — so
@@ -800,13 +862,32 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             title="Close" aria-label="Close">&times;</button>
     </div>
     <?php
-    // One tab per recording of the call, when this dialog was opened from an order id. Built by the
-    // script from the Details buttons the row already carries, so nothing is rendered here and nothing
-    // is fetched until a tab is chosen.
-    //
-    // Hidden throughout the single-recording path, and hidden for an order with only one recording:
-    // the Original transcript dialog above draws its tab bar on the same rule, and a tab strip holding
-    // one tab is a control that cannot do anything.
+    // A recording that is still being transcribed has no transcript to show, and used to be a dead end:
+    // the row offered no Details at all and the only word anywhere was "Processing". The same card the
+    // Update dialog uses now answers that, polling the same endpoint, so closing one window and opening
+    // another shows the same state rather than two different accounts of it.
+?>
+    <?= $this->render(AudioToTextViews::processingCard(), [
+        'title' => 'Transcription Progress',
+        'cardAttrs' => ['data-a2t-processing' => 'details'],
+        'badgeAttrs' => ['data-a2t-processing-badge' => true],
+        'badgeText' => 'Starting',
+        'steps' => $transcriptionSteps(),
+        'errorAttrs' => ['data-a2t-processing-error' => true],
+        'layout' => 'overall',
+        'meta' => true,
+        'note' => true,
+        'closable' => false,
+        'extra' => '',
+    ]) ?>
+    <?php
+// One tab per recording of the call, when this dialog was opened from an order id. Built by the
+// script from the Details buttons the row already carries, so nothing is rendered here and nothing
+// is fetched until a tab is chosen.
+//
+// Hidden throughout the single-recording path, and hidden for an order with only one recording:
+// the Original transcript dialog above draws its tab bar on the same rule, and a tab strip holding
+// one tab is a control that cannot do anything.
 ?>
     <div class="a2t-tabs" role="tablist" data-a2t-review-tabs hidden></div>
     <p class="source-modal__status" data-a2t-review-status hidden></p>
@@ -967,6 +1048,24 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             <button class="btn btn--primary btn--sm" type="submit" data-a2t-update-submit>Update Audio</button>
         </div>
     </form>
+
+    <?php
+    // The one progress card. Same file, same hooks and same stage list as the Details dialog's and the
+    // AI-audio one — see the partial for why there is only ever one of these.
+?>
+    <?= $this->render(AudioToTextViews::processingCard(), [
+        'title' => 'Update Audio Progress',
+        'cardAttrs' => ['data-a2t-processing' => 'update'],
+        'badgeAttrs' => ['data-a2t-processing-badge' => true],
+        'badgeText' => 'Starting',
+        'steps' => $transcriptionSteps(),
+        'errorAttrs' => ['data-a2t-processing-error' => true],
+        'layout' => 'overall',
+        'meta' => true,
+        'note' => true,
+        'closable' => true,
+        'extra' => '',
+    ]) ?>
 </dialog>
 
 <?php
@@ -1024,6 +1123,27 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             </button>
         </div>
     </div>
+
+    <?php
+    // The one progress card. Same file, same hooks and same stage list as the Details dialog's and the
+    // AI-audio one — see the partial for why there is only ever one of these.
+?>
+    <?= $this->render(AudioToTextViews::processingCard(), [
+        'title' => 'AI Audio Progress',
+        'cardAttrs' => ['data-a2t-processing' => 'tts'],
+        'badgeAttrs' => ['data-a2t-processing-badge' => true],
+        'badgeText' => 'Starting',
+        'steps' => [
+            $progressStep('01', 'ACCEPTED', 'Request', 'Generation request accepted'),
+            $progressStep('02', 'GENERATING', 'Generate audio', 'Creating AI audio from the transcript'),
+        ],
+        'errorAttrs' => ['data-a2t-processing-error' => true],
+        'layout' => 'overall',
+        'meta' => true,
+        'note' => true,
+        'closable' => true,
+        'extra' => '',
+    ]) ?>
 </dialog>
 
 <?php

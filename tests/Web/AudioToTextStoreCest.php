@@ -2952,7 +2952,9 @@ final class AudioToTextStoreCest
 
         /** @var array<string, mixed> $state */
         $state = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
-        Assert::assertSame(['status', 'stage', 'speakerSeparation'], array_keys($state));
+        // `eta` joins the three enum values: two second counts for the dialog's "usually takes about"
+        // line, or null where this recording gives nothing to estimate from. Never a countdown.
+        Assert::assertSame(['status', 'stage', 'speakerSeparation', 'eta'], array_keys($state));
         Assert::assertSame('QUEUED', $state['status'], 'Queued only. The web request converted nothing.');
     }
 
@@ -3133,7 +3135,7 @@ final class AudioToTextStoreCest
 
             // The two a worker holds. Drawn, named, and NOT pressable — this is the whole fix.
             ['status' => 'QUEUED', 'file' => false, 'current' => true, 'state' => 'Queued',
-                'enabled' => false, 'inFlight' => true, 'label' => 'Queued…'],
+                'enabled' => false, 'inFlight' => true, 'label' => 'Starting…'],
             ['status' => 'GENERATING', 'file' => false, 'current' => true, 'state' => 'Generating',
                 'enabled' => false, 'inFlight' => true, 'label' => 'Generating…'],
 

@@ -247,9 +247,9 @@ final class DetailsHeaderActionsTest extends TestCase
         $body = substr($script, $start, $end - $start);
 
         self::assertStringContainsString(
-            "textContent = 'Queued…'",
+            "textContent = 'Starting…'",
             $body,
-            'The header is moved on straight away.',
+            'The header is moved on straight away — and says "Starting", not the name of a queue.',
         );
         self::assertSame(
             2,

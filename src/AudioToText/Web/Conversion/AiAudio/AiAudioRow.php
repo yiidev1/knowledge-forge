@@ -109,7 +109,11 @@ final readonly class AiAudioRow
     public function actionLabel(): string
     {
         return match ($this->state) {
-            AiAudioState::Queued => 'Queued…',
+            // "Starting…", not "Queued…". This is the label on the control somebody has just pressed,
+            // which makes it the primary status they read — and the name of the mechanism is not what
+            // they need at that moment. The state's own badge still says Queued, on the listing where
+            // it is a column of facts rather than an answer to a press.
+            AiAudioState::Queued => 'Starting…',
             AiAudioState::Generating => 'Generating…',
             default => $this->buttonLabel() . ' AI Audio',
         };

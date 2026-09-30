@@ -7,6 +7,7 @@ namespace App\Tests\Support;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
 use DateTimeImmutable;
@@ -56,6 +57,10 @@ final class TranscriptionJobFactory
         // Which upload this recording hangs off. Only the tests about recordings of one call care, and
         // they need two different values; every other test keeps the single one it always had.
         int $conversationId = 42,
+        // Which engine, and how long the recording is. Only the estimate tests vary either; every
+        // other test keeps the values it always had — Whisper by omission, and 73.72 seconds.
+        ?TranscriptionProvider $provider = null,
+        ?float $durationSeconds = 73.72,
     ): TranscriptionJob {
         return self::build(
             id: $id,
@@ -73,6 +78,8 @@ final class TranscriptionJobFactory
             reviewCount: $reviewCount,
             sourceRole: SourceRole::Common,
             conversationId: $conversationId,
+            provider: $provider,
+            durationSeconds: $durationSeconds,
         );
     }
 
@@ -125,6 +132,8 @@ final class TranscriptionJobFactory
         int $reviewCount,
         SourceRole $sourceRole,
         int $conversationId = 42,
+        ?TranscriptionProvider $provider = null,
+        ?float $durationSeconds = 73.72,
     ): TranscriptionJob {
         $now = new DateTimeImmutable('2026-09-18 12:00:00', new DateTimeZone('UTC'));
 
@@ -138,7 +147,7 @@ final class TranscriptionJobFactory
             'call.wav',
             null,
             'source.wav',
-            73.72,
+            $durationSeconds,
             $transcript,
             'en',
             null,
@@ -161,7 +170,7 @@ final class TranscriptionJobFactory
             $reviewCount,
             $conversationId,
             $sourceRole,
-            null,
+            $provider,
         );
     }
 }

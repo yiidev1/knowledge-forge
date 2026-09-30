@@ -387,8 +387,14 @@ tr:hover .a2t-slot__add,
    strip of whitespace and the reader has to hunt for the sentence that matters — and the confirmation in
    particular has to be read, because it is the one that says whether anything will be spent. Not a new
    modal: everything else about them is `.source-modal`. */
-.a2t-update-dialog { width: min(34rem, calc(100vw - 2rem)); }
-.a2t-tts-confirm-dialog { width: min(30rem, calc(100vw - 2rem)); }
+/* Wide enough for the progress card's five stage names to sit on one line on a desktop — 48rem is
+   768px, against the 34rem it had, which wrapped "Identifying speakers" onto a second row and made the
+   card taller than it needed to be. The `min()` is unchanged, so a narrow viewport still gets the full
+   width less a 1rem gutter either side and the stage row wraps naturally rather than scrolling. */
+.a2t-update-dialog { width: min(48rem, calc(100vw - 2rem)); }
+/* The AI-audio dialog now carries the same progress card, with its own two numbered rows, so it needs
+   the same room the Update dialog does. Both bounded by the viewport less a 1rem gutter either side. */
+.a2t-tts-confirm-dialog { width: min(44rem, calc(100vw - 2rem)); }
 
 /* Two rows: the players share the first, the voice takes the second. The divider between the two
    players stays; the one that would now start a row is removed. */
@@ -693,3 +699,100 @@ tr:hover .a2t-slot__add,
 @media (max-width: 900px) {
     .a2t-orders { min-width: 780px; }
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * Processing mode — the card a dialog switches to once its request has been accepted.
+ *
+ * Almost nothing here. The panel IS the "Recording progress" card: it carries `.a2t-upload-feedback`,
+ * its steps carry `.a2t-upload-step`, its bars carry `.a2t-upload-progress`, and every state those
+ * already understand — pending, active, complete, error — is styled once, above, for both.
+ *
+ * What remains is the three things a dialog needs that the inline form did not: room to breathe inside
+ * a modal, a metadata row for the estimate and the clock, and a callout saying the window may be
+ * closed.
+ * ------------------------------------------------------------------------------------------- */
+
+.a2t-processing { margin: 0; padding: 1.1rem 1.15rem; }
+
+/* The dialog gives the card its own margin, so the card does not also give itself one. */
+.source-modal .a2t-processing { margin: 0 1.25rem 1.25rem; }
+
+/*
+ * The card's own rows are `.a2t-upload-step`, styled once above for the upload form and now serving
+ * every surface. What remains here is only what a dialog needs beyond that: the metadata row, the
+ * callout, and the controls.
+ */
+/* The stages as a checklist under the one bar: five short rows, not five bars. Vertical, because the
+   sentence beneath names one of them and the eye should find it without scanning sideways. */
+.a2t-processing__stages {
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+    margin: .9rem 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: .78rem;
+}
+
+.a2t-processing__stage {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    color: var(--text-muted);
+}
+
+/* The marker carries the state, so a row reads the same to somebody who cannot tell the colours apart:
+   an empty ring to come, a filled one running, a tick done, a cross failed. */
+.a2t-processing__mark::before { content: '\25CB'; }
+.a2t-processing__stage[data-state="active"] { color: var(--primary); font-weight: 700; }
+.a2t-processing__stage[data-state="active"] .a2t-processing__mark::before { content: '\25C9'; }
+.a2t-processing__stage[data-state="complete"] { color: var(--success-text); }
+.a2t-processing__stage[data-state="complete"] .a2t-processing__mark::before { content: '\2713'; }
+.a2t-processing__stage[data-state="error"] { color: var(--error-text); font-weight: 650; }
+.a2t-processing__stage[data-state="error"] .a2t-processing__mark::before { content: '\2717'; }
+
+/* The overall row has no description of its own — the sentence below the checklist is the description
+   — so it needs no gap beneath its bar. */
+.a2t-processing [data-a2t-processing-overall] .a2t-upload-progress { margin-bottom: 0; }
+
+.a2t-processing [data-a2t-processing-detail] { margin-top: .75rem; font-size: .78rem; }
+
+.a2t-processing__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem 1.1rem;
+    margin: 1rem 0 0;
+    padding-top: .85rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: .74rem;
+}
+
+.a2t-processing__elapsed { font-variant-numeric: tabular-nums; }
+/* `:not(:empty)` matters: the second span exists even when there is nothing to say, and an
+   unconditional separator drew a stray middle dot on a finished card. */
+.a2t-processing__meta > span + span:not(:empty)::before { content: '\00B7'; margin-right: .5rem; }
+.a2t-processing__meta[hidden] { display: none; }
+.a2t-processing [data-a2t-processing-overall][hidden] { display: none; }
+
+.a2t-processing__note {
+    margin: .7rem 0 0;
+    padding: .6rem .7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: .74rem;
+    line-height: 1.5;
+}
+
+.a2t-processing__actions { margin-top: 1rem; }
+
+/*
+ * `[hidden]` sets `display: none` from the user-agent stylesheet, which any class that sets `display`
+ * beats on specificity — and `.btn` sets `display: inline-flex`. Without this, a Retry button marked
+ * hidden stays on screen, which is exactly what happened: Close and Retry were both offered while a
+ * recording was still being transcribed. The card above already patches the same collision for its own
+ * three elements; this covers the controls.
+ */
+.a2t-processing [hidden] { display: none; }

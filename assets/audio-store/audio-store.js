@@ -11,7 +11,7 @@
  * Deliberately global, like `window.KFReviewTurns`. There is no module loader here.
  */
 window.KFAudioStages = {
-    QUEUED: 'Waiting for the transcription worker',
+    QUEUED: 'Getting ready to process this recording',
     CLAIMED: 'Starting conversion',
     CONVERTING: 'Preparing audio for transcription',
     TRANSCRIBING: 'Transcribing audio to text',
@@ -253,7 +253,9 @@ window.KFAudioStages = {
                                 unlock();
                                 return;
                             }
-                            state('converting', data.status === 'QUEUED' ? 'Queued' : 'Converting');
+                            // "Starting", not "Queued": what the reader needs is that their
+                            // recording is on its way, not the name of the mechanism it is on.
+                            state('converting', data.status === 'QUEUED' ? 'Starting' : 'Converting');
                             conversionPercent.textContent = data.status === 'QUEUED' ? 'Waiting' : 'In progress';
                             conversionStatus.textContent = data.status === 'QUEUED'
                                 ? stages.QUEUED : (stages[data.stage] || 'Processing your recording');
@@ -1868,7 +1870,74 @@ window.KFAudioStages = {
         //    somebody reloaded — and the operator who pressed the button is exactly the person watching.
         watchGenerated(audio.generated);
 
+        // 6. And keep the confirmation dialog's panel in step with what that just read. This is where a
+        //    generation is seen to finish: the poll above re-reads the fragment, the player is repainted
+        //    from it a few lines up, and the panel below settles on the same answer. Driven from the
+        //    server's state rather than from what this tab asked for, so a generation somebody else
+        //    started, or one that failed before this page loaded, reads correctly too.
+        settleTtsPanel(audio.generated);
+
         listen.hidden = false;
+    }
+
+    /**
+     * Move the AI-audio panel to its end state once the server stops saying `inFlight`.
+     *
+     * Only acts while the panel is actually showing, so a background re-read for some other reason
+     * cannot open a dialog nobody asked for. The player above has already been repainted by the time
+     * this runs — which is the "refresh the audio automatically" half of the requirement, and is why
+     * this only has to say what happened.
+     */
+    function settleTtsPanel(generated) {
+        var panel = panelIn(ttsConfirmDialog);
+
+        if (!panel || panel.hidden || !generated) {
+            return;
+        }
+
+        if (generated.inFlight) {
+            return; // Still working. The ticker keeps the elapsed count moving.
+        }
+
+        stopTtsTicker();
+
+        if (reviewUrl !== null) {
+            forgetProcessing('tts', reviewUrl + '|' + generated.outputType);
+        }
+
+        if (generated.playable) {
+            renderProcessing(ttsConfirmDialog, {
+                headline: 'AI audio ready.',
+                badge: 'Ready',
+                // Both steps complete: the request was accepted and the audio was made.
+                step: null,
+                // No `percent`, and that is what hides the bar: a rendition has no position in a
+                // workflow to end at, so there is nothing for a bar to say once it is done. The ticks
+                // and the badge say it.
+                detail: 'AI audio is ready to play.',
+                state: 'done',
+                finished: true
+            }, ttsStarted);
+
+            return;
+        }
+
+        // Not playable and not in flight: the generation failed. `reason` is the server's own sentence
+        // for it — shown verbatim rather than replaced with a generic one, because it is the only thing
+        // that says what went wrong.
+        renderProcessing(ttsConfirmDialog, {
+            headline: ttsVerb.replace('ing', 'ion') + ' did not finish.',
+            badge: 'Failed',
+            // The request step stays complete — it WAS accepted. What failed is the generating.
+            step: 'GENERATING',
+            state: 'failed',
+            finished: true,
+            error: generated.reason || generated.label || 'The audio could not be generated.',
+            // Safe: a FAILED rendition is re-queueable by the same POST — the database's own guard
+            // refuses only while one is QUEUED or GENERATING — and the previous audio, if there was
+            // any, is still on disk and still playable.
+            retry: 'Try again'
+        }, ttsStarted);
     }
 
     /**
@@ -2021,6 +2090,399 @@ window.KFAudioStages = {
         return controls;
     }
 
+
+    /* ---- Processing mode: one panel, both dialogs ------------------------------------------- */
+
+    /**
+     * The panel a dialog switches to once its request has been accepted.
+     *
+     * ## Why a mode rather than a message
+     *
+     * Both dialogs used to keep their form on screen and write a sentence above it. That leaves the
+     * submit button under the reader's cursor while a worker is already acting on the last press, and
+     * it says nothing about what is happening beyond one line. Switching the dialog into a second mode
+     * removes the control that must not be pressed again and gives the state somewhere to live.
+     *
+     * ## What it will not do
+     *
+     * No percentage and no countdown. The server publishes a **stage** and, for transcription, an
+     * approximate range; neither is a fraction, and a bar built from them would be a number this
+     * application invented. Elapsed time is counted up because it is measured rather than predicted.
+     *
+     * ## Server state is the authority
+     *
+     * Everything drawn here comes from a poll. `sessionStorage` holds only enough to find the job again
+     * after the dialog is closed and reopened — a url and an id — and the first thing a restore does is
+     * ask the server. A remembered entry for a job that has already finished simply repaints as
+     * finished and clears itself.
+     */
+    var PROCESSING_MEMORY_KEY = 'kf.a2t.processing';
+
+    /**
+     * ProcessingStage, collapsed to what a reader is shown — and to one number.
+     *
+     * ## What `percent` is
+     *
+     * **How far through the list of stages this job is.** Not a fraction of the time remaining, not
+     * measured, and it moves only when the server reports a different stage. Transcribing a ten-minute
+     * recording sits at 40% for most of the wait, which is correct: the workflow really is 40% done,
+     * and the elapsed clock beside it is the thing that keeps moving.
+     *
+     * Nothing animates it toward 100% and no timer touches it.
+     *
+     * QUEUED, CLAIMED and CONVERTING all read as "Preparing": the first two are the queue and the
+     * claim, which are mechanism rather than work, and the third finishes in a second or two. None of
+     * those three words reaches a screen.
+     */
+    var PROCESSING_STAGES = {
+        QUEUED: { step: 'PREPARING', percent: 10, label: 'Preparing', detail: 'getting the recording ready' },
+        CLAIMED: { step: 'PREPARING', percent: 15, label: 'Preparing', detail: 'getting the recording ready' },
+        CONVERTING: { step: 'PREPARING', percent: 20, label: 'Preparing', detail: 'preparing the audio for transcription' },
+        TRANSCRIBING: { step: 'TRANSCRIBING', percent: 40, label: 'Transcribing', detail: 'converting speech into text' },
+        DIARIZING: { step: 'DIARIZING', percent: 65, label: 'Separating speakers', detail: 'telling the two voices apart' },
+        MAPPING_SPEAKERS: { step: 'MAPPING_SPEAKERS', percent: 80, label: 'Identifying speakers', detail: 'working out which voice is the agent' },
+        SAVING: { step: 'SAVING', percent: 95, label: 'Saving', detail: 'writing the finished transcript' }
+    };
+
+    /** The steps a transcription card lists, in the order the template draws them. */
+    var PROCESSING_STEP_ORDER = ['PREPARING', 'TRANSCRIBING', 'DIARIZING', 'MAPPING_SPEAKERS', 'SAVING'];
+
+    /**
+     * One view model, from one status reading, for every surface that shows progress.
+     *
+     * The Update dialog, the Details dialog and the AI-audio confirmation all render from this, so a
+     * reader who starts an update, closes the window and opens Details sees the same card in the same
+     * state rather than two accounts of one job.
+     *
+     * @param {Object} state  the JOB_STATUS payload, or a TTS shape {ttsState, playable, reason}
+     * @param {Object} intent {headline, verb} — what this surface calls the thing being waited on
+     */
+    function processingViewModel(state, intent) {
+        var status = state.status;
+
+        if (status === 'COMPLETED') {
+            return {
+                headline: intent.doneHeadline || 'Finished.',
+                badge: 'Completed',
+                percent: 100,
+                step: null, // every step is done; none of them is the current one
+                detail: '',
+                finished: true,
+                state: 'done'
+            };
+        }
+
+        if (status === 'FAILED') {
+            var reached = PROCESSING_STAGES[state.stage] || PROCESSING_STAGES.QUEUED;
+
+            return {
+                headline: intent.failedHeadline || 'This could not be finished.',
+                badge: 'Failed',
+                // The last known position is kept rather than reset: the stages before the failure did
+                // happen, and emptying the bar would say they had not.
+                percent: reached.percent,
+                step: reached.step,
+                detail: '',
+                finished: true,
+                state: 'failed'
+            };
+        }
+
+        var stage = PROCESSING_STAGES[state.stage] || PROCESSING_STAGES.QUEUED;
+
+        return {
+            headline: intent.headline,
+            // "Starting" only while nothing has been claimed. The word "Queued" is the name of a
+            // mechanism and never appears.
+            badge: state.stage && state.stage !== 'QUEUED' ? 'Processing' : 'Starting',
+            percent: stage.percent,
+            step: stage.step,
+            // Names the stage AND what it is doing, so the sentence under the bar and the highlighted
+            // row in the list are obviously the same thing rather than two readings to reconcile.
+            detail: 'Currently: ' + stage.label + ' — ' + stage.detail,
+            eta: state.eta,
+            finished: false,
+            state: 'working'
+        };
+    }
+
+    /** The panel inside one container, or null where the template drew none. */
+    function panelIn(root) {
+        return root ? root.querySelector('[data-a2t-processing]') : null;
+    }
+
+    /** Every part of a dialog that is not its processing panel — the form mode. */
+    function formPartsIn(dialog) {
+        if (!dialog) {
+            return [];
+        }
+
+        return Array.prototype.filter.call(dialog.children, function (child) {
+            return !child.hasAttribute('data-a2t-processing') && !child.classList.contains('source-modal__head');
+        });
+    }
+
+    /**
+     * Switch a dialog between its form and its processing panel.
+     *
+     * The head stays either way: it carries the close control, and the requirement is that this dialog
+     * remains closable while a worker is running.
+     */
+    function showProcessing(dialog, on) {
+        var panel = panelIn(dialog);
+
+        if (!panel) {
+            return;
+        }
+
+        formPartsIn(dialog).forEach(function (part) { part.hidden = on; });
+        panel.hidden = !on;
+    }
+
+    /** Seconds since a start time, as "1m 24s" — counted up, never down. */
+    function elapsedWords(startedAt) {
+        var seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+
+        if (seconds < 60) {
+            return seconds + 's elapsed';
+        }
+
+        return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's elapsed';
+    }
+
+    /**
+     * The server's range, in words, or the honest fallback.
+     *
+     * "Usually takes about" and never "will take": the range is two bounds measured over past jobs on a
+     * shared machine, and `ProcessingEstimate` widens them deliberately. Null means this recording has
+     * nothing to estimate from, which is said plainly rather than filled in.
+     */
+    function etaWords(eta) {
+        if (!eta || !eta.lowSeconds || !eta.highSeconds) {
+            return 'This may take a few minutes.';
+        }
+
+        var low = Math.max(1, Math.round(eta.lowSeconds / 60));
+        var high = Math.max(low, Math.round(eta.highSeconds / 60));
+
+        if (high <= 1) {
+            return 'Usually takes about a minute.';
+        }
+
+        return low === high
+            ? 'Usually takes about ' + low + ' minutes.'
+            : 'Usually takes about ' + low + '–' + high + ' minutes.';
+    }
+
+    /**
+     * Draw one card from one view model.
+     *
+     * The single renderer. Everything about how progress looks is decided here, so the three surfaces
+     * cannot drift: they differ only in the words they pass in and in where their container is.
+     *
+     * @param {Element} root    the dialog or element holding a `[data-a2t-processing]` card
+     * @param {Object}  model   from {@see processingViewModel}
+     * @param {number}  started when the request was accepted, for the elapsed count
+     */
+    function renderProcessing(root, model, started) {
+        var panel = panelIn(root);
+
+        if (!panel) {
+            return;
+        }
+
+        // The same four values the upload card understands, so one stylesheet rule colours both.
+        panel.dataset.a2tState = model.state === 'done'
+            ? 'complete'
+            : (model.state === 'failed' ? 'error' : 'converting');
+
+        var headline = panel.querySelector('[data-a2t-processing-headline]');
+        if (headline) {
+            headline.textContent = model.headline;
+        }
+
+        var badge = panel.querySelector('[data-a2t-processing-badge]');
+        if (badge) {
+            badge.textContent = model.badge;
+        }
+
+        // Whether there is anything left to show progress *of*.
+        //
+        // Computed here rather than passed in, so no caller can forget it. Three cases and they are not
+        // the same:
+        //
+        //   working             a bar, filled to the stage or travelling if there is no stage
+        //   done WITH a figure  a bar at 100%, which is Update Audio's last frame before it reloads
+        //   done WITHOUT one    NO BAR — AI audio, whose ticks and Ready badge say it is finished
+        //   failed              NO BAR, for either: the checklist already shows where it stopped
+        //
+        // The bug this fixes: READY passed no percent, the renderer read that as "indeterminate", and a
+        // finished generation sat behind a bar still travelling left to right.
+        var showProgress = model.state === 'working'
+            || (model.state === 'done' && typeof model.percent === 'number');
+
+        var overall = panel.querySelector('[data-a2t-processing-overall]');
+        if (overall) {
+            overall.hidden = !showProgress;
+        }
+
+        var bar = panel.querySelector('[data-a2t-processing-bar]');
+        if (bar && overall && showProgress) {
+            if (typeof model.percent === 'number') {
+                bar.value = model.percent;
+            } else {
+                // No position in a workflow to fill to — AI audio while it is generating. Indeterminate
+                // is the travelling segment the upload card already styles.
+                bar.removeAttribute('value');
+            }
+        }
+
+        var percent = panel.querySelector('[data-a2t-processing-percent]');
+        if (percent) {
+            percent.textContent = showProgress && typeof model.percent === 'number'
+                ? model.percent + '%'
+                : '';
+        }
+
+        // The stages, as a checklist: a tick for what is done, a filled dot for what is running, an
+        // empty ring for what has not started. The same walk serves the upload card's per-step rows,
+        // which carry their own bar and value and are given them here.
+        var steps = Array.from(panel.querySelectorAll('[data-a2t-processing-step]'));
+        var reached = steps.findIndex(function (node) {
+            return node.getAttribute('data-a2t-processing-step') === model.step;
+        });
+
+        steps.forEach(function (node, index) {
+            var state;
+
+            if (model.state === 'done') {
+                state = 'complete';
+            } else if (model.state === 'failed') {
+                state = index < reached ? 'complete' : (index === reached ? 'error' : 'pending');
+            } else {
+                state = index < reached ? 'complete' : (index === reached ? 'active' : 'pending');
+            }
+
+            node.dataset.state = state;
+
+            // Present only in the per-step layout. A checklist row has neither.
+            var stepBar = node.querySelector('[data-a2t-processing-bar]');
+            if (stepBar) {
+                if (state === 'active') {
+                    stepBar.removeAttribute('value');
+                } else {
+                    stepBar.value = state === 'complete' ? 100 : 0;
+                }
+            }
+
+            var stepValue = node.querySelector('[data-a2t-processing-value]');
+            if (stepValue) {
+                stepValue.textContent = state === 'complete'
+                    ? '100%'
+                    : (state === 'active' ? 'Processing' : (state === 'error' ? 'Failed' : 'Waiting'));
+            }
+        });
+
+        // What is happening, in one sentence, naming the same stage the checklist has highlighted.
+        var detail = panel.querySelector('[data-a2t-processing-detail]');
+        if (detail) {
+            detail.textContent = model.detail || '';
+            detail.hidden = !model.detail;
+        }
+
+        // The estimate and the clock are about waiting. A finished job has nothing to wait for, so the
+        // row is hidden rather than emptied — an empty row still costs a line and still drew the
+        // separator between its two halves.
+        var meta = panel.querySelector('.a2t-processing__meta');
+        if (meta) {
+            meta.hidden = model.finished;
+        }
+
+        var eta = panel.querySelector('[data-a2t-processing-eta]');
+        if (eta) {
+            eta.textContent = model.finished ? '' : etaWords(model.eta);
+        }
+
+        var elapsed = panel.querySelector('[data-a2t-processing-elapsed]');
+        if (elapsed) {
+            elapsed.textContent = !model.finished && started ? elapsedWords(started) : '';
+        }
+
+        var note = panel.querySelector('[data-a2t-processing-note]');
+        if (note) {
+            note.hidden = model.finished;
+        }
+
+        var error = panel.querySelector('[data-a2t-processing-error]');
+        if (error) {
+            error.hidden = !model.error;
+            error.textContent = model.error || '';
+        }
+
+        // Offered only once there is something to retry. While a worker is still acting, the only
+        // control on this panel is the one that closes it — a retry beside a running job is an
+        // invitation to queue the same work twice.
+        var retry = panel.querySelector('[data-a2t-processing-retry]');
+        if (retry) {
+            retry.hidden = model.state !== 'failed' || !model.retry;
+            retry.textContent = model.retry || 'Retry';
+        }
+    }
+
+    /** Tick one card's elapsed count, for as long as it is still working. */
+    function elapsedTicker(root, startedAt) {
+        return window.setInterval(function () {
+            var panel = panelIn(root);
+            var elapsed = panel && panel.querySelector('[data-a2t-processing-elapsed]');
+
+            if (elapsed && panel.dataset.a2tState === 'converting') {
+                elapsed.textContent = elapsedWords(startedAt());
+            }
+        }, 1000);
+    }
+
+    /* ---- Remembering an in-flight request across a close ------------------------------------ */
+
+    /**
+     * What is needed to find a job again, and nothing more.
+     *
+     * Not a cache of its state: the entry holds a url, an id and a start time, and every restore begins
+     * by asking the server. `sessionStorage` because this is per-tab and per-session — a remembered
+     * upload is meaningless in another tab, and outliving the browser session would mean restoring a
+     * panel for something that finished yesterday.
+     *
+     * Every access is wrapped: a private window, disabled site data or a full quota all throw, and none
+     * of them may stop an upload the user has already made.
+     */
+    function rememberProcessing(kind, key, entry) {
+        try {
+            var all = JSON.parse(window.sessionStorage.getItem(PROCESSING_MEMORY_KEY) || '{}');
+            all[kind + ':' + key] = entry;
+            window.sessionStorage.setItem(PROCESSING_MEMORY_KEY, JSON.stringify(all));
+        } catch (ignored) {
+            // The panel still works for as long as the dialog stays open; only the restore is lost.
+        }
+    }
+
+    function recallProcessing(kind, key) {
+        try {
+            var all = JSON.parse(window.sessionStorage.getItem(PROCESSING_MEMORY_KEY) || '{}');
+            return all[kind + ':' + key] || null;
+        } catch (ignored) {
+            return null;
+        }
+    }
+
+    function forgetProcessing(kind, key) {
+        try {
+            var all = JSON.parse(window.sessionStorage.getItem(PROCESSING_MEMORY_KEY) || '{}');
+            delete all[kind + ':' + key];
+            window.sessionStorage.setItem(PROCESSING_MEMORY_KEY, JSON.stringify(all));
+        } catch (ignored) {
+            // Nothing to do. A stale entry restores, finds the job finished and clears itself.
+        }
+    }
+
     /* ---- Updating this recording's audio ---------------------------------------------------- */
 
     var updateForm = document.querySelector('[data-a2t-update-form]');
@@ -2029,6 +2491,10 @@ window.KFAudioStages = {
     var updateSubmit = document.querySelector('[data-a2t-update-submit]');
     var updateBusy = false;
     var updateTimer = null;
+    var updateTicker = null;
+    var updateStarted = 0;
+    var updateWatching = null; // {statusUrl, jobPublicId} while a replacement is being followed
+    var lastUpdateStage = 'QUEUED'; // the last stage the server reported, so a failure marks the right step
 
     /**
      * One line of text inside one dialog, by the attribute the template marked it with.
@@ -2082,8 +2548,46 @@ window.KFAudioStages = {
         // dialog is now about a different recording and must not report the old one's stages.
         stopWatching();
         releaseUpdate();
+        showProcessing(updateDialog, false);
 
         openDialog(updateDialog);
+
+        // If this slot has a replacement still in flight from earlier in the session, come back to it
+        // rather than offering a second upload. The remembered entry is only a pointer — the panel is
+        // drawn from the poll that follows, and an entry whose job has already finished repaints as
+        // finished and is cleared.
+        var pending = recallProcessing('update', target.replaces);
+
+        if (pending && pending.statusUrl) {
+            updateBusy = true;
+            updateSubmit.disabled = true;
+            updateStarted = pending.startedAt || Date.now();
+            updateWatching = pending;
+            showProcessing(updateDialog, true);
+            renderProcessing(
+                updateDialog,
+                processingViewModel({ status: 'PROCESSING' }, {
+                headline: 'Updating audio…',
+                doneHeadline: 'Audio updated.',
+                failedHeadline: 'The new recording could not be processed.'
+            }),
+                updateStarted,
+            );
+            startUpdateTicker();
+            watchReplacement(pending.statusUrl, pending.jobPublicId, 0);
+        }
+    }
+
+    function startUpdateTicker() {
+        stopUpdateTicker();
+        updateTicker = elapsedTicker(updateDialog, function () { return updateStarted; });
+    }
+
+    function stopUpdateTicker() {
+        if (updateTicker !== null) {
+            window.clearInterval(updateTicker);
+            updateTicker = null;
+        }
     }
 
     /**
@@ -2142,7 +2646,31 @@ window.KFAudioStages = {
                 return;
             }
 
-            say(updateStatus, data.message);
+            // Accepted. The form goes away — leaving a submit button under the cursor while a worker
+            // is already acting on the last press is how a second recording lands on the same slot.
+            quiet(updateStatus);
+            updateStarted = Date.now();
+            updateWatching = { statusUrl: data.statusUrl, jobPublicId: data.jobPublicId };
+
+            var slot = updateForm.querySelector('[data-a2t-update-replaces]');
+            rememberProcessing('update', slot ? slot.value : '', {
+                statusUrl: data.statusUrl,
+                jobPublicId: data.jobPublicId,
+                startedAt: updateStarted
+            });
+
+            showProcessing(updateDialog, true);
+            renderProcessing(
+                updateDialog,
+                processingViewModel({ status: 'QUEUED' }, {
+                headline: 'Updating audio…',
+                doneHeadline: 'Audio updated.',
+                failedHeadline: 'The new recording could not be processed.'
+            }),
+                updateStarted,
+            );
+            startUpdateTicker();
+
             watchReplacement(data.statusUrl, data.jobPublicId);
         }).catch(function () {
             releaseUpdate();
@@ -2179,21 +2707,34 @@ window.KFAudioStages = {
                 return; // Closed while that was in flight. The worker carries on regardless.
             }
 
+            var model = processingViewModel(state, {
+                headline: 'Updating audio…',
+                doneHeadline: 'Audio updated.',
+                failedHeadline: 'The new recording could not be processed.'
+            });
+
+            if (model.finished) {
+                stopUpdateTicker();
+                clearUpdateMemory();
+            }
+
             if (state.status === 'COMPLETED') {
-                say(updateStatus, 'Finished. Reloading to show the new recording…');
-                arriveAt(jobPublicId);
+                // Held for a moment before the reload, so the last thing the reader sees is the result
+                // rather than a page turning over under them.
+                renderProcessing(updateDialog, model, updateStarted);
+                window.setTimeout(function () { arriveAt(jobPublicId); }, 1200);
                 return;
             }
 
             if (state.status === 'FAILED') {
-                // The real end state, in the page's own words. No reason is published by that endpoint —
-                // the failure detail lives on the recording's own page, where the log put it.
                 releaseUpdate();
-                say(updateStatus, 'The new recording failed. Open it from the table to see why.');
+                model.error = 'Open the recording from the table to see why it failed.';
+                model.retry = 'Try another file';
+                renderProcessing(updateDialog, model, updateStarted);
                 return;
             }
 
-            say(updateStatus, stageWords(state));
+            renderProcessing(updateDialog, model, updateStarted);
             updateTimer = setTimeout(function () { watchReplacement(statusUrl, jobPublicId, 0); }, 2000);
         }).catch(function () {
             if (!updateDialog.open) {
@@ -2205,12 +2746,19 @@ window.KFAudioStages = {
             // unbounded loop would ask for a recording that will never exist every five seconds for as
             // long as the tab stayed open, and say "Uploading…" the whole time.
             if (failures >= 4) {
+                stopUpdateTicker();
                 releaseUpdate();
-                say(
-                    updateStatus,
-                    'The upload was accepted, but its progress cannot be read just now. '
-                    + 'Reload the page to see where it got to.',
-                );
+                renderProcessing(updateDialog, {
+                    headline: 'Still processing in the background.',
+                    badge: 'Unknown',
+                    state: 'failed',
+                    finished: true,
+                    // Not a failure of the upload, and worded so: the recording is queued and the worker
+                    // has it. What was lost is this page's view of it, so the pointer is deliberately
+                    // kept and reopening the dialog picks the job up again.
+                    error: 'The upload was accepted, but its progress cannot be read just now. '
+                        + 'Reopen this window or reload the page to see where it got to.'
+                }, updateStarted);
 
                 return;
             }
@@ -2242,9 +2790,50 @@ window.KFAudioStages = {
         return labels[state.stage] || labels[state.status] || 'Working…';
     }
 
+    /** Drop the pointer for the slot this dialog is on. Called only once a job has reached an end state. */
+    function clearUpdateMemory() {
+        var slot = updateForm && updateForm.querySelector('[data-a2t-update-replaces]');
+
+        if (slot) {
+            forgetProcessing('update', slot.value);
+        }
+
+        updateWatching = null;
+    }
+
     if (updateForm) {
         updateForm.addEventListener('submit', submitUpdate);
-        updateDialog.addEventListener('close', stopWatching);
+
+        // Closing stops the polling and the clock, and nothing else. The worker carries on, the pointer
+        // is deliberately kept, and reopening this dialog picks the same job back up.
+        updateDialog.addEventListener('close', function () {
+            stopWatching();
+            stopUpdateTicker();
+        });
+
+        var updateRetry = panelIn(updateDialog) && panelIn(updateDialog).querySelector('[data-a2t-processing-retry]');
+
+        if (updateRetry) {
+            // Back to form mode with the file input empty, because it is: a browser does not keep the
+            // file it already sent, and this must not suggest the same one will be sent again.
+            updateRetry.addEventListener('click', function () {
+                clearUpdateMemory();
+                stopWatching();
+                stopUpdateTicker();
+                updateForm.reset();
+
+                var target = lastFragment && lastFragment.replace;
+
+                if (target) {
+                    updateForm.action = target.url;
+                    updateForm.querySelector('[data-a2t-update-replaces]').value = target.replaces;
+                }
+
+                showProcessing(updateDialog, false);
+                releaseUpdate();
+                say(updateStatus, 'Please select the audio file again to retry.');
+            });
+        }
     }
 
     /* ---- Generating this recording's AI audio ----------------------------------------------- */
@@ -2252,6 +2841,9 @@ window.KFAudioStages = {
     var ttsConfirmDialog = document.getElementById('a2t-tts-confirm-dialog');
     var ttsConfirmSubmit = document.querySelector('[data-a2t-tts-confirm-submit]');
     var ttsConfirmStatus = document.querySelector('[data-a2t-tts-confirm-status]');
+    var ttsTicker = null;
+    var ttsStarted = 0;
+    var ttsVerb = 'Generating'; // or 'Regenerating' — set from the server's own button label
 
     /**
      * Ask before spending anything — and say plainly when there is nothing to spend.
@@ -2288,7 +2880,61 @@ window.KFAudioStages = {
         ttsConfirmSubmit.disabled = current;
         ttsConfirmSubmit.textContent = current ? 'Already current' : generated.buttonLabel;
 
+        // "Generate" or "Regenerate", as the server labelled the button. Carried into the panel's
+        // headline so the two read differently without this script deciding which one it is.
+        ttsVerb = generated.buttonLabel === 'Regenerate' ? 'Regenerating' : 'Generating';
+
+        showProcessing(ttsConfirmDialog, false);
         openDialog(ttsConfirmDialog);
+
+        // Already running — because the operator pressed it, closed the dialog and came back, or
+        // because a worker had it before they arrived. `inFlight` is the server's answer either way, so
+        // the panel is shown without a request having been made from here.
+        if (generated.inFlight) {
+            ttsStarted = recallTtsStart(generated.outputType);
+            showTtsProcessing();
+        }
+    }
+
+    /**
+     * When the generation now on screen was asked for, as best this tab knows.
+     *
+     * Only the elapsed count depends on it, and only cosmetically. A generation started in another tab,
+     * or before this page was loaded, has no remembered start — the count then runs from now, which
+     * understates it. Understating an elapsed time is a smaller lie than inventing a start.
+     */
+    function recallTtsStart(outputType) {
+        var remembered = reviewUrl === null ? null : recallProcessing('tts', reviewUrl + '|' + outputType);
+
+        return (remembered && remembered.startedAt) || Date.now();
+    }
+
+    /** Put the confirmation dialog into processing mode and keep the clock running. */
+    function showTtsProcessing() {
+        showProcessing(ttsConfirmDialog, true);
+        renderProcessing(ttsConfirmDialog, {
+            headline: ttsVerb + ' AI audio…',
+            badge: 'Processing',
+            // Two steps, and only two, because a rendition reports only QUEUED and GENERATING. The
+            // request is done the moment the server accepted it; the second row carries the
+            // indeterminate bar for as long as the generator has it.
+            step: 'GENERATING',
+            state: 'working',
+            finished: false
+        }, ttsStarted);
+        startTtsTicker();
+    }
+
+    function startTtsTicker() {
+        stopTtsTicker();
+        ttsTicker = elapsedTicker(ttsConfirmDialog, function () { return ttsStarted; });
+    }
+
+    function stopTtsTicker() {
+        if (ttsTicker !== null) {
+            window.clearInterval(ttsTicker);
+            ttsTicker = null;
+        }
     }
 
     if (ttsConfirmSubmit) {
@@ -2300,10 +2946,50 @@ window.KFAudioStages = {
                 return;
             }
 
+            // Not closed on success any more: the dialog becomes the progress panel. Closing it was
+            // what left the operator with nothing to look at but a header label, which is the whole
+            // complaint this addresses.
             requestGeneration(ttsConfirmSubmit, ttsConfirmStatus, function () {
-                closeDialog(ttsConfirmDialog);
+                ttsStarted = Date.now();
+
+                if (reviewUrl !== null && lastAudio && lastAudio.generated) {
+                    rememberProcessing('tts', reviewUrl + '|' + lastAudio.generated.outputType, {
+                        startedAt: ttsStarted
+                    });
+                }
+
+                quiet(ttsConfirmStatus);
+                showTtsProcessing();
             });
         });
+    }
+
+    if (ttsConfirmDialog) {
+        // Closing stops the clock and nothing else: the worker carries on, and reopening reads the
+        // server's state and picks the panel back up.
+        ttsConfirmDialog.addEventListener('close', stopTtsTicker);
+
+        var ttsRetry = panelIn(ttsConfirmDialog) && panelIn(ttsConfirmDialog).querySelector('[data-a2t-processing-retry]');
+
+        if (ttsRetry) {
+            // The same request as the first press, through the same endpoint and the same guards. A
+            // FAILED rendition is re-queueable; anything else is refused by the server and the panel
+            // says so rather than this script deciding.
+            ttsRetry.addEventListener('click', function () {
+                requestGeneration(ttsRetry, ttsConfirmStatus, function () {
+                    ttsStarted = Date.now();
+
+                    if (reviewUrl !== null && lastAudio && lastAudio.generated) {
+                        rememberProcessing('tts', reviewUrl + '|' + lastAudio.generated.outputType, {
+                            startedAt: ttsStarted
+                        });
+                    }
+
+                    quiet(ttsConfirmStatus);
+                    showTtsProcessing();
+                });
+            });
+        }
     }
 
     /**
@@ -2339,7 +3025,7 @@ window.KFAudioStages = {
         // Replaced by whatever the server then says, in its words, not left on this guess.
         headerAction(function (control) {
             control.disabled = true;
-            control.textContent = 'Queued…';
+            control.textContent = 'Starting…';
         });
 
         var body = new URLSearchParams();
@@ -2828,7 +3514,115 @@ window.KFAudioStages = {
      * The tab strip is cleared and hidden, so this reads exactly as it did before orders could be
      * opened: one recording, its own title, no way to reach another.
      */
+    /* ---- Details, opened on a recording that is still being transcribed --------------------- */
+
+    var progressTimer = null;
+    var progressTicker = null;
+    var progressStarted = 0;
+    var progressUrl = null;
+
+    /**
+     * Show the same card the Update dialog shows, in the Details dialog.
+     *
+     * The recording has no transcript yet — `Fragment/Action` answers 404 for a job that is not
+     * COMPLETED, which is why this reads the **status** endpoint instead. It is the same endpoint the
+     * Update dialog follows and the same model both render from, so opening Details on a job somebody
+     * started in another window shows exactly what that window shows.
+     *
+     * Nothing is remembered. The server is asked on open and every two seconds after, which is what
+     * makes this correct for a job this tab knows nothing about.
+     */
+    function openProgress(button) {
+        var url = button.getAttribute('data-a2t-progress');
+
+        if (!url || !reviewDialog) {
+            return;
+        }
+
+        orderLabel = null;
+        showChannels([], null);
+        reviewUrl = null;
+
+        fillIn(reviewDialog, '[data-a2t-review-title]', button.getAttribute('data-a2t-details-label'));
+        fillIn(reviewDialog, '[data-a2t-review-meta]', 'Still processing');
+
+        // Everything the finished view would show is hidden: there is no transcript, no player and no
+        // action that makes sense yet. The card is the whole dialog until the job ends.
+        showProcessing(reviewDialog, true);
+
+        progressUrl = url;
+        progressStarted = Date.now();
+        renderProcessing(reviewDialog, progressModel({ status: 'PROCESSING' }), progressStarted);
+        stopProgressWatch();
+        progressTicker = elapsedTicker(reviewDialog, function () { return progressStarted; });
+
+        openDialog(reviewDialog);
+        watchProgress(url);
+    }
+
+    /** The Details dialog's words for the same model. */
+    function progressModel(state) {
+        return processingViewModel(state, {
+            headline: 'Processing transcription…',
+            doneHeadline: 'Transcription finished.',
+            failedHeadline: 'This recording could not be transcribed.'
+        });
+    }
+
+    function watchProgress(url) {
+        load(url).then(function (state) {
+            if (!reviewDialog.open || progressUrl !== url) {
+                return; // Closed, or moved to another recording. The worker carries on either way.
+            }
+
+            var model = progressModel(state);
+
+            if (state.status === 'FAILED') {
+                model.error = 'Open the recording from the table to see why it failed.';
+            }
+
+            renderProcessing(reviewDialog, model, progressStarted);
+
+            if (model.finished) {
+                stopProgressWatch();
+
+                // Finished while somebody was watching. The row behind this dialog is server-rendered
+                // and there is no endpoint that re-renders one, so the only truthful refresh is to ask
+                // for the page again — the same thing the Update dialog does on success.
+                if (state.status === 'COMPLETED') {
+                    window.setTimeout(function () { window.location.reload(); }, 1200);
+                }
+
+                return;
+            }
+
+            progressTimer = window.setTimeout(function () { watchProgress(url); }, 2000);
+        }).catch(function () {
+            if (reviewDialog.open && progressUrl === url) {
+                progressTimer = window.setTimeout(function () { watchProgress(url); }, 5000);
+            }
+        });
+    }
+
+    function stopProgressWatch() {
+        if (progressTimer !== null) {
+            window.clearTimeout(progressTimer);
+            progressTimer = null;
+        }
+
+        if (progressTicker !== null) {
+            window.clearInterval(progressTicker);
+            progressTicker = null;
+        }
+    }
+
     function openReview(button) {
+        // A finished recording shows its transcript, so the progress card is put away first — the two
+        // are modes of one dialog and only one of them may be on screen.
+        showProcessing(reviewDialog, false);
+        progressUrl = null;
+        stopProgressWatch();
+
         orderLabel = null;
         showChannels([], null);
 
@@ -3087,6 +3881,9 @@ window.KFAudioStages = {
             speechStop();
             // Nothing to keep asking for once there is nowhere to show the answer.
             stopWatchingGenerated();
+            // The progress card's poll and clock too. The worker carries on; only this view of it ends.
+            progressUrl = null;
+            stopProgressWatch();
             // And nothing read for this call survives it: the next open re-reads, so a recording that
             // changed while the dialog was shut is never shown from memory.
             channelCache = {};
@@ -3283,6 +4080,13 @@ window.KFAudioStages = {
         if (play) {
             event.preventDefault();
             toggle(play);
+            return;
+        }
+
+        var progress = target.closest('[data-a2t-progress]');
+        if (progress) {
+            event.preventDefault();
+            openProgress(progress);
             return;
         }
 

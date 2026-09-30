@@ -24,6 +24,12 @@ final class AudioToTextViews
      *
      * One rendering of a turn, so the two screens cannot describe the same speaker differently.
      */
+    /** The shared progress card — see the partial for why all three surfaces render one file. */
+    public static function processingCard(): string
+    {
+        return __DIR__ . '/_partial/processing-card';
+    }
+
     public static function thread(): string
     {
         return __DIR__ . '/_partial/thread';

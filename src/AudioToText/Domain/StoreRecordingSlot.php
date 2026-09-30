@@ -138,6 +138,21 @@ final readonly class StoreRecordingSlot
     }
 
     /** Whether a correction screen has anything to show for this recording. */
+    /**
+     * Whether a worker still has this recording.
+     *
+     * Queued and processing together, because the difference between them is the mechanism: to somebody
+     * watching, a recording that is waiting for a worker and one a worker has are both "being worked
+     * on", and the progress card says which of the two it is in its own words.
+     *
+     * Deliberately not folded into {@see isReviewable()}: that asks whether there is a transcript to
+     * correct, and the answer here is that there is not one yet.
+     */
+    public function isProcessing(): bool
+    {
+        return $this->status === JobStatus::QUEUED || $this->status === JobStatus::PROCESSING;
+    }
+
     public function isReviewable(): bool
     {
         return $this->status === JobStatus::COMPLETED && $this->hasSegments;

@@ -230,9 +230,12 @@ final class OrderChannelTabsTest extends TestCase
         $close = strpos($script, "reviewDialog.addEventListener('close'");
         self::assertNotFalse($close);
 
+        // A generous window: the handler has grown as the dialog gained things to stop — the AI-audio
+        // watcher, and the progress card's poll and clock — and the claim is that the cache is cleared
+        // somewhere in it, not that it is cleared within a particular number of characters.
         self::assertStringContainsString(
             'channelCache = {};',
-            substr($script, $close, 700),
+            substr($script, $close, 1400),
             'And nothing read survives the dialog being shut.',
         );
     }
