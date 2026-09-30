@@ -112,7 +112,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     <?php
     // Up here rather than beside the history card below, because it leaves this page rather than
     // changing it — the same reason Store audio puts its cross-store link in the header.
-?>
+    ?>
     <div class="page-header__actions">
         <a class="btn btn--secondary" href="<?= Html::encode($allHistoryUrl) ?>">View Sync History</a>
     </div>
@@ -133,7 +133,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     <?php
     // A GET form: choosing a store and loading its calls is a readable, repeatable address, and it is
     // what keeps the provider from being contacted by a bare page load. `load=1` is the explicit ask.
-?>
+    ?>
     <form method="get" action="<?= Html::encode($pageUrl) ?>" class="store-picker" role="group">
         <input type="hidden" name="load" value="1">
         <?php if ($source !== ''): ?>
@@ -153,10 +153,10 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
         // Defaults to today and never offers a later day: the provider cannot have recorded a call that
         // has not happened. Leaving it alone and pressing the button is exactly the request this page
         // made before the field existed.
-?>
+        ?>
         <label class="field__label store-picker__label" for="o58-date">Date</label>
         <input class="field__control store-picker__date" type="date" id="o58-date" name="date"
-               value="<?= Html::encode($businessDate) ?>" max="<?= Html::encode($today) ?>">
+            value="<?= Html::encode($businessDate) ?>" max="<?= Html::encode($today) ?>">
         <button class="btn btn--primary" type="submit">Load calls</button>
     </form>
 
@@ -174,7 +174,8 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
         </h2>
 
         <?php if ($usingFixtures): ?>
-            <?php // Never left implicit: a page showing invented calls must say so in plain words.?>
+            <?php // Never left implicit: a page showing invented calls must say so in plain words.
+            ?>
             <div class="alert alert--warning">
                 <strong>Local fixtures.</strong> These calls are generated in this repository, not
                 fetched from the recording service. Development and test only.
@@ -192,6 +193,9 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
             <form method="post" action="<?= Html::encode($syncUrl) ?>">
                 <?= $csrfField ?>
                 <input type="hidden" name="store" value="<?= Html::encode((string) $selectedStore) ?>">
+                <?php /* The day these rows are FROM. Without it the sync re-fetches today and refuses
+                         every selection made on any other date. */ ?>
+                <input type="hidden" name="date" value="<?= Html::encode($businessDate) ?>">
                 <?php if ($source !== ''): ?>
                     <input type="hidden" name="source" value="<?= Html::encode($source) ?>">
                 <?php endif; ?>
@@ -199,41 +203,41 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 <div class="table-wrap" data-o58-calls>
                     <table class="table">
                         <thead>
-                        <tr>
-                            <th>
-                                <label class="a2t-checkbox">
-                                    <input type="checkbox" data-o58-select-all>
-                                    <span class="util-visually-hidden">Select all of today's calls</span>
-                                </label>
-                            </th>
-                            <th>Call session ID</th>
-                            <th>Call time</th>
-                            <th>Order ID</th>
-                            <th>Sync status</th>
-                        </tr>
+                            <tr>
+                                <th>
+                                    <label class="a2t-checkbox">
+                                        <input type="checkbox" data-o58-select-all>
+                                        <span class="util-visually-hidden">Select all of today's calls</span>
+                                    </label>
+                                </th>
+                                <th>Call session ID</th>
+                                <th>Call time</th>
+                                <th>Order ID</th>
+                                <th>Sync status</th>
+                            </tr>
                         </thead>
                         <tbody>
-                        <?php foreach ($calls as $call): ?>
-                            <tr>
-                                <td>
-                                    <label class="a2t-checkbox">
-                                        <input type="checkbox" name="calls[]"
-                                               value="<?= Html::encode($call->callSessionId) ?>">
-                                        <span class="util-visually-hidden">
-                                            Select call <?= Html::encode($call->callSessionId) ?>
-                                        </span>
-                                    </label>
-                                </td>
-                                <td><code><?= Html::encode($call->callSessionId) ?></code></td>
-                                <td><?= Html::encode($call->callTime) ?></td>
-                                <td>
-                                    <?= $call->orderId === ''
-                            ? '<span class="util-muted">—</span>'
-                            : Html::encode($call->orderId) ?>
-                                </td>
-                                <td><?= $callState($statuses[$call->callSessionId] ?? null) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
+                            <?php foreach ($calls as $call): ?>
+                                <tr>
+                                    <td>
+                                        <label class="a2t-checkbox">
+                                            <input type="checkbox" name="calls[]"
+                                                value="<?= Html::encode($call->callSessionId) ?>">
+                                            <span class="util-visually-hidden">
+                                                Select call <?= Html::encode($call->callSessionId) ?>
+                                            </span>
+                                        </label>
+                                    </td>
+                                    <td><code><?= Html::encode($call->callSessionId) ?></code></td>
+                                    <td><?= Html::encode($call->callTime) ?></td>
+                                    <td>
+                                        <?= $call->orderId === ''
+                                            ? '<span class="util-muted">—</span>'
+                                            : Html::encode($call->orderId) ?>
+                                    </td>
+                                    <td><?= $callState($statuses[$call->callSessionId] ?? null) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
@@ -257,9 +261,9 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 </div>
 
                 <?php
-    // Unticked every render, never remembered: it spends money, and an unticked checkbox
-    // posts nothing at all, which is what makes "off" the reliable default.
-?>
+                // Unticked every render, never remembered: it spends money, and an unticked checkbox
+                // posts nothing at all, which is what makes "off" the reliable default.
+                ?>
                 <div class="field">
                     <label class="a2t-checkbox" for="o58-ai-audio">
                         <input type="checkbox" id="o58-ai-audio" name="generate_ai_audio" value="1">
@@ -271,14 +275,14 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                     </div>
                 </div>
 
-                <button class="btn btn--primary" type="submit"<?= $importEnabled ? '' : ' disabled' ?>>
+                <button class="btn btn--primary" type="submit" <?= $importEnabled ? '' : ' disabled' ?>>
                     Sync selected
                 </button>
 
                 <?php
-// All three channels are attempted for every call. The administrator chooses calls, not
-// channels: which of the three a merchant actually produces is the provider's answer.
-?>
+                // All three channels are attempted for every call. The administrator chooses calls, not
+                // channels: which of the three a merchant actually produces is the provider's answer.
+                ?>
                 <p class="field__hint">
                     Each call fetches its mixed, caller and callee recordings. A merchant without
                     separated channels reports those as <em>Not available</em>, which is normal.
@@ -307,72 +311,72 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
         <div class="table-wrap">
             <table class="table o58-table">
                 <thead>
-                <tr>
-                    <th>Store</th>
-                    <th>Call</th>
-                    <th>Order</th>
-                    <th>Call time</th>
-                    <?php foreach ($channels as $channel): ?>
-                        <th><?= Html::encode($channel->label()) ?></th>
-                    <?php endforeach; ?>
-                    <th>Overall</th>
-                    <th>Provider</th>
-                    <th>AI audio</th>
-                    <th>Updated</th>
-                    <th class="table__actions"></th>
-                </tr>
+                    <tr>
+                        <th>Store</th>
+                        <th>Call</th>
+                        <th>Order</th>
+                        <th>Call time</th>
+                        <?php foreach ($channels as $channel): ?>
+                            <th><?= Html::encode($channel->label()) ?></th>
+                        <?php endforeach; ?>
+                        <th>Overall</th>
+                        <th>Provider</th>
+                        <th>AI audio</th>
+                        <th>Updated</th>
+                        <th class="table__actions"></th>
+                    </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($history as $row): ?>
-                    <?php $outcome = $row->outcome(); ?>
-                    <tr>
-                        <td>
-                            <?= Html::encode($row->storeName !== '' ? $row->storeName : 'Store') ?>
-                            <div class="field__hint">#<?= Html::encode((string) $row->storeSourceId) ?></div>
-                        </td>
-                        <td><code><?= Html::encode($row->callSessionId) ?></code></td>
-                        <td>
-                            <?= $row->orderId === null
-                ? '<span class="util-muted">—</span>'
-                : Html::encode($row->orderId) ?>
-                        </td>
-                        <td><?= Html::encode($row->callTimeRaw) ?></td>
-                        <?php foreach ($channels as $channel): ?>
-                            <?= $channelCell($row, $channel) ?>
-                        <?php endforeach; ?>
-                        <td>
-                            <span class="badge badge--<?= Html::encode($outcome->badge()) ?>">
-                                <?= Html::encode($outcome->label()) ?>
-                            </span>
-                        </td>
-                        <td><?= Html::encode($row->provider) ?></td>
-                        <td><?= $row->generateAiAudio ? 'Yes' : 'No' ?></td>
-                        <td class="util-muted"><?= Html::encode($appTimeZone->format($row->updatedAt)) ?></td>
-                        <td class="table__actions">
-                            <?php
-            // One button per failed channel. Offered only where the repository would
-            // actually act — a missing channel and an oversized recording are settled
-            // facts, and a button that did nothing would be worse than none.
-                    ?>
+                    <?php foreach ($history as $row): ?>
+                        <?php $outcome = $row->outcome(); ?>
+                        <tr>
+                            <td>
+                                <?= Html::encode($row->storeName !== '' ? $row->storeName : 'Store') ?>
+                                <div class="field__hint">#<?= Html::encode((string) $row->storeSourceId) ?></div>
+                            </td>
+                            <td><code><?= Html::encode($row->callSessionId) ?></code></td>
+                            <td>
+                                <?= $row->orderId === null
+                                    ? '<span class="util-muted">—</span>'
+                                    : Html::encode($row->orderId) ?>
+                            </td>
+                            <td><?= Html::encode($row->callTimeRaw) ?></td>
                             <?php foreach ($channels as $channel): ?>
-                                <?php $item = $row->channel($channel); ?>
-                                <?php if ($item !== null && $item->status->isRetryable()): ?>
-                                    <form method="post" action="<?= Html::encode($retryUrl) ?>"
-                                          class="inline-form">
-                                        <?= $csrfField ?>
-                                        <input type="hidden" name="import"
-                                               value="<?= Html::encode((string) $item->id) ?>">
-                                        <input type="hidden" name="store"
-                                               value="<?= Html::encode((string) $row->storeSourceId) ?>">
-                                        <button class="btn btn--sm" type="submit">
-                                            Retry <?= Html::encode($channel->label()) ?>
-                                        </button>
-                                    </form>
-                                <?php endif; ?>
+                                <?= $channelCell($row, $channel) ?>
                             <?php endforeach; ?>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
+                            <td>
+                                <span class="badge badge--<?= Html::encode($outcome->badge()) ?>">
+                                    <?= Html::encode($outcome->label()) ?>
+                                </span>
+                            </td>
+                            <td><?= Html::encode($row->provider) ?></td>
+                            <td><?= $row->generateAiAudio ? 'Yes' : 'No' ?></td>
+                            <td class="util-muted"><?= Html::encode($appTimeZone->format($row->updatedAt)) ?></td>
+                            <td class="table__actions">
+                                <?php
+                                // One button per failed channel. Offered only where the repository would
+                                // actually act — a missing channel and an oversized recording are settled
+                                // facts, and a button that did nothing would be worse than none.
+                                ?>
+                                <?php foreach ($channels as $channel): ?>
+                                    <?php $item = $row->channel($channel); ?>
+                                    <?php if ($item !== null && $item->status->isRetryable()): ?>
+                                        <form method="post" action="<?= Html::encode($retryUrl) ?>"
+                                            class="inline-form">
+                                            <?= $csrfField ?>
+                                            <input type="hidden" name="import"
+                                                value="<?= Html::encode((string) $item->id) ?>">
+                                            <input type="hidden" name="store"
+                                                value="<?= Html::encode((string) $row->storeSourceId) ?>">
+                                            <button class="btn btn--sm" type="submit">
+                                                Retry <?= Html::encode($channel->label()) ?>
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
         </div>

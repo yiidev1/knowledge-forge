@@ -22,6 +22,7 @@ use App\Shared\Web\Support\FormData;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use DateTimeImmutable;
 use Throwable;
 
 use function array_key_exists;
@@ -38,7 +39,7 @@ use function sprintf;
  * ## The browser's list of calls is never believed
  *
  * A checkbox posts a call session id, and a request can post any string at all. So this asks the
- * provider for today's calls again and **intersects**: an id that is not in that answer is dropped
+ * provider for the calls of the day the page was showing again and **intersects**: an id that is not in that answer is dropped
  * without comment. That costs one extra request per Sync click and removes a whole class of problem —
  * a forged id would otherwise become a path segment in a fetch, and a stale tab's ids would queue work
  * for calls that no longer exist.
@@ -82,6 +83,14 @@ final readonly class SyncAction
         $storeId = $this->positiveInt($form->string('store'));
         $source = $form->string('source');
 
+        // The day the page was showing, carried in a hidden field beside `store`. Resolved before any
+        // early return so every redirect below comes back to the same day the operator was working on.
+        //
+        // Without it this action re-fetched and filtered to TODAY, so selecting calls on a past date and
+        // pressing Sync failed every time with "not in this store's list for today" — the list was real,
+        // it was simply the wrong day's list being intersected against.
+        $date = $this->requestedDate($form->string('date'), $this->clock->now());
+
         if ($storeId === null) {
             $this->flash->error('Choose a store first.');
 
@@ -93,10 +102,10 @@ final readonly class SyncAction
         if (!$this->importEnabled) {
             $this->flash->error(
                 'Recording import is turned off on this server (ORDER58_RECORDING_IMPORT_ENABLED). '
-                . 'Nothing was queued.',
+                    . 'Nothing was queued.',
             );
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         $selected = $this->selectedIds($request->getParsedBody());
@@ -104,7 +113,7 @@ final readonly class SyncAction
         if ($selected === []) {
             $this->flash->error('Select at least one call to sync.');
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         try {
@@ -114,7 +123,7 @@ final readonly class SyncAction
             // would build a well-formed request for somebody else's audio.
             $this->flash->error($e->getMessage());
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         $provider = $this->provider($form->string('transcription_provider'));
@@ -122,19 +131,19 @@ final readonly class SyncAction
         if ($provider === null) {
             $this->flash->error('Choose one of the listed transcription providers.');
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         // Presence is the yes: an unticked checkbox posts nothing, which is what makes "off" the
         // reliable default rather than something this form has to remember to say.
         $generateAiAudio = $form->has('generate_ai_audio');
 
-        [$calls, $problem] = $this->todaysCalls($storeId, $source);
+        [$calls, $problem] = $this->callsOn($storeId, $source, $date);
 
         if ($problem !== null) {
             $this->flash->error($problem);
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         $queueable = [];
@@ -146,17 +155,18 @@ final readonly class SyncAction
         }
 
         if ($queueable === []) {
-            $this->flash->error(
-                'None of the selected calls are in this store\'s list for today. The page may be out of '
-                . 'date — load the calls again.',
-            );
+            $this->flash->error(sprintf(
+                'None of the selected calls are in this store\'s list for %s. The page may be out of '
+                    . 'date — load the calls again.',
+                $date,
+            ));
 
-            return $this->back($storeId, $source);
+            return $this->back($storeId, $source, $date);
         }
 
         $this->queue($storeId, $company, $provider, $generateAiAudio, $queueable);
 
-        return $this->back($storeId, $source);
+        return $this->back($storeId, $source, $date);
     }
 
     /**
@@ -241,18 +251,20 @@ final readonly class SyncAction
     }
 
     /**
-     * Today's calls, straight from the provider — the only list this action trusts.
+     * The calls for one day, straight from the provider — the only list this action trusts.
+     *
+     * `$date` is the day the page was showing. It is filtered with the SAME call the page itself uses
+     * ({@see TodayCallFilter::onDate()}), so the sync intersects against exactly the rows the operator
+     * saw. Passing today here regardless — which is what this did — is the whole bug.
      *
      * @return array{list<CallSummary>, ?string}
      */
-    private function todaysCalls(int $storeId, string $source): array
+    private function callsOn(int $storeId, string $source, string $date): array
     {
         // The same gate the page uses, applied to the list this action actually trusts — otherwise the
         // fixtures would list calls that the sync then refused as unknown.
         if (FixtureAvailability::isRequested($source)) {
-            $now = $this->clock->now();
-
-            return [$this->today->today($this->fixtures->today($now), $now), null];
+            return [$this->today->onDate($this->fixtures->today($this->clock->now()), $date), null];
         }
 
         $request = LatestCallsRequest::fromStrings((string) $storeId, (string) self::LIMIT);
@@ -271,7 +283,7 @@ final readonly class SyncAction
             return [[], $result->diagnosis->headline . ' Nothing was queued.'];
         }
 
-        return [$this->today->today($result->calls, $this->clock->now()), null];
+        return [$this->today->onDate($result->calls, $date), null];
     }
 
     /**
@@ -324,15 +336,41 @@ final readonly class SyncAction
     }
 
     /** Back to the page, with the store still chosen and its calls reloaded. */
-    private function back(?int $storeId, string $source = ''): ResponseInterface
+    private function back(?int $storeId, string $source = '', string $date = ''): ResponseInterface
     {
         return $this->redirect->afterPost(
             'order58.calls',
             $storeId === null
                 ? []
                 // `source` is carried back so a local fixture session does not silently fall through to
-                // the live API on the redirect.
-                : ['store' => $storeId, 'load' => '1'] + ($source === '' ? [] : ['source' => $source]),
+                // the live API on the redirect. `date` is carried for the same reason: after a sync, or
+                // after any refusal above, the page must come back on the day being worked on rather
+                // than silently snapping to today. An empty date is omitted, so a form that posts none
+                // redirects exactly as it did before.
+                : ['store' => $storeId, 'load' => '1']
+                + ($source === '' ? [] : ['source' => $source])
+                + ($date === '' ? [] : ['date' => $date]),
         );
+    }
+
+    /**
+     * The `YYYY-MM-DD` the form posted, or today.
+     *
+     * Deliberately the same rule as the page's own GET field, including the reconstruction check that
+     * rejects `2026-02-30` — which matches any reasonable pattern and is not a day. A malformed value is
+     * a hand-edited form rather than a state worth an error message, so it falls back to today and the
+     * reloaded page shows which day was actually used.
+     */
+    private function requestedDate(mixed $value, DateTimeImmutable $now): string
+    {
+        if (!is_string($value) || $value === '') {
+            return $this->today->businessDate($now);
+        }
+
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+        return $parsed !== false && $parsed->format('Y-m-d') === $value
+            ? $value
+            : $this->today->businessDate($now);
     }
 }
