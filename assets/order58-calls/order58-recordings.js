@@ -89,21 +89,29 @@
      */
     function render(cell, call) {
         badge(cell, '[data-o58-outcome]', call.outcomeLabel, call.outcomeBadge);
-        text(cell, '[data-o58-progress-text]', call.progressText);
         text(cell, '[data-o58-availability]', call.availabilityText);
 
-        var bar = cell.querySelector('[data-o58-bar]');
+        var panel = cell.querySelector('[data-o58-panel]');
 
-        if (bar && typeof call.percentChecked === 'number') {
-            bar.setAttribute('aria-valuenow', String(call.percentChecked));
-            // The words, not the number: a screen reader announcing "33 percent" would repeat the one
-            // figure on this page that is not the authoritative one.
-            bar.setAttribute('aria-valuetext', call.progressText || '');
+        if (panel && !call.active) {
+            // The work finished while this page was watching. The panel's whole subject is the thing
+            // that was moving, so it goes rather than freezing at full — a bar that stays at 100% on
+            // every finished row is noise on most of the table, most of the time.
+            panel.remove();
+            panel = null;
+        }
 
-            var fill = bar.querySelector('.o58-bar__fill');
+        if (panel) {
+            text(panel, '[data-o58-progress-text]', call.progressText);
+            text(panel, '[data-o58-current]', call.currentStep);
 
-            if (fill) {
-                fill.style.width = call.percentChecked + '%';
+            var bar = panel.querySelector('[data-o58-bar]');
+
+            if (bar && typeof call.percentChecked === 'number') {
+                bar.value = call.percentChecked;
+                // The words, not the number: a reader told "33 percent" would be hearing the one
+                // figure here that is not the authoritative one.
+                bar.setAttribute('aria-label', call.progressText || '');
             }
         }
 
@@ -114,8 +122,16 @@
         Object.keys(call.channels).forEach(function (channel) {
             var row = cell.querySelector('[data-o58-channel="' + channel + '"]');
 
-            if (row) {
-                badge(row, '[data-o58-channel-state]', call.channels[channel].label, call.channels[channel].badge);
+            if (!row) {
+                return;
+            }
+
+            badge(row, '[data-o58-channel-state]', call.channels[channel].label, call.channels[channel].badge);
+
+            // The mark comes from the server for the same reason the words do: one place decides what
+            // a state looks like, and the browser does not get its own opinion.
+            if (call.channels[channel].step) {
+                row.setAttribute('data-state', call.channels[channel].step);
             }
         });
     }

@@ -98,6 +98,17 @@ return [
     App\Order58\Web\CallRecordings\Action::class => [
         '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
     ],
+    // One small file in `runtime/`, watched by a systemd `.path` unit that starts the importer service.
+    // Beside the lock rather than anywhere else: the service already declares `runtime` as writable, so
+    // the trigger needs no new path, no new permission and no server change beyond installing the unit.
+    App\Order58\Application\ImportRunRequest::class => [
+        '__construct()' => [
+            'triggerFile' => DynamicReference::to(
+                static fn(Aliases $aliases): string => $aliases->get('@runtime/triggers') . '/order58-import.trigger',
+            ),
+        ],
+    ],
+
     App\Order58\Web\CallRecordings\DownloadAction::class => [
         '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
     ],

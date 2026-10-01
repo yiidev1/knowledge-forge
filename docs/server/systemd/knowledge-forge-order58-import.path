@@ -1,0 +1,70 @@
+# Knowledge Forge — start the Order58 recording importer as soon as work is asked for.
+#
+# WHAT THIS IS FOR
+#
+# Downloading is scheduled work: the web request writes rows and a timer picks them up. That is the
+# right shape — a web request must never spend minutes fetching megabytes from a third party — but it
+# meant a click could sit saying "Pending download" for a whole timer interval on a server that was
+# otherwise idle. The work was correct and the product felt broken.
+#
+# This unit closes that gap WITHOUT changing what a run is allowed to do. The application writes one
+# small file; systemd notices and starts the ordinary importer service. Everything that service
+# declares still applies — CPUQuota=25%, MemoryMax=256M, Nice=15, IOSchedulingClass=idle, the
+# hardening, and `--once` — because it is the same service, started the same way, by systemd.
+#
+# WHAT IT IS NOT
+#
+# Not a second worker. Not a way around the flock. Not a way around ResourceAdmission. Not parallelism.
+# It decides only WHEN a run is attempted, never what that run may do: the importer still takes one
+# call, and its three channels still download one after another.
+#
+# CONCURRENCY
+#
+# `Type=oneshot` means systemd will not start a second instance while one is active, and a burst of
+# clicks coalesces into one start. Beyond that the application's own flock is unchanged and remains the
+# final guard — if a run is already going, the new rows simply wait, which is correct.
+#
+# IF THIS UNIT IS NOT INSTALLED
+#
+# Nothing breaks. The application's write becomes an inert file in runtime/, and the timer picks the
+# work up exactly as it did before — just not immediately. The trigger is an optimisation, and the
+# application treats a failure to send it as a non-event.
+#
+# INSTALL
+#
+#   sudo cp docs/server/systemd/knowledge-forge-order58-import.path /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now knowledge-forge-order58-import.path
+#
+# The service and timer are installed as documented beside this file; this is additive to both. Keep
+# the timer enabled — it is the fallback that recovers anything a missed trigger left behind.
+#
+# VERIFY
+#
+#   systemctl status knowledge-forge-order58-import.path
+#   touch /var/www/html/knowledge-forge/runtime/triggers/order58-import.trigger
+#   journalctl -u knowledge-forge-order58-import.service -n 20
+#
+# The last command should show a run starting within a second or so of the touch.
+
+[Unit]
+Description=Start the Knowledge Forge Order58 recording importer when a download is asked for
+Documentation=file:///var/www/html/knowledge-forge/docs/deploy/worker.md
+
+[Path]
+# PathModified, not PathChanged: the application rewrites the same file every time rather than creating
+# a new one, and PathChanged would not fire for a write to a file that already exists.
+PathModified=/var/www/html/knowledge-forge/runtime/triggers/order58-import.trigger
+
+# Named explicitly rather than relying on the implicit `<name>.service`, so renaming this file cannot
+# quietly point it at nothing.
+Unit=knowledge-forge-order58-import.service
+
+# The application creates the directory on its first request, but the unit must survive a deployment
+# that has not run one yet — without this, systemd refuses to start a path unit whose directory is
+# absent, and it would stay failed until somebody noticed.
+MakeDirectory=true
+DirectoryMode=0775
+
+[Install]
+WantedBy=multi-user.target

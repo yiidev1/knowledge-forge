@@ -16,6 +16,7 @@ use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\Store\StoreAudioAsset;
 use App\Shared\Application\Time\AppTimeZone;
+use App\Shared\Audio\RecordingTypeLabels;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
@@ -698,29 +699,68 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                             // line under it is what actually arrived.
                     ?>
                             <?php if ($group->arriving !== null && $group->arriving->isActive()): ?>
-                                <div class="a2t-arriving">
-                                    <span class="a2t-badge a2t-badge--queued" data-a2t-arriving-outcome>
-                                        <?= Html::encode($group->arriving->outcome()->label()) ?>
-                                    </span>
-                                    <?php
-                                    // `aria-valuetext` carries the words rather than the number: a
-                                    // reader told "33 percent" would be hearing the one figure here
-                                    // that is not the authoritative one.
+                                <?php
+                                // The transcription panel's shape and its step marks, reusing its
+                                // PRIMITIVES — `.a2t-processing__stages`, `__stage`, `__mark` — rather
+                                // than its shell classes. That card's markup lives in one partial and
+                                // must stay there (ManualProcessingPanelTest enforces it); this is a
+                                // different thing wearing the same clothes, so it owns its shell and
+                                // shares the parts that make the two read as one product.
+                                //
+                                // Drawn only while a channel is still pending or downloading. Once the
+                                // acquisition settles the call is no longer reported as arriving at
+                                // all, so this disappears and the row falls back to its ordinary
+                                // recordings — which is what the reader actually wants to see.
                                 ?>
-                                    <div class="a2t-arriving__bar" role="progressbar"
-                                        aria-valuemin="0" aria-valuemax="100"
-                                        aria-valuenow="<?= $group->arriving->percentChecked() ?>"
-                                        aria-valuetext="<?= Html::encode($group->arriving->progressText()) ?>"
-                                        data-a2t-arriving-bar>
-                                        <span class="a2t-arriving__fill"
-                                            style="width: <?= $group->arriving->percentChecked() ?>%"></span>
+                                <div class="a2t-arriving">
+                                    <div class="a2t-arriving__heading">
+                                        <strong>Downloading recordings</strong>
+                                        <span class="a2t-arriving__badge" data-a2t-arriving-outcome>
+                                            <?= Html::encode($group->arriving->outcome()->label()) ?>
+                                        </span>
                                     </div>
-                                    <div class="field__hint" data-a2t-arriving-progress>
-                                        <?= Html::encode($group->arriving->progressText()) ?>
+
+                                    <div class="a2t-arriving__overall">
+                                        <div class="a2t-arriving__label">
+                                            <span class="a2t-arriving__title">Overall progress</span>
+                                            <?php
+                                            // `aria-hidden`: the bar below carries the same figure as
+                                            // a label, and announcing it twice makes the panel
+                                            // unusable with a screen reader.
+                                ?>
+                                            <span data-a2t-arriving-progress aria-hidden="true">
+                                                <?= Html::encode($group->arriving->progressText()) ?>
+                                            </span>
+                                        </div>
+                                        <progress class="a2t-arriving__bar" max="100"
+                                            value="<?= $group->arriving->percentChecked() ?>"
+                                            aria-label="<?= Html::encode($group->arriving->progressText()) ?>"
+                                            data-a2t-arriving-bar></progress>
                                     </div>
-                                    <div class="field__hint" data-a2t-arriving-availability>
+
+                                    <ol class="a2t-processing__stages">
+                                        <?php foreach ($group->arriving->channels as $channel => $state): ?>
+                                            <li class="a2t-processing__stage"
+                                                data-state="<?= Html::encode($state->step()) ?>"
+                                                data-a2t-arriving-step="<?= Html::encode($channel) ?>">
+                                                <span class="a2t-processing__mark" aria-hidden="true"></span>
+                                                <?= Html::encode(
+                                                    RecordingTypeLabels::forStorageValue(strtoupper($channel)),
+                                                ) ?>
+                                                <span data-a2t-arriving-channel="<?= Html::encode($channel) ?>">
+                                                    <?= Html::encode($state->label()) ?>
+                                                </span>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ol>
+
+                                    <p class="a2t-arriving__detail" role="status" data-a2t-arriving-current>
+                                        <?= Html::encode((string) $group->arriving->currentStep()) ?>
+                                    </p>
+                                    <?php // What actually arrived — never inferred from the bar.?>
+                                    <p class="a2t-arriving__detail" data-a2t-arriving-availability>
                                         <?= Html::encode($group->arriving->availabilityText()) ?>
-                                    </div>
+                                    </p>
                                 </div>
                             <?php else: ?>
                                 <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">

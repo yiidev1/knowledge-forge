@@ -4491,25 +4491,31 @@ window.KFAudioStages = {
                     if (progress) { progress.textContent = call.progressText; }
                     if (availability) { availability.textContent = call.availabilityText; }
 
+                    var current = row.querySelector('[data-a2t-arriving-current]');
+
+                    if (current) { current.textContent = call.currentStep || ''; }
+
                     var bar = row.querySelector('[data-a2t-arriving-bar]');
 
                     if (bar && typeof call.percentChecked === 'number') {
-                        bar.setAttribute('aria-valuenow', String(call.percentChecked));
+                        bar.value = call.percentChecked;
                         // The words, not the number — see the template.
-                        bar.setAttribute('aria-valuetext', call.progressText || '');
-
-                        var fill = bar.querySelector('.a2t-arriving__fill');
-
-                        if (fill) {
-                            fill.style.width = call.percentChecked + '%';
-                        }
+                        bar.setAttribute('aria-label', call.progressText || '');
                     }
 
                     Object.keys(call.channels || {}).forEach(function (channel) {
                         var cell = row.querySelector('[data-a2t-arriving-channel="' + channel + '"]');
 
                         if (cell) {
-                            cell.textContent = call.channels[channel].label + '…';
+                            cell.textContent = call.channels[channel].label;
+                        }
+
+                        // The step mark comes from the server, so one place decides what a state looks
+                        // like and the browser does not get its own opinion.
+                        var step = row.querySelector('[data-a2t-arriving-step="' + channel + '"]');
+
+                        if (step && call.channels[channel].step) {
+                            step.setAttribute('data-state', call.channels[channel].step);
                         }
                     });
                 });

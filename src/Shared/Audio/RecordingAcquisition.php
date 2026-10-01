@@ -157,6 +157,25 @@ final readonly class RecordingAcquisition
         };
     }
 
+    /**
+     * What is happening right now, for the line under the bar.
+     *
+     * Null when nothing is: a finished acquisition has no current anything, and the panel it would sit
+     * in is not drawn at all.
+     */
+    public function currentStep(): ?string
+    {
+        foreach ($this->channels as $channel => $state) {
+            if ($state === RecordingAcquisitionState::Downloading) {
+                return 'Downloading the ' . $channel . ' recording';
+            }
+        }
+
+        // Asked for, nothing claimed yet. True for the minute or so before the scheduled run picks it
+        // up, and saying so beats an empty line that reads as nothing happening.
+        return $this->isActive() ? 'Waiting for the next recording to start' : null;
+    }
+
     /** Whether any single channel could usefully be asked for again. */
     public function hasRetryableChannel(): bool
     {

@@ -110,7 +110,14 @@ final readonly class StatusAction
         $channels = [];
 
         foreach ($acquisition->channels as $channel => $state) {
-            $channels[$channel] = ['state' => $state->value, 'label' => $state->label(), 'badge' => $state->badge()];
+            $channels[$channel] = [
+                'state' => $state->value,
+                'label' => $state->label(),
+                'badge' => $state->badge(),
+                // The step mark, so the browser does not have to map five states to four marks and
+                // get it wrong the day a sixth is added.
+                'step' => $state->step(),
+            ];
         }
 
         $outcome = $acquisition->outcome();
@@ -125,6 +132,9 @@ final readonly class StatusAction
             'progressText' => $acquisition->progressText(),
             // The authoritative sentence, which is what actually arrived.
             'availabilityText' => $acquisition->availabilityText(),
+            // What is happening now, for the line under the bar. Null once nothing is, which is also
+            // when the panel stops being drawn.
+            'currentStep' => $acquisition->currentStep(),
             'active' => $acquisition->isActive(),
             'channels' => $channels,
         ];

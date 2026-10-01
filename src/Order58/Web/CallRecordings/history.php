@@ -59,26 +59,26 @@ $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
             </p>
         </div>
     <?php else: ?>
-        <div class="table-wrap">
-            <table class="table">
+        <div class="table-wrap o58-wide">
+            <table class="table o58-table">
                 <thead>
                     <tr>
-                        <th>Store</th>
-                        <th>Order ID</th>
-                        <th>Call session ID</th>
+                        <th class="o58-table__store">Store</th>
+                        <th class="o58-table__order">Order ID</th>
+                        <th class="o58-table__id">Call session ID</th>
                         <?php
                         // The provider's own string, printed exactly as sent and with NO zone label —
                         // it carries none, and appending one would invent a claim about a timestamp
                         // this application did not generate. The two beside it are ours, so they are
                         // shown in the business timezone like every other time on this server.
         ?>
-                        <th>Call time</th>
-                        <th>Requested</th>
-                        <th>Downloaded</th>
+                        <th class="o58-table__time">Call time</th>
+                        <th class="o58-table__when">Requested</th>
+                        <th class="o58-table__when">Downloaded</th>
                         <th>Recordings</th>
                         <th>Progress</th>
                         <th>Status</th>
-                        <th>Actions</th>
+                        <th class="o58-table__actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -107,19 +107,21 @@ $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
                                 <ul class="o58-channels">
                                     <?php foreach ($channels as $channel): ?>
                                         <?php $item = $row->channel($channel); ?>
-                                        <li class="o58-channel">
+                                        <?php
+                                        $state = $item === null
+                                            ? null
+                                            : App\Order58\Domain\RecordingAcquisitionReader::state($item->status);
+                                        ?>
+                                        <li class="o58-channel"
+                                            data-state="<?= Html::encode($state?->step() ?? 'pending') ?>">
+                                            <span class="o58-channel__mark" aria-hidden="true"></span>
                                             <span class="o58-channel__name">
                                                 <?= Html::encode($channel->label()) ?>
                                             </span>
-                                            <?php if ($item === null): ?>
+                                            <?php if ($item === null || $state === null): ?>
                                                 <?php // Never asked for — different from "asked and refused".?>
                                                 <span class="util-muted">—</span>
                                             <?php else: ?>
-                                                <?php
-                                            $state = App\Order58\Domain\RecordingAcquisitionReader::state(
-                                                $item->status,
-                                            );
-                                                ?>
                                                 <span class="badge badge--<?= Html::encode($state->badge()) ?>">
                                                     <?= Html::encode($state->label()) ?>
                                                 </span>
@@ -137,17 +139,31 @@ $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
                             </td>
                             <td>
                                 <?php if ($acquisition !== null): ?>
-                                    <?php
-                                    // Channels checked, which is what the bar counts everywhere in this
-                                    // feature. The sentence under it is what says how many recordings
-                                    // actually arrived, because those are different questions.
+                                    <div class="o58-recordings">
+                                        <?php if ($acquisition->isActive()): ?>
+                                            <?php
+                                            // Still moving, so the same panel the live page draws. A
+                                            // finished row gets none of it: the bar's whole subject is
+                                            // the thing in motion, and history is mostly not.
+                                            ?>
+                                            <div class="o58-panel">
+                                                <div class="o58-panel__head">
+                                                    <span class="o58-panel__title">Overall progress</span>
+                                                    <span class="o58-panel__count" aria-hidden="true">
+                                                        <?= Html::encode($acquisition->progressText()) ?>
+                                                    </span>
+                                                </div>
+                                                <progress class="o58-panel__bar" max="100"
+                                                    value="<?= $acquisition->percentChecked() ?>"
+                                                    aria-label="<?= Html::encode($acquisition->progressText()) ?>">
+                                                </progress>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php
+                                        // What arrived, always — settled or not. It is the one fact
+                                        // somebody opens this page for.
                                     ?>
-                                    <div class="o58-progress">
-                                        <span class="o58-progress__count">
-                                            <?= Html::encode($acquisition->checked()) ?>
-                                            of <?= Html::encode($acquisition->total()) ?>
-                                        </span>
-                                        <span class="o58-progress__availability">
+                                        <span class="o58-recordings__availability">
                                             <?= Html::encode($acquisition->availabilityText()) ?>
                                         </span>
                                     </div>

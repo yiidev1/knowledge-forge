@@ -15,7 +15,9 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function dirname;
 use function gmdate;
+use function unlink;
 use function implode;
 use function json_decode;
 use function str_contains;
@@ -297,7 +299,7 @@ final class Order58CallRecordingsCest
         $this->download($I, [self::CALLS[0]]);
         $I->amOnPage($this->loadUrl());
 
-        $I->see('Waiting');
+        $I->see('Pending download');
         $I->see('0 of 3 recordings checked');
         $I->see('0 recordings available');
 
@@ -333,12 +335,19 @@ final class Order58CallRecordingsCest
         // One of three answered for: the bar's number, and the words that carry it.
         $I->see('1 of 3 recordings checked');
         $I->see('1 recording available');
-        $I->seeElement('[data-o58-bar][aria-valuenow="33"]');
+        $I->seeElement('progress[data-o58-bar][value="33"]');
+
+        // The panel is the shared one, with a step per channel.
+        $I->seeElement('[data-o58-panel]');
+        $I->see('Overall progress');
+        $I->seeElement('.o58-channel[data-state="complete"]');
+        $I->seeElement('.o58-channel[data-state="active"]');
+        $I->seeElement('.o58-channel[data-state="pending"]');
 
         // Each channel reports for itself.
         $I->see('Downloaded');
         $I->see('Downloading');
-        $I->see('Waiting');
+        $I->see('Pending download');
     }
 
     /**
@@ -363,11 +372,14 @@ final class Order58CallRecordingsCest
 
         $I->amOnPage($this->loadUrl());
 
-        $I->seeElement('[data-o58-bar][aria-valuenow="100"]');
-        $I->see('3 of 3 recordings checked');
-        // The authoritative line, and it does not say three.
+        // **No bar, and no count.** The asking is finished, so the thing the bar was tracking is
+        // gone — and a full bar on every settled row is noise on most of this table, most of the time.
+        $I->dontSeeElement('[data-o58-panel]');
+        $I->dontSeeElement('progress[data-o58-bar]');
+        $I->dontSee('3 of 3 recordings checked');
+
+        // What is left is the result, which is what somebody reads the column for.
         $I->see('1 recording available · 2 unavailable');
-        // And the call is not called a failure.
         $I->see('Partial');
         $I->dontSee('Failed');
 
@@ -420,7 +432,7 @@ final class Order58CallRecordingsCest
         Assert::assertSame('1 of 3 recordings checked', $first['progressText']);
         Assert::assertSame('1 recording available', $first['availabilityText']);
         Assert::assertSame('Downloaded', $first['channels']['mixed']['label']);
-        Assert::assertSame('Waiting', $first['channels']['caller']['label']);
+        Assert::assertSame('Pending download', $first['channels']['caller']['label']);
     }
 
     /** It says when there is nothing left to watch, which is what stops the polling. */
@@ -489,8 +501,23 @@ final class Order58CallRecordingsCest
         $this->download($I, [self::CALLS[0]]);
         $source = $this->statusSource($I, [self::CALLS[0]]);
 
-        foreach (['error_message', 'batch', 'admin', 'conversation', 'bytes', 'company', 'PENDING'] as $leak) {
-            Assert::assertStringNotContainsStringIgnoringCase(
+        // The storage statuses, which are this module's own bookkeeping and nobody else's business.
+        // `state` and `step` are deliberately NOT in this list: they are the shared presentation
+        // vocabulary the browser keys off, the same way the job status endpoint publishes a JobStatus
+        // value. Neither is ever rendered — `label` is what reaches the screen.
+        foreach ([
+            'error_message',
+            'batch',
+            'admin',
+            'conversation',
+            'bytes',
+            'company',
+            'NOT_AVAILABLE',
+            'TOO_LARGE',
+            'IMPORTED',
+            'FETCHING',
+        ] as $leak) {
+            Assert::assertStringNotContainsString(
                 $leak,
                 $source,
                 'The poll endpoint publishes something written for a log.',
@@ -649,6 +676,78 @@ final class Order58CallRecordingsCest
         );
     }
 
+    // ------------------------------------------------------------------ starting without waiting
+
+    /**
+     * Asking for a download asks for a run, rather than waiting for the next scheduled one.
+     *
+     * The click used to sit on "Pending download" for a whole timer interval on a server that was
+     * doing nothing. The trigger file is what a systemd `.path` unit watches, so the run is started by
+     * systemd with every limit that unit declares — not by this request.
+     */
+    public function downloadingAsksTheImporterToRunNow(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $trigger = $this->triggerFile();
+        @unlink($trigger);
+
+        $this->download($I, [self::CALLS[0]]);
+
+        Assert::assertFileExists($trigger, 'Nothing asked the importer to run, so the click waits for the timer.');
+    }
+
+    /** A request that created nothing new asks for nothing. */
+    public function aDownloadThatCreatedNothingDoesNotAskForARun(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        $trigger = $this->triggerFile();
+        @unlink($trigger);
+
+        // The same call again: the unique key refuses every row, so there is no new work to start.
+        $this->download($I, [self::CALLS[0]]);
+
+        Assert::assertFileDoesNotExist($trigger, 'Nothing was created, so nothing needed starting.');
+    }
+
+    /**
+     * And the request still downloads nothing itself.
+     *
+     * The rule the whole scheduling exists for. A web request that fetched three recordings would time
+     * out halfway and leave nobody able to say which arrived — so the rows are written, a run is asked
+     * for, and the response returns.
+     */
+    public function theDownloadRequestStillFetchesNothingItself(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        // Every channel is still waiting to be fetched: the request created work and did none of it.
+        foreach (['mixed', 'caller', 'callee'] as $channel) {
+            Assert::assertSame(
+                'PENDING',
+                $this->channelStatus(self::CALLS[0], $channel),
+                'The web request must never contact the provider itself.',
+            );
+        }
+    }
+
     // ------------------------------------------------------------------ download history
 
     /** The page is reachable from the one that creates the work. */
@@ -718,8 +817,8 @@ final class Order58CallRecordingsCest
         $I->see('Downloaded');
         $I->see('Call time');
 
-        // Channels checked, with availability stated separately, exactly as on the live page.
-        $I->see('3 of 3');
+        // Settled, so no progress panel — just the result.
+        $I->dontSeeElement('.o58-panel');
         $I->see('1 recording available · 2 unavailable');
         $I->see('Partial');
     }
@@ -866,6 +965,12 @@ final class Order58CallRecordingsCest
             'created_at' => $now,
             'updated_at' => $now,
         ])->execute();
+    }
+
+    /** Where the application writes its "please run" hint, as the container resolves it. */
+    private function triggerFile(): string
+    {
+        return dirname(__DIR__, 2) . '/runtime/triggers/order58-import.trigger';
     }
 
     private function channelStatus(string $sessionId, string $channel): string

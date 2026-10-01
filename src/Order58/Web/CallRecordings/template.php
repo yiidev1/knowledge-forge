@@ -6,6 +6,7 @@ use App\Integration\Order58Recording\CallSummary;
 use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Web\CallRecordings\CallRecordingsAsset;
 use App\Shared\Audio\RecordingAcquisition;
+use App\Shared\Audio\RecordingAcquisitionState;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
@@ -42,11 +43,18 @@ $csrfField = (string) $csrf->hiddenInput();
 $pageUrl = $urlGenerator->generate('order58.call-recordings');
 $downloadUrl = $urlGenerator->generate('order58.call-recordings.download');
 
-/** One channel's line: the provider's name for it, and where it has got to. */
-$channelRow = static function (string $channel, \App\Shared\Audio\RecordingAcquisitionState $state): string {
+/**
+ * One channel as a step: its mark, the provider's name for it, and where it has got to.
+ *
+ * The mark is the transcription panel's own — ○ pending, ◉ active, ✓ complete, ✗ failed, – skipped —
+ * so a reader scanning the column sees the shape of the call before reading a word of it.
+ */
+$channelRow = static function (string $channel, RecordingAcquisitionState $state): string {
     $name = RecordingChannel::fromStorage($channel)?->label() ?? $channel;
 
-    return '<li class="o58-channel" data-o58-channel="' . Html::encode($channel) . '">'
+    return '<li class="o58-channel" data-o58-channel="' . Html::encode($channel) . '"'
+        . ' data-state="' . Html::encode($state->step()) . '">'
+        . '<span class="o58-channel__mark" aria-hidden="true"></span>'
         . '<span class="o58-channel__name">' . Html::encode($name) . '</span>'
         . '<span class="badge badge--' . Html::encode($state->badge()) . '" data-o58-channel-state>'
         . Html::encode($state->label()) . '</span>'
@@ -54,18 +62,32 @@ $channelRow = static function (string $channel, \App\Shared\Audio\RecordingAcqui
 };
 
 /**
- * One call's recordings: the word, the bar, the two sentences, and the three channels.
+ * One call's recordings: a progress panel while it is happening, and a plain result once it is not.
  *
- * ## Why there are two numbers here and not one
+ * ## The bar is for the thing that is moving, and nothing else
  *
- * The bar counts **channels checked** — how much of the asking is finished. The sentence under it counts
- * **what is actually here**. They are different questions and a single figure answering both would lie
- * in one direction or the other: a bar tracking availability would sit a third full for ever on a
- * merchant who only records the mixed call, and a bar tracking progress with no sentence beside it would
- * reach full and read as three recordings downloaded.
+ * A finished call used to keep a full bar and the line "3 of 3 recordings checked" for ever. Both were
+ * true and neither was any use: the question a bar answers is "how far along is this", and once the
+ * answer is "it is done" the bar is noise on every row of the table — most of which are finished, most
+ * of the time. So the panel is drawn **only while a channel is still pending or downloading**, and a
+ * settled call shows its word and its three channels and stops.
  *
- * Rendered by the server for the first paint and by `order58-recordings.js` for every poll after it, from
- * the same model — see {@see RecordingAcquisition}.
+ * ## While it IS moving, it is the transcription panel
+ *
+ * Same structure, same classes, same step marks as the card the Audio-to-Text page already uses for a
+ * transcription: a heading, one overall bar, a checklist of steps, and a line saying what is happening
+ * now. A download and a transcription are different work, but they are the same product, and a reader
+ * who has learnt one of these should not have to learn the other.
+ *
+ * ## Two numbers, because one of them would lie
+ *
+ * The bar counts **channels checked** — how much of the asking is finished. The line under it counts
+ * **what is actually here**. A bar tracking availability would sit a third full for ever on a merchant
+ * who only records the mixed call; a bar with no sentence beside it would reach full and read as three
+ * recordings downloaded.
+ *
+ * Rendered by the server for the first paint and by `order58-recordings.js` for every poll after it,
+ * from the same model — see {@see RecordingAcquisition}.
  */
 $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($channelRow): string {
     if ($acquisition === null) {
@@ -74,25 +96,27 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
 
     $outcome = $acquisition->outcome();
 
-    $html = '<div class="o58-progress" data-o58-progress>'
+    $html = '<div class="o58-recordings" data-o58-progress>'
         . '<span class="badge badge--' . Html::encode($outcome->badge()) . '" data-o58-outcome>'
         . Html::encode($outcome->label()) . '</span>';
 
-    // `aria-valuetext` carries the words, not the number: a screen reader announcing "33 percent" would
-    // repeat the one figure on this page that is not the authoritative one.
-    $html .= '<div class="o58-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"'
-        . ' aria-valuenow="' . $acquisition->percentChecked() . '"'
-        . ' aria-valuetext="' . Html::encode($acquisition->progressText()) . '" data-o58-bar>'
-        . '<span class="o58-bar__fill" style="width: ' . $acquisition->percentChecked() . '%"></span>'
-        . '</div>';
-
-    $html .= '<span class="o58-progress__count" data-o58-progress-text>'
-        . Html::encode($acquisition->progressText()) . '</span>';
-
-    // The authoritative line. Always rendered, including while the bar is still moving, so the reader
-    // never has to infer availability from a percentage.
-    $html .= '<span class="o58-progress__availability" data-o58-availability>'
-        . Html::encode($acquisition->availabilityText()) . '</span>';
+    if ($acquisition->isActive()) {
+        $html .= '<div class="o58-panel" data-o58-panel>'
+            . '<div class="o58-panel__head">'
+            . '<span class="o58-panel__title">Overall progress</span>'
+            // `aria-hidden`, because the bar below carries the same figure as `aria-valuetext` in
+            // words. Announcing it twice is how a progress panel becomes unusable with a screen reader.
+            . '<span class="o58-panel__count" data-o58-progress-text aria-hidden="true">'
+            . Html::encode($acquisition->progressText()) . '</span>'
+            . '</div>'
+            // A real <progress>, as the transcription card uses: the browser draws it, announces it,
+            // and respects reduced-motion settings without any of that being reimplemented here.
+            . '<progress class="o58-panel__bar" max="100" value="' . $acquisition->percentChecked() . '"'
+            . ' aria-label="' . Html::encode($acquisition->progressText()) . '" data-o58-bar></progress>'
+            . '<p class="o58-panel__detail" role="status" data-o58-current>'
+            . Html::encode((string) $acquisition->currentStep()) . '</p>'
+            . '</div>';
+    }
 
     $html .= '<ul class="o58-channels" data-o58-channels>';
 
@@ -100,7 +124,14 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
         $html .= $channelRow($channel, $state);
     }
 
-    return $html . '</ul></div>';
+    $html .= '</ul>';
+
+    // Always last and always present, settled or not: what actually arrived is the one fact a reader
+    // came for, and it must never have to be inferred from a count of channels.
+    $html .= '<span class="o58-recordings__availability" data-o58-availability>'
+        . Html::encode($acquisition->availabilityText()) . '</span>';
+
+    return $html . '</div>';
 };
 
 ?>
@@ -215,27 +246,27 @@ foreach ($statuses as $acquisition) {
     $anyActive = $anyActive || $acquisition->isActive();
 }
 ?>
-                <div class="table-wrap" data-o58-calls
+                <div class="table-wrap o58-wide" data-o58-calls
                     data-o58-status="<?= Html::encode($statusUrl) ?>"
                     data-o58-store="<?= Html::encode((string) $selectedStore) ?>"
                     data-o58-active="<?= $anyActive ? '1' : '0' ?>">
-                    <table class="table">
+                    <table class="table o58-table">
                         <thead>
                             <tr>
-                                <th>
+                                <th class="o58-table__select">
                                     <label class="a2t-checkbox">
                                         <input type="checkbox" data-o58-select-all>
                                         <span class="util-visually-hidden">Select every call shown</span>
                                     </label>
                                 </th>
-                                <th>Call session ID</th>
+                                <th class="o58-table__id">Call session ID</th>
                                 <?php
                         // The provider's own string, printed exactly as sent. No zone label: it
                         // carries none, and appending one would be inventing a claim about a
                         // timestamp this application did not generate.
 ?>
-                                <th>Call time</th>
-                                <th>Order ID</th>
+                                <th class="o58-table__time">Call time</th>
+                                <th class="o58-table__order">Order ID</th>
                                 <th>Recordings</th>
                             </tr>
                         </thead>

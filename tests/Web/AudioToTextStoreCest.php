@@ -3640,7 +3640,8 @@ final class AudioToTextStoreCest
         $I->see('16674631');
         // The provider's own string, printed as sent.
         $I->see('2026-10-01 01:43:12');
-        $I->see('Waiting…');
+        $I->see('Downloading recordings');
+        $I->see('Pending download');
         $I->see('0 of 3 recordings checked');
         $I->see('0 recordings available');
     }
@@ -3663,7 +3664,7 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
-        $I->see('Downloading…');
+        $I->see('Downloading');
         $I->dontSeeElement('[data-a2t-transcribe]');
         $I->dontSeeElement('[data-a2t-play]');
         $I->dontSee('Ready for transcription');
@@ -3696,10 +3697,15 @@ final class AudioToTextStoreCest
         $I->seeElement('[data-a2t-details]');
 
         // The others say where they are, and offer nothing.
-        $I->see('Downloading…');
-        $I->see('Waiting…');
+        $I->see('Downloading');
+        $I->see('Pending download');
         $I->see('1 of 3 recordings checked');
         $I->see('1 recording available');
+
+        // The panel is the transcription card's own structure, not a second design for one idea.
+        $I->seeElement('.a2t-processing .a2t-processing__stages');
+        $I->seeElement('.a2t-processing__stage[data-state="complete"]');
+        $I->seeElement('.a2t-processing__stage[data-state="active"]');
     }
 
     /** While anything is outstanding the page polls; the moment nothing is, it does not. */
@@ -3729,9 +3735,11 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
+        // Settled, so the acquisition UI is gone entirely — no panel, no bar, no leftover counts.
         $I->dontSeeElement('[data-a2t-arriving-poll]');
-        $I->dontSee('Waiting…');
-        $I->dontSee('Downloading…');
+        $I->dontSeeElement('.a2t-arriving');
+        $I->dontSee('Downloading recordings');
+        $I->dontSee('of 3 recordings checked');
     }
 
     /** The poll endpoint answers for one store, in counts, and names nothing internal. */
@@ -3755,8 +3763,12 @@ final class AudioToTextStoreCest
         Assert::assertSame('1 recording available', $payload['calls']['22635909']['availabilityText']);
         Assert::assertSame(1, $payload['calls']['22635909']['available']);
         Assert::assertSame('Downloading', $payload['calls']['22635909']['channels']['caller']['label']);
+        Assert::assertSame('active', $payload['calls']['22635909']['channels']['caller']['step']);
+        Assert::assertSame('pending', $payload['calls']['22635909']['channels']['callee']['step']);
 
-        foreach (['batch', 'company', 'error', 'PENDING', 'FETCHING'] as $leak) {
+        // The storage statuses. `step` is presentation vocabulary shared with the transcription
+        // panel and is deliberately not treated as a leak.
+        foreach (['batch', 'company', 'error', 'IMPORTED', 'FETCHING', 'NOT_AVAILABLE'] as $leak) {
             Assert::assertStringNotContainsStringIgnoringCase(
                 $leak,
                 $I->grabPageSource(),

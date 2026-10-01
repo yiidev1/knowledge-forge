@@ -28,7 +28,12 @@ namespace App\Shared\Audio;
  */
 enum RecordingAcquisitionState: string
 {
-    /** Asked for, and the first provider fetch has not started. */
+    /**
+     * Asked for, and the first provider fetch has not started.
+     *
+     * "Pending download" rather than "Waiting": waiting says nothing about what for, and a reader
+     * scanning three channels needs to know at a glance which of them are still owed a file.
+     */
     case Waiting = 'WAITING';
 
     /** Being fetched right now. */
@@ -69,11 +74,32 @@ enum RecordingAcquisitionState: string
     public function label(): string
     {
         return match ($this) {
-            self::Waiting => 'Waiting',
+            self::Waiting => 'Pending download',
             self::Downloading => 'Downloading',
             self::Downloaded => 'Downloaded',
             self::Unavailable => 'Unavailable',
             self::Failed => 'Failed',
+        };
+    }
+
+    /**
+     * This channel as a step in a progress list, in the words the transcription panel already uses.
+     *
+     * The same four values that component's stages take — `pending`, `active`, `complete`, `error` —
+     * plus `skipped` for a channel the provider simply does not have. Reusing its vocabulary is what
+     * makes a download and a transcription read as the same product rather than two takes on progress.
+     *
+     * {@see Unavailable} is deliberately not `complete` and not `error`: nothing arrived, and nothing
+     * went wrong. A tick would claim a recording that is not there; a cross would blame somebody.
+     */
+    public function step(): string
+    {
+        return match ($this) {
+            self::Waiting => 'pending',
+            self::Downloading => 'active',
+            self::Downloaded => 'complete',
+            self::Unavailable => 'skipped',
+            self::Failed => 'error',
         };
     }
 

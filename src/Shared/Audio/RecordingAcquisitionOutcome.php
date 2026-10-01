@@ -39,7 +39,7 @@ enum RecordingAcquisitionOutcome: string
     public function label(): string
     {
         return match ($this) {
-            self::Waiting => 'Waiting',
+            self::Waiting => 'Pending download',
             self::Downloading => 'Downloading',
             self::Downloaded => 'Downloaded',
             self::Partial => 'Partial',

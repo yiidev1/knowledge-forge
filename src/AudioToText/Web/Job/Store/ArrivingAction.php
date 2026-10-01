@@ -61,7 +61,13 @@ final readonly class ArrivingAction
             $channels = [];
 
             foreach ($acquisition->channels as $channel => $state) {
-                $channels[$channel] = ['state' => $state->value, 'label' => $state->label()];
+                $channels[$channel] = [
+                    'state' => $state->value,
+                    'label' => $state->label(),
+                    // The step mark, decided here so the browser does not map five states to five
+                    // marks itself and get it wrong the day a sixth appears.
+                    'step' => $state->step(),
+                ];
             }
 
             $calls[$acquisition->callSessionId] = [
@@ -73,6 +79,7 @@ final readonly class ArrivingAction
                 'progressText' => $acquisition->progressText(),
                 // What is actually here, which is the line that must never be inferred from the other.
                 'availabilityText' => $acquisition->availabilityText(),
+                'currentStep' => $acquisition->currentStep(),
                 'available' => $acquisition->available(),
                 'channels' => $channels,
             ];

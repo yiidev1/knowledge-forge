@@ -11,6 +11,7 @@ use App\Integration\Order58Recording\FixtureAvailability;
 use App\Integration\Order58Recording\FixtureCallSource;
 use App\Integration\Order58Recording\LatestCallsRequest;
 use App\Integration\Order58Recording\RecordingChannel;
+use App\Order58\Application\ImportRunRequest;
 use App\Order58\Application\RecordingCompanyResolver;
 use App\Order58\Application\TodayCallFilter;
 use App\Order58\Domain\AudioProviderDefaultInterface;
@@ -86,6 +87,7 @@ final readonly class DownloadAction
         private ClockInterface $clock,
         private Redirect $redirect,
         private FlashMessages $flash,
+        private ImportRunRequest $runRequest,
         private bool $importEnabled,
     ) {}
 
@@ -222,6 +224,13 @@ final readonly class DownloadAction
             );
 
             $created > 0 ? ++$asked : ++$already;
+        }
+
+        if ($asked > 0) {
+            // Ask for a run now rather than at the next scheduled one. This starts nothing itself and
+            // is allowed to fail silently — see ImportRunRequest. The rows are already saved, and the
+            // timer remains exactly the fallback it has always been.
+            $this->runRequest->requestRun();
         }
 
         $this->flash->success($this->summary($asked, $already, count($calls)));
