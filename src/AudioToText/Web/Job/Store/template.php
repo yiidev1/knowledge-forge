@@ -324,9 +324,12 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
     }
 
     if ($slot->isProcessing()) {
-        $html .= '<button class="a2t-slot__link" type="button"'
+        // The same control and the same words as a current recording's — one way of saying "this is
+        // happening, and here is how to watch it", wherever the recording sits.
+        $html .= '<button class="a2t-slot__link a2t-slot__link--watch" type="button"'
             . ' data-a2t-progress="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
-            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Progress</button>';
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">'
+            . Html::encode($slot->status->label()) . '…</button>';
     }
 
     if ($slot->isReviewable()) {
@@ -448,6 +451,24 @@ $slotCell = static function (
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Transcribe audio</button>';
     } elseif ($slot->status->value === 'FAILED') {
         $html .= '<span class="a2t-slot__note">Failed</span>';
+    } elseif ($slot->isProcessing()) {
+        // A way back into the progress view, not just a word about it.
+        //
+        // This was a plain span reading "Converting…", which is a dead end in two ways: it names a
+        // stage rather than the state, and it carries nothing — so a reader who closed the dialog, or
+        // simply refreshed, had no route back to the thing still running. The url is server-rendered,
+        // so reopening survives a reload and depends on no memory of the click that started it.
+        //
+        // Opening it POSTs nothing: {@see showProgressOn} reads the status endpoint and resumes the
+        // same poll. The worker is untouched either way — closing the dialog never stopped it.
+        //
+        // The status's own word rather than a fixed "Transcribing": a recording that has been asked
+        // for but not started is "Transcription requested", and saying otherwise would claim work that
+        // is not happening yet. Both are active and both open the same view.
+        $html .= '<button class="a2t-slot__link a2t-slot__link--watch" type="button"'
+            . ' data-a2t-progress="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">'
+            . Html::encode($slot->status->label()) . '…</button>';
     } elseif ($slot->status->value !== 'COMPLETED') {
         $html .= '<span class="a2t-slot__note">Converting…</span>';
     }

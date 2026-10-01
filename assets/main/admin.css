@@ -2530,6 +2530,21 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-slot__note--ready { color: var(--text-muted); }
 .a2t-slot__link--go { color: var(--primary); font-weight: 650; }
 
+/* A recording being transcribed. It reads as a status because that is what it is — but it is a way
+   back into the live progress view, so it has to look pressable rather than like the plain word it
+   replaced. The dot is the same "something is happening" mark the processing badges use. */
+.a2t-slot__link--watch { color: var(--primary); }
+.a2t-slot__link--watch::before {
+    background: currentColor;
+    border-radius: 50%;
+    content: '';
+    display: inline-block;
+    height: 6px;
+    margin-right: .35rem;
+    vertical-align: middle;
+    width: 6px;
+}
+
 
 /* A recording asked for and not here yet. Quiet, because it is a statement of fact rather than
    something to act on — there is nothing to press until the audio lands. */
