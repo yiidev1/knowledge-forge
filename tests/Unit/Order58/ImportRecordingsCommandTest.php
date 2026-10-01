@@ -11,6 +11,7 @@ use App\Order58\Application\RecordingImportProcessor;
 use App\Order58\Console\ImportRecordingsCommand;
 use App\Order58\Domain\CallImportHistoryPage;
 use App\Order58\Domain\CallImportItem;
+use App\Order58\Domain\CallImportMode;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\Order58ImportStatus;
 use App\Shared\Audio\AudioIngestionOutcome;
@@ -407,6 +408,7 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
         bool $generateAiAudio,
         string $recordingCompany,
         DateTimeImmutable $now,
+        CallImportMode $mode = CallImportMode::DownloadAndTranscribe,
     ): int {
         return 1;
     }
@@ -456,7 +458,7 @@ final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
     /**
      * What the importer handed over, per call, in order.
      *
-     * @var list<array{recordingType: string, orderId: string|null, callSessionId: string|null}>
+     * @var list<array{recordingType: string, orderId: string|null, callSessionId: string|null, callTimeRaw: string|null, transcribe: bool}>
      */
     public array $received = [];
 
@@ -470,11 +472,15 @@ final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
         bool $generateAiAudio,
         int $adminUserId,
         ?string $callSessionId = null,
+        ?string $callTimeRaw = null,
+        bool $transcribe = true,
     ): AudioIngestionOutcome {
         $this->received[] = [
             'recordingType' => $recordingType,
             'orderId' => $orderId,
             'callSessionId' => $callSessionId,
+            'callTimeRaw' => $callTimeRaw,
+            'transcribe' => $transcribe,
         ];
 
         return AudioIngestionOutcome::queued('c0ffee00c0ffee00c0ffee00c0ffee00');

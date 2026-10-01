@@ -313,12 +313,34 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         string $publicId,
         int $uploadedByAdminId,
         string $originalFilename,
-        string $storedAudioPath,
+        /**
+         * The workspace copy, or null when there is none.
+         *
+         * Null for a recording downloaded without a transcript being asked for: it was moved straight to
+         * permanent storage, so there is nothing in the workspace and saying otherwise would send the
+         * worker looking for a file that is not there. The column has always been nullable.
+         */
+        ?string $storedAudioPath,
         ?float $durationSeconds,
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
         ?TranscriptionProvider $transcriptionProvider = null,
+        /**
+         * Where this row starts.
+         *
+         * Defaulted, so every existing caller creates a claimable job exactly as before. The only caller
+         * that passes anything else is a download made without asking for a transcript.
+         */
+        JobStatus $status = JobStatus::QUEUED,
+        /**
+         * The permanent copy, when there already is one.
+         *
+         * Normally null — the worker writes this when it finishes. A download-only recording is retained
+         * the moment it arrives, so it has one before any worker has seen it, which is what makes it
+         * playable straight away.
+         */
+        ?string $retainedAudioPath = null,
     ): string {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
@@ -328,11 +350,11 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             // Whisper, so a caller that predates provider selection still writes a valid row.
             'transcription_provider' => $transcriptionProvider?->value,
             'uploaded_by_admin_id' => $uploadedByAdminId,
-            'status' => JobStatus::QUEUED->value,
+            'status' => $status->value,
             'processing_stage' => ProcessingStage::QUEUED->value,
             'original_filename' => $originalFilename,
             'stored_audio_path' => $storedAudioPath,
-            'retained_audio_path' => null,
+            'retained_audio_path' => $retainedAudioPath,
             'duration_seconds' => $durationSeconds,
             'transcript' => null,
             'detected_language' => null,
@@ -400,6 +422,40 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         }
 
         return null;
+    }
+
+    /**
+     * Ask for a transcript of a recording that was downloaded without one.
+     *
+     * The whole operation is one conditional UPDATE, and its affected-row count is the answer: the row
+     * moves out of NOT_REQUESTED exactly once, so a second press — a double click, a resubmitted form, a
+     * retried request — changes nothing and says so. The same shape as the recording claim beside it and
+     * as the AI-audio queue's.
+     *
+     * **The provider is chosen here, not at download.** A recording acquired a week ago is transcribed by
+     * whatever this server is set to today, which is the only reading that can be right: the setting at
+     * download time was about a transcript nobody had asked for.
+     *
+     * @return bool whether this call is the one that requested it
+     */
+    public function requestTranscription(int $id, TranscriptionProvider $provider): bool
+    {
+        return 1 === $this->connection->createCommand()->update(
+            self::TABLE,
+            [
+                'status' => JobStatus::QUEUED->value,
+                'processing_stage' => ProcessingStage::QUEUED->value,
+                'transcription_provider' => $provider->value,
+            ],
+            ['id' => $id, 'status' => JobStatus::NOT_REQUESTED->value],
+        )->execute();
+    }
+
+    public function recordWorkspaceCopy(int $id, string $storedName): void
+    {
+        $this->connection->createCommand()
+            ->update(self::TABLE, ['stored_audio_path' => $storedName], ['id' => $id])
+            ->execute();
     }
 
     /**

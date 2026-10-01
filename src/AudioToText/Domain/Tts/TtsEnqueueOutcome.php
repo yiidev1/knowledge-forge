@@ -57,8 +57,8 @@ enum TtsEnqueueOutcome
     public function messageFor(string $subject): string
     {
         return match ($this) {
-            self::Queued => $subject . ' has been queued. It will be generated shortly.',
-            self::AlreadyRunning => $subject . ' is already being generated. Nothing was queued twice.',
+            self::Queued => $subject . ' has been requested. It will be generated shortly.',
+            self::AlreadyRunning => $subject . ' is already being generated. It was not requested twice.',
             self::AlreadyCurrent => $subject . ' is already up to date for the current transcript.',
             self::NotFound => 'That recording is no longer available.',
         };

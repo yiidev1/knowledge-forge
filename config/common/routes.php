@@ -22,6 +22,7 @@ use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\CallHistory as Order58CallHistory;
+use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
@@ -312,6 +313,21 @@ return [
             Route::post('/admin/order58/calls/retry')
                 ->action(Order58Calls\RetryAction::class)
                 ->name('order58.calls.retry'),
+
+            // Order58 Call Recordings. The same two steps as the page above — load a day's calls, pick
+            // some — writing to the same tables and drained by the same worker. The one difference is
+            // the batch's mode: these recordings are downloaded and nothing is transcribed, so the audio
+            // becomes playable on the store's Audio to Text page and each channel offers its own
+            // Transcribe action to somebody who has heard it.
+            //
+            // Its own slice rather than a flag on the one above, because the calls page's behaviour must
+            // not move: every row it writes still takes the default mode.
+            Route::get('/admin/order58/call-recordings')
+                ->action(Order58CallRecordings\Action::class)
+                ->name('order58.call-recordings'),
+            Route::post('/admin/order58/call-recordings/download')
+                ->action(Order58CallRecordings\DownloadAction::class)
+                ->name('order58.call-recordings.download'),
             // The same import history the calls page shows, across every store and paged. Nested under
             // /calls because it reads that feature's rows; a GET, so it cannot collide with the two
             // POSTs above.
@@ -452,6 +468,12 @@ return [
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/status')
                 ->action(AudioToText\Job\Status\Action::class)
                 ->name(AudioToTextRoute::JOB_STATUS),
+            // Asks for the transcript of one recording that was downloaded without one. A POST because
+            // it changes state, and it changes exactly one row — a call's three channels are three
+            // separate recordings and each is asked for on its own.
+            Route::post('/audio-to-text/job/{publicId:[0-9a-f]{32}}/transcribe')
+                ->action(AudioToText\Job\Transcribe\Action::class)
+                ->name(AudioToTextRoute::JOB_TRANSCRIBE),
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}/download')
                 ->action(AudioToText\Job\Download\Action::class)
                 ->name(AudioToTextRoute::JOB_DOWNLOAD),

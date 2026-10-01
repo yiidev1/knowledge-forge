@@ -21,6 +21,15 @@ use function count;
  */
 enum ConversationStatus: string
 {
+    /**
+     * Every recording in this upload is stored and none has been asked to transcribe.
+     *
+     * Not a stage on the way to anything: it is where a download-only import stops and waits for a
+     * person. Mixed with any other state it loses — an upload where one channel is being transcribed is
+     * doing something, and saying otherwise would hide it.
+     */
+    case NOT_REQUESTED = 'NOT_REQUESTED';
+
     case QUEUED = 'QUEUED';
     case PROCESSING = 'PROCESSING';
     case COMPLETED = 'COMPLETED';
@@ -48,6 +57,13 @@ enum ConversationStatus: string
             return self::QUEUED;
         }
 
+        // Asked first, and only when it is true of every child. A recording nobody has asked about is
+        // not waiting for a worker, so reporting it alongside work that is would be two different facts
+        // under one word.
+        if (self::countOf($children, JobStatus::NOT_REQUESTED) === count($children)) {
+            return self::NOT_REQUESTED;
+        }
+
         $completed = self::countOf($children, JobStatus::COMPLETED);
         $failed = self::countOf($children, JobStatus::FAILED);
         $terminal = $completed + $failed;
@@ -64,14 +80,21 @@ enum ConversationStatus: string
         // finished, which is what an administrator means by "processing" for the upload as a whole.
         $processing = self::countOf($children, JobStatus::PROCESSING);
 
-        return $processing > 0 || $terminal > 0 ? self::PROCESSING : self::QUEUED;
+        if ($processing > 0 || $terminal > 0) {
+            return self::PROCESSING;
+        }
+
+        // Nothing running, nothing finished, and not every child is un-asked — so at least one has been
+        // requested and is waiting. That is what the upload as a whole is doing.
+        return self::QUEUED;
     }
 
     public function label(): string
     {
         return match ($this) {
-            self::QUEUED => 'Queued',
-            self::PROCESSING => 'Processing',
+            self::NOT_REQUESTED => 'Ready for transcription',
+            self::QUEUED => 'Transcription requested',
+            self::PROCESSING => 'Transcribing',
             self::COMPLETED => 'Completed',
             self::PARTIALLY_COMPLETED => 'Partially completed',
             self::FAILED => 'Failed',
@@ -88,6 +111,9 @@ enum ConversationStatus: string
     public function badgeModifier(): string
     {
         return match ($this) {
+            // The same modifier the queued state uses: both are "nothing has happened yet" to look at,
+            // and inventing a sixth badge colour for a state that is waiting on a person adds nothing.
+            self::NOT_REQUESTED => 'queued',
             self::QUEUED => 'queued',
             self::PROCESSING => 'processing',
             self::COMPLETED => 'completed',

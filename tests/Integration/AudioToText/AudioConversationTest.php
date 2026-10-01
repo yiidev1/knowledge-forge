@@ -330,6 +330,108 @@ final class AudioConversationTest extends Unit
         self::assertSame('22449119', $this->conversations->callSessionFor($id));
     }
 
+    /**
+     * **The claim this whole feature rests on: downloading does not transcribe.**
+     *
+     * A recording acquired without a transcript being asked for exists, is playable, and is invisible to
+     * every part of the transcription machinery — not by a flag somebody has to remember to check, but
+     * because `NOT_REQUESTED` is in neither `activeValues()` nor `terminalValues()`, which is what the
+     * claim query, the queue limit and the retention purge are all built from.
+     */
+    public function testADownloadOnlyRecordingIsNeverClaimedAndCostsNoQueueSlot(): void
+    {
+        $before = $this->jobs->countActive();
+
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('22613839.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Mixed,
+            '16655261',
+            '22613839',
+            '2026-10-01 01:43:39',
+            // The whole point.
+            transcribe: false,
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+        self::assertNotNull($conversation);
+
+        $job = $this->jobs->findByPublicId($conversation->children[0]->publicId);
+        self::assertNotNull($job);
+
+        self::assertSame(JobStatus::NOT_REQUESTED, $job->status, 'Not a state any worker looks for.');
+        self::assertSame('Ready for transcription', $job->status->label());
+
+        // Playable at once: the bytes are in permanent storage, not in a workspace the worker owns.
+        self::assertNotNull($job->retainedAudioPath, 'Retained, so the player can serve it today.');
+        self::assertNull($job->storedAudioPath, 'And no workspace copy to send a worker looking for.');
+
+        // Invisible to the queue, by construction rather than by a WHERE clause somebody added.
+        self::assertSame($before, $this->jobs->countActive(), 'It occupies no queue slot.');
+        self::assertNull($this->jobs->queuePositionOf($job->id), 'It is not waiting in line.');
+        self::assertNotContains($job->publicId, $this->jobs->activePublicIds());
+
+        // And the call time came across verbatim — not parsed, not given a timezone it never carried.
+        self::assertSame('2026-10-01 01:43:39', $conversation->callTimeRaw);
+        self::assertSame('22613839', $conversation->callSessionId);
+    }
+
+    /**
+     * Asking turns it into ordinary queued work, once, however many times the button is pressed.
+     *
+     * The provider is captured at this moment and not at download — a recording acquired while the
+     * server said Whisper is transcribed by whatever it says when somebody actually wants the text.
+     */
+    public function testAskingForATranscriptQueuesItExactlyOnce(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('22613709.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Mixed,
+            null,
+            '22613709',
+            null,
+            transcribe: false,
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+        self::assertNotNull($conversation);
+        $id = (int) $this->connection->createCommand(
+            'SELECT id FROM {{%audio_transcription_jobs}} WHERE public_id = :p',
+            ['p' => $conversation->children[0]->publicId],
+        )->queryScalar();
+
+        self::assertTrue(
+            $this->jobs->requestTranscription($id, TranscriptionProvider::Deepgram),
+            'The first press is the one that asks.',
+        );
+        self::assertFalse(
+            $this->jobs->requestTranscription($id, TranscriptionProvider::Whisper),
+            'A second press changes nothing — and cannot change the engine out from under the first.',
+        );
+
+        $job = $this->jobs->findById($id);
+        self::assertNotNull($job);
+        self::assertSame(JobStatus::QUEUED, $job->status);
+        self::assertSame('Transcription requested', $job->status->label());
+        self::assertSame(
+            TranscriptionProvider::Deepgram,
+            $job->transcriptionProvider(),
+            'Chosen when it was asked for, not when it was downloaded.',
+        );
+
+        // Now it is ordinary work, and the retained copy is still there for the worker to restore from.
+        self::assertNotNull($job->retainedAudioPath);
+    }
+
     /** An upload that named neither: both stay null, and the conversation reads as it always did. */
     public function testAnUploadThatNamesNeitherStoresNull(): void
     {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
 use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
@@ -87,17 +88,29 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         string $publicId,
         int $uploadedByAdminId,
         string $originalFilename,
-        string $storedAudioPath,
+        ?string $storedAudioPath,
         ?float $durationSeconds,
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
         ?TranscriptionProvider $transcriptionProvider = null,
+        JobStatus $status = JobStatus::QUEUED,
+        ?string $retainedAudioPath = null,
     ): string {
         throw new RuntimeException('Not used by these tests.');
     }
 
     public function claimNextQueued(int $candidates = 10): ?TranscriptionJob
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function requestTranscription(int $id, TranscriptionProvider $provider): bool
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function recordWorkspaceCopy(int $id, string $storedName): void
     {
         throw new RuntimeException('Not used by these tests.');
     }

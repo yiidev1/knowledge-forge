@@ -8,16 +8,24 @@ use function floor;
 use function sprintf;
 
 /**
- * What the admin page says about the worker.
+ * What the admin page says about whether transcribing is happening.
  *
- * The rule this class exists to enforce: **the word "Running" appears only when a worker process is
- * genuinely alive.** Under a systemd timer or cron there is no process between ticks, and calling that
- * "Running" would be a plain untruth that also hides a real failure — a timer that has actually stopped
- * looks identical to one that is merely idle if liveness is all you track. So a tick deployment between
- * ticks reads "Scheduled — last ran 34 seconds ago", and only says "Not running" once ticks themselves
- * have stopped.
+ * The rule this class exists to enforce: **"is running" appears only when a process is genuinely alive.**
+ * Under a systemd timer or cron there is no process between ticks, and calling that "running" would be a
+ * plain untruth that also hides a real failure — a timer that has actually stopped looks identical to one
+ * that is merely idle if liveness is all you track. So a tick deployment between ticks reads "scheduled —
+ * last ran 34 seconds ago", and only says "is not running" once ticks themselves have stopped.
  *
- * Nothing here exposes a PID, a path, a command line or a job id.
+ * ## Why none of these sentences name the worker
+ *
+ * They used to: "Audio worker: Running", "Queued jobs will start as soon as the server has capacity." Each
+ * was accurate about this application's internals and silent about the only question the reader has, which
+ * is whether their recordings are moving. An administrator cannot see a worker, start one, or join a queue;
+ * what they can do is wait or go and investigate, and that decision is made from *whether transcribing is
+ * running*, which is what these now say. The mechanism keeps its own names in {@see WorkerProcessState},
+ * the commands, and the logs — this class is the one place the two vocabularies meet.
+ *
+ * Nothing here exposes a PID, a path, a command line or an internal row id.
  */
 final readonly class WorkerStatusView
 {
@@ -49,7 +57,7 @@ final readonly class WorkerStatusView
         return $this->process !== WorkerProcessState::ABSENT;
     }
 
-    /** Whether queued work can be expected to move without operator intervention. */
+    /** Whether waiting work can be expected to move without operator intervention. */
     public function isHealthy(): bool
     {
         if ($this->process === WorkerProcessState::BUSY || $this->process === WorkerProcessState::IDLE) {
@@ -62,31 +70,31 @@ final readonly class WorkerStatusView
     public function label(): string
     {
         if (!$this->everRan) {
-            return 'Audio worker: Unknown';
+            return 'Transcribing: unknown';
         }
 
         return match ($this->process) {
             WorkerProcessState::BUSY => $this->mode === WorkerMode::ONCE
-                ? 'Audio worker: Processing a job'
-                : 'Audio worker: Running (processing a job)',
-            WorkerProcessState::IDLE => 'Audio worker: Running',
-            WorkerProcessState::DEFERRED => 'Audio worker: Deferring new jobs while the server is busy',
+                ? 'Transcribing a recording'
+                : 'Transcribing is running (a recording is in progress)',
+            WorkerProcessState::IDLE => 'Transcribing is running',
+            WorkerProcessState::DEFERRED => 'Paused while the server is busy',
             WorkerProcessState::ABSENT => $this->absentLabel(),
         };
     }
 
     /**
-     * The sentence under the label, or null when the state needs no elaboration. This is where a stalled
-     * queue explains itself instead of looking like a dead application.
+     * The sentence under the label, or null when the state needs no elaboration. This is where a stall
+     * explains itself instead of looking like a dead application.
      */
     public function detail(): ?string
     {
         if (!$this->everRan) {
-            return 'No transcription worker has run yet on this server.';
+            return 'Transcribing has not run yet on this server.';
         }
 
         if ($this->process === WorkerProcessState::DEFERRED) {
-            return 'Queued jobs will start as soon as the server has capacity.';
+            return 'Waiting recordings will start when the server has capacity.';
         }
 
         if ($this->process !== WorkerProcessState::ABSENT) {
@@ -94,17 +102,17 @@ final readonly class WorkerStatusView
         }
 
         return $this->mode === WorkerMode::ONCE && $this->scheduler === WorkerSchedulerState::TICKING
-            ? 'The schedule is active. A queued job starts on the next tick.'
-            : 'Queued jobs will remain pending until the worker starts.';
+            ? 'The schedule is active. A waiting recording starts on the next run.'
+            : 'Waiting recordings will not start until transcribing is running.';
     }
 
     private function absentLabel(): string
     {
         if ($this->mode === WorkerMode::ONCE && $this->scheduler === WorkerSchedulerState::TICKING) {
-            return 'Audio worker: Scheduled — last ran ' . self::humanize($this->secondsSinceLastTick) . ' ago';
+            return 'Transcribing is scheduled — last ran ' . self::humanize($this->secondsSinceLastTick) . ' ago';
         }
 
-        return 'Audio worker: Not running';
+        return 'Transcribing is not running';
     }
 
     private static function humanize(?int $seconds): string

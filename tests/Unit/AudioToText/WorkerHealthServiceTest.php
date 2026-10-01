@@ -33,7 +33,7 @@ final class WorkerHealthServiceTest extends TestCase
         $status = $this->serviceWith(null)->status();
 
         $this->assertFalse($status->everRan);
-        $this->assertSame('Audio worker: Unknown', $status->label());
+        $this->assertSame('Transcribing: unknown', $status->label());
         $this->assertFalse($status->isHealthy());
     }
 
@@ -41,7 +41,7 @@ final class WorkerHealthServiceTest extends TestCase
     {
         $status = $this->statusFor(WorkerProcessState::BUSY, WorkerMode::CONTINUOUS, beatAgo: 2, tickAgo: 2);
 
-        $this->assertSame('Audio worker: Running (processing a job)', $status->label());
+        $this->assertSame('Transcribing is running (a recording is in progress)', $status->label());
         $this->assertTrue($status->isProcessAlive());
         $this->assertTrue($status->isHealthy());
     }
@@ -50,7 +50,7 @@ final class WorkerHealthServiceTest extends TestCase
     {
         $status = $this->statusFor(WorkerProcessState::IDLE, WorkerMode::CONTINUOUS, beatAgo: 3, tickAgo: 3);
 
-        $this->assertSame('Audio worker: Running', $status->label());
+        $this->assertSame('Transcribing is running', $status->label());
         $this->assertTrue($status->isHealthy());
     }
 
@@ -58,18 +58,18 @@ final class WorkerHealthServiceTest extends TestCase
     {
         $status = $this->statusFor(WorkerProcessState::IDLE, WorkerMode::CONTINUOUS, beatAgo: 600, tickAgo: 600);
 
-        $this->assertSame('Audio worker: Not running', $status->label());
+        $this->assertSame('Transcribing is not running', $status->label());
         $this->assertFalse($status->isProcessAlive());
         $this->assertFalse($status->isHealthy());
         $this->assertSame(
-            'Queued jobs will remain pending until the worker starts.',
+            'Waiting recordings will not start until transcribing is running.',
             $status->detail(),
         );
     }
 
     /**
      * The case the plan was corrected for: a timer between ticks. No process exists, but the schedule is
-     * alive, and the page must say so rather than claiming the worker is running.
+     * alive, and the page must say so rather than claiming transcribing is running.
      */
     public function testATimerBetweenTicksReadsScheduledAndNeverRunning(): void
     {
@@ -77,9 +77,9 @@ final class WorkerHealthServiceTest extends TestCase
 
         $this->assertFalse($status->isProcessAlive());
         $this->assertSame(WorkerSchedulerState::TICKING, $status->scheduler);
-        $this->assertSame('Audio worker: Scheduled — last ran 34 seconds ago', $status->label());
-        $this->assertStringNotContainsString('Running', $status->label());
-        // Still healthy: a queued job starts on the next tick without anyone intervening.
+        $this->assertSame('Transcribing is scheduled — last ran 34 seconds ago', $status->label());
+        $this->assertStringNotContainsString('is running', $status->label());
+        // Still healthy: a waiting recording starts on the next run without anyone intervening.
         $this->assertTrue($status->isHealthy());
     }
 
@@ -87,7 +87,7 @@ final class WorkerHealthServiceTest extends TestCase
     {
         $status = $this->statusFor(WorkerProcessState::IDLE, WorkerMode::ONCE, beatAgo: 130, tickAgo: 130);
 
-        $this->assertSame('Audio worker: Scheduled — last ran 2 minutes ago', $status->label());
+        $this->assertSame('Transcribing is scheduled — last ran 2 minutes ago', $status->label());
     }
 
     /**
@@ -98,28 +98,31 @@ final class WorkerHealthServiceTest extends TestCase
         $status = $this->statusFor(WorkerProcessState::IDLE, WorkerMode::ONCE, beatAgo: 4000, tickAgo: 4000);
 
         $this->assertSame(WorkerSchedulerState::STALLED, $status->scheduler);
-        $this->assertSame('Audio worker: Not running', $status->label());
+        $this->assertSame('Transcribing is not running', $status->label());
         $this->assertFalse($status->isHealthy());
     }
 
-    /** A tick actively processing a job says so, without claiming to be a long-running worker. */
+    /** A tick actively transcribing says so, without claiming to be something long-running. */
     public function testATimerMidJobSaysProcessing(): void
     {
         $status = $this->statusFor(WorkerProcessState::BUSY, WorkerMode::ONCE, beatAgo: 1, tickAgo: 1);
 
-        $this->assertSame('Audio worker: Processing a job', $status->label());
+        $this->assertSame('Transcribing a recording', $status->label());
     }
 
     /**
-     * A stalled queue has to explain itself. A deferral that rendered as "Running" would leave an
-     * administrator watching a queue that never moves with no idea why.
+     * A stall has to explain itself. A deferral that rendered as "is running" would leave an
+     * administrator watching recordings that never move with no idea why.
      */
     public function testADeferringWorkerSaysSo(): void
     {
         $status = $this->statusFor(WorkerProcessState::DEFERRED, WorkerMode::CONTINUOUS, beatAgo: 2, tickAgo: 2);
 
-        $this->assertSame('Audio worker: Deferring new jobs while the server is busy', $status->label());
-        $this->assertSame('Queued jobs will start as soon as the server has capacity.', $status->detail());
+        $this->assertSame('Paused while the server is busy', $status->label());
+        $this->assertSame(
+            'Waiting recordings will start when the server has capacity.',
+            $status->detail(),
+        );
     }
 
     /**

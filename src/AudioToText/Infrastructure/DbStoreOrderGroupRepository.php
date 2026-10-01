@@ -134,6 +134,7 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
                 'recording_type' => 'c.recording_type',
                 'order_id' => 'c.order_id',
                 'created_at' => 'c.created_at',
+                'call_time_raw' => 'c.call_time_raw',
                 'group_key' => new Expression(GroupKey::sqlExpression('c')),
             ])
             ->from(['c' => self::CONVERSATIONS])
@@ -237,11 +238,19 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
         $legacySeparate = [];
         $orderId = null;
         $latest = null;
+        $callTimeRaw = null;
 
         foreach ($conversationRows as $row) {
             $conversationId = (int) $row['id'];
             $mode = ConversationMode::fromStorage((string) $row['mode']) ?? ConversationMode::Common;
             $createdAt = DbDateTime::parse((string) $row['created_at']);
+
+            // The call's own time, from whichever conversation of this order records one. They are all
+            // recordings of the same call, so the first non-null answer is the answer — and a hand-made
+            // upload sitting alongside imported ones has none, which must not blank it.
+            $callTimeRaw ??= is_string($row['call_time_raw'] ?? null) && $row['call_time_raw'] !== ''
+                ? (string) $row['call_time_raw']
+                : null;
             $orderId ??= $this->nullableString($row['order_id'] ?? null);
             $latest = $latest === null || $createdAt > $latest ? $createdAt : $latest;
 
@@ -268,6 +277,7 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             $this->primary($slots['CALLER']),
             $this->primary($slots['CALLEE']),
             $legacySeparate,
+            $callTimeRaw,
         );
     }
 

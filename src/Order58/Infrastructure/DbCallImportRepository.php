@@ -8,6 +8,7 @@ use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Domain\CallImportHistoryPage;
 use App\Order58\Domain\CallImportHistoryRow;
 use App\Order58\Domain\CallImportItem;
+use App\Order58\Domain\CallImportMode;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\Order58ImportStatus;
 use App\Shared\Infrastructure\Db\DbDateTime;
@@ -59,10 +60,18 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
         bool $generateAiAudio,
         string $recordingCompany,
         DateTimeImmutable $now,
+        /**
+         * What this batch was asked for.
+         *
+         * Defaulted, so the calls page — which does not pass it — keeps writing exactly the row it always
+         * wrote. Only the recordings page asks for anything else.
+         */
+        CallImportMode $mode = CallImportMode::DownloadAndTranscribe,
     ): int {
         $this->connection->createCommand()->insert(self::BATCHES, [
             'store_source_id' => $storeSourceId,
             'triggered_by' => $triggeredBy,
+            'import_mode' => $mode->value,
             'requested_by_admin_id' => $requestedByAdminId,
             'transcription_provider' => $provider,
             'generate_ai_audio' => $generateAiAudio ? 1 : 0,
@@ -501,6 +510,7 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
                 'provider' => 'b.transcription_provider',
                 'generate_ai_audio' => 'b.generate_ai_audio',
                 'requested_by_admin_id' => 'b.requested_by_admin_id',
+                'import_mode' => 'b.import_mode',
             ])
             ->from(['i' => self::IMPORTS])
             ->innerJoin(['b' => self::BATCHES], 'b.id = i.batch_id');
@@ -533,6 +543,7 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
             (string) $row['provider'],
             (int) $row['generate_ai_audio'] === 1,
             (int) $row['requested_by_admin_id'],
+            CallImportMode::fromStorage($this->nullableString($row['import_mode'] ?? null)),
         );
     }
 

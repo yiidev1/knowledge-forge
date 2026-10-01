@@ -88,7 +88,7 @@ final class AudioToTextConversationCest
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/job/' . $queued . '/conversation');
         $I->seeCurrentUrlEquals('/audio-to-text/job/' . $queued);
-        $I->see('Queued');
+        $I->see('Transcription requested');
     }
 
     public function aCompletedJobWithNoSpeakerSegmentsAlsoRedirects(WebTester $I): void

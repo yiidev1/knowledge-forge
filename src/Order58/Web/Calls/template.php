@@ -112,7 +112,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     <?php
     // Up here rather than beside the history card below, because it leaves this page rather than
     // changing it — the same reason Store audio puts its cross-store link in the header.
-    ?>
+?>
     <div class="page-header__actions">
         <a class="btn btn--secondary" href="<?= Html::encode($allHistoryUrl) ?>">View Sync History</a>
     </div>
@@ -131,9 +131,9 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
     <h2 class="card__title">Find today's calls</h2>
 
     <?php
-    // A GET form: choosing a store and loading its calls is a readable, repeatable address, and it is
-    // what keeps the provider from being contacted by a bare page load. `load=1` is the explicit ask.
-    ?>
+// A GET form: choosing a store and loading its calls is a readable, repeatable address, and it is
+// what keeps the provider from being contacted by a bare page load. `load=1` is the explicit ask.
+?>
     <form method="get" action="<?= Html::encode($pageUrl) ?>" class="store-picker" role="group">
         <input type="hidden" name="load" value="1">
         <?php if ($source !== ''): ?>
@@ -150,10 +150,10 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
             <?php endforeach; ?>
         </select>
         <?php
-        // Defaults to today and never offers a later day: the provider cannot have recorded a call that
-        // has not happened. Leaving it alone and pressing the button is exactly the request this page
-        // made before the field existed.
-        ?>
+    // Defaults to today and never offers a later day: the provider cannot have recorded a call that
+    // has not happened. Leaving it alone and pressing the button is exactly the request this page
+    // made before the field existed.
+?>
         <label class="field__label store-picker__label" for="o58-date">Date</label>
         <input class="field__control store-picker__date" type="date" id="o58-date" name="date"
             value="<?= Html::encode($businessDate) ?>" max="<?= Html::encode($today) ?>">
@@ -175,7 +175,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
 
         <?php if ($usingFixtures): ?>
             <?php // Never left implicit: a page showing invented calls must say so in plain words.
-            ?>
+    ?>
             <div class="alert alert--warning">
                 <strong>Local fixtures.</strong> These calls are generated in this repository, not
                 fetched from the recording service. Development and test only.
@@ -232,8 +232,8 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                                     <td><?= Html::encode($call->callTime) ?></td>
                                     <td>
                                         <?= $call->orderId === ''
-                                            ? '<span class="util-muted">—</span>'
-                                            : Html::encode($call->orderId) ?>
+                                    ? '<span class="util-muted">—</span>'
+                                    : Html::encode($call->orderId) ?>
                                     </td>
                                     <td><?= $callState($statuses[$call->callSessionId] ?? null) ?></td>
                                 </tr>
@@ -261,9 +261,9 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 </div>
 
                 <?php
-                // Unticked every render, never remembered: it spends money, and an unticked checkbox
-                // posts nothing at all, which is what makes "off" the reliable default.
-                ?>
+        // Unticked every render, never remembered: it spends money, and an unticked checkbox
+        // posts nothing at all, which is what makes "off" the reliable default.
+?>
                 <div class="field">
                     <label class="a2t-checkbox" for="o58-ai-audio">
                         <input type="checkbox" id="o58-ai-audio" name="generate_ai_audio" value="1">
@@ -280,9 +280,9 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                 </button>
 
                 <?php
-                // All three channels are attempted for every call. The administrator chooses calls, not
-                // channels: which of the three a merchant actually produces is the provider's answer.
-                ?>
+// All three channels are attempted for every call. The administrator chooses calls, not
+// channels: which of the three a merchant actually produces is the provider's answer.
+?>
                 <p class="field__hint">
                     Each call fetches its mixed, caller and callee recordings. A merchant without
                     separated channels reports those as <em>Not available</em>, which is normal.
@@ -357,7 +357,7 @@ $channelCell = static function (CallImportHistoryRow $row, RecordingChannel $cha
                                 // One button per failed channel. Offered only where the repository would
                                 // actually act — a missing channel and an oversized recording are settled
                                 // facts, and a button that did nothing would be worse than none.
-                                ?>
+                        ?>
                                 <?php foreach ($channels as $channel): ?>
                                     <?php $item = $row->channel($channel); ?>
                                     <?php if ($item !== null && $item->status->isRetryable()): ?>

@@ -228,7 +228,9 @@ final class AudioToTextCest
         Assert::assertNull($row['transcript'], 'The web request must not transcribe anything.');
         Assert::assertNotNull($row['duration_seconds'], 'ffprobe runs during the upload request.');
 
-        $I->see('Queued');
+        // The stored value is still QUEUED, asserted above; what the page says is the other vocabulary.
+        $I->see('Transcription requested');
+        $I->dontSee('Queued');
         $I->see('Stage:');
     }
 
@@ -283,16 +285,27 @@ final class AudioToTextCest
         Assert::assertSame(2, $this->jobCount());
     }
 
-    /** A waiting job tells the uploader where it is in line, without exposing any database id. */
-    public function aQueuedJobShowsItsQueuePosition(WebTester $I): void
+    /**
+     * A waiting recording says it is waiting, and nothing about the line it is waiting in.
+     *
+     * This page used to count down a queue position. The number was accurate and useless: the reader
+     * cannot see the queue, join it, leave it or move up it, so "2" answered a question nobody had while
+     * naming machinery that is none of their business. It was removed rather than reworded, and this is
+     * what keeps it removed — the wording is the easiest thing in the application to put back by
+     * accident.
+     */
+    public function aWaitingJobDoesNotExposeItsPlaceInLine(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
         $this->upload($I);
         $second = $this->upload($I);
 
         $I->amOnPage('/audio-to-text/job/' . $second);
-        $I->see('Queue position');
-        $I->see('2');
+
+        $I->see('Transcription requested');
+        $I->dontSee('Queue position');
+        $I->dontSee('Queued');
+        $I->dontSee('worker');
     }
 
     /** Two administrators can both queue work at the same time. */

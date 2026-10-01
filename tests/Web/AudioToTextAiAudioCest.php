@@ -522,7 +522,7 @@ final class AudioToTextAiAudioCest
         $I->submitForm('form[action*="ai-audio/generate"]', []);
 
         $I->seeResponseCodeIs(200);
-        $I->see('has been queued');
+        $I->see('has been requested');
         Assert::assertSame(1, $this->renditionCount(), 'One press, one rendition.');
         Assert::assertSame('QUEUED', $this->renditionStatus(), 'Nothing is generated inside the request.');
     }
@@ -543,7 +543,7 @@ final class AudioToTextAiAudioCest
 
         $I->amOnPage($this->pageUrl());
 
-        $I->see('Queued');
+        $I->see('Requested');
         $I->dontSeeElement('form[action*="ai-audio/generate"]');
         $I->see('A generation is already under way.');
         Assert::assertSame(1, $this->renditionCount());
@@ -581,7 +581,7 @@ final class AudioToTextAiAudioCest
         // two drifted. Escaped because PHP's json_encode escapes the slash in "Mix / Common".
         $mixed = str_replace('/', '\/', (string) RecordingTypeLabels::forStorageValue('MIXED'));
         $I->seeInSource('"recording":"' . $mixed . '"');
-        $I->seeInSource($mixed . ' text-to-audio has been queued');
+        $I->seeInSource($mixed . ' text-to-audio has been requested');
         $I->seeInSource('"outputType":"MIXED"');
 
         // It really enqueued, exactly once, and rendered nothing.
@@ -598,7 +598,7 @@ final class AudioToTextAiAudioCest
         $I->submitForm('form[action*="ai-audio/generate"]', []);
 
         $I->seeCurrentUrlEquals($this->pageUrl());
-        $I->see('has been queued');
+        $I->see('has been requested');
         $I->dontSeeInSource('"success":true');
         Assert::assertSame(1, $this->renditionCount());
     }

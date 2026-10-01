@@ -344,12 +344,20 @@ final class ManualProcessingPanelTest extends TestCase
      */
     public function testDetailsShowsTheSameCardForAProcessingRecording(): void
     {
-        $open = self::functionBody('function openProgress(');
+        // The body moved into showProgressOn() when asking for a transcript became a second way in: that
+        // caller has no button carrying the url, only a server response that named it. `openProgress` is
+        // now the thin button adapter, and this is still the one place the card is opened.
+        $open = self::functionBody('function showProgressOn(');
 
         self::assertStringContainsString('showProcessing(reviewDialog, true);', $open);
         self::assertStringContainsString('renderProcessing(reviewDialog, progressModel(', $open);
         self::assertStringContainsString('watchProgress(url);', $open);
         self::assertStringNotContainsString('recallProcessing', $open, 'The server is asked, not storage.');
+        self::assertStringContainsString(
+            'showProgressOn(',
+            self::functionBody('function openProgress('),
+            'The button adapter must still reach the card.',
+        );
 
         self::assertStringContainsString('processingViewModel(state, {', self::functionBody('function progressModel('));
         self::assertStringContainsString('$slot->isProcessing()', self::storeTemplate());

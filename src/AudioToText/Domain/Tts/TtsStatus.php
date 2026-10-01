@@ -23,10 +23,15 @@ enum TtsStatus: string
     case Ready = 'READY';
     case Failed = 'FAILED';
 
+    /**
+     * What to call this on screen. "Requested" rather than "Queued": the reader asked for a voice and is
+     * being told their request was taken, which is the true and useful half of what the queue means to
+     * them. The queue itself is ours.
+     */
     public function label(): string
     {
         return match ($this) {
-            self::Queued => 'Queued',
+            self::Queued => 'Requested',
             self::Generating => 'Generating',
             self::Ready => 'Ready',
             self::Failed => 'Failed',

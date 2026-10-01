@@ -85,12 +85,17 @@ interface TranscriptionJobRepositoryInterface
         string $publicId,
         int $uploadedByAdminId,
         string $originalFilename,
-        string $storedAudioPath,
+        /** The workspace copy, or null for a recording retained at download without a transcript asked for. */
+        ?string $storedAudioPath,
         ?float $durationSeconds,
         ?DateTimeImmutable $expiresAt,
         ?int $conversationId = null,
         ?SourceRole $sourceRole = null,
         ?TranscriptionProvider $transcriptionProvider = null,
+        /** Where this row starts. Defaulted, so every existing caller is unchanged. */
+        JobStatus $status = JobStatus::QUEUED,
+        /** The permanent copy, when a download already made one. Normally the worker writes it. */
+        ?string $retainedAudioPath = null,
     ): string;
 
     /**
@@ -98,6 +103,25 @@ interface TranscriptionJobRepositoryInterface
      * when every candidate was taken by someone else between the scan and the update.
      */
     public function claimNextQueued(int $candidates = 10): ?TranscriptionJob;
+
+    /**
+     * Ask for a transcript of a recording that was downloaded without one.
+     *
+     * One conditional UPDATE whose affected-row count is the answer, so a second press changes nothing.
+     * The provider is captured at this moment rather than at download — see the implementation.
+     *
+     * @return bool whether this call is the one that requested it
+     */
+    public function requestTranscription(int $id, TranscriptionProvider $provider): bool;
+
+    /**
+     * Note that a workspace copy of a retained recording now exists.
+     *
+     * Written by the worker, immediately after it copies one back, so a run that dies mid-transcription
+     * does not leave the row claiming there is no workspace file while one is sitting on disk. The
+     * orphan sweep and the next attempt both read this column.
+     */
+    public function recordWorkspaceCopy(int $id, string $storedName): void;
 
     /** Best-effort telemetry; a failure here must never fail the job. */
     public function markStage(int $id, ProcessingStage $stage): void;

@@ -283,6 +283,62 @@ final readonly class QueuedAudioStorage
      * Re-validated exactly like {@see pathFor()}: the value has been to the database and back, and a
      * path assembled from a database column is not trustworthy merely because it was when written.
      */
+    /**
+     * Put a retained recording back in the workspace, so the pipeline can read it.
+     *
+     * The mirror of {@see retain()}, and deliberately a **copy** rather than a move. A recording that was
+     * downloaded without being asked to transcribe is playable from the retained copy, and it has to stay
+     * playable while the transcription runs and if the transcription fails. Moving it would make the one
+     * permanent copy disappear for the duration of work that might not succeed.
+     *
+     * The duplicate is short-lived: the worker's own {@see retain()} at the end of a successful run moves
+     * the workspace copy back over the retained one — the same name, the same bytes — and a failed run
+     * leaves the workspace to the orphan sweep. Either way one copy survives and it is the right one.
+     *
+     * Idempotent: a workspace copy that already exists is left alone and its name returned, so a retried
+     * job does not pay for the copy twice.
+     *
+     * @throws AudioTranscriptionException when the retained file is missing or the workspace is unwritable
+     */
+    public function restore(string $publicId, string $retainedName): string
+    {
+        $this->assertPublicId($publicId);
+
+        $source = $this->retainedPathFor($publicId, $retainedName);
+
+        if ($source === null) {
+            throw AudioTranscriptionException::uploadUnreadable(
+                'the retained recording is missing, so there is nothing to transcribe',
+            );
+        }
+
+        $this->prepareBaseDirectories();
+
+        $directory = $this->directoryFor($publicId);
+
+        if (!is_dir($directory) && !@mkdir($directory, 0o700, true) && !is_dir($directory)) {
+            throw AudioTranscriptionException::temporaryDirectoryNotWritable(
+                $directory,
+                'the per-job directory could not be created',
+            );
+        }
+
+        $destination = $directory . '/' . $retainedName;
+
+        if (is_file($destination)) {
+            return $retainedName;
+        }
+
+        if (!@copy($source, $destination)) {
+            throw AudioTranscriptionException::temporaryDirectoryNotWritable(
+                $destination,
+                'the retained recording could not be copied into the workspace',
+            );
+        }
+
+        return $retainedName;
+    }
+
     public function retainedPathFor(string $publicId, ?string $retainedName): ?string
     {
         if ($retainedName === null || preg_match(self::STORED_NAME_PATTERN, $retainedName) !== 1) {

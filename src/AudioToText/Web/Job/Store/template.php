@@ -236,6 +236,12 @@ $fragmentUrl = static fn(string $jobPublicId): string => $urlGenerator->generate
     AudioToTextRoute::JOB_REVIEW_FRAGMENT,
     ['publicId' => $jobPublicId],
 );
+// Where a recording that has never been transcribed is asked about. A POST, and it names exactly one
+// recording: a call's three channels are three separate recordings and each is asked for on its own.
+$transcribeUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
+    AudioToTextRoute::JOB_TRANSCRIBE,
+    ['publicId' => $jobPublicId],
+);
 // The polling endpoint, for a recording that is still being transcribed. The same one the Update
 // dialog follows — there is one status endpoint and every surface that shows progress reads it.
 $statusUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
@@ -309,6 +315,10 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
     // Details button below is not drawn — which used to leave the word "Processing" as the only thing
     // anywhere about it. This opens the same Details dialog straight into its progress card, polling
     // the status endpoint that already exists.
+    if ($slot->isReadyForTranscription()) {
+        $html .= '<span class="a2t-slot__note a2t-slot__note--ready">Ready for transcription</span>';
+    }
+
     if ($slot->isProcessing()) {
         $html .= '<button class="a2t-slot__link" type="button"'
             . ' data-a2t-progress="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
@@ -342,7 +352,9 @@ $slotCell = static function (
     $fullReviewUrl,
     $slotCellInner,
     $appTimeZone,
-    $groupUrl
+    $groupUrl,
+    $statusUrl,
+    $transcribeUrl
 ): string {
     if ($slot === null) {
         // Nothing here yet — so offer to put something here, rather than printing a dash and leaving
@@ -400,6 +412,15 @@ $slotCell = static function (
             . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
+    } elseif ($slot->isReadyForTranscription()) {
+        // Audio and nothing else. No Details, because there is no transcript to show — opening an empty
+        // correction editor would be pretending there is. One action, and it is the only one that makes
+        // sense: ask for the text.
+        $html .= '<span class="a2t-slot__note a2t-slot__note--ready">Ready for transcription</span>'
+            . '<button class="a2t-slot__link a2t-slot__link--go" type="button"'
+            . ' data-a2t-transcribe="' . Html::encode($transcribeUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-status="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Transcribe audio</button>';
     } elseif ($slot->status->value === 'FAILED') {
         $html .= '<span class="a2t-slot__note">Failed</span>';
     } elseif ($slot->status->value !== 'COMPLETED') {
@@ -579,7 +600,21 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 ?>
                                 <span class="util-muted">No order</span>
                             <?php endif; ?>
+                            <?php
+                            // Two different facts that were being shown as one. The call time is the
+                            // provider's own string, printed exactly as sent and with NO zone label —
+                            // it carries none, and appending one would be inventing a claim. The import
+                            // time is this application's own instant, so it gets the business timezone
+                            // every other timestamp on this page is formatted in.
+                    ?>
+                            <?php if ($group->callTimeRaw !== null): ?>
+                                <span class="a2t-order-when">
+                                    <span class="a2t-order-when__key">Call time</span>
+                                    <?= Html::encode($group->callTimeRaw) ?>
+                                </span>
+                            <?php endif; ?>
                             <span class="a2t-order-when">
+                                <span class="a2t-order-when__key"><?= $group->callTimeRaw === null ? 'Added' : 'Downloaded' ?></span>
                                 <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
                             </span>
                         </td>
@@ -636,13 +671,20 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                     Original transcript
                                 </button>
                             <?php endif; ?>
-                            <button class="a2t-slot__link" type="button"
-                                    data-a2t-tts="<?= Html::encode(
-                                        $groupUrl(AudioToTextRoute::STORE_GROUP_TTS_OPTIONS, $group->key),
-                                    ) ?>"
-                                    data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
-                                Generate Text to Audio
-                            </button>
+                            <?php
+                            // Withheld for a row with nothing transcribed. AI audio is a reading of a
+                            // transcript, so offering it where there is none is offering to read
+                            // nothing aloud — the same rule the action above it has always followed.
+                    ?>
+                            <?php if ($group->hasAnyTranscript()): ?>
+                                <button class="a2t-slot__link" type="button"
+                                        data-a2t-tts="<?= Html::encode(
+                                            $groupUrl(AudioToTextRoute::STORE_GROUP_TTS_OPTIONS, $group->key),
+                                        ) ?>"
+                                        data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
+                                    Generate Text to Audio
+                                </button>
+                            <?php endif; ?>
                             <?php
                             // Offered for every row, including one whose recordings cannot be replaced:
                             // the dialog is also where an administrator reads what an order holds and

@@ -137,6 +137,13 @@ final readonly class RecordingImportProcessor
                 // The identity of the call, carried across the seam so the audio side can tell which
                 // recordings belong together. Already in hand — it is what this whole item is keyed on.
                 $item->callSessionId,
+                // And when it happened, verbatim. The store page shows this beside the time the
+                // recording was imported, which are two different facts and were being shown as one.
+                $item->callTimeRaw,
+                // The fork. A download-only batch stops here: the recording is stored and playable, and
+                // nothing is asked of a speech provider. Somebody asks for the text later, per
+                // recording, from the store page — or never.
+                $item->mode->transcribes(),
             );
         } catch (Throwable $e) {
             @unlink($path);

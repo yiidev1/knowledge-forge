@@ -119,17 +119,24 @@ $separation = $job->speakerSeparationStatus;
         </div>
     </dl>
 
-    <?php if ($job->status === JobStatus::QUEUED): ?>
+    <?php
+    // No position, and no mechanism named. A number counting down a line the reader cannot see, join or
+    // leave told them nothing they could act on, and the words around it described this application's
+    // internals rather than their recording.
+?>
+    <?php if ($job->status === JobStatus::NOT_REQUESTED): ?>
         <p>
-            Queued. Your recording is waiting for the transcription worker to pick it up.
-            <?php // Position by queue order, not a database id — nothing internal is exposed.?>
-            <?php if ($queuePosition !== null): ?>
-                <strong>Queue position: <?= $queuePosition ?></strong>
-            <?php endif; ?>
+            Ready for transcription. The recording is stored and can be played. Nothing is being
+            transcribed until you ask for it.
+        </p>
+    <?php elseif ($job->status === JobStatus::QUEUED): ?>
+        <p>
+            Transcription requested. This page updates itself and will show the transcript when it is
+            ready.
         </p>
     <?php elseif ($job->status === JobStatus::PROCESSING): ?>
         <p>
-            Processing. This page updates itself — a recording is transcribed at roughly real time,
+            Transcribing. This page updates itself — a recording is transcribed at roughly real time,
             so a two-minute file takes about two minutes.
         </p>
     <?php elseif ($job->status === JobStatus::FAILED): ?>

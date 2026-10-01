@@ -7,6 +7,7 @@ namespace App\AudioToText\Application;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
@@ -130,6 +131,21 @@ final readonly class TranscriptionQueue
          * it. See {@see \App\AudioToText\Domain\AudioConversation::$callSessionId}.
          */
         ?string $callSessionId = null,
+        /**
+         * When the call happened, as the provider wrote it, or null for an upload with no call behind it.
+         *
+         * Carried verbatim and never parsed — the provider's timezone is undocumented, so interpreting
+         * it would be choosing one. See the column's own migration.
+         */
+        ?string $callTimeRaw = null,
+        /**
+         * Whether a transcript is being asked for, or only the recording stored.
+         *
+         * False puts every job in NOT_REQUESTED and moves the audio straight to retained storage: it is
+         * playable at once and no worker will ever claim it. True is what every existing caller does and
+         * what this has always done.
+         */
+        bool $transcribe = true,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
@@ -153,12 +169,24 @@ final readonly class TranscriptionQueue
                     $this->extensionOf($file->getClientFilename()),
                 );
 
+                // Probed while it is still in the workspace, because that is where ffprobe looks.
+                $duration = $this->assertDurationWithinLimit($publicId);
+
+                // Nobody asked for a transcript, so nothing will come back for this file. Move it to
+                // permanent storage now — `retain()` is a move, so the workspace is left empty — and the
+                // recording is playable from the moment the row exists rather than from the moment a
+                // worker finishes with it.
+                $retainedName = $transcribe ? null : $this->storage->retain($publicId, $storedName);
+
                 $children[] = [
                     'publicId' => $publicId,
                     'role' => $role,
                     'originalFilename' => $this->safeOriginalFilename($file->getClientFilename()),
-                    'storedName' => $storedName,
-                    'duration' => $this->assertDurationWithinLimit($publicId),
+                    // Null once retained: there is no workspace copy, and saying there is would send the
+                    // worker looking for a file that moved. It is restored when somebody asks.
+                    'storedName' => $transcribe ? $storedName : null,
+                    'retainedName' => $retainedName,
+                    'duration' => $duration,
                 ];
             }
 
@@ -172,7 +200,9 @@ final readonly class TranscriptionQueue
                 $generateAiAudio,
                 $recordingType,
                 $orderId,
-                $callSessionId
+                $callSessionId,
+                $callTimeRaw,
+                $transcribe
             ): string {
                 // Parent and children in one transaction: a pair whose second insert failed would
                 // otherwise leave a conversation promising two recordings and holding one.
@@ -186,7 +216,9 @@ final readonly class TranscriptionQueue
                     $generateAiAudio,
                     $recordingType,
                     $orderId,
-                    $callSessionId
+                    $callSessionId,
+                    $callTimeRaw,
+                    $transcribe
                 ): string {
                     $conversationId = $this->conversations->create(
                         $conversationPublicId,
@@ -198,6 +230,7 @@ final readonly class TranscriptionQueue
                         $recordingType,
                         $orderId,
                         $callSessionId,
+                        $callTimeRaw,
                     );
 
                     foreach ($children as $child) {
@@ -214,6 +247,11 @@ final readonly class TranscriptionQueue
                             // is one call recorded twice; transcribing its two halves with different
                             // engines would make the customer and agent sides incomparable for no gain.
                             $provider,
+                            // NOT_REQUESTED is outside both activeValues() and terminalValues(), so this
+                            // row is claimed by nothing, counts against no limit and is purged by
+                            // nothing. See the enum.
+                            $transcribe ? JobStatus::QUEUED : JobStatus::NOT_REQUESTED,
+                            $child['retainedName'],
                         );
                     }
 

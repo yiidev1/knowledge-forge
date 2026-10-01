@@ -29,7 +29,7 @@ enum ProcessingStage: string
     public function label(): string
     {
         return match ($this) {
-            self::QUEUED => 'Waiting for the worker',
+            self::QUEUED => 'Waiting to start',
             self::CLAIMED => 'Starting',
             self::CONVERTING => 'Converting audio',
             self::TRANSCRIBING => 'Transcribing audio',

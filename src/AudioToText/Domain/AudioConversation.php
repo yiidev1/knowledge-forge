@@ -74,6 +74,19 @@ final readonly class AudioConversation
          * a normal recording.
          */
         public ?string $callSessionId = null,
+        /**
+         * When the call happened, as the provider wrote it, or null when nothing recorded that.
+         *
+         * **A string, deliberately.** The provider does not document the timezone of this value, so
+         * parsing it into an instant would mean choosing one — and choosing wrong makes every call time
+         * silently hours out, which looks like data rather than a bug. It is stored as sent and printed
+         * as sent, with no zone label appended to a value that carries none.
+         *
+         * Null for every upload made by hand, which has no call behind it, and for every row that
+         * predates the column. Those show their import time alone, which is what every row showed
+         * before today.
+         */
+        public ?string $callTimeRaw = null,
     ) {}
 
     /**

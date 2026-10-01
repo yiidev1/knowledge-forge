@@ -255,7 +255,22 @@ final class AudioTranscriptionWorkerCommand extends Command
         $startedAt = microtime(true);
 
         try {
-            $source = $this->storage->pathFor($job->publicId, $job->storedAudioPath);
+            // A recording downloaded without being asked to transcribe was written straight to retained
+            // storage, so it is playable the moment it arrives and there is no workspace copy. Putting
+            // one back is the first thing this does, and it happens **here** rather than in the request
+            // that pressed the button: a multi-megabyte copy belongs in the worker, beside the work.
+            //
+            // A copy, not a move — see QueuedAudioStorage::restore(). The retained original stays
+            // playable while this runs, and survives if it fails.
+            $storedName = $job->storedAudioPath;
+
+            if ($storedName === null && $job->retainedAudioPath !== null) {
+                $storedName = $this->storage->restore($job->publicId, $job->retainedAudioPath);
+                $this->jobs->recordWorkspaceCopy($job->id, $storedName);
+                $io->writeln('  restored the retained recording into the workspace');
+            }
+
+            $source = $this->storage->pathFor($job->publicId, $storedName);
 
             if ($source === null) {
                 throw AudioTranscriptionException::uploadUnreadable('the queued audio is no longer on disk');
@@ -310,7 +325,7 @@ final class AudioTranscriptionWorkerCommand extends Command
 
             // The recording moves out of the temporary workspace into permanent storage *before* the row
             // is marked complete, so a row can never claim to have retained a file that is not there.
-            $retained = $this->storage->retain($job->publicId, $job->storedAudioPath);
+            $retained = $this->storage->retain($job->publicId, $storedName);
 
             if ($job->sourceRole !== null && $job->sourceRole->isProvided()) {
                 // Known roles: complete with the separation columns left NULL. Nothing was inferred,

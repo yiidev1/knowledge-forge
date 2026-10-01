@@ -57,5 +57,23 @@ interface AudioIngestionPortInterface
         bool $generateAiAudio,
         int $adminUserId,
         ?string $callSessionId = null,
+        /**
+         * When the call happened, as the provider wrote it, or null when the caller knows no call time.
+         *
+         * Recorded verbatim. Nothing on the receiving side parses it, converts it or reads a timezone
+         * into it — the provider does not document one, and inventing one would make every displayed
+         * call time quietly wrong rather than visibly absent.
+         */
+        ?string $callTimeRaw = null,
+        /**
+         * Whether a transcript is being asked for, or only the recording stored.
+         *
+         * **False means stop after storage.** The recording is kept and becomes playable; no transcript
+         * is produced, nothing is sent to a speech provider, and no background work is created for it.
+         * A person asks for the text later, per recording, or never.
+         *
+         * True is the default and is what every caller did before this existed.
+         */
+        bool $transcribe = true,
     ): AudioIngestionOutcome;
 }

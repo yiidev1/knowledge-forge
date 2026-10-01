@@ -49,6 +49,12 @@ interface AudioConversationRepositoryInterface
          * a browser — see {@see AudioConversation::$callSessionId}.
          */
         ?string $callSessionId = null,
+        /**
+         * When the call happened, as the provider wrote it, or null.
+         *
+         * Stored verbatim and never parsed — see {@see AudioConversation::$callTimeRaw}.
+         */
+        ?string $callTimeRaw = null,
     ): int;
 
     public function findByPublicId(string $publicId): ?AudioConversation;

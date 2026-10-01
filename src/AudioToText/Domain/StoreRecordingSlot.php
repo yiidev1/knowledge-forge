@@ -153,6 +153,17 @@ final readonly class StoreRecordingSlot
         return $this->status === JobStatus::QUEUED || $this->status === JobStatus::PROCESSING;
     }
 
+    /**
+     * Whether this recording is waiting for somebody to ask for its text.
+     *
+     * True only for audio acquired without a transcript in mind. It is the one state that offers an
+     * action rather than reporting progress, and the one where no transcript view has anything to show.
+     */
+    public function isReadyForTranscription(): bool
+    {
+        return $this->status === JobStatus::NOT_REQUESTED;
+    }
+
     public function isReviewable(): bool
     {
         return $this->status === JobStatus::COMPLETED && $this->hasSegments;

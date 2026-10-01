@@ -74,6 +74,8 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
         bool $generateAiAudio,
         int $adminUserId,
         ?string $callSessionId = null,
+        ?string $callTimeRaw = null,
+        bool $transcribe = true,
     ): IngestionResult {
         $problems = $this->validator->validate($file);
 
@@ -93,6 +95,8 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
             $recordingType,
             $orderId,
             $callSessionId,
+            $callTimeRaw,
+            $transcribe,
         ));
     }
 
@@ -117,6 +121,8 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
         bool $generateAiAudio,
         int $adminUserId,
         ?string $callSessionId = null,
+        ?string $callTimeRaw = null,
+        bool $transcribe = true,
     ): AudioIngestionOutcome {
         $type = RecordingType::fromStorage($recordingType);
         $engine = TranscriptionProvider::fromStorage($provider);
@@ -154,6 +160,8 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
                 $generateAiAudio,
                 $adminUserId,
                 $callSessionId,
+                $callTimeRaw,
+                $transcribe,
             );
         } catch (AudioTranscriptionException $e) {
             // Most of what this exception covers is about *this server* — no temporary directory, a

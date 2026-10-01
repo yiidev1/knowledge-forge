@@ -114,6 +114,7 @@ final class LinkedConversations implements AudioConversationRepositoryInterface
         ?RecordingType $recordingType = null,
         ?string $orderId = null,
         ?string $callSessionId = null,
+        ?string $callTimeRaw = null,
     ): int {
         throw new RuntimeException('Not used by these tests.');
     }

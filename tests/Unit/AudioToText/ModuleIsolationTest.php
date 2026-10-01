@@ -10,6 +10,9 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
 
+use function array_intersect;
+use function array_unique;
+use function array_values;
 use function dirname;
 use function implode;
 use function strpos;
@@ -20,6 +23,8 @@ use function preg_match_all;
 use function str_contains;
 use function str_replace;
 use function str_starts_with;
+
+use const PREG_SET_ORDER;
 
 /**
  * Audio-to-Text is a bolt-on, and this test is what keeps it one.
@@ -162,37 +167,64 @@ final class ModuleIsolationTest extends TestCase
         }
     }
 
-    /** No Audio-to-Text migration may touch a table it did not create. */
+    /**
+     * No migration that touches this module's tables may touch anybody else's in the same breath.
+     *
+     * ## Why this is discovered rather than listed
+     *
+     * It used to name six migration classes explicitly, and by the time anyone looked there were two it
+     * had never heard of — a list of files to remember to add to is a list that is wrong, and silently:
+     * the test went on passing while checking less and less of what it claimed to.
+     *
+     * So the rule is inverted. Every migration in the tree is read, and a migration is this module's
+     * business if it touches **any** `audio_*` table. Those must touch nothing else. That needs no
+     * maintenance, and it is strictly stronger in both directions: it also catches another feature's
+     * migration reaching into `audio_conversations`, which the old list could not see at all.
+     */
     public function testAudioToTextMigrationsOnlyTouchTheirOwnTables(): void
     {
-        $migrations = [
-            'M260826120000CreateAudioTranscriptionJobs',
-            'M260826120100AddSpeakerSeparationColumns',
-            'M260826130000RetainSuccessfulRecordings',
-            'M260902100000CreateAudioConversations',
-            'M260915100000AddTranscriptionProvider',
-            'M260918100000CreateAudioTtsRenditions',
+        $allowed = [
+            'audio_transcription_jobs',
+            'audio_worker_heartbeat',
+            'audio_to_text_settings',
+            'audio_conversations',
+            'audio_tts_renditions',
+            // The review layer's own table. It was missing from the list this replaced — and its
+            // migration was one of the six that list named, which is how little the old check saw.
+            'audio_segment_revisions',
         ];
 
-        foreach ($migrations as $class) {
-            $source = (string) file_get_contents($this->root() . '/src/Migration/' . $class . '.php');
+        $checked = 0;
 
-            preg_match_all('/(?:ALTER|CREATE|DROP)\s+TABLE(?:\s+IF\s+EXISTS)?\s+`([a-z_]+)`/i', $source, $matches);
+        foreach ($this->phpFilesIn($this->root() . '/src/Migration') as $relative => $source) {
+            $tables = $this->tablesTouchedBy($source);
 
-            foreach ($matches[1] as $table) {
+            // Not ours: a migration that never names an audio table is another feature's, and this test
+            // has nothing to say about it.
+            if (array_intersect($tables, $allowed) === []) {
+                continue;
+            }
+
+            ++$checked;
+
+            foreach ($tables as $table) {
                 $this->assertContains(
                     $table,
-                    [
-                        'audio_transcription_jobs',
-                        'audio_worker_heartbeat',
-                        'audio_to_text_settings',
-                        'audio_conversations',
-                        'audio_tts_renditions',
-                    ],
-                    $class . ' must not modify the existing table "' . $table . '".',
+                    $allowed,
+                    $relative . ' touches this module\'s tables and also "' . $table . '", which is '
+                        . 'another feature\'s. Split it, or the two features can no longer be migrated '
+                        . 'independently.',
                 );
             }
         }
+
+        // A regex that stopped matching would otherwise turn this into a test that checks nothing and
+        // passes faster. Six were listed by hand when this was written; there must be at least that many.
+        $this->assertGreaterThanOrEqual(
+            6,
+            $checked,
+            'No migrations were recognised as this module\'s, so this proves nothing.',
+        );
     }
 
     private function root(): string
@@ -203,6 +235,58 @@ final class ModuleIsolationTest extends TestCase
     /**
      * @return iterable<string, string> relative path => source
      */
+    /**
+     * Every table one migration's SQL names.
+     *
+     * Almost none of them are written as literals: the normal form in this tree is
+     * ``'ALTER TABLE `' . self::JOBS . '`'``, so a regex looking only for backticked words finds nothing
+     * in 61 of the 80-odd statements here. That is not a hypothetical — it is why the hand-written list
+     * this replaced was passing while checking almost nothing, including the very migration it named
+     * first. So the file's own constants are resolved before the SQL is read.
+     *
+     * @return list<string>
+     */
+    private function tablesTouchedBy(string $source): array
+    {
+        // `private const JOBS = 'audio_transcription_jobs';` — the only shape used, and a value that is
+        // not a bare table name simply never matches a table reference below.
+        preg_match_all('/const\s+([A-Z_][A-Z0-9_]*)\s*=\s*\'([a-z0-9_]+)\'/', $source, $constants, PREG_SET_ORDER);
+
+        $names = [];
+
+        foreach ($constants as [, $name, $value]) {
+            $names[$name] = $value;
+        }
+
+        preg_match_all(
+            '/(?:ALTER|CREATE|DROP)\s+TABLE(?:\s+IF\s+EXISTS)?\s+`(?:([a-z0-9_]+)`|\'\s*\.\s*self::([A-Z_][A-Z0-9_]*))/i',
+            $source,
+            $matches,
+            PREG_SET_ORDER,
+        );
+
+        $tables = [];
+
+        foreach ($matches as $match) {
+            // Group 1 is a literal name, group 2 a constant to look up. Exactly one is ever set.
+            $literal = $match[1] ?? '';
+
+            if ($literal !== '') {
+                $tables[] = $literal;
+
+                continue;
+            }
+
+            $constant = $match[2] ?? '';
+
+            if ($constant !== '' && isset($names[$constant])) {
+                $tables[] = $names[$constant];
+            }
+        }
+
+        return array_values(array_unique($tables));
+    }
+
     private function phpFilesIn(string $directory): iterable
     {
         $iterator = new RecursiveIteratorIterator(

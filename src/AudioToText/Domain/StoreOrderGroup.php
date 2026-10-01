@@ -45,6 +45,17 @@ final readonly class StoreOrderGroup
         public ?StoreRecordingSlot $caller = null,
         public ?StoreRecordingSlot $callee = null,
         public array $legacySeparate = [],
+        /**
+         * When the call happened, as the provider wrote it, or null when nothing recorded that.
+         *
+         * A different fact from `$latestActivityAt`, which is when this application imported the
+         * recording — often hours later. The two were being shown as one, and the page now says which
+         * is which. A string, because the provider does not document its timezone.
+         *
+         * **Last in the list and defaulted**, so every existing construction site builds exactly the
+         * group it built before. Adding it mid-signature would silently shift `$mixed` along by one.
+         */
+        public ?string $callTimeRaw = null,
     ) {}
 
     /**

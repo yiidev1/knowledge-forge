@@ -51,6 +51,9 @@ final class AudioToTextRoute
     public const CONVERSION = 'audio-to-text.conversion';
     public const JOB = 'audio-to-text.job';
     public const JOB_STATUS = 'audio-to-text.job.status';
+
+    /** Ask for the transcript of one recording that was downloaded without one. */
+    public const JOB_TRANSCRIBE = 'audio-to-text.job.transcribe';
     public const JOB_DOWNLOAD = 'audio-to-text.job.download';
 
     /**

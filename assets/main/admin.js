@@ -922,7 +922,7 @@
     // The status endpoint returns enum keys, never prose. Mapping them to English here keeps the
     // endpoint incapable of leaking a string that was written for an operator rather than a user.
     var STAGE_LABELS = {
-        QUEUED: 'Waiting for the worker',
+        QUEUED: 'Waiting to start',
         CLAIMED: 'Starting',
         CONVERTING: 'Converting audio',
         TRANSCRIBING: 'Transcribing audio',
@@ -933,9 +933,13 @@
         FAILED: 'Failed'
     };
 
+    // These mirror JobStatus::label() exactly, and must keep mirroring it. The server renders the badge
+    // once and this replaces it on every poll, so any divergence shows up as the same recording changing
+    // its wording without changing its state.
     var STATUS_LABELS = {
-        QUEUED: 'Queued',
-        PROCESSING: 'Processing',
+        NOT_REQUESTED: 'Ready for transcription',
+        QUEUED: 'Transcription requested',
+        PROCESSING: 'Transcribing',
         COMPLETED: 'Completed',
         FAILED: 'Failed'
     };

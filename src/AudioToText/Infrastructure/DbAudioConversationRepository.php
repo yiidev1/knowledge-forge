@@ -54,6 +54,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         ?RecordingType $recordingType = null,
         ?string $orderId = null,
         ?string $callSessionId = null,
+        ?string $callTimeRaw = null,
     ): int {
         $this->connection->createCommand()->insert(self::TABLE, [
             'public_id' => $publicId,
@@ -69,6 +70,9 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             // upload until the importer runs. NULL means "not known to belong to a call", and the
             // derived views read it as "show this recording on its own".
             'call_session_id' => $callSessionId,
+            // Exactly what the provider sent. Not parsed, not converted, not given a timezone it does
+            // not carry — see the column's migration.
+            'call_time_raw' => $callTimeRaw,
             'uploaded_by_admin_id' => $uploadedByAdminId,
             'created_at' => DbDateTime::format($createdAt),
             // Written once, at upload, and never rewritten. The generation itself is decided later and
@@ -282,6 +286,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'recording_type' => 'c.recording_type',
                 'order_id' => 'c.order_id',
                 'call_session_id' => 'c.call_session_id',
+                'call_time_raw' => 'c.call_time_raw',
                 'uploaded_by_admin_id' => 'c.uploaded_by_admin_id',
                 'created_at' => 'c.created_at',
                 'generate_ai_audio' => 'c.generate_ai_audio',
@@ -376,6 +381,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             RecordingType::fromStorage($this->nullableString($row['recording_type'] ?? null)),
             $this->nullableString($row['order_id'] ?? null),
             $this->nullableString($row['call_session_id'] ?? null),
+            $this->nullableString($row['call_time_raw'] ?? null),
         );
     }
 

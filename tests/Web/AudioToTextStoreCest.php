@@ -1748,6 +1748,12 @@ final class AudioToTextStoreCest
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
+        // Completed first, because there is nothing to put a voice to until there is a transcript, and
+        // the control is now withheld until then. This test is about the endpoint's store scoping, so
+        // it wants the control present — not the state in which it is absent.
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $options = $I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts');
 

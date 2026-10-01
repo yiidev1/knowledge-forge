@@ -2749,13 +2749,13 @@ window.KFAudioStages = {
                 stopUpdateTicker();
                 releaseUpdate();
                 renderProcessing(updateDialog, {
-                    headline: 'Still processing in the background.',
+                    headline: 'Still transcribing in the background.',
                     badge: 'Unknown',
                     state: 'failed',
                     finished: true,
                     // Not a failure of the upload, and worded so: the recording is queued and the worker
                     // has it. What was lost is this page's view of it, so the pointer is deliberately
-                    // kept and reopening the dialog picks the job up again.
+                    // kept and reopening the dialog picks the row up again.
                     error: 'The upload was accepted, but its progress cannot be read just now. '
                         + 'Reopen this window or reload the page to see where it got to.'
                 }, updateStarted);
@@ -3532,9 +3532,79 @@ window.KFAudioStages = {
      * Nothing is remembered. The server is asked on open and every two seconds after, which is what
      * makes this correct for a job this tab knows nothing about.
      */
-    function openProgress(button) {
-        var url = button.getAttribute('data-a2t-progress');
+    /**
+     * Ask for the transcript of one recording, then watch it.
+     *
+     * One recording — a call's mixed, caller and callee sides are three of them, and this touches the
+     * one whose button was pressed. The server does the same arithmetic again and would refuse anything
+     * else; this is not where that is decided.
+     *
+     * Nothing heavy happens in the request it sends: a row changes state and the worker that has always
+     * done this work picks it up. What this does afterwards is open the progress view on the recording,
+     * so the reader is looking at the thing they just asked for rather than at a table that has not
+     * changed yet.
+     *
+     * The button is disabled for the round trip, and the server refuses a second ask anyway, so a double
+     * press cannot produce two requests.
+     */
+    function askForTranscript(button) {
+        var url = button.getAttribute('data-a2t-transcribe');
+        var label = button.getAttribute('data-a2t-details-label') || 'Recording';
 
+        if (!url || button.disabled || reviewToken === null) {
+            return;
+        }
+
+        var wording = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Requesting…';
+
+        fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': reviewToken.value
+            }
+        }).then(function (response) {
+            return response.json().then(
+                function (data) { return data; },
+                function () { return { success: false, message: 'The server could not confirm this request.' }; }
+            );
+        }).then(function (data) {
+            button.disabled = false;
+            button.textContent = wording;
+
+            if (!data.success || !data.statusUrl) {
+                // Refused — most often because somebody else asked first, which is not a failure worth
+                // alarming anybody about. The table is re-read so it shows whatever is true now.
+                window.location.reload();
+                return;
+            }
+
+            showProgressOn(data.statusUrl, label);
+        }).catch(function () {
+            button.disabled = false;
+            button.textContent = wording;
+        });
+    }
+
+    function openProgress(button) {
+        showProgressOn(
+            button.getAttribute('data-a2t-progress'),
+            button.getAttribute('data-a2t-details-label'),
+        );
+    }
+
+    /**
+     * Open the progress view on one recording, by its status endpoint.
+     *
+     * Taken as a url and a name rather than as a button, because two things open it: pressing Progress
+     * on a recording already being transcribed, and asking for a transcript just now — and the second
+     * has no button carrying the url, it has a server response that named it.
+     */
+    function showProgressOn(url, label) {
         if (!url || !reviewDialog) {
             return;
         }
@@ -3543,8 +3613,10 @@ window.KFAudioStages = {
         showChannels([], null);
         reviewUrl = null;
 
-        fillIn(reviewDialog, '[data-a2t-review-title]', button.getAttribute('data-a2t-details-label'));
-        fillIn(reviewDialog, '[data-a2t-review-meta]', 'Still processing');
+        fillIn(reviewDialog, '[data-a2t-review-title]', label);
+        // The same word the badge beside it uses. Two names for one state on one screen reads as two
+        // different things happening.
+        fillIn(reviewDialog, '[data-a2t-review-meta]', 'Transcribing');
 
         // Everything the finished view would show is hidden: there is no transcript, no player and no
         // action that makes sense yet. The card is the whole dialog until the job ends.
@@ -4087,6 +4159,13 @@ window.KFAudioStages = {
         if (progress) {
             event.preventDefault();
             openProgress(progress);
+            return;
+        }
+
+        var transcribe = target.closest('[data-a2t-transcribe]');
+        if (transcribe) {
+            event.preventDefault();
+            askForTranscript(transcribe);
             return;
         }
 

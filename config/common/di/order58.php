@@ -93,6 +93,15 @@ return [
         '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
     ],
 
+    // The recordings page reads the same flag for the same two reasons. One switch governs every path
+    // that reaches the provider, so turning it off cannot leave one page still asking.
+    App\Order58\Web\CallRecordings\Action::class => [
+        '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
+    ],
+    App\Order58\Web\CallRecordings\DownloadAction::class => [
+        '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
+    ],
+
     App\Order58\Application\RecordingImportProcessor::class => [
         '__construct()' => [
             'maxAttempts' => $params['app/order58']['recordingImportMaxAttempts'],

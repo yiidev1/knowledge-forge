@@ -101,7 +101,7 @@ final class AudioToTextReviewCest
         $this->signIn($I);
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/review');
         $I->seeCurrentUrlEquals('/audio-to-text/job/' . $publicId);
-        $I->see('Processing');
+        $I->see('Transcribing');
     }
 
     /** The conversions list's View action opens this page. */

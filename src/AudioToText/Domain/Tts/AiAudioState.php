@@ -47,7 +47,9 @@ enum AiAudioState
     {
         return match ($this) {
             self::NotGenerated => 'Not generated',
-            self::Queued => 'Queued',
+            // "Requested", not "Queued" — see TtsStatus::label(). The two must agree, because this
+            // state is derived from that one and both can be on screen at the same moment.
+            self::Queued => 'Requested',
             self::Generating => 'Generating',
             self::Ready => 'Ready',
             self::Stale => 'Stale',

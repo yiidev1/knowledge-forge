@@ -101,11 +101,11 @@ async function generate(page, label) {
     check('dialog closed', !(await page.$eval('.a2t-tts-dialog', (d) => d.open)));
     check('success notice shown', await page.$eval('[data-a2t-notice]', (n) => !n.hidden));
     check('notice names the recording', (await page.$eval('[data-a2t-notice]', (n) => n.textContent))
-        .startsWith('Caller text-to-audio has been queued'),
+        .startsWith('Caller text-to-audio has been requested'),
         await page.$eval('[data-a2t-notice]', (n) => n.textContent.trim()));
 
     const cells = await readCell(page);
-    check('caller cell now says Queued', cells.Caller === 'Queued', JSON.stringify(cells));
+    check('caller cell now says Requested', cells.Caller === 'Requested', JSON.stringify(cells));
     check('mixed cell untouched', cells[LABELS.MIXED] === 'Not generated');
     check('callee cell untouched', cells.Callee === 'Not generated');
 
@@ -145,8 +145,8 @@ async function generate(page, label) {
         await generate(page, label);
         check(label + ': stayed on the store page', page.url() === store(), page.url());
         const c = await readCell(page);
-        check(label + ': its own cell moved', c[label] === 'Queued', JSON.stringify(c));
-        check(label + ': caller left alone', c.Caller === 'PLAY' || c.Caller === 'Queued', c.Caller);
+        check(label + ': its own cell moved', c[label] === 'Requested', JSON.stringify(c));
+        check(label + ': caller left alone', c.Caller === 'PLAY' || c.Caller === 'Requested', c.Caller);
     }
 
     console.log('\nF. THE CELL REACHES READY WITHOUT A RELOAD');
@@ -190,7 +190,7 @@ async function generate(page, label) {
             page.click('form[action*="ai-audio/generate"] button[type=submit]'),
         ]);
         check('it still redirects back to itself', page.url() === aiAudio, page.url());
-        check('and still flashes', (await page.$eval('body', (b) => b.innerText)).includes('has been queued'));
+        check('and still flashes', (await page.$eval('body', (b) => b.innerText)).includes('has been requested'));
     }
 
     console.log('\nI. MIXED STILL NEEDS ITS SPEAKERS (this makes it ineligible, so it runs last)');

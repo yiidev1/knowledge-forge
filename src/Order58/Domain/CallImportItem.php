@@ -53,5 +53,13 @@ final readonly class CallImportItem
         public string $provider,
         public bool $generateAiAudio,
         public int $requestedByAdminId,
+        /**
+         * What the batch this item belongs to asked for.
+         *
+         * Read by the import worker once the file is stored, to decide whether to ask the audio pipeline
+         * for a transcript as well. Defaulted so a row read through an older code path behaves as
+         * imports always have.
+         */
+        public CallImportMode $mode = CallImportMode::DownloadAndTranscribe,
     ) {}
 }

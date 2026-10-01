@@ -22,6 +22,9 @@ interface CallImportRepositoryInterface
      * The options are written here, once, and every item of the batch reads them back — including
      * `$recordingCompany`, which is a snapshot rather than a reference. See
      * {@see \App\Order58\Application\RecordingCompanyResolver}.
+     *
+     * `$mode` defaults to what every batch has always been, so the existing caller is unchanged by
+     * this parameter existing. {@see CallImportMode} for why it is a mode and not a flag.
      */
     public function createBatch(
         int $storeSourceId,
@@ -31,6 +34,7 @@ interface CallImportRepositoryInterface
         bool $generateAiAudio,
         string $recordingCompany,
         DateTimeImmutable $now,
+        CallImportMode $mode = CallImportMode::DownloadAndTranscribe,
     ): int;
 
     /**

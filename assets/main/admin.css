@@ -2354,3 +2354,13 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     line-height: 1.7;
     color: var(--text);
 }
+
+/* Two timestamps under an order id, each saying which it is. The call time is the provider's own string
+   and carries no timezone, so none is printed beside it; the import time is this application's own and
+   is formatted like every other instant on the page. */
+.a2t-order-when__key { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
+.a2t-order-when + .a2t-order-when { margin-top: .3rem; }
+
+/* A recording that has audio and no transcript: a state, then the one action it supports. */
+.a2t-slot__note--ready { color: var(--text-muted); }
+.a2t-slot__link--go { color: var(--primary); font-weight: 650; }
