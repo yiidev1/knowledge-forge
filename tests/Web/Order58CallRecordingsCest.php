@@ -21,6 +21,7 @@ use function unlink;
 use function implode;
 use function json_decode;
 use function str_contains;
+use function substr_count;
 use function str_repeat;
 
 use const JSON_THROW_ON_ERROR;
@@ -405,6 +406,45 @@ final class Order58CallRecordingsCest
 
         $I->see('1 recording available · 1 unavailable · 1 failed');
         $I->see('Partial');
+    }
+
+    /**
+     * The overall state is a badge, not a bar across the cell.
+     *
+     * It rendered as a full-bleed green stripe because `.badge` is `inline-flex` and the cell is a flex
+     * COLUMN, whose default `align-items: stretch` overrides that. The markup looked right and the
+     * result shouted the same word four times at the same weight. The container now starts its children
+     * rather than stretching them, and the overall badge shares a line with the summary that qualifies
+     * it.
+     */
+    public function theOverallStateIsACompactBadgeBesideItsSummary(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        foreach (['mixed', 'caller', 'callee'] as $channel) {
+            $this->setChannelStatus(self::CALLS[0], $channel, 'IMPORTED');
+        }
+
+        $I->amOnPage($this->loadUrl());
+
+        // The badge and the summary read as one line.
+        $I->seeElement('.o58-recordings__head [data-o58-outcome]');
+        $I->seeElement('.o58-recordings__head [data-o58-availability]');
+
+        // Settled: no panel, no bar, no leftover count.
+        $I->dontSeeElement('.o58-panel');
+        $I->dontSeeElement('progress[data-o58-bar]');
+        $I->dontSee('3 of 3 recordings checked');
+
+        // The three channels are still each reported, under their own marks.
+        $I->seeElement('.o58-channel[data-state="complete"]');
+        $I->see('3 recordings available');
     }
 
     // ------------------------------------------------------------------ the poll endpoint
@@ -817,10 +857,26 @@ final class Order58CallRecordingsCest
         $I->see('Downloaded');
         $I->see('Call time');
 
-        // Settled, so no progress panel — just the result.
+        // Settled, so no progress panel and no bar — just the result.
         $I->dontSeeElement('.o58-panel');
+        $I->dontSeeElement('progress');
         $I->see('1 recording available · 2 unavailable');
-        $I->see('Partial');
+
+        // Status and Actions are gone: the overall word was a third copy of what the channel badges
+        // and the summary already say, and the actions column held one link and a conditional button.
+        $I->dontSee('ACTIONS');
+        $I->dontSee('View store audio');
+        $I->dontSee('Retry');
+
+        // The eight columns that are left, and nothing else. `<th ` and `<th>` rather than `<th`,
+        // which also matches `<thead`.
+        $source = $I->grabPageSource();
+
+        Assert::assertSame(
+            8,
+            substr_count($source, '<th ') + substr_count($source, '<th>'),
+            'The history table must carry exactly the eight columns it is for.',
+        );
     }
 
     /** Pagination exists and moves. */
@@ -849,12 +905,14 @@ final class Order58CallRecordingsCest
     // ------------------------------------------------------------------ retry
 
     /**
-     * Only a failed channel is offered again, and asking does not disturb the ones that arrived.
+     * Retrying one failed channel leaves the ones that arrived exactly as they are.
      *
-     * The guarantee is in the statement rather than in the button: `retry()` carries `status = FAILED`
-     * in its WHERE, so a recording already here cannot be fetched twice however the form is posted.
+     * The history table no longer carries an Actions column, so there is no button to press — but the
+     * endpoint is unchanged and this is the guarantee that mattered about it. `retry()` carries
+     * `status = FAILED` in its WHERE, so a recording already here cannot be fetched twice however the
+     * request is made.
      */
-    public function retryIsOfferedForAFailedChannelAndNotForTheOthers(WebTester $I): void
+    public function retryingAFailedChannelDoesNotDisturbTheOthers(WebTester $I): void
     {
         $this->signIn($I);
 
@@ -868,15 +926,13 @@ final class Order58CallRecordingsCest
         $this->setChannelStatus(self::CALLS[0], 'callee', 'NOT_AVAILABLE');
 
         $I->amOnPage(self::PAGE . '/history');
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
 
-        // One button, for the one channel that could usefully be asked for again.
-        $I->see('Retry Caller');
-        $I->dontSee('Retry Mix');
-        $I->dontSee('Retry Callee');
+        $I->sendAjaxPostRequest(self::PAGE . '/retry', [
+            '_csrf' => $token,
+            'import' => (string) $this->channelId(self::CALLS[0], 'caller'),
+        ]);
 
-        $I->submitForm('form[action*="/call-recordings/retry"]', []);
-
-        // The failed one is waiting again; the other two are exactly as they were.
         Assert::assertSame('PENDING', $this->channelStatus(self::CALLS[0], 'caller'));
         Assert::assertSame(
             'IMPORTED',
@@ -886,8 +942,8 @@ final class Order58CallRecordingsCest
         Assert::assertSame('NOT_AVAILABLE', $this->channelStatus(self::CALLS[0], 'callee'));
     }
 
-    /** A channel the provider does not have is never offered again. */
-    public function anUnavailableChannelIsNotOfferedForRetry(WebTester $I): void
+    /** And a channel the provider does not have is refused, because asking again would learn nothing. */
+    public function retryingAnUnavailableChannelIsRefused(WebTester $I): void
     {
         $this->signIn($I);
 
@@ -896,14 +952,21 @@ final class Order58CallRecordingsCest
         }
 
         $this->download($I, [self::CALLS[0]]);
-
-        foreach (['mixed' => 'IMPORTED', 'caller' => 'NOT_AVAILABLE', 'callee' => 'NOT_AVAILABLE'] as $c => $s) {
-            $this->setChannelStatus(self::CALLS[0], $c, $s);
-        }
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'NOT_AVAILABLE');
 
         $I->amOnPage(self::PAGE . '/history');
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
 
-        $I->dontSee('Retry');
+        $I->sendAjaxPostRequest(self::PAGE . '/retry', [
+            '_csrf' => $token,
+            'import' => (string) $this->channelId(self::CALLS[0], 'caller'),
+        ]);
+
+        Assert::assertSame(
+            'NOT_AVAILABLE',
+            $this->channelStatus(self::CALLS[0], 'caller'),
+            'The statement guards this, not the button that used to be hidden.',
+        );
     }
 
     // ------------------------------------------------------------------ helpers
@@ -971,6 +1034,19 @@ final class Order58CallRecordingsCest
     private function triggerFile(): string
     {
         return dirname(__DIR__, 2) . '/runtime/triggers/order58-import.trigger';
+    }
+
+    private function channelId(string $sessionId, string $channel): int
+    {
+        return (int) (new Query($this->connection))
+            ->select('id')
+            ->from('{{%order58_call_imports}}')
+            ->where([
+                'store_source_id' => self::STORE,
+                'call_session_id' => $sessionId,
+                'channel' => $channel,
+            ])
+            ->scalar();
     }
 
     private function channelStatus(string $sessionId, string $channel): string

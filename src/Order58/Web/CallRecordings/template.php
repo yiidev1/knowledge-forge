@@ -62,29 +62,26 @@ $channelRow = static function (string $channel, RecordingAcquisitionState $state
 };
 
 /**
- * One call's recordings: a progress panel while it is happening, and a plain result once it is not.
+ * One call's recordings: a compact card, with a progress panel only while something is moving.
  *
- * ## The bar is for the thing that is moving, and nothing else
+ * ## Hierarchy, because the same word four times says nothing
  *
- * A finished call used to keep a full bar and the line "3 of 3 recordings checked" for ever. Both were
- * true and neither was any use: the question a bar answers is "how far along is this", and once the
- * answer is "it is done" the bar is noise on every row of the table — most of which are finished, most
- * of the time. So the panel is drawn **only while a channel is still pending or downloading**, and a
- * settled call shows its word and its three channels and stops.
+ * The call's identity lives in the columns to the left and is the primary information. Here the overall
+ * state is secondary — one normal badge — and the three channels are tertiary, in smaller, quieter
+ * badges. Rendering all four at the same weight, which is what this did, left a reader with nothing to
+ * look at first and a row of full-bleed green bars shouting "Downloaded" four times.
  *
- * ## While it IS moving, it is the transcription panel
+ * ## The bar is for the thing that is moving
  *
- * Same structure, same classes, same step marks as the card the Audio-to-Text page already uses for a
- * transcription: a heading, one overall bar, a checklist of steps, and a line saying what is happening
- * now. A download and a transcription are different work, but they are the same product, and a reader
- * who has learnt one of these should not have to learn the other.
+ * Drawn only while a channel is pending or downloading. Once the asking is finished the bar's subject
+ * is gone, and a full bar frozen on every settled row is noise on most of this table, most of the time.
  *
  * ## Two numbers, because one of them would lie
  *
- * The bar counts **channels checked** — how much of the asking is finished. The line under it counts
- * **what is actually here**. A bar tracking availability would sit a third full for ever on a merchant
- * who only records the mixed call; a bar with no sentence beside it would reach full and read as three
- * recordings downloaded.
+ * The bar counts **channels checked** — how much of the asking is done. The line beside the badge
+ * counts **what actually arrived**. A bar tracking availability would sit a third full for ever on a
+ * merchant who only records the mixed call; a bar with no sentence beside it would reach full and read
+ * as three recordings downloaded.
  *
  * Rendered by the server for the first paint and by `order58-recordings.js` for every poll after it,
  * from the same model — see {@see RecordingAcquisition}.
@@ -97,20 +94,26 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
     $outcome = $acquisition->outcome();
 
     $html = '<div class="o58-recordings" data-o58-progress>'
+        // The state and what came of it, on one line: the strongest thing in the cell, and the summary
+        // that qualifies it, read together rather than stacked as two separate claims.
+        . '<div class="o58-recordings__head">'
         . '<span class="badge badge--' . Html::encode($outcome->badge()) . '" data-o58-outcome>'
-        . Html::encode($outcome->label()) . '</span>';
+        . Html::encode($outcome->label()) . '</span>'
+        . '<span class="o58-recordings__availability" data-o58-availability>'
+        . Html::encode($acquisition->availabilityText()) . '</span>'
+        . '</div>';
 
     if ($acquisition->isActive()) {
         $html .= '<div class="o58-panel" data-o58-panel>'
             . '<div class="o58-panel__head">'
             . '<span class="o58-panel__title">Overall progress</span>'
-            // `aria-hidden`, because the bar below carries the same figure as `aria-valuetext` in
-            // words. Announcing it twice is how a progress panel becomes unusable with a screen reader.
+            // `aria-hidden`: the bar below carries the same figure as its label, and announcing it
+            // twice is how a progress panel becomes unusable with a screen reader.
             . '<span class="o58-panel__count" data-o58-progress-text aria-hidden="true">'
             . Html::encode($acquisition->progressText()) . '</span>'
             . '</div>'
-            // A real <progress>, as the transcription card uses: the browser draws it, announces it,
-            // and respects reduced-motion settings without any of that being reimplemented here.
+            // A real <progress>, as the transcription card uses: the browser draws it, announces it and
+            // honours reduced-motion without any of that being reimplemented here.
             . '<progress class="o58-panel__bar" max="100" value="' . $acquisition->percentChecked() . '"'
             . ' aria-label="' . Html::encode($acquisition->progressText()) . '" data-o58-bar></progress>'
             . '<p class="o58-panel__detail" role="status" data-o58-current>'
@@ -124,14 +127,7 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
         $html .= $channelRow($channel, $state);
     }
 
-    $html .= '</ul>';
-
-    // Always last and always present, settled or not: what actually arrived is the one fact a reader
-    // came for, and it must never have to be inferred from a count of channels.
-    $html .= '<span class="o58-recordings__availability" data-o58-availability>'
-        . Html::encode($acquisition->availabilityText()) . '</span>';
-
-    return $html . '</div>';
+    return $html . '</ul></div>';
 };
 
 ?>

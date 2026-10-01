@@ -1236,33 +1236,56 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .o58-table .field__hint { white-space: normal; }
 
 /* ---------------------------------------------------------------------------------------------- *
- * Order58 call recordings — download progress.
+ * Order58 call recordings — the recordings cell.
  *
- * Mirrors the Audio-to-Text transcription panel rather than inventing a second way of showing
- * progress: a heading, one overall bar, a checklist of steps with the same marks, and a line saying
- * what is happening now. A download and a transcription are different work and the same product.
+ * ## What went wrong before, and the one line that caused it
  *
- * Two readings of the same call are shown together, because either alone misleads: the bar counts
- * channels the provider has ANSWERED FOR, and the line under the list counts what actually arrived.
- * A bar tracking availability would sit a third full for ever on a merchant who only records the
- * mixed call; a full bar with no sentence beside it reads as three recordings downloaded.
+ * `.badge` is `inline-flex`, which sizes to its text — but inside a flex COLUMN the default
+ * `align-items: stretch` overrides that, and every badge grew to the full width of the cell. The result
+ * was a row of full-bleed green bars that shouted the same word four times. `align-items: flex-start`
+ * below is the fix, and it is why nothing here sets widths on badges to compensate.
  *
- * The panel is drawn only while something is moving. A settled call keeps its word and its channels
- * and loses the bar — most rows in this table are finished, most of the time, and a frozen bar on
- * each of them is noise.
+ * ## Hierarchy
+ *
+ * The call's identity is the primary information and lives in the columns to the left. In this cell the
+ * overall state is secondary and the per-channel detail is tertiary, so the overall badge is normal
+ * size and the channel badges are smaller and quieter. The same word at the same weight four times
+ * tells a reader nothing about what to look at.
+ *
+ * ## The bar is for the thing that is moving
+ *
+ * Drawn only while a channel is pending or downloading. A settled call keeps its word, its channels and
+ * what arrived — most rows in this table are settled, most of the time, and a frozen bar on each of
+ * them is noise.
  * ---------------------------------------------------------------------------------------------- */
 
-/* The whole table is the useful content here, so these two pages get the wider column the conversions
-   list already uses. `:has()` keeps it scoped to the pages that opt in; a browser without `:has()`
-   gets the standard width and the scroll container inside. */
+/* The whole table is the useful content on these pages, so they get the wider column the conversions
+   list already uses. `:has()` keeps it scoped to the pages that opt in; a browser without `:has()` gets
+   the standard width and the scroll container inside. */
 .content:has(.o58-wide) { max-width: 1600px; }
 
 .o58-recordings {
+    /* Load-bearing: without it every badge in this column stretches to the full cell width. */
+    align-items: flex-start;
     display: flex;
     flex-direction: column;
-    gap: .45rem;
-    min-width: 13rem;
+    gap: .5rem;
+    /* A card, not a column that runs to the far edge of a 1600px page. */
+    max-width: 38rem;
 }
+
+/* The overall state and what came of it, on one line. */
+.o58-recordings__head {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem .75rem;
+}
+
+/* Tertiary: a summary of the badges beneath it, so it must not compete with them. */
+.o58-recordings__availability { color: var(--text-muted); font-size: .78rem; }
+
+/* ---- the active panel ---- */
 
 .o58-panel {
     background: var(--surface-sunken, rgba(255, 255, 255, .04));
@@ -1271,21 +1294,16 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     display: flex;
     flex-direction: column;
     gap: .3rem;
-    padding: .5rem .6rem;
+    padding: .5rem .65rem;
+    width: 100%;
 }
 
-.o58-panel__head {
-    align-items: baseline;
-    display: flex;
-    gap: .75rem;
-    justify-content: space-between;
-}
+.o58-panel__head { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }
+.o58-panel__title { font-size: .76rem; font-weight: 650; }
+.o58-panel__count { color: var(--text-muted); font-size: .74rem; white-space: nowrap; }
 
-.o58-panel__title { font-size: .78rem; font-weight: 650; }
-.o58-panel__count { color: var(--text-muted); font-size: .75rem; }
-
-/* A real <progress>: the browser draws it, announces it and honours reduced-motion without any of
-   that being reimplemented. Appearance is reset because the native control ignores most styling. */
+/* A real <progress>: the browser draws it, announces it and honours reduced-motion without any of that
+   being reimplemented. Appearance is reset because the native control ignores most styling. */
 .o58-panel__bar {
     appearance: none;
     -webkit-appearance: none;
@@ -1303,56 +1321,81 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 
 .o58-panel__detail { color: var(--text-muted); font-size: .74rem; margin: 0; }
 
+/* ---- the channel rows ---- */
+
 .o58-channels {
     display: flex;
     flex-direction: column;
-    gap: .22rem;
+    gap: .3rem;
     list-style: none;
     margin: 0;
     padding: 0;
+    width: 100%;
 }
 
-/* The marks the transcription panel uses, so a reader who has learnt one has learnt both. */
+/* A grid rather than flex, so the marks, the names and the badges line up down the column however long
+   a channel's name is. The last track is for the history page's completion time and collapses to
+   nothing where there is none. */
 .o58-channel {
     align-items: center;
     display: grid;
-    gap: .45rem;
-    grid-template-columns: .9rem 1fr auto;
+    gap: .5rem;
+    grid-template-columns: .85rem 4.5rem auto 1fr;
 }
 
-.o58-channel__mark { color: var(--text-muted); font-size: .72rem; line-height: 1; }
+/* The marks the transcription panel uses, so a reader who has learnt one has learnt both. */
+.o58-channel__mark { font-size: .72rem; line-height: 1; opacity: .75; }
 .o58-channel__mark::before { content: '\25CB'; }
-.o58-channel[data-state="active"] .o58-channel__mark { color: var(--primary); }
+.o58-channel[data-state="active"] .o58-channel__mark { color: var(--primary); opacity: 1; }
 .o58-channel[data-state="active"] .o58-channel__mark::before { content: '\25C9'; }
-.o58-channel[data-state="complete"] .o58-channel__mark { color: var(--success-text); }
+.o58-channel[data-state="complete"] .o58-channel__mark { color: var(--success-text); opacity: 1; }
 .o58-channel[data-state="complete"] .o58-channel__mark::before { content: '\2713'; }
-.o58-channel[data-state="error"] .o58-channel__mark { color: var(--error-text); }
+.o58-channel[data-state="error"] .o58-channel__mark { color: var(--error-text); opacity: 1; }
 .o58-channel[data-state="error"] .o58-channel__mark::before { content: '\2717'; }
 /* Settled, and nothing arrived — and nothing went wrong either. Neither a tick nor a cross: one would
    claim a recording that is not there, the other would blame somebody for a merchant's setup. */
 .o58-channel[data-state="skipped"] .o58-channel__mark::before { content: '\2013'; }
 
-.o58-channel__name { color: var(--text-muted); font-size: .75rem; }
+.o58-channel__name { color: var(--text-muted); font-size: .76rem; }
 
-/* Not muted: what actually arrived outranks the bar above it. */
-.o58-recordings__availability { font-size: .76rem; }
+/* Tertiary, so visibly lighter than the overall badge above: the same word at the same weight four
+   times would leave a reader with nothing to look at first. */
+.o58-channel .badge {
+    font-size: .68rem;
+    font-weight: 550;
+    padding: .08rem .42rem;
+}
 
-.o58-channel__at { color: var(--text-muted); font-size: .72rem; }
+.o58-channel__at { color: var(--text-muted); font-size: .7rem; white-space: nowrap; }
 
 .o58-retry { display: inline; }
 
-/* Width allocated by how much each column is worth reading, rather than by what fits. The recordings
-   column carries the panel, the channels and the result, so it gets the slack; ids and timestamps get
-   just enough not to wrap. */
+/* ---- column widths ---- *
+ * Allocated by how much each column is worth reading rather than by what happens to fit. Ids and
+ * timestamps get just enough never to wrap; the recordings cell takes the slack and caps itself. */
 .o58-table { width: 100%; }
 .o58-table th, .o58-table td { vertical-align: top; }
-.o58-table__select { width: 2.5rem; }
-.o58-table__id { width: 11rem; white-space: nowrap; }
-.o58-table__time { width: 12rem; white-space: nowrap; }
-.o58-table__order { width: 9rem; white-space: nowrap; }
-.o58-table__store { width: 13rem; }
-.o58-table__when { width: 10rem; }
-.o58-table__actions { width: 9rem; }
+.o58-table__select { width: 40px; }
+.o58-table__id { width: 150px; white-space: nowrap; }
+.o58-table__time { width: 210px; white-space: nowrap; }
+.o58-table__order { width: 140px; white-space: nowrap; }
+.o58-table__store { width: 180px; }
+.o58-table__when { width: 150px; white-space: nowrap; }
+.o58-table__progress { width: 180px; }
+
+/* History's ids are narrower than the live page's: that table carries four more columns. */
+.o58-history__order { width: 110px; white-space: nowrap; }
+.o58-history__id { width: 125px; white-space: nowrap; }
+.o58-history__time { width: 175px; white-space: nowrap; }
+
+/* Narrow screens: the fixed widths stop being helpful once there is no room for them, so the cell
+   stacks and the table scrolls inside its own box rather than pushing the page sideways. */
+@media (max-width: 1100px) {
+    .o58-recordings { max-width: none; }
+    .o58-table__time, .o58-table__when, .o58-history__time { white-space: normal; }
+}
+
+
 
 
 

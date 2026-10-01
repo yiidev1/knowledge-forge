@@ -79,7 +79,6 @@ final readonly class HistoryAction
                 'appTimeZone' => $this->appTimeZone,
                 'pageUrl' => $this->urlGenerator->generate('order58.call-recordings.history'),
                 'recordingsUrl' => $this->urlGenerator->generate('order58.call-recordings'),
-                'retryUrl' => $this->urlGenerator->generate('order58.call-recordings.retry'),
             ]);
     }
 }

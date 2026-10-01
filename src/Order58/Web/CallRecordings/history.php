@@ -6,18 +6,15 @@ use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Domain\CallImportHistoryPage;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
-use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
- * @var Csrf $csrf
  * @var CallImportHistoryPage $result
  * @var int $page
  * @var list<RecordingChannel> $channels
  * @var AppTimeZone $appTimeZone
  * @var string $pageUrl
  * @var string $recordingsUrl
- * @var string $retryUrl
  */
 
 $this->setTitle('Download History');
@@ -27,7 +24,6 @@ $this->setParameter('breadcrumbs', [
     ['label' => 'Download History'],
 ]);
 
-$csrfField = (string) $csrf->hiddenInput();
 
 /** A timestamp in the business timezone, or a dash where there is nothing to show yet. */
 $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
@@ -64,21 +60,19 @@ $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
                 <thead>
                     <tr>
                         <th class="o58-table__store">Store</th>
-                        <th class="o58-table__order">Order ID</th>
-                        <th class="o58-table__id">Call session ID</th>
+                        <th class="o58-history__order">Order ID</th>
+                        <th class="o58-history__id">Call session ID</th>
                         <?php
                         // The provider's own string, printed exactly as sent and with NO zone label —
                         // it carries none, and appending one would invent a claim about a timestamp
                         // this application did not generate. The two beside it are ours, so they are
                         // shown in the business timezone like every other time on this server.
         ?>
-                        <th class="o58-table__time">Call time</th>
+                        <th class="o58-history__time">Call time</th>
                         <th class="o58-table__when">Requested</th>
                         <th class="o58-table__when">Downloaded</th>
                         <th>Recordings</th>
-                        <th>Progress</th>
-                        <th>Status</th>
-                        <th class="o58-table__actions">Actions</th>
+                        <th class="o58-table__progress">Progress</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -138,71 +132,38 @@ $when = static function (?DateTimeImmutable $at) use ($appTimeZone): string {
                                 </ul>
                             </td>
                             <td>
-                                <?php if ($acquisition !== null): ?>
-                                    <div class="o58-recordings">
-                                        <?php if ($acquisition->isActive()): ?>
-                                            <?php
-                                            // Still moving, so the same panel the live page draws. A
-                                            // finished row gets none of it: the bar's whole subject is
-                                            // the thing in motion, and history is mostly not.
-                                            ?>
-                                            <div class="o58-panel">
-                                                <div class="o58-panel__head">
-                                                    <span class="o58-panel__title">Overall progress</span>
-                                                    <span class="o58-panel__count" aria-hidden="true">
-                                                        <?= Html::encode($acquisition->progressText()) ?>
-                                                    </span>
-                                                </div>
-                                                <progress class="o58-panel__bar" max="100"
-                                                    value="<?= $acquisition->percentChecked() ?>"
-                                                    aria-label="<?= Html::encode($acquisition->progressText()) ?>">
-                                                </progress>
-                                            </div>
-                                        <?php endif; ?>
-                                        <?php
-                                        // What arrived, always — settled or not. It is the one fact
-                                        // somebody opens this page for.
+                                <?php if ($acquisition !== null && $acquisition->isActive()): ?>
+                                    <?php
+                                    // Still moving, so the same panel the live page draws — the only
+                                    // rows in a history that have anything to show a bar about.
                                     ?>
+                                    <div class="o58-recordings">
+                                        <div class="o58-panel">
+                                            <div class="o58-panel__head">
+                                                <span class="o58-panel__title">Overall progress</span>
+                                                <span class="o58-panel__count" aria-hidden="true">
+                                                    <?= Html::encode($acquisition->progressText()) ?>
+                                                </span>
+                                            </div>
+                                            <progress class="o58-panel__bar" max="100"
+                                                value="<?= $acquisition->percentChecked() ?>"
+                                                aria-label="<?= Html::encode($acquisition->progressText()) ?>">
+                                            </progress>
+                                        </div>
                                         <span class="o58-recordings__availability">
                                             <?= Html::encode($acquisition->availabilityText()) ?>
                                         </span>
                                     </div>
-                                <?php endif; ?>
-                            </td>
-                            <td>
-                                <?php if ($acquisition !== null): ?>
-                                    <span class="badge badge--<?= Html::encode($acquisition->outcome()->badge()) ?>">
-                                        <?= Html::encode($acquisition->outcome()->label()) ?>
+                                <?php elseif ($acquisition !== null): ?>
+                                    <?php
+                                    // Settled. One line saying what came of it, and nothing else —
+                                    // a bar here would be tracking something that finished, often days
+                                    // ago, and a card around one sentence is a box for its own sake.
+                                    ?>
+                                    <span class="o58-recordings__availability">
+                                        <?= Html::encode($acquisition->availabilityText()) ?>
                                     </span>
                                 <?php endif; ?>
-                            </td>
-                            <td>
-                                <a class="a2t-slot__link"
-                                    href="/audio-to-text/store/<?= Html::encode((string) $row->storeSourceId) ?>">
-                                    View store audio
-                                </a>
-                                <?php
-                                // One button per failed channel, never one for the call. A call with the
-                                // mixed recording here and the caller side failed must ask again for the
-                                // caller side only — the repository would refuse anything else, and
-                                // offering a control that does nothing is worse than offering none.
-                        ?>
-                                <?php foreach ($channels as $channel): ?>
-                                    <?php $item = $row->channel($channel); ?>
-                                    <?php if ($item !== null && $item->status->isRetryable()): ?>
-                                        <form method="post" action="<?= Html::encode($retryUrl) ?>"
-                                            class="o58-retry">
-                                            <?= $csrfField ?>
-                                            <input type="hidden" name="import"
-                                                value="<?= Html::encode((string) $item->id) ?>">
-                                            <input type="hidden" name="page"
-                                                value="<?= Html::encode((string) $page) ?>">
-                                            <button class="a2t-slot__link" type="submit">
-                                                Retry <?= Html::encode($channel->label()) ?>
-                                            </button>
-                                        </form>
-                                    <?php endif; ?>
-                                <?php endforeach; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
