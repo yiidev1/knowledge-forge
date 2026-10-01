@@ -228,26 +228,25 @@ final readonly class DownloadAction
     }
 
     /**
-     * What to tell the operator, in the words this product uses.
+     * One line, and the table says the rest.
      *
-     * Not "queued", not "jobs", not a position in a line: a count of recordings, where they will appear,
-     * and the one thing that is genuinely surprising — that each channel is downloaded on its own, so a
-     * selection arrives over minutes rather than at once.
+     * This used to carry three sentences explaining that recordings arrive one at a time, where they
+     * appear, and that nothing is transcribed. All of it was true and none of it belonged in a banner:
+     * it described, in prose, a process the reader is about to watch happen in the rows below. A message
+     * that explains what a live view is already showing is a message people stop reading.
+     *
+     * So it states what was done and stops. The per-call progress underneath is what explains it.
      */
     private function summary(int $asked, int $already, int $total): string
     {
         if ($asked === 0) {
-            return sprintf(
-                'Nothing new to download — all %d selected call(s) had already been requested.',
-                $total,
-            );
+            return sprintf('Already requested — all %d selected call(s) were asked for earlier.', $total);
         }
 
         $message = sprintf(
-            '%d call(s) selected for download. Each call\'s recordings arrive one at a time and appear '
-                . 'on the store\'s Audio to Text page as they land, ready to play. Nothing is '
-                . 'transcribed until you ask for it.',
+            'Download started for %d %s.',
             $asked,
+            $asked === 1 ? 'call' : 'calls',
         );
 
         return $already > 0

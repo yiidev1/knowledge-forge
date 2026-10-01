@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use App\Integration\Order58Recording\CallSummary;
-use App\Order58\Domain\Order58ImportStatus;
-use App\Order58\Domain\RecordingDownloadState;
+use App\Integration\Order58Recording\RecordingChannel;
 use App\Order58\Web\CallRecordings\CallRecordingsAsset;
+use App\Shared\Audio\RecordingAcquisition;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
@@ -20,7 +20,9 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $loaded whether the provider was asked for calls on this request
  * @var string $today the current business date, as the date field's ceiling
  * @var list<CallSummary> $calls the chosen day's calls, already filtered
- * @var array<string, non-empty-list<Order58ImportStatus>> $statuses keyed by call session id
+ * @var array<string, RecordingAcquisition> $statuses keyed by call session id
+ * @var string $statusUrl the one endpoint this page polls for every visible call at once
+ * @var string $historyUrl what has been downloaded before, on its own page
  * @var string|null $problem why there are no calls to show
  * @var string $businessDate the day being shown — today unless the operator chose another
  * @var bool $importEnabled
@@ -40,25 +42,67 @@ $csrfField = (string) $csrf->hiddenInput();
 $pageUrl = $urlGenerator->generate('order58.call-recordings');
 $downloadUrl = $urlGenerator->generate('order58.call-recordings.download');
 
-/**
- * One call's audio, in a word.
- *
- * The rule lives in {@see RecordingDownloadState} rather than here, so the words on this page and the
- * reasoning behind them cannot drift apart — and so "all three channels 404'd" can be tested as the
- * ordinary outcome it is without rendering anything.
- *
- * @param list<Order58ImportStatus>|null $channels
- */
-$downloadState = static function (?array $channels): string {
-    // Narrowed here rather than relied on from the closure's own `@param`, which psalm does not carry
-    // into the body of a closure assigned to a variable. The same line, for the same reason, sits in
-    // the calls page's equivalent helper.
-    /** @var list<Order58ImportStatus>|null $channels */
-    $state = RecordingDownloadState::fromChannels($channels);
+/** One channel's line: the provider's name for it, and where it has got to. */
+$channelRow = static function (string $channel, \App\Shared\Audio\RecordingAcquisitionState $state): string {
+    $name = RecordingChannel::fromStorage($channel)?->label() ?? $channel;
 
-    return '<span class="badge badge--' . Html::encode($state->badge()) . '">'
-        . Html::encode($state->label()) . '</span>';
+    return '<li class="o58-channel" data-o58-channel="' . Html::encode($channel) . '">'
+        . '<span class="o58-channel__name">' . Html::encode($name) . '</span>'
+        . '<span class="badge badge--' . Html::encode($state->badge()) . '" data-o58-channel-state>'
+        . Html::encode($state->label()) . '</span>'
+        . '</li>';
 };
+
+/**
+ * One call's recordings: the word, the bar, the two sentences, and the three channels.
+ *
+ * ## Why there are two numbers here and not one
+ *
+ * The bar counts **channels checked** — how much of the asking is finished. The sentence under it counts
+ * **what is actually here**. They are different questions and a single figure answering both would lie
+ * in one direction or the other: a bar tracking availability would sit a third full for ever on a
+ * merchant who only records the mixed call, and a bar tracking progress with no sentence beside it would
+ * reach full and read as three recordings downloaded.
+ *
+ * Rendered by the server for the first paint and by `order58-recordings.js` for every poll after it, from
+ * the same model — see {@see RecordingAcquisition}.
+ */
+$recordingsCell = static function (?RecordingAcquisition $acquisition) use ($channelRow): string {
+    if ($acquisition === null) {
+        return '<span class="badge badge--muted">Not downloaded</span>';
+    }
+
+    $outcome = $acquisition->outcome();
+
+    $html = '<div class="o58-progress" data-o58-progress>'
+        . '<span class="badge badge--' . Html::encode($outcome->badge()) . '" data-o58-outcome>'
+        . Html::encode($outcome->label()) . '</span>';
+
+    // `aria-valuetext` carries the words, not the number: a screen reader announcing "33 percent" would
+    // repeat the one figure on this page that is not the authoritative one.
+    $html .= '<div class="o58-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"'
+        . ' aria-valuenow="' . $acquisition->percentChecked() . '"'
+        . ' aria-valuetext="' . Html::encode($acquisition->progressText()) . '" data-o58-bar>'
+        . '<span class="o58-bar__fill" style="width: ' . $acquisition->percentChecked() . '%"></span>'
+        . '</div>';
+
+    $html .= '<span class="o58-progress__count" data-o58-progress-text>'
+        . Html::encode($acquisition->progressText()) . '</span>';
+
+    // The authoritative line. Always rendered, including while the bar is still moving, so the reader
+    // never has to infer availability from a percentage.
+    $html .= '<span class="o58-progress__availability" data-o58-availability>'
+        . Html::encode($acquisition->availabilityText()) . '</span>';
+
+    $html .= '<ul class="o58-channels" data-o58-channels>';
+
+    foreach ($acquisition->channels as $channel => $state) {
+        $html .= $channelRow($channel, $state);
+    }
+
+    return $html . '</ul></div>';
+};
+
 ?>
 
 <div class="page-header">
@@ -70,6 +114,13 @@ $downloadState = static function (?array $channels): string {
             store's Audio to Text page, ready to play. Nothing is transcribed until you ask for it,
             one recording at a time.
         </p>
+    </div>
+    <?php
+    // Up here rather than beside the table, because it leaves this page rather than changing it — the
+    // same placement the calls page uses for its own history link.
+?>
+    <div class="page-header__actions">
+        <a class="btn btn--secondary" href="<?= Html::encode($historyUrl) ?>">View Download History</a>
     </div>
 </div>
 
@@ -154,7 +205,20 @@ $downloadState = static function (?array $channels): string {
                     <input type="hidden" name="source" value="<?= Html::encode($source) ?>">
                 <?php endif; ?>
 
-                <div class="table-wrap" data-o58-calls>
+                <?php
+                // The polling hooks. `data-o58-active` decides whether the script starts at all, so a
+                // page of finished downloads makes no requests — the commonest case by far, since most
+                // visits are to look at a day rather than to download one.
+                $anyActive = false;
+
+foreach ($statuses as $acquisition) {
+    $anyActive = $anyActive || $acquisition->isActive();
+}
+?>
+                <div class="table-wrap" data-o58-calls
+                    data-o58-status="<?= Html::encode($statusUrl) ?>"
+                    data-o58-store="<?= Html::encode((string) $selectedStore) ?>"
+                    data-o58-active="<?= $anyActive ? '1' : '0' ?>">
                     <table class="table">
                         <thead>
                             <tr>
@@ -194,7 +258,9 @@ $downloadState = static function (?array $channels): string {
                 ? '<span class="util-muted">—</span>'
                 : Html::encode($call->orderId) ?>
                                     </td>
-                                    <td><?= $downloadState($statuses[$call->callSessionId] ?? null) ?></td>
+                                    <td data-o58-call="<?= Html::encode($call->callSessionId) ?>">
+                                        <?= $recordingsCell($statuses[$call->callSessionId] ?? null) ?>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>

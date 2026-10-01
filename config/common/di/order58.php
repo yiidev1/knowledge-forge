@@ -101,6 +101,9 @@ return [
     App\Order58\Web\CallRecordings\DownloadAction::class => [
         '__construct()' => ['importEnabled' => $params['app/order58']['recordingImportEnabled']],
     ],
+    // The status, history and retry endpoints read and write rows that already exist; none of them can
+    // reach the provider, so the import flag does not gate them. A server with downloading turned off
+    // must still be able to show what it downloaded before.
 
     App\Order58\Application\RecordingImportProcessor::class => [
         '__construct()' => [

@@ -66,6 +66,12 @@ return [
     // The seam the Order58 recording importer ingests through: Audio-to-Text implements it, and the
     // importer depends on the interface, so neither module has to name the other.
     App\Shared\Audio\AudioIngestionPortInterface::class => App\AudioToText\Application\AudioIngestionService::class,
+
+    // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
+    // still on their way in, and the module that imports them answers. Bound here beside its counterpart
+    // so both halves of the contract are visible in one place.
+    App\Shared\Audio\PendingRecordingPortInterface::class
+        => App\Order58\Infrastructure\Order58PendingRecordingProvider::class,
     TranscriptionJobRepositoryInterface::class => DbTranscriptionJobRepository::class,
     AudioConversationRepositoryInterface::class => DbAudioConversationRepository::class,
     StoreOrderGroupRepositoryInterface::class => DbStoreOrderGroupRepository::class,

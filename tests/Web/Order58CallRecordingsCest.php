@@ -16,9 +16,12 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function gmdate;
+use function implode;
+use function json_decode;
 use function str_contains;
 use function str_repeat;
 
+use const JSON_THROW_ON_ERROR;
 use const SORT_DESC;
 
 /**
@@ -67,6 +70,15 @@ final class Order58CallRecordingsCest
     /** A second store with no company code: the one that must refuse to download. */
     private const STORE_NO_COMPANY = 987655301;
 
+    /**
+     * A third store that is perfectly usable, and has asked for nothing.
+     *
+     * Needed because the cross-store check must fail for the right reason. Asking the status endpoint
+     * about a store with no company code is refused outright, which would prove nothing about scoping —
+     * this one resolves, so an empty answer can only mean the rows were not its own.
+     */
+    private const STORE_OTHER = 987655302;
+
     private const PAGE = '/admin/order58/call-recordings';
 
     /** The fixture call list, which {@see \App\Integration\Order58Recording\FixtureCallSource} generates. */
@@ -84,6 +96,7 @@ final class Order58CallRecordingsCest
 
         $this->createStore(self::STORE, self::STORE_NAME, self::COMPANY);
         $this->createStore(self::STORE_NO_COMPANY, self::STORE_NAME . ' (no code)', null);
+        $this->createStore(self::STORE_OTHER, self::STORE_NAME . ' (other)', 'KFRO');
     }
 
     public function _after(WebTester $I): void
@@ -232,8 +245,15 @@ final class Order58CallRecordingsCest
         Assert::assertSame(['callee', 'caller', 'mixed'], $channels);
     }
 
-    /** And the operator is told in recordings, not in machinery. */
-    public function theConfirmationNamesRecordingsRatherThanAQueue(WebTester $I): void
+    /**
+     * The confirmation is one short line, and names no machinery.
+     *
+     * It used to carry three sentences explaining that recordings arrive one at a time, where they
+     * appear and that nothing is transcribed — all true, and all describing a process the reader is
+     * about to watch happen in the rows below. A banner that explains a live view is a banner people
+     * stop reading.
+     */
+    public function theConfirmationIsOneShortLine(WebTester $I): void
     {
         $this->signIn($I);
 
@@ -243,8 +263,8 @@ final class Order58CallRecordingsCest
 
         $this->download($I, [self::CALLS[0]]);
 
-        $I->see('selected for download');
-        $I->see('Nothing is transcribed until you ask for it');
+        $I->see('Download started for 1 call.');
+        $I->dontSee('Each call\'s recordings arrive one at a time');
 
         $page = $I->grabPageSource();
 
@@ -253,6 +273,227 @@ final class Order58CallRecordingsCest
                 $banned,
                 $page,
                 'The confirmation names this application\'s internals rather than the operator\'s audio.',
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------ live progress
+
+    /**
+     * A call just asked for reports as active straight away, with nothing downloaded yet.
+     *
+     * The first provider fetch happens on the next scheduled run, so for a minute or so there is
+     * genuinely nothing to show but the asking. "Waiting" says that; "Downloading" would describe
+     * something that is not happening, and an empty cell would read as though the press did nothing.
+     */
+    public function aCallJustAskedForShowsAsWaitingWithNothingDownloaded(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $I->amOnPage($this->loadUrl());
+
+        $I->see('Waiting');
+        $I->see('0 of 3 recordings checked');
+        $I->see('0 recordings available');
+
+        // And the page is told to start polling, because something is outstanding.
+        $I->seeElement('[data-o58-active="1"]');
+    }
+
+    /** A day with nothing requested polls nothing at all. */
+    public function aPageWithNothingOutstandingDoesNotPoll(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->loadUrl());
+
+        $I->seeElement('[data-o58-active="0"]');
+        $I->see('Not downloaded');
+    }
+
+    /** The progress figures are whole channels. No byte percentage appears anywhere. */
+    public function progressIsCountedInChannelsAndNeverInBytes(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'FETCHING');
+
+        $I->amOnPage($this->loadUrl());
+
+        // One of three answered for: the bar's number, and the words that carry it.
+        $I->see('1 of 3 recordings checked');
+        $I->see('1 recording available');
+        $I->seeElement('[data-o58-bar][aria-valuenow="33"]');
+
+        // Each channel reports for itself.
+        $I->see('Downloaded');
+        $I->see('Downloading');
+        $I->see('Waiting');
+    }
+
+    /**
+     * Channels the provider does not have fill the bar without claiming recordings exist.
+     *
+     * The case that would otherwise sit at 33% for ever: a merchant who records the mixed call and
+     * nothing else produces exactly this on every call they make. The asking is finished, so the bar is
+     * full — and the sentence beside it is what stops that reading as three recordings downloaded.
+     */
+    public function unavailableChannelsCompleteTheBarButNotTheAvailability(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'NOT_AVAILABLE');
+        $this->setChannelStatus(self::CALLS[0], 'callee', 'NOT_AVAILABLE');
+
+        $I->amOnPage($this->loadUrl());
+
+        $I->seeElement('[data-o58-bar][aria-valuenow="100"]');
+        $I->see('3 of 3 recordings checked');
+        // The authoritative line, and it does not say three.
+        $I->see('1 recording available · 2 unavailable');
+        // And the call is not called a failure.
+        $I->see('Partial');
+        $I->dontSee('Failed');
+
+        // Nothing is outstanding, so the page stops asking.
+        $I->seeElement('[data-o58-active="0"]');
+    }
+
+    /** A genuine fault alongside an absence is still reported as a fault. */
+    public function aFailedChannelIsNotHiddenAmongTheUnavailableOnes(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'FAILED');
+        $this->setChannelStatus(self::CALLS[0], 'callee', 'NOT_AVAILABLE');
+
+        $I->amOnPage($this->loadUrl());
+
+        $I->see('1 recording available · 1 unavailable · 1 failed');
+        $I->see('Partial');
+    }
+
+    // ------------------------------------------------------------------ the poll endpoint
+
+    /** One request answers for every call on the page. */
+    public function theStatusEndpointAnswersForEveryVisibleCallAtOnce(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0], self::CALLS[1]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+
+        $payload = $this->status($I, [self::CALLS[0], self::CALLS[1]]);
+
+        Assert::assertArrayHasKey(self::CALLS[0], $payload['calls']);
+        Assert::assertArrayHasKey(self::CALLS[1], $payload['calls']);
+        Assert::assertTrue($payload['active'], 'Both calls still have channels outstanding.');
+
+        $first = $payload['calls'][self::CALLS[0]];
+        Assert::assertSame(33, $first['percentChecked']);
+        Assert::assertSame('1 of 3 recordings checked', $first['progressText']);
+        Assert::assertSame('1 recording available', $first['availabilityText']);
+        Assert::assertSame('Downloaded', $first['channels']['mixed']['label']);
+        Assert::assertSame('Waiting', $first['channels']['caller']['label']);
+    }
+
+    /** It says when there is nothing left to watch, which is what stops the polling. */
+    public function theStatusEndpointReportsWhenNothingIsOutstanding(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        foreach (['mixed', 'caller', 'callee'] as $channel) {
+            $this->setChannelStatus(self::CALLS[0], $channel, 'IMPORTED');
+        }
+
+        $payload = $this->status($I, [self::CALLS[0]]);
+
+        Assert::assertFalse($payload['active']);
+        Assert::assertSame(100, $payload['calls'][self::CALLS[0]]['percentChecked']);
+        Assert::assertSame('DOWNLOADED', $payload['calls'][self::CALLS[0]]['outcome']);
+    }
+
+    /**
+     * It answers only about the store it was asked for.
+     *
+     * A call id is guessable, so the scoping has to be the query rather than the caller's good manners:
+     * an id that is not this store's simply has no row and is absent from the answer. Nothing here can
+     * be used to learn whether another store has a given call.
+     */
+    public function theStatusEndpointWillNotReportAnotherStoresCall(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        // The same session id, asked for under a usable store that never requested it.
+        $payload = $this->status($I, [self::CALLS[0]], self::STORE_OTHER);
+
+        Assert::assertSame([], $payload['calls'], 'Another store\'s call must not be reported.');
+    }
+
+    /** And it refuses outright when the store cannot be resolved. */
+    public function theStatusEndpointRefusesAnUnknownStore(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '/status?store=99999999&calls=' . self::CALLS[0]);
+
+        $I->seeResponseCodeIs(404);
+    }
+
+    /** It leaks nothing beyond the five states and the counts drawn from them. */
+    public function theStatusEndpointPublishesNoInternals(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $source = $this->statusSource($I, [self::CALLS[0]]);
+
+        foreach (['error_message', 'batch', 'admin', 'conversation', 'bytes', 'company', 'PENDING'] as $leak) {
+            Assert::assertStringNotContainsStringIgnoringCase(
+                $leak,
+                $source,
+                'The poll endpoint publishes something written for a log.',
             );
         }
     }
@@ -273,7 +514,7 @@ final class Order58CallRecordingsCest
 
         Assert::assertSame(3, $this->countItems(), 'The unique key refuses the second ask.');
         Assert::assertSame(2, $this->countBatches(), 'Both presses are recorded; only one made rows.');
-        $I->see('had already been requested');
+        $I->see('Already requested');
     }
 
     // ------------------------------------------------------------------ what must not have moved
@@ -408,6 +649,164 @@ final class Order58CallRecordingsCest
         );
     }
 
+    // ------------------------------------------------------------------ download history
+
+    /** The page is reachable from the one that creates the work. */
+    public function theRecordingsPageLinksToItsHistory(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->see('View Download History');
+        $I->seeElement('a[href*="/call-recordings/history"]');
+    }
+
+    /**
+     * It lists download-only activity, and not the imports asked for in order to be transcribed.
+     *
+     * The whole point of separating the two flows is that they are different intentions. A history that
+     * mixed them would make both pages answer a question nobody asked.
+     */
+    public function theHistoryContainsOnlyDownloadOnlyActivity(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        // One of each: a download, and a sync from the calls page.
+        $this->download($I, [self::CALLS[0]]);
+
+        $I->amOnPage('/admin/order58/calls?store=' . self::STORE . '&load=1&source='
+            . FixtureAvailability::FIXTURE);
+        $I->submitForm('form[action*="/calls/sync"]', [
+            'store' => (string) self::STORE,
+            'source' => FixtureAvailability::FIXTURE,
+            'calls' => [self::CALLS[1]],
+        ]);
+
+        $I->amOnPage(self::PAGE . '/history');
+
+        $I->see(self::CALLS[0]);
+        $I->dontSee(self::CALLS[1]);
+    }
+
+    /** And it shows the facts somebody would come here for. */
+    public function theHistoryShowsTheCallsFactsAndItsProgress(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'NOT_AVAILABLE');
+        $this->setChannelStatus(self::CALLS[0], 'callee', 'NOT_AVAILABLE');
+
+        $I->amOnPage(self::PAGE . '/history');
+
+        $I->see('Call session ID');
+        $I->see(self::CALLS[0]);
+        $I->see(self::STORE_NAME);
+
+        // Requested and Downloaded — never "sync time", which would name an operation that did not
+        // happen. Both are headings, and the call time beside them is the provider's own string.
+        $I->see('Requested');
+        $I->see('Downloaded');
+        $I->see('Call time');
+
+        // Channels checked, with availability stated separately, exactly as on the live page.
+        $I->see('3 of 3');
+        $I->see('1 recording available · 2 unavailable');
+        $I->see('Partial');
+    }
+
+    /** Pagination exists and moves. */
+    public function theHistoryIsPaged(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        // Twenty-six calls, one more than a page holds.
+        for ($i = 0; $i < 26; $i++) {
+            $this->seedDownloadedCall('2200000' . $i, '1660000' . $i);
+        }
+
+        $I->amOnPage(self::PAGE . '/history');
+        $I->see('Page 1 of 2');
+        $I->see('Next');
+
+        $I->amOnPage(self::PAGE . '/history?page=2');
+        $I->see('Page 2 of 2');
+        $I->see('Previous');
+
+        // A page past the end lands on the last real one rather than an empty table.
+        $I->amOnPage(self::PAGE . '/history?page=900');
+        $I->see('Page 2 of 2');
+    }
+
+    // ------------------------------------------------------------------ retry
+
+    /**
+     * Only a failed channel is offered again, and asking does not disturb the ones that arrived.
+     *
+     * The guarantee is in the statement rather than in the button: `retry()` carries `status = FAILED`
+     * in its WHERE, so a recording already here cannot be fetched twice however the form is posted.
+     */
+    public function retryIsOfferedForAFailedChannelAndNotForTheOthers(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+        $this->setChannelStatus(self::CALLS[0], 'mixed', 'IMPORTED');
+        $this->setChannelStatus(self::CALLS[0], 'caller', 'FAILED');
+        $this->setChannelStatus(self::CALLS[0], 'callee', 'NOT_AVAILABLE');
+
+        $I->amOnPage(self::PAGE . '/history');
+
+        // One button, for the one channel that could usefully be asked for again.
+        $I->see('Retry Caller');
+        $I->dontSee('Retry Mix');
+        $I->dontSee('Retry Callee');
+
+        $I->submitForm('form[action*="/call-recordings/retry"]', []);
+
+        // The failed one is waiting again; the other two are exactly as they were.
+        Assert::assertSame('PENDING', $this->channelStatus(self::CALLS[0], 'caller'));
+        Assert::assertSame(
+            'IMPORTED',
+            $this->channelStatus(self::CALLS[0], 'mixed'),
+            'A recording already here must never be fetched a second time.',
+        );
+        Assert::assertSame('NOT_AVAILABLE', $this->channelStatus(self::CALLS[0], 'callee'));
+    }
+
+    /** A channel the provider does not have is never offered again. */
+    public function anUnavailableChannelIsNotOfferedForRetry(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        if (!$this->importEnabled($I)) {
+            return;
+        }
+
+        $this->download($I, [self::CALLS[0]]);
+
+        foreach (['mixed' => 'IMPORTED', 'caller' => 'NOT_AVAILABLE', 'callee' => 'NOT_AVAILABLE'] as $c => $s) {
+            $this->setChannelStatus(self::CALLS[0], $c, $s);
+        }
+
+        $I->amOnPage(self::PAGE . '/history');
+
+        $I->dontSee('Retry');
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private function loadUrl(int $store = self::STORE): string
@@ -427,6 +826,92 @@ final class Order58CallRecordingsCest
             'source' => FixtureAvailability::FIXTURE,
             'calls' => $calls,
         ]);
+    }
+
+    /**
+     * One finished download-only call, written straight to the tables.
+     *
+     * For the paging test, which needs more calls than the fixture source offers and cares about
+     * nothing except how many rows there are.
+     */
+    private function seedDownloadedCall(string $sessionId, string $orderId): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_call_import_batches}}', [
+            'store_source_id' => self::STORE,
+            'triggered_by' => 'MANUAL',
+            'import_mode' => 'DOWNLOAD_ONLY',
+            'requested_by_admin_id' => null,
+            'transcription_provider' => 'WHISPER',
+            'generate_ai_audio' => 0,
+            'recording_company' => self::COMPANY,
+            'call_count' => 1,
+            'created_at' => $now,
+        ])->execute();
+
+        $batchId = (int) $this->connection->getLastInsertID();
+
+        $this->connection->createCommand()->insert('{{%order58_call_imports}}', [
+            'batch_id' => $batchId,
+            'store_source_id' => self::STORE,
+            'call_session_id' => $sessionId,
+            'channel' => 'mixed',
+            'call_time_raw' => '2026-10-01 01:43:12',
+            'call_date' => '2026-10-01',
+            'order_id' => $orderId,
+            'status' => 'IMPORTED',
+            'attempts' => 0,
+            'completed_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
+    private function channelStatus(string $sessionId, string $channel): string
+    {
+        return (string) (new Query($this->connection))
+            ->select('status')
+            ->from('{{%order58_call_imports}}')
+            ->where([
+                'store_source_id' => self::STORE,
+                'call_session_id' => $sessionId,
+                'channel' => $channel,
+            ])
+            ->scalar();
+    }
+
+    private function setChannelStatus(string $sessionId, string $channel, string $status): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%order58_call_imports}}',
+            ['status' => $status],
+            ['store_source_id' => self::STORE, 'call_session_id' => $sessionId, 'channel' => $channel],
+        )->execute();
+    }
+
+    /**
+     * @param list<string> $calls
+     *
+     * @return array{calls: array<string, array<string, mixed>>, active: bool}
+     */
+    private function status(WebTester $I, array $calls, int $store = self::STORE): array
+    {
+        /** @var array{calls: array<string, array<string, mixed>>, active: bool} $payload */
+        $payload = json_decode($this->statusSource($I, $calls, $store), true, 512, JSON_THROW_ON_ERROR);
+
+        return $payload;
+    }
+
+    /**
+     * @param list<string> $calls
+     */
+    private function statusSource(WebTester $I, array $calls, int $store = self::STORE): string
+    {
+        $I->amOnPage(self::PAGE . '/status?store=' . $store . '&calls=' . implode(',', $calls));
+        $I->seeResponseCodeIs(200);
+
+        return $I->grabPageSource();
     }
 
     /**
@@ -491,7 +976,7 @@ final class Order58CallRecordingsCest
         /** @var array<string, mixed>|null $row */
         $row = (new Query($this->connection))
             ->from('{{%order58_call_import_batches}}')
-            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY]])
+            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY, self::STORE_OTHER]])
             ->orderBy(['id' => SORT_DESC])
             ->one();
 
@@ -504,7 +989,7 @@ final class Order58CallRecordingsCest
     {
         return (int) (new Query($this->connection))
             ->from('{{%order58_call_imports}}')
-            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY]])
+            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY, self::STORE_OTHER]])
             ->count();
     }
 
@@ -512,14 +997,14 @@ final class Order58CallRecordingsCest
     {
         return (int) (new Query($this->connection))
             ->from('{{%order58_call_import_batches}}')
-            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY]])
+            ->where(['store_source_id' => [self::STORE, self::STORE_NO_COMPANY, self::STORE_OTHER]])
             ->count();
     }
 
     private function cleanup(): void
     {
         $connection = $this->connection ?? IntegrationDb::connectOrSkip();
-        $stores = [self::STORE, self::STORE_NO_COMPANY];
+        $stores = [self::STORE, self::STORE_NO_COMPANY, self::STORE_OTHER];
 
         // Children first: the batch foreign key is RESTRICT.
         $connection->createCommand()->delete('{{%order58_call_imports}}', ['store_source_id' => $stores])->execute();

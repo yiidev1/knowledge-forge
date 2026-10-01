@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use App\Shared\Audio\RecordingAcquisition;
+use App\Shared\Audio\RecordingAcquisitionState;
 use DateTimeImmutable;
 
 use function array_map;
@@ -56,7 +58,64 @@ final readonly class StoreOrderGroup
          * group it built before. Adding it mid-signature would silently shift `$mixed` along by one.
          */
         public ?string $callTimeRaw = null,
+
+        /**
+         * Recordings of this call still on their way in, if any.
+         *
+         * Null for every row this page has ever shown: a group is built from stored conversations, and
+         * a conversation exists only once its audio has landed. This is the other half — set from the
+         * shared seam for a call somebody has asked for and whose channels have not all arrived.
+         *
+         * Carrying it on the group rather than in a parallel map means a slot cell can ask one object
+         * both questions — "is there a recording here?" and "is one coming?" — and the template never
+         * has to decide which of two sources a row came from.
+         *
+         * **Last in the list and defaulted**, so every existing construction site builds exactly the
+         * group it built before.
+         */
+        public ?RecordingAcquisition $arriving = null,
     ) {}
+
+    /**
+     * Whether anything about this row is still expected to change on its own.
+     *
+     * Two different kinds of waiting, and the page polls for either: audio still being downloaded, or
+     * a transcript being produced for audio that is already here.
+     */
+    public function isSettling(): bool
+    {
+        if ($this->arriving !== null && $this->arriving->isActive()) {
+            return true;
+        }
+
+        foreach ($this->primaries() as $slot) {
+            if ($slot->status->isActive()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * What is coming for one channel, or null when nothing is.
+     *
+     * Returns null for a channel that has already arrived as well as for one never asked for: once
+     * there is a recording the cell draws a player, and a status beside it would be describing work
+     * that is finished.
+     */
+    public function arrivingFor(string $channel): ?RecordingAcquisitionState
+    {
+        $state = $this->arriving?->channels[$channel] ?? null;
+
+        return $state === null || $state->isAvailable() ? null : $state;
+    }
+
+    /** A row with no recordings at all yet — everything it has is still being fetched. */
+    public function isArrivingOnly(): bool
+    {
+        return $this->arriving !== null && $this->primaries() === [];
+    }
 
     /**
      * Every recording in this group, primaries and history alike.

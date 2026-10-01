@@ -16,7 +16,8 @@ use App\AudioToText\Domain\WorkerProcessState;
 use App\AudioToText\Domain\WorkerSchedulerState;
 use App\AudioToText\Domain\WorkerStatusView;
 use App\Order58\Domain\Order58ImportStatus;
-use App\Order58\Domain\RecordingDownloadState;
+use App\Shared\Audio\RecordingAcquisitionOutcome;
+use App\Shared\Audio\RecordingAcquisitionState;
 use PHPUnit\Framework\TestCase;
 
 use function dirname;
@@ -104,10 +105,15 @@ final class ClientVocabularyTest extends TestCase
             $labels[] = ['Order58ImportStatus::' . $case->name, $case->label()];
         }
 
-        // The recordings page's own vocabulary. In this file rather than its own because the rule is
-        // one rule: a reader moving between the two pages meets one set of words, not two.
-        foreach (RecordingDownloadState::cases() as $case) {
-            $labels[] = ['RecordingDownloadState::' . $case->name, $case->label()];
+        // The recordings pages' own vocabulary, both levels of it. In this file rather than its own
+        // because the rule is one rule: a reader moving between these pages and the store's audio page
+        // meets one set of words, not three.
+        foreach (RecordingAcquisitionState::cases() as $case) {
+            $labels[] = ['RecordingAcquisitionState::' . $case->name, $case->label()];
+        }
+
+        foreach (RecordingAcquisitionOutcome::cases() as $case) {
+            $labels[] = ['RecordingAcquisitionOutcome::' . $case->name, $case->label()];
         }
 
         foreach (ProcessingStage::cases() as $case) {

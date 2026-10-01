@@ -61,5 +61,17 @@ final readonly class CallImportItem
          * imports always have.
          */
         public CallImportMode $mode = CallImportMode::DownloadAndTranscribe,
+
+        /**
+         * When a person asked for this recording.
+         *
+         * Distinct from {@see $updatedAt}, which moves with every attempt, and from
+         * {@see $completedAt}, which is when the provider finished answering. The history page shows
+         * this as **Requested**, and calling it anything to do with syncing would be describing a
+         * different operation: nothing was synchronised, somebody pressed a button.
+         *
+         * Last and defaulted, so adding it shifts no existing positional argument.
+         */
+        public ?DateTimeImmutable $createdAt = null,
     ) {}
 }

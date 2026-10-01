@@ -72,6 +72,25 @@ interface CallImportRepositoryInterface
     public function statusesFor(int $storeSourceId, array $callSessionIds): array;
 
     /**
+     * The same rows, read as what each call's recordings are actually doing.
+     *
+     * Separate from {@see statusesFor()} rather than replacing it, because the two answer different
+     * questions: that one folds a call's channels into a bag of statuses, which is all the calls page's
+     * single badge needs. This one keeps **which channel is which**, because the recordings page and the
+     * store page both report them individually — "Mixed Downloaded, Caller Downloading, Callee Waiting"
+     * cannot be reconstructed from an unordered list.
+     *
+     * One statement for every call asked about. A live page polls this every few seconds, so a version
+     * that read per call would turn one open tab into a query per row.
+     *
+     * @param list<string> $callSessionIds
+     *
+     * @return array<string, \App\Shared\Audio\RecordingAcquisition> keyed by call session id; calls with
+     *                                                              no rows are absent rather than empty
+     */
+    public function acquisitionsFor(int $storeSourceId, array $callSessionIds): array;
+
+    /**
      * Take the oldest eligible item and mark it as being worked on.
      *
      * Returns null when there is nothing to do. The claim must be atomic against a second worker even
@@ -79,6 +98,31 @@ interface CallImportRepositoryInterface
      * worker's own claim is.
      */
     public function claimNext(DateTimeImmutable $now): ?CallImportItem;
+
+    /**
+     * The same claim, restricted to one call's remaining channels.
+     *
+     * ## Why this exists
+     *
+     * A person selects a *call*, and a call is three recordings. Claiming strictly one row per run meant
+     * each of those waited a separate timer tick, so one click took three scheduler intervals to finish
+     * — latency that was pure scheduling, not work. This lets one run take the mixed recording and then
+     * that same call's two sides, sequentially, before exiting.
+     *
+     * ## What it deliberately is not
+     *
+     * It is not a backlog drainer. It only ever offers the siblings of a call already claimed, so the
+     * unit of work for one invocation stays bounded at one call — the next call waits for the next tick.
+     *
+     * The claim itself is **identical** to {@see claimNext()}: a conditional update whose affected-row
+     * count is the token, applied per channel. Two executions still cannot take the same channel, and
+     * that remains a database guarantee rather than an agreement between callers.
+     */
+    public function claimNextForCall(
+        int $storeSourceId,
+        string $callSessionId,
+        DateTimeImmutable $now,
+    ): ?CallImportItem;
 
     /** Terminal, successful: this channel became a conversation. */
     public function markImported(
@@ -147,7 +191,7 @@ interface CallImportRepositoryInterface
      * this one must know how many calls exist in total and must land on a page boundary that falls
      * between calls, never between a call's channels.
      */
-    public function historyPage(int $page, int $perPage): CallImportHistoryPage;
+    public function historyPage(int $page, int $perPage, ?CallImportMode $mode = null): CallImportHistoryPage;
 
     public function findItem(int $id): ?CallImportItem;
 }

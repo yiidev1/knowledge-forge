@@ -33,8 +33,10 @@ use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 use Yiisoft\Yii\Console\ExitCode;
 
+use function array_key_first;
 use function fopen;
 use function flock;
+use function intdiv;
 use function sys_get_temp_dir;
 use function tempnam;
 use function unlink;
@@ -146,18 +148,61 @@ final class ImportRecordingsCommandTest extends Unit
         assertSame(1, $repository->claims, '500 MB is ample for a 92 MB download.');
     }
 
-    // ------------------------------------------------------------------ one at a time
+    // ------------------------------------------------------------------ one call at a time
 
-    /** `--once` means one recording, even when the queue has more waiting. */
-    public function testOnceProcessesAtMostOneRecording(): void
+    /**
+     * `--once` means one **call**, even when the queue has more waiting.
+     *
+     * This is the boundary the whole design rests on. A run takes the three channels of the call it
+     * claimed — because that is one thing a person asked for, and splitting it across three timer ticks
+     * added two scheduler intervals of latency for nothing — and then stops. The fourth and fifth rows
+     * here belong to a *different* call and must still be sitting there afterwards.
+     */
+    public function testOnceProcessesOneWholeCallAndNoMore(): void
     {
+        // Five rows: one complete call (mixed, caller, callee) and two channels of the next.
         $repository = $this->repositoryWithOnePendingItem(pending: 5);
         [$command, $output] = $this->command($repository, availableMb: 8000, load: 0.2);
 
         $command->run(new ArrayInput(['--once' => true]), $output);
 
-        assertSame(1, $repository->claims, '--once must claim exactly one item, never drain the queue.');
-        assertStringContainsString('Processed 1 recording(s).', $output->fetch());
+        assertSame(
+            3,
+            $repository->claims,
+            '--once must take the whole call it claimed, and then stop — never drain the queue.',
+        );
+        assertStringContainsString('Processed 3 recording(s).', $output->fetch());
+    }
+
+    /** A call with only one channel waiting is still just that one claim. */
+    public function testASingleWaitingChannelIsOneClaim(): void
+    {
+        $repository = $this->repositoryWithOnePendingItem();
+        [$command, $output] = $this->command($repository, availableMb: 8000, load: 0.2);
+
+        $command->run(new ArrayInput(['--once' => true]), $output);
+
+        assertSame(1, $repository->claims, 'There were no siblings to take.');
+    }
+
+    /**
+     * The sibling channels are taken one after another, never together.
+     *
+     * Asserted from the order the repository was asked, because that is the only place concurrency
+     * could appear: every claim must follow the previous channel's outcome being written.
+     */
+    public function testTheChannelsOfOneCallAreTakenSequentially(): void
+    {
+        $repository = $this->repositoryWithOnePendingItem(pending: 3);
+        [$command, $output] = $this->command($repository, availableMb: 8000, load: 0.2);
+
+        $command->run(new ArrayInput(['--once' => true]), $output);
+
+        assertSame(
+            ['mixed', 'caller', 'callee'],
+            $repository->claimedChannels,
+            'One call, three channels, in order — and one at a time.',
+        );
     }
 
     // ------------------------------------------------------------------ locks
@@ -319,29 +364,76 @@ final class ImportRecordingsCommandTest extends Unit
  * `claims` is the number that matters: it is the only way a row changes hands, so `claims === 0` is a
  * complete statement that the item is still PENDING with its attempt count untouched. `writes` catches any
  * status change that somehow happened without one.
+ *
+ * ## Why it models channels rather than a flat count
+ *
+ * It used to hand out identical rows from a single integer, which was enough while a run took exactly
+ * one of them. Now that a run takes one **call** — up to three channels — a flat counter could not tell
+ * the difference between "took the call it claimed" and "drained the queue", which is the whole
+ * distinction worth testing. So the pending rows are laid out as real calls: three channels each, in
+ * the order the provider offers them.
  */
 final class SpyCallImportRepository implements CallImportRepositoryInterface
 {
     public int $claims = 0;
     public int $writes = 0;
 
-    public function __construct(private int $pending) {}
+    /** @var list<string> the channels handed out, in order — how sequencing is observed */
+    public array $claimedChannels = [];
+
+    /** @var list<array{session: string, channel: RecordingChannel}> oldest first, as the claim orders them */
+    private array $rows = [];
+
+    /** @param int $pending how many channel rows are waiting, grouped into calls of three */
+    public function __construct(int $pending)
+    {
+        $channels = RecordingChannel::all();
+
+        for ($i = 0; $i < $pending; $i++) {
+            $this->rows[] = [
+                // One call per group of three, so `pending: 5` is one whole call and part of a second.
+                'session' => (string) (22487129 + intdiv($i, 3)),
+                'channel' => $channels[$i % 3],
+            ];
+        }
+    }
 
     public function claimNext(DateTimeImmutable $now): ?CallImportItem
     {
-        if ($this->pending <= 0) {
+        return $this->take(array_key_first($this->rows), $now);
+    }
+
+    public function claimNextForCall(
+        int $storeSourceId,
+        string $callSessionId,
+        DateTimeImmutable $now,
+    ): ?CallImportItem {
+        foreach ($this->rows as $index => $row) {
+            if ($row['session'] === $callSessionId) {
+                return $this->take($index, $now);
+            }
+        }
+
+        return null;
+    }
+
+    private function take(?int $index, DateTimeImmutable $now): ?CallImportItem
+    {
+        if ($index === null || !isset($this->rows[$index])) {
             return null;
         }
 
-        $this->pending--;
+        $row = $this->rows[$index];
+        unset($this->rows[$index]);
         $this->claims++;
+        $this->claimedChannels[] = $row['channel']->value;
 
         return new CallImportItem(
-            id: 1,
+            id: $index + 1,
             batchId: 1,
             storeSourceId: 1491,
-            callSessionId: '22487129',
-            channel: RecordingChannel::Mixed,
+            callSessionId: $row['session'],
+            channel: $row['channel'],
             callTimeRaw: '2026-09-25 06:09:16',
             callDate: '2026-09-25',
             orderId: '16547451',
@@ -431,6 +523,11 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
         return [];
     }
 
+    public function acquisitionsFor(int $storeSourceId, array $callSessionIds): array
+    {
+        return [];
+    }
+
     public function retry(int $id, DateTimeImmutable $now): bool
     {
         return false;
@@ -441,7 +538,7 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
         return [];
     }
 
-    public function historyPage(int $page, int $perPage): CallImportHistoryPage
+    public function historyPage(int $page, int $perPage, ?CallImportMode $mode = null): CallImportHistoryPage
     {
         return new CallImportHistoryPage([], 0, $page, $perPage);
     }

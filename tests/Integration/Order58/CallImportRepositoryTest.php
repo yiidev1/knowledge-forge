@@ -127,6 +127,89 @@ final class CallImportRepositoryTest extends Unit
         self::assertNull($this->repository->claimNext($this->now), 'The only item is already taken.');
     }
 
+    // ------------------------------------------------------ claiming one call's remaining channels
+
+    /**
+     * A run takes the call it claimed, channel by channel, and nothing else.
+     *
+     * This is the guarantee the whole throughput change rests on. Splitting one call across three timer
+     * ticks added two scheduler intervals of latency to every click, so a run now drains *that call* —
+     * and must still refuse to touch the next one, which is what keeps the unit of work bounded.
+     */
+    public function testOneRunTakesItsOwnCallsChannelsAndNoOthers(): void
+    {
+        $batch = $this->batch();
+        $this->queue($batch, '22487129');
+        $this->queue($batch, '22487999');
+
+        $first = $this->repository->claimNext($this->now);
+        self::assertNotNull($first);
+
+        $taken = [$first->channel->value];
+
+        while (($next = $this->repository->claimNextForCall(self::STORE, $first->callSessionId, $this->now)) !== null) {
+            self::assertSame($first->callSessionId, $next->callSessionId, 'It strayed onto another call.');
+            $taken[] = $next->channel->value;
+        }
+
+        self::assertCount(3, $taken, 'All three channels of the claimed call, and no more.');
+        self::assertSame(['mixed', 'caller', 'callee'], $taken, 'In the order the provider offers them.');
+
+        // The other call is untouched: still three pending rows, waiting for the next tick.
+        self::assertSame(3, $this->pendingFor('22487999'));
+    }
+
+    /** It never reaches across stores, even for an identical session id. */
+    public function testTheSiblingClaimIsScopedToItsStore(): void
+    {
+        $this->queue($this->batch(), '22487129');
+        $this->queue($this->batch(self::OTHER_STORE), '22487129', self::OTHER_STORE);
+
+        while ($this->repository->claimNextForCall(self::STORE, '22487129', $this->now) !== null) {
+            // Drain this store's channels only.
+        }
+
+        self::assertSame(
+            3,
+            $this->pendingFor('22487129', self::OTHER_STORE),
+            'Another store\'s call sharing a session id must be left alone.',
+        );
+    }
+
+    /** A sibling already taken by someone else is skipped, not fought over. */
+    public function testASiblingAlreadyTakenIsNotClaimedTwice(): void
+    {
+        $this->queue($this->batch(), '22487129');
+
+        $one = $this->repository->claimNextForCall(self::STORE, '22487129', $this->now);
+        $two = $this->repository->claimNextForCall(self::STORE, '22487129', $this->now);
+        self::assertNotNull($one);
+        self::assertNotNull($two);
+
+        self::assertNotSame($one->id, $two->id, 'The conditional update is what stops a double claim.');
+    }
+
+    /** A sibling whose backoff has not elapsed is left for later, exactly as the general claim does. */
+    public function testASiblingStillInBackoffIsNotTaken(): void
+    {
+        $this->queue($this->batch(), '22487129');
+
+        $first = $this->repository->claimNext($this->now);
+        self::assertNotNull($first);
+
+        // Put it back with a backoff that has not expired.
+        $this->repository->requeue($first->id, $this->now->modify('+10 minutes'), 'timeout', 'slow', $this->now);
+
+        $sessions = [];
+
+        while (($next = $this->repository->claimNextForCall(self::STORE, '22487129', $this->now)) !== null) {
+            $sessions[] = $next->id;
+        }
+
+        self::assertCount(2, $sessions, 'The two siblings are taken; the deferred one is not.');
+        self::assertNotContains($first->id, $sessions);
+    }
+
     /** The claimed item carries the batch's options, so the worker needs no second read. */
     public function testAClaimedItemCarriesTheBatchsSnapshot(): void
     {
@@ -292,6 +375,18 @@ final class CallImportRepositoryTest extends Unit
             RecordingChannel::all(),
             $this->now,
         );
+    }
+
+    private function pendingFor(string $sessionId, int $store = self::STORE): int
+    {
+        return (int) (new Query($this->connection))
+            ->from('{{%order58_call_imports}}')
+            ->where([
+                'store_source_id' => $store,
+                'call_session_id' => $sessionId,
+                'status' => Order58ImportStatus::Pending->value,
+            ])
+            ->count();
     }
 
     private function countItems(): int

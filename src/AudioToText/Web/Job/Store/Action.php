@@ -18,11 +18,13 @@ use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Application\ArrivingRecordingMerger;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\Auth\Application\CurrentAdmin;
 use App\Shared\Application\Time\AppTimeZone;
+use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -101,6 +103,8 @@ final readonly class Action
          * one upload at a time — cannot answer without the caller grouping afterwards and paging wrong.
          */
         private StoreOrderGroupRepositoryInterface $groups,
+        private ArrivingRecordingMerger $arriving,
+        private ClockInterface $clock,
     ) {}
 
     public function __invoke(#[RouteArgument] int $sourceId, ServerRequestInterface $request): ResponseInterface
@@ -219,10 +223,18 @@ final readonly class Action
                 // with the card that led here.
                 'canUpload' => $store->active,
                 'errors' => $errors,
-                'groups' => $this->groups->pageFor(
+                // Stored conversations, plus the calls somebody has asked for whose audio has not all
+                // landed. Without the second half the page shows nothing for the minute or two between
+                // pressing Download and the first recording arriving, which reads as the press having
+                // done nothing. See ArrivingRecordingMerger.
+                'groups' => $this->arriving->merge(
                     $store->sourceId,
-                    self::PER_PAGE,
-                    ($page - 1) * self::PER_PAGE,
+                    $this->groups->pageFor(
+                        $store->sourceId,
+                        self::PER_PAGE,
+                        ($page - 1) * self::PER_PAGE,
+                    ),
+                    $this->clock->now(),
                 ),
                 'total' => $total,
                 'page' => $page,

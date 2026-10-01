@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Domain;
 
 use App\Integration\Order58Recording\RecordingChannel;
+use App\Shared\Audio\RecordingAcquisition;
 use DateTimeImmutable;
 
 /**
@@ -66,5 +67,74 @@ final readonly class CallImportHistoryRow
         }
 
         return false;
+    }
+
+    /**
+     * The same call in the vocabulary both live pages use, so one row reads alike wherever it appears.
+     *
+     * Null only for a call with no channel rows at all, which the grouping cannot produce.
+     */
+    public function acquisition(): ?RecordingAcquisition
+    {
+        $statuses = [];
+
+        foreach ($this->channels as $channel => $item) {
+            $statuses[$channel] = $item->status;
+        }
+
+        return RecordingAcquisitionReader::forCall(
+            $this->callSessionId,
+            $this->orderId,
+            $this->callTimeRaw,
+            $statuses,
+        );
+    }
+
+    /**
+     * When a person asked for these recordings.
+     *
+     * The earliest of the channels, which in practice is all of them: a call's three rows are written in
+     * one statement. Deliberately **not** called a sync time — nothing was synchronised, somebody
+     * pressed a button, and naming it after a different operation would mislead anybody reading the
+     * column to work out what happened when.
+     */
+    public function requestedAt(): ?DateTimeImmutable
+    {
+        $earliest = null;
+
+        foreach ($this->channels as $item) {
+            if ($item->createdAt !== null && ($earliest === null || $item->createdAt < $earliest)) {
+                $earliest = $item->createdAt;
+            }
+        }
+
+        return $earliest;
+    }
+
+    /**
+     * When the acquisition finished — the **last** channel to settle.
+     *
+     * Channels finish at different moments, so this has to choose, and the last one is the only choice
+     * that means "this call is done". The first would date the call from a recording that arrived while
+     * two others were still outstanding.
+     *
+     * Null while anything is still outstanding, which is what makes it safe to render as a completion
+     * time: a value here is a promise that there is nothing left to wait for.
+     */
+    public function downloadedAt(): ?DateTimeImmutable
+    {
+        $latest = null;
+
+        foreach ($this->channels as $item) {
+            if (!$item->status->isSettled()) {
+                return null;
+            }
+
+            if ($item->completedAt !== null && ($latest === null || $item->completedAt > $latest)) {
+                $latest = $item->completedAt;
+            }
+        }
+
+        return $latest;
     }
 }

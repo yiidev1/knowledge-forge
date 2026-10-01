@@ -562,11 +562,32 @@ window.KFAudioStages = {
         }
     }
 
+    /**
+     * The recording the confirmation is currently about, or null when the dialog is closed.
+     *
+     * Everything the dialog needs is read off the button at open time and kept here, so the request it
+     * eventually sends goes to the recording that was clicked — not to whichever row the pointer has
+     * since moved over, and not to the last one looked at.
+     */
+    var pendingTranscribe = null;
+
     dialogs.forEach(function (dialog) {
         // Audio must not go on playing behind a dialog that is no longer on screen.
         dialog.addEventListener('close', function () {
             silence();
             forgetDetached();
+
+            // Back to the control that opened this, however it closed — the close button, Cancel, the
+            // backdrop or Escape. A reader who cancels should find the caret where they left it rather
+            // than at the top of the document.
+            if (pendingTranscribe && pendingTranscribe.button) {
+                var opener = pendingTranscribe.button;
+                pendingTranscribe = null;
+
+                if (document.contains(opener)) {
+                    opener.focus();
+                }
+            }
         });
         // A server-rendered `open` is a non-modal dialog — the state the page falls back to without
         // this script. Upgrade it so the backdrop and Escape behave like every other dialog here.
@@ -3532,6 +3553,92 @@ window.KFAudioStages = {
      * Nothing is remembered. The server is asked on open and every two seconds after, which is what
      * makes this correct for a job this tab knows nothing about.
      */
+    /* ---- Asking for a transcript, with a confirmation first -------------------------------- */
+
+    function confirmDialog() {
+        return document.getElementById('a2t-transcribe-dialog');
+    }
+
+    function fill(dialog, selector, value, rowSelector) {
+        var node = dialog.querySelector(selector);
+        var row = rowSelector ? dialog.querySelector(rowSelector) : null;
+
+        if (node) {
+            node.textContent = value || '';
+        }
+
+        // A fact the page does not have — an upload that named no order, a recording with no measured
+        // duration — is left out rather than shown as a blank or an em dash. An empty row in a list of
+        // four reads as something missing; three rows read as three facts.
+        if (row) {
+            row.hidden = !value;
+        }
+    }
+
+    /**
+     * Open the confirmation for one recording. **Sends nothing.**
+     *
+     * This is the whole point of the dialog: pressing Transcribe used to start work that spends CPU or
+     * money and cannot be called back, from a button sitting in a row of three identical ones. Opening
+     * this makes no request, moves no status, and closing it leaves the recording exactly as it was.
+     */
+    function confirmTranscript(button) {
+        var dialog = confirmDialog();
+        var url = button.getAttribute('data-a2t-transcribe');
+
+        if (!dialog || !url || button.disabled || reviewToken === null) {
+            return;
+        }
+
+        var label = button.getAttribute('data-a2t-details-label') || 'Recording';
+
+        pendingTranscribe = {
+            url: url,
+            label: label,
+            // Kept so focus can go back where it came from when the dialog closes, however it closes.
+            button: button
+        };
+
+        var order = button.getAttribute('data-a2t-transcribe-order');
+
+        fill(dialog, '[data-a2t-confirm-order]', order ? '#' + order : '', '[data-a2t-confirm-order-row]');
+        fill(dialog, '[data-a2t-confirm-recording]', label);
+        fill(
+            dialog,
+            '[data-a2t-confirm-duration]',
+            button.getAttribute('data-a2t-transcribe-duration'),
+            '[data-a2t-confirm-duration-row]'
+        );
+        fill(
+            dialog,
+            '[data-a2t-confirm-provider]',
+            button.getAttribute('data-a2t-transcribe-provider'),
+            '[data-a2t-confirm-provider-row]'
+        );
+
+        var error = dialog.querySelector('[data-a2t-confirm-error]');
+        var confirm = dialog.querySelector('[data-a2t-confirm-transcribe]');
+
+        // A refusal from a previous attempt is not this one's news.
+        if (error) {
+            error.hidden = true;
+            error.textContent = '';
+        }
+
+        if (confirm) {
+            confirm.disabled = false;
+            confirm.textContent = 'Start transcription';
+        }
+
+        openDialog(dialog);
+
+        // `showModal()` focuses the dialog; this puts the caret on the action rather than on the close
+        // button, so Enter does the thing the reader came for and Escape still cancels.
+        if (confirm) {
+            confirm.focus();
+        }
+    }
+
     /**
      * Ask for the transcript of one recording, then watch it.
      *
@@ -3544,22 +3651,44 @@ window.KFAudioStages = {
      * so the reader is looking at the thing they just asked for rather than at a table that has not
      * changed yet.
      *
-     * The button is disabled for the round trip, and the server refuses a second ask anyway, so a double
-     * press cannot produce two requests.
+     * The confirm button is disabled for the round trip and the server refuses a second ask anyway, so
+     * a double press cannot produce two requests.
      */
-    function askForTranscript(button) {
-        var url = button.getAttribute('data-a2t-transcribe');
-        var label = button.getAttribute('data-a2t-details-label') || 'Recording';
+    function startTranscript() {
+        var dialog = confirmDialog();
+        var asked = pendingTranscribe;
 
-        if (!url || button.disabled || reviewToken === null) {
+        if (!dialog || !asked || reviewToken === null) {
             return;
         }
 
-        var wording = button.textContent;
-        button.disabled = true;
-        button.textContent = 'Requesting…';
+        var confirm = dialog.querySelector('[data-a2t-confirm-transcribe]');
+        var error = dialog.querySelector('[data-a2t-confirm-error]');
 
-        fetch(url, {
+        if (!confirm || confirm.disabled) {
+            return;
+        }
+
+        // Before the request, not after it: the guard has to be in place for the second click of a
+        // double click, which arrives long before any answer does.
+        confirm.disabled = true;
+        confirm.textContent = 'Starting…';
+
+        if (error) {
+            error.hidden = true;
+        }
+
+        function refuse(message) {
+            confirm.disabled = false;
+            confirm.textContent = 'Start transcription';
+
+            if (error) {
+                error.textContent = message;
+                error.hidden = false;
+            }
+        }
+
+        fetch(asked.url, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -3570,23 +3699,26 @@ window.KFAudioStages = {
         }).then(function (response) {
             return response.json().then(
                 function (data) { return data; },
-                function () { return { success: false, message: 'The server could not confirm this request.' }; }
+                function () { return { success: false }; }
             );
         }).then(function (data) {
-            button.disabled = false;
-            button.textContent = wording;
-
             if (!data.success || !data.statusUrl) {
-                // Refused — most often because somebody else asked first, which is not a failure worth
-                // alarming anybody about. The table is re-read so it shows whatever is true now.
+                // Refused. Most often because somebody else asked first, which is not a failure worth
+                // alarming anybody about — but the recording has NOT been asked for by this press, so
+                // the page must not claim otherwise. Re-read it and show whatever is true now.
+                pendingTranscribe = null;
+                closeDialog(dialog);
                 window.location.reload();
                 return;
             }
 
-            showProgressOn(data.statusUrl, label);
+            pendingTranscribe = null;
+            closeDialog(dialog);
+            showProgressOn(data.statusUrl, asked.label);
         }).catch(function () {
-            button.disabled = false;
-            button.textContent = wording;
+            // The request did not arrive. Nothing was asked for, so the recording is still ready and
+            // the dialog stays open with something to press again.
+            refuse('Unable to start transcription. Please try again.');
         });
     }
 
@@ -4165,7 +4297,7 @@ window.KFAudioStages = {
         var transcribe = target.closest('[data-a2t-transcribe]');
         if (transcribe) {
             event.preventDefault();
-            askForTranscript(transcribe);
+            confirmTranscript(transcribe);
             return;
         }
 
@@ -4177,6 +4309,12 @@ window.KFAudioStages = {
                 event.preventDefault();
                 openDialog(wanted);
             }
+            return;
+        }
+
+        var starter = target.closest('[data-a2t-confirm-transcribe]');
+        if (starter) {
+            startTranscript();
             return;
         }
 
@@ -4260,4 +4398,147 @@ window.KFAudioStages = {
             closeDialog(target);
         }
     });
+}());
+
+/* ------------------------------------------------------------------------------------------------
+ * Recordings still arriving for this store.
+ *
+ * The audio for a call is fetched on a schedule, one recording at a time, so between asking for a call
+ * and its first recording landing there is a minute or two in which the page would otherwise sit still.
+ * The server renders what is on its way; this keeps those words current without a manual refresh.
+ *
+ * ## Why it reloads rather than building the cell
+ *
+ * A recording that has arrived needs a player with its duration, a Transcribe control and a Details
+ * route — a cell only the template knows how to draw, and one whose wording is held to rules a second
+ * implementation here would quietly drift from. So this updates the *pending* text in place, and when a
+ * recording actually lands it reloads once and lets the server draw it.
+ *
+ * ## It stops
+ *
+ * The attribute that starts it is rendered only while something is outstanding, and the server's own
+ * `active` flag ends it. A page with nothing arriving makes no requests at all.
+ * ---------------------------------------------------------------------------------------------- */
+(function () {
+    'use strict';
+
+    var root = document.querySelector('[data-a2t-arriving-poll]');
+
+    if (!root || !window.fetch) {
+        return;
+    }
+
+    var url = root.getAttribute('data-a2t-arriving-poll');
+
+    // Five seconds: the backend moves at most once per scheduled run, so asking faster would spend
+    // requests learning nothing. Twenty on failure, and a ceiling so a stuck import cannot poll for ever.
+    var INTERVAL = 5000;
+    var BACKOFF = 20000;
+    var MAX_POLLS = 180;
+
+    var timer = null;
+    var stopped = false;
+    var polls = 0;
+
+    // What had arrived when the page was drawn. A rise in this count means a recording landed and the
+    // server now has a player to render, which is the one thing worth a reload.
+    var landed = Number(root.getAttribute('data-a2t-arriving-landed') || '0');
+
+    function stop() {
+        stopped = true;
+
+        if (timer) {
+            window.clearTimeout(timer);
+            timer = null;
+        }
+    }
+
+    function poll() {
+        if (stopped) {
+            return;
+        }
+
+        window.fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('status ' + response.status);
+                }
+
+                return response.json();
+            })
+            .then(function (data) {
+                if (stopped || !data) {
+                    return;
+                }
+
+                var total = 0;
+
+                Object.keys(data.calls || {}).forEach(function (session) {
+                    var call = data.calls[session];
+                    total += call.available || 0;
+
+                    var row = root.querySelector('[data-a2t-arriving-call="' + session + '"]');
+
+                    if (!row) {
+                        return;
+                    }
+
+                    var outcome = row.querySelector('[data-a2t-arriving-outcome]');
+                    var progress = row.querySelector('[data-a2t-arriving-progress]');
+                    var availability = row.querySelector('[data-a2t-arriving-availability]');
+
+                    if (outcome) { outcome.textContent = call.outcomeLabel; }
+                    if (progress) { progress.textContent = call.progressText; }
+                    if (availability) { availability.textContent = call.availabilityText; }
+
+                    var bar = row.querySelector('[data-a2t-arriving-bar]');
+
+                    if (bar && typeof call.percentChecked === 'number') {
+                        bar.setAttribute('aria-valuenow', String(call.percentChecked));
+                        // The words, not the number — see the template.
+                        bar.setAttribute('aria-valuetext', call.progressText || '');
+
+                        var fill = bar.querySelector('.a2t-arriving__fill');
+
+                        if (fill) {
+                            fill.style.width = call.percentChecked + '%';
+                        }
+                    }
+
+                    Object.keys(call.channels || {}).forEach(function (channel) {
+                        var cell = row.querySelector('[data-a2t-arriving-channel="' + channel + '"]');
+
+                        if (cell) {
+                            cell.textContent = call.channels[channel].label + '…';
+                        }
+                    });
+                });
+
+                // Something landed, or everything finished: either way the server has cells to draw
+                // that this cannot, so hand back to it.
+                if (total > landed || !data.active) {
+                    stop();
+                    window.location.reload();
+                    return;
+                }
+
+                if (++polls >= MAX_POLLS) {
+                    stop();
+                    return;
+                }
+
+                timer = window.setTimeout(poll, INTERVAL);
+            })
+            .catch(function () {
+                if (stopped) {
+                    return;
+                }
+
+                // Nothing is said on screen: the rows are still true as drawn, and a warning about this
+                // page's own connection would be noise about the wrong thing.
+                timer = window.setTimeout(poll, BACKOFF);
+            });
+    }
+
+    timer = window.setTimeout(poll, INTERVAL);
 }());

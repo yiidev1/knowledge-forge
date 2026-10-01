@@ -61,6 +61,9 @@ $this->setParameter('breadcrumbs', [
 
 $csrfField = (string) $csrf->hiddenInput();
 $storeUrl = $urlGenerator->generate(AudioToTextRoute::STORE, ['sourceId' => $store->sourceId]);
+// One endpoint for the whole page. The attribute that uses it is rendered only while something is
+// still being downloaded, so an idle page never asks.
+$arrivingUrl = $urlGenerator->generate(AudioToTextRoute::STORE_ARRIVING, ['sourceId' => $store->sourceId]);
 $pageUrl = static fn(int $p): string => $storeUrl . ($p > 1 ? '?page=' . $p : '');
 
 /**
@@ -354,9 +357,25 @@ $slotCell = static function (
     $appTimeZone,
     $groupUrl,
     $statusUrl,
-    $transcribeUrl
+    $transcribeUrl,
+    $globalDefault
 ): string {
     if ($slot === null) {
+        // Asked for and not here yet. Said plainly, in place of the Add-audio affordance: offering to
+        // upload a recording that is already being fetched would invite somebody to do the work twice,
+        // and a dash would read as nothing having been asked for.
+        //
+        // No play button, no Details, and above all no Transcribe — there is no audio to do any of it
+        // to. That is structural rather than a rule: all three are drawn from a slot, and there is none.
+        $channelKey = $emptyType === null ? null : strtolower($emptyType->value);
+        $incoming = $channelKey === null ? null : $group?->arrivingFor($channelKey);
+
+        if ($incoming !== null && $channelKey !== null) {
+            return '<span class="a2t-slot__note a2t-slot__note--arriving"'
+                . ' data-a2t-arriving-channel="' . Html::encode($channelKey) . '">'
+                . Html::encode($incoming->label()) . '…</span>';
+        }
+
         // Nothing here yet — so offer to put something here, rather than printing a dash and leaving
         // the administrator to find the Manage Audio dialog and work out which slot they wanted.
         //
@@ -420,6 +439,11 @@ $slotCell = static function (
             . '<button class="a2t-slot__link a2t-slot__link--go" type="button"'
             . ' data-a2t-transcribe="' . Html::encode($transcribeUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-status="' . Html::encode($statusUrl($slot->jobPublicId)) . '"'
+            // What the confirmation names, carried on the button that opens it so the dialog
+            // describes THE recording that was clicked rather than whichever one was looked at last.
+            . ' data-a2t-transcribe-order="' . Html::encode($group?->orderId ?? '') . '"'
+            . ' data-a2t-transcribe-duration="' . Html::encode($clock($slot->durationSeconds)) . '"'
+            . ' data-a2t-transcribe-provider="' . Html::encode($globalDefault->shortLabel()) . '"'
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Transcribe audio</button>';
     } elseif ($slot->status->value === 'FAILED') {
         $html .= '<span class="a2t-slot__note">Failed</span>';
@@ -547,12 +571,31 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             <?php endif; ?>
         </div>
     <?php else: ?>
-        <div class="a2t-table-scroll">
+        <?php
+        // Polling hooks. The attribute is rendered only while something is still being downloaded, so a
+        // page with nothing arriving — almost every page view — makes no requests at all. `landed` is
+        // what had already arrived when this was drawn: a rise in it means the server has a player to
+        // render that the browser cannot build, and the page reloads once rather than assembling one.
+        $arrivingCalls = [];
+        $landed = 0;
+
+        foreach ($groups as $group) {
+            if ($group->arriving !== null && $group->arriving->isActive()) {
+                $arrivingCalls[] = $group;
+                $landed += $group->arriving->available();
+            }
+        }
+        ?>
+        <div class="a2t-table-scroll"
+            <?php if ($arrivingCalls !== []): ?>
+                data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
+                data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
+            <?php endif; ?>>
             <table class="table a2t-table a2t-orders">
                 <?php
-                // Sized to content, with the three recording columns sharing the slack: a filename no
-                // longer appears here, so nothing in this table has an unbounded length.
-        ?>
+                        // Sized to content, with the three recording columns sharing the slack: a filename no
+                        // longer appears here, so nothing in this table has an unbounded length.
+?>
                 <colgroup>
                     <col class="a2t-col-order">
                     <col class="a2t-col-slot">
@@ -579,7 +622,9 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 <tbody>
                 <?php foreach ($groups as $group): ?>
                     <?php $status = $group->aggregateStatus(); ?>
-                    <tr>
+                    <tr<?= $group->arriving !== null
+                ? ' data-a2t-arriving-call="' . Html::encode($group->arriving->callSessionId) . '"'
+                : '' ?>>
                         <td>
                             <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
                                 <?php // One way in to every recording of this call. The channels it?>
@@ -594,9 +639,9 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 <span class="a2t-order-id">#<?= Html::encode($group->orderId) ?></span>
                             <?php else: ?>
                                 <?php
-                        // An upload that named no order is still its own row — never merged
-                        // with every other order-less upload. It says so rather than showing
-                        // a blank cell that would read as missing data.
+                // An upload that named no order is still its own row — never merged
+                // with every other order-less upload. It says so rather than showing
+                // a blank cell that would read as missing data.
                                 ?>
                                 <span class="util-muted">No order</span>
                             <?php endif; ?>
@@ -645,9 +690,43 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                         <td><?= $slotCell($group->caller, RecordingType::Caller, $group) ?></td>
                         <td><?= $slotCell($group->callee, RecordingType::Callee, $group) ?></td>
                         <td>
-                            <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
-                                <?= Html::encode($status->label()) ?>
-                            </span>
+                            <?php
+                            // A row whose audio is still arriving says so, instead of reporting a
+                            // transcription status for recordings that are not here to transcribe. The
+                            // two numbers are kept apart for the reason they are everywhere in this
+                            // feature: the count is channels the provider has answered for, and the
+                            // line under it is what actually arrived.
+                    ?>
+                            <?php if ($group->arriving !== null && $group->arriving->isActive()): ?>
+                                <div class="a2t-arriving">
+                                    <span class="a2t-badge a2t-badge--queued" data-a2t-arriving-outcome>
+                                        <?= Html::encode($group->arriving->outcome()->label()) ?>
+                                    </span>
+                                    <?php
+                                    // `aria-valuetext` carries the words rather than the number: a
+                                    // reader told "33 percent" would be hearing the one figure here
+                                    // that is not the authoritative one.
+                                ?>
+                                    <div class="a2t-arriving__bar" role="progressbar"
+                                        aria-valuemin="0" aria-valuemax="100"
+                                        aria-valuenow="<?= $group->arriving->percentChecked() ?>"
+                                        aria-valuetext="<?= Html::encode($group->arriving->progressText()) ?>"
+                                        data-a2t-arriving-bar>
+                                        <span class="a2t-arriving__fill"
+                                            style="width: <?= $group->arriving->percentChecked() ?>%"></span>
+                                    </div>
+                                    <div class="field__hint" data-a2t-arriving-progress>
+                                        <?= Html::encode($group->arriving->progressText()) ?>
+                                    </div>
+                                    <div class="field__hint" data-a2t-arriving-availability>
+                                        <?= Html::encode($group->arriving->availabilityText()) ?>
+                                    </div>
+                                </div>
+                            <?php else: ?>
+                                <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
+                                    <?= Html::encode($status->label()) ?>
+                                </span>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <?php $primaries = $group->primaries(); ?>
@@ -982,6 +1061,73 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         <div class="a2t-listen" data-a2t-listen hidden></div>
         <div class="a2t-mnotice" data-a2t-review-notice></div>
         <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
+    </div>
+</dialog>
+
+<?php
+// Asking before transcribing.
+//
+// Pressing Transcribe used to start the work on the press. That is the right behaviour for something
+// cheap and reversible, and transcription is neither: it spends CPU or money, it cannot be called back
+// once a provider has the audio, and the button sits in a row of three identical ones where the wrong
+// click is easy. So the press now opens this, and the work starts on a second, deliberate press.
+//
+// **Opening it does nothing.** No request is made, no status moves, and closing it leaves the recording
+// exactly as it was. Everything the dialog says is read from the button that opened it, so it describes
+// the recording actually clicked rather than whichever was looked at last.
+//
+// Empty and filled on demand, like the three dialogs above it, so the page carries one of these however
+// many recordings it lists.
+?>
+<dialog class="source-modal a2t-confirm-dialog" id="a2t-transcribe-dialog" data-a2t-dialog
+        aria-labelledby="a2t-transcribe-title">
+    <div class="source-modal__head">
+        <div>
+            <h2 class="source-modal__title" id="a2t-transcribe-title">Transcribe this audio?</h2>
+            <p class="source-modal__meta">
+                This will convert the selected recording to text using the currently configured
+                transcription provider.
+            </p>
+        </div>
+        <button class="source-modal__close" type="button" data-a2t-dialog-close
+            title="Close" aria-label="Close">&times;</button>
+    </div>
+
+    <div class="source-modal__body">
+        <?php
+        // What is about to happen, to what. Named in the client's own words — the recording's column
+        // heading, not a channel code — so the line reads as the row it came from.
+?>
+        <dl class="a2t-confirm__facts">
+            <div class="a2t-confirm__fact" data-a2t-confirm-order-row>
+                <dt>Order ID</dt>
+                <dd data-a2t-confirm-order></dd>
+            </div>
+            <div class="a2t-confirm__fact">
+                <dt>Recording</dt>
+                <dd data-a2t-confirm-recording></dd>
+            </div>
+            <div class="a2t-confirm__fact" data-a2t-confirm-duration-row>
+                <dt>Duration</dt>
+                <dd data-a2t-confirm-duration></dd>
+            </div>
+            <div class="a2t-confirm__fact" data-a2t-confirm-provider-row>
+                <dt>Provider</dt>
+                <dd data-a2t-confirm-provider></dd>
+            </div>
+        </dl>
+
+        <?php
+        // Only ever shown after a refusal, and worded for the person rather than for a log. A failure
+        // here leaves the recording exactly where it was, which is why the dialog stays open: there is
+        // something to try again.
+?>
+        <p class="field__error" data-a2t-confirm-error hidden></p>
+    </div>
+
+    <div class="source-modal__foot a2t-confirm__actions">
+        <button class="btn btn--secondary" type="button" data-a2t-dialog-close>Cancel</button>
+        <button class="btn btn--primary" type="button" data-a2t-confirm-transcribe>Start transcription</button>
     </div>
 </dialog>
 

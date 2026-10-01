@@ -13,6 +13,7 @@ use App\Shared\Audio\AudioIngestionPortInterface;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Log\SecretRedactor;
 use Psr\Log\LoggerInterface;
+use DateTimeImmutable;
 use Throwable;
 
 use function in_array;
@@ -24,7 +25,7 @@ use function unlink;
  *
  * ## One item, one outcome, always written
  *
- * Every path through {@see processNext()} ends in a terminal status or a requeue. A claimed row that
+ * Every path through {@see attempt()} ends in a terminal status or a requeue. A claimed row that
  * were left as `FETCHING` would be invisible to the next claim and would need the stale sweep to rescue
  * it, so the `finally` is not a tidiness measure — it is what stops a crash costing a recording.
  *
@@ -48,6 +49,18 @@ final readonly class RecordingImportProcessor
 
     private const BASE_BACKOFF_SECONDS = 60;
 
+    /**
+     * How long into a run a new channel may still be started.
+     *
+     * Derived from the unit's `TimeoutStartSec=300`, not guessed. One channel's worst case is the
+     * provider's 60s read timeout plus ffprobe's 20s plus ingestion — call it 85s — so starting one at
+     * 180s elapsed lands around 265s, inside the limit with room for the lock, the admission check and
+     * the stale sweep. Three typical channels finish in a few seconds and never come near this; the
+     * budget exists for the run where the provider has gone slow, which is exactly when being killed
+     * mid-download would cost a claimed row and a partial file.
+     */
+    private const CALL_BUDGET_SECONDS = 180;
+
     /** Diagnoses that another attempt could plausibly resolve. */
     private const TRANSIENT = [
         ChannelDiagnosis::TIMEOUT,
@@ -69,18 +82,71 @@ final readonly class RecordingImportProcessor
     ) {}
 
     /**
-     * Claim the next queued recording and see it through.
+     * Claim one call and see its channels through, one after another.
      *
-     * @return bool whether there was anything to do
+     * ## One call, not one recording — and still not a drainer
+     *
+     * A person selects a *call*, and a call is up to three recordings. Taking strictly one row per run
+     * meant each of those waited its own timer tick, so a single click took three scheduler intervals
+     * to finish. That latency was pure scheduling: the provider is not slow, the schedule was.
+     *
+     * So a run takes the row it claimed and then that **same call's** remaining channels, sequentially,
+     * and exits. It never looks at another call — the maximum unit of work for one invocation is one
+     * call session and at most three channels, and the next call waits for the next tick exactly as it
+     * did before. Nothing here downloads in parallel; each channel is fully finished, and its temporary
+     * file consumed or removed, before the next is claimed.
+     *
+     * ## Why the time budget, and why it is checked before claiming
+     *
+     * The unit allows `TimeoutStartSec=300`. One channel's worst case is the provider read timeout (60s)
+     * plus ffprobe's (20s) plus ingestion, so three in a row could come within about forty seconds of
+     * being killed mid-download. {@see CALL_BUDGET_SECONDS} stops that, and it is checked **before** the
+     * next sibling is claimed rather than during it: a channel this run declines to start is simply left
+     * `pending`, which the next tick takes. A row is never claimed and then abandoned, so the stale
+     * sweep has nothing new to rescue.
+     *
+     * @return int how many channels this run actually handled; 0 when there was nothing to do
      */
-    public function processNext(): bool
+    public function processNextCall(): int
     {
         $item = $this->imports->claimNext($this->clock->now());
 
         if ($item === null) {
-            return false;
+            return 0;
         }
 
+        $startedAt = $this->clock->now();
+        $this->attempt($item);
+        $handled = 1;
+
+        // The siblings of the call just claimed, and only those. Each is a fresh conditional claim, so
+        // a channel another worker took in the meantime is skipped rather than fought over.
+        while ($this->hasTimeForAnotherChannel($startedAt)) {
+            $sibling = $this->imports->claimNextForCall(
+                $item->storeSourceId,
+                $item->callSessionId,
+                $this->clock->now(),
+            );
+
+            if ($sibling === null) {
+                break;
+            }
+
+            $this->attempt($sibling);
+            ++$handled;
+        }
+
+        return $handled;
+    }
+
+    /**
+     * One channel, taken as far as it can go, with its outcome written whatever happens.
+     *
+     * The try/catch is per channel on purpose: a fault on the mixed recording must not cost the two
+     * sides their turn, and each row's attempt count and backoff are its own.
+     */
+    private function attempt(CallImportItem $item): void
+    {
         try {
             $this->process($item);
         } catch (Throwable $e) {
@@ -98,8 +164,12 @@ final readonly class RecordingImportProcessor
 
             $this->giveUpOrRetry($item, 'import_error', $e->getMessage());
         }
+    }
 
-        return true;
+    /** Whether there is room inside the budget to start another channel from scratch. */
+    private function hasTimeForAnotherChannel(DateTimeImmutable $startedAt): bool
+    {
+        return $this->clock->now()->getTimestamp() - $startedAt->getTimestamp() < self::CALL_BUDGET_SECONDS;
     }
 
     /** Return any item a killed worker left claimed, so it is picked up again rather than stranded. */

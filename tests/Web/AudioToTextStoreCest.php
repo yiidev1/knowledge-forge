@@ -3457,6 +3457,375 @@ final class AudioToTextStoreCest
         $I->seeCurrentUrlEquals('/');
     }
 
+    // ------------------------------------------------------------- confirming before transcription
+
+    /**
+     * The confirmation is on the page, and the button opens it rather than starting anything.
+     *
+     * The server-side half of the guarantee: the control that used to send a POST is now an ordinary
+     * button carrying the facts the dialog reads. Nothing about it submits.
+     */
+    public function theTranscribeButtonOpensAConfirmationRatherThanStarting(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+        $this->makeReadyForTranscription(self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Transcribe audio');
+        $I->seeElement('#a2t-transcribe-dialog');
+        $I->see('Transcribe this audio?');
+        $I->see('Start transcription');
+        $I->see('Cancel');
+
+        // A button, not a form: there is no submit here that could start work without the dialog.
+        $I->seeElement('button[data-a2t-transcribe]');
+        $I->dontSeeElement('form[action*="/transcribe"]');
+    }
+
+    /** The button carries the facts the dialog names, for its own recording. */
+    public function eachTranscribeButtonCarriesItsOwnRecordingsFacts(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16674631');
+        $this->makeReadyForTranscription(self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('button[data-a2t-transcribe-order="16674631"]');
+        $I->seeElement('button[data-a2t-details-label="Mix / Common"]');
+        // The provider the request will actually use, named on the button.
+        $I->seeElement('button[data-a2t-transcribe-provider]');
+    }
+
+    /**
+     * Rendering the page starts nothing.
+     *
+     * The complement to the JavaScript test that opening the dialog makes no request: here the whole
+     * page is loaded and the recording is still waiting to be asked for afterwards.
+     */
+    public function loadingThePageDoesNotRequestAnyTranscript(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+        $this->makeReadyForTranscription(self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        Assert::assertSame(
+            'NOT_REQUESTED',
+            $this->jobStatus((string) $child['public_id']),
+            'Looking at the page must never start work.',
+        );
+    }
+
+    /**
+     * The endpoint behind the dialog still accepts exactly one ask.
+     *
+     * The backend idempotency is the final protection — the disabled button only stops the common case.
+     * A second POST affects no rows and is refused, whatever the browser does.
+     */
+    public function theTranscribeEndpointStillAcceptsOnlyOneAsk(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+        $this->makeReadyForTranscription(self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $publicId = (string) $child['public_id'];
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
+
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/transcribe', ['_csrf' => $token]);
+        $I->seeResponseCodeIs(200);
+        Assert::assertSame('QUEUED', $this->jobStatus($publicId));
+
+        // The second ask changes nothing and is refused. This is the final protection: the disabled
+        // button only stops the common case, and the browser is not what decides this.
+        $I->sendAjaxPostRequest('/audio-to-text/job/' . $publicId . '/transcribe', ['_csrf' => $token]);
+        $I->seeResponseCodeIs(409);
+        Assert::assertSame('QUEUED', $this->jobStatus($publicId));
+    }
+
+    /** And asking for one channel leaves the other two exactly where they were. */
+    public function askingForOneChannelDoesNotStartTheOthers(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        // Three recordings of one call — the row the reader sees, and the reason the per-recording
+        // guarantee matters: the three Transcribe buttons sit side by side.
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        $this->makeReadyForTranscription(self::STORE_A);
+
+        $children = [];
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $children[] = $job;
+            }
+        }
+
+        Assert::assertGreaterThan(1, count($children), 'This test needs a call with several recordings.');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
+
+        $I->sendAjaxPostRequest(
+            '/audio-to-text/job/' . $children[0]['public_id'] . '/transcribe',
+            ['_csrf' => $token],
+        );
+
+        Assert::assertSame('QUEUED', $this->jobStatus((string) $children[0]['public_id']));
+
+        foreach (array_slice($children, 1) as $other) {
+            Assert::assertSame(
+                'NOT_REQUESTED',
+                $this->jobStatus((string) $other['public_id']),
+                'Asking for one recording must never start another.',
+            );
+        }
+    }
+
+    /** Every recording of this store's newest call, back to the state before anybody asked. */
+    private function makeReadyForTranscription(int $sourceId): void
+    {
+        foreach ($this->conversationsFor($sourceId) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->connection->createCommand()->update(
+                    '{{%audio_transcription_jobs}}',
+                    ['status' => 'NOT_REQUESTED', 'processing_stage' => 'QUEUED'],
+                    ['id' => $job['id']],
+                )->execute();
+            }
+        }
+    }
+
+    private function jobStatus(string $publicId): string
+    {
+        return (string) (new Query($this->connection))
+            ->select('status')
+            ->from('{{%audio_transcription_jobs}}')
+            ->where(['public_id' => $publicId])
+            ->scalar();
+    }
+
+    // ------------------------------------------------- recordings that have been asked for and not arrived
+
+    /**
+     * A call appears here the moment somebody asks for it, before any audio exists.
+     *
+     * The audio is fetched on a schedule, so for a minute or two there is no conversation, no file and
+     * nothing this page was ever able to draw. It showed exactly what it had shown before, which reads
+     * as the request not having worked. Now the row is there with its order, its call time and three
+     * channels in progress.
+     */
+    public function aCallAppearsWhileItsRecordingsAreStillBeingDownloaded(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->askForCall(self::STORE_A, '22635909', '16674631', [
+            'mixed' => 'PENDING',
+            'caller' => 'PENDING',
+            'callee' => 'PENDING',
+        ]);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('16674631');
+        // The provider's own string, printed as sent.
+        $I->see('2026-10-01 01:43:12');
+        $I->see('Waiting…');
+        $I->see('0 of 3 recordings checked');
+        $I->see('0 recordings available');
+    }
+
+    /**
+     * And it offers nothing that needs audio, because there is none.
+     *
+     * The important half of the previous test. A row with no recordings must not offer to play, to open
+     * details, or above all to transcribe — a Transcribe control here would send somebody to ask for the
+     * text of a file that does not exist.
+     */
+    public function anArrivingCallOffersNothingThatNeedsAudio(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->askForCall(self::STORE_A, '22635909', '16674631', [
+            'mixed' => 'FETCHING',
+            'caller' => 'PENDING',
+            'callee' => 'PENDING',
+        ]);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Downloading…');
+        $I->dontSeeElement('[data-a2t-transcribe]');
+        $I->dontSeeElement('[data-a2t-play]');
+        $I->dontSee('Ready for transcription');
+    }
+
+    /**
+     * The mixed recording becomes playable while the two sides are still coming.
+     *
+     * The channels are fetched one after another, so this is the ordinary middle of a download rather
+     * than an edge case: one real cell with a player and a Transcribe control, two still in progress.
+     */
+    public function anArrivedChannelIsPlayableWhileItsSiblingsAreStillComing(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16674631');
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation($child['public_id']);
+
+        // The same order, with the two sides still outstanding.
+        $this->askForCall(self::STORE_A, '22635909', '16674631', [
+            'mixed' => 'IMPORTED',
+            'caller' => 'FETCHING',
+            'callee' => 'PENDING',
+        ]);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        // The arrived one is a real recording cell, drawn from its conversation.
+        $I->seeElement('[data-a2t-details]');
+
+        // The others say where they are, and offer nothing.
+        $I->see('Downloading…');
+        $I->see('Waiting…');
+        $I->see('1 of 3 recordings checked');
+        $I->see('1 recording available');
+    }
+
+    /** While anything is outstanding the page polls; the moment nothing is, it does not. */
+    public function theStorePageOnlyPollsWhileSomethingIsArriving(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->dontSeeElement('[data-a2t-arriving-poll]');
+
+        $this->askForCall(self::STORE_A, '22635909', '16674631', ['mixed' => 'PENDING']);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('[data-a2t-arriving-poll]');
+    }
+
+    /** Settled channels are not reported as arriving, so a finished call stops the polling. */
+    public function aFinishedDownloadIsNotReportedAsArriving(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->askForCall(self::STORE_A, '22635909', '16674631', [
+            'mixed' => 'IMPORTED',
+            'caller' => 'NOT_AVAILABLE',
+            'callee' => 'NOT_AVAILABLE',
+        ]);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->dontSeeElement('[data-a2t-arriving-poll]');
+        $I->dontSee('Waiting…');
+        $I->dontSee('Downloading…');
+    }
+
+    /** The poll endpoint answers for one store, in counts, and names nothing internal. */
+    public function theArrivingEndpointReportsCountsAndNothingElse(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->askForCall(self::STORE_A, '22635909', '16674631', [
+            'mixed' => 'IMPORTED',
+            'caller' => 'FETCHING',
+            'callee' => 'PENDING',
+        ]);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A) . '/arriving');
+        $I->seeResponseCodeIs(200);
+
+        /** @var array{calls: array<string, array<string, mixed>>, active: bool} $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertTrue($payload['active']);
+        Assert::assertSame('1 of 3 recordings checked', $payload['calls']['22635909']['progressText']);
+        Assert::assertSame('1 recording available', $payload['calls']['22635909']['availabilityText']);
+        Assert::assertSame(1, $payload['calls']['22635909']['available']);
+        Assert::assertSame('Downloading', $payload['calls']['22635909']['channels']['caller']['label']);
+
+        foreach (['batch', 'company', 'error', 'PENDING', 'FETCHING'] as $leak) {
+            Assert::assertStringNotContainsStringIgnoringCase(
+                $leak,
+                $I->grabPageSource(),
+                'The poll endpoint publishes something written for a log.',
+            );
+        }
+    }
+
+    /** It will not report another store's downloads. */
+    public function theArrivingEndpointIsScopedToItsStore(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->askForCall(self::STORE_A, '22635909', '16674631', ['mixed' => 'PENDING']);
+
+        $I->amOnPage($this->storeUrl(self::STORE_B) . '/arriving');
+        $I->seeResponseCodeIs(200);
+
+        /** @var array{calls: array<string, mixed>, active: bool} $payload */
+        $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame([], $payload['calls']);
+        Assert::assertFalse($payload['active']);
+    }
+
+    /**
+     * Reading the page costs the same whether one call is arriving or twenty.
+     *
+     * The guard against the obvious way to build this: a lookup per row. The port answers in two
+     * statements however many calls it covers, so a page that polls every few seconds stays affordable.
+     */
+    public function arrivingRecordingsCostAFixedNumberOfQueries(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        for ($i = 0; $i < 8; $i++) {
+            $this->askForCall(
+                self::STORE_A,
+                '2263590' . $i,
+                '1667463' . $i,
+                ['mixed' => 'PENDING', 'caller' => 'PENDING', 'callee' => 'PENDING'],
+            );
+        }
+
+        $before = $this->queryCount();
+        $I->amOnPage($this->storeUrl(self::STORE_A) . '/arriving');
+        $I->seeResponseCodeIs(200);
+        $spent = $this->queryCount() - $before;
+
+        // Two for the port, plus the store lookup and the session. Eight calls must not cost eight more.
+        Assert::assertLessThan(
+            12,
+            $spent,
+            'Reading arriving recordings is growing with the number of calls — that is an N+1.',
+        );
+    }
+
+    /** MySQL's own count of statements run, for the N+1 guard above. */
+    private function queryCount(): int
+    {
+        /** @var array<string, mixed>|null $row */
+        $row = (new Query($this->connection))
+            ->select(['Value' => 'VARIABLE_VALUE'])
+            ->from('performance_schema.session_status')
+            ->where(['VARIABLE_NAME' => 'Queries'])
+            ->one();
+
+        return $row === null ? 0 : (int) $row['Value'];
+    }
+
     private function storeUrl(int $sourceId): string
     {
         return '/audio-to-text/store/' . $sourceId;
@@ -3680,6 +4049,55 @@ final class AudioToTextStoreCest
      * `DELETE FROM audio_transcription_jobs` here would destroy someone's actual recordings.
      * Children before parents before administrators: both foreign keys are RESTRICT.
      */
+    /**
+     * One call asked for, with each channel in whatever state the test needs.
+     *
+     * Writes the import rows directly rather than going through the recordings page: this suite is
+     * about what the *store* page does with them, and driving the other page here would make these
+     * tests fail for its reasons as well as their own.
+     *
+     * @param array<string, string> $channels storage channel value => storage status
+     */
+    private function askForCall(
+        int $store,
+        string $sessionId,
+        string $orderId,
+        array $channels,
+        string $callTime = '2026-10-01 01:43:12',
+    ): void {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_call_import_batches}}', [
+            'store_source_id' => $store,
+            'triggered_by' => 'MANUAL',
+            'import_mode' => 'DOWNLOAD_ONLY',
+            'requested_by_admin_id' => null,
+            'transcription_provider' => 'WHISPER',
+            'generate_ai_audio' => 0,
+            'recording_company' => 'KFAS',
+            'call_count' => 1,
+            'created_at' => $now,
+        ])->execute();
+
+        $batchId = (int) $this->connection->getLastInsertID();
+
+        foreach ($channels as $channel => $status) {
+            $this->connection->createCommand()->insert('{{%order58_call_imports}}', [
+                'batch_id' => $batchId,
+                'store_source_id' => $store,
+                'call_session_id' => $sessionId,
+                'channel' => $channel,
+                'call_time_raw' => $callTime,
+                'call_date' => '2026-10-01',
+                'order_id' => $orderId,
+                'status' => $status,
+                'attempts' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])->execute();
+        }
+    }
+
     private function cleanup(): void
     {
         // Scoped by **this suite's own administrator**, not by store.
@@ -3707,6 +4125,17 @@ final class AudioToTextStoreCest
         }
 
         IntegrationDb::cleanup($this->connection, '{{%admin_users}}', ['username' => self::ADMIN]);
+
+        // The import rows this suite's arriving-recording tests create, and the batches they hang off.
+        // Children before parents: the batch foreign key is RESTRICT.
+        foreach ([self::STORE_A, self::STORE_B, self::STORE_C] as $sourceId) {
+            $this->connection->createCommand()
+                ->delete('{{%order58_call_imports}}', ['store_source_id' => $sourceId])
+                ->execute();
+            $this->connection->createCommand()
+                ->delete('{{%order58_call_import_batches}}', ['store_source_id' => $sourceId])
+                ->execute();
+        }
 
         foreach ([self::STORE_A, self::STORE_B, self::STORE_C] as $sourceId) {
             IntegrationDb::cleanup($this->connection, '{{%knowledge_bases}}', ['source_store_id' => $sourceId]);

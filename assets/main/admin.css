@@ -1235,6 +1235,79 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    (not short), and an error message that cannot wrap would widen the whole table to fit one row. */
 .o58-table .field__hint { white-space: normal; }
 
+/* ---------------------------------------------------------------------------------------------- *
+ * Order58 call recordings — download progress.
+ *
+ * Two readings of the same call, deliberately shown together: the bar counts channels the provider has
+ * answered for, and the line under it counts recordings that actually arrived. Either on its own would
+ * mislead — a bar tracking availability sits a third full for ever on a merchant who only records the
+ * mixed call, and a full bar with no sentence beside it reads as three recordings downloaded.
+ * ---------------------------------------------------------------------------------------------- */
+.o58-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 11rem;
+}
+
+.o58-bar {
+    background: var(--surface-sunken, rgba(255, 255, 255, 0.08));
+    border-radius: 999px;
+    height: 0.4rem;
+    overflow: hidden;
+    width: 100%;
+}
+
+.o58-bar__fill {
+    background: var(--accent, #6366f1);
+    display: block;
+    height: 100%;
+    /* The width is set from a whole-channel count, never from bytes, so it moves in visible steps. The
+       transition keeps those steps from reading as a glitch when a poll lands. */
+    transition: width 240ms ease-out;
+}
+
+.o58-progress__count {
+    color: var(--text-muted, #9ca3af);
+    font-size: 0.78rem;
+}
+
+/* The authoritative line: what is actually there. Not muted, because it outranks the bar above it. */
+.o58-progress__availability {
+    font-size: 0.78rem;
+}
+
+.o58-channels {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    list-style: none;
+    margin: 0.15rem 0 0;
+    padding: 0;
+}
+
+.o58-channel {
+    align-items: center;
+    display: flex;
+    gap: 0.4rem;
+    justify-content: space-between;
+}
+
+.o58-channel__name {
+    color: var(--text-muted, #9ca3af);
+    font-size: 0.75rem;
+}
+
+.o58-channel__at {
+    color: var(--text-muted, #9ca3af);
+    font-size: 0.72rem;
+}
+
+.o58-retry {
+    display: inline;
+}
+
+
 /* ------------------------------------------------------------------------------------------------
  * Audio to Text
  *
@@ -2364,3 +2437,77 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 /* A recording that has audio and no transcript: a state, then the one action it supports. */
 .a2t-slot__note--ready { color: var(--text-muted); }
 .a2t-slot__link--go { color: var(--primary); font-weight: 650; }
+
+
+/* A recording asked for and not here yet. Quiet, because it is a statement of fact rather than
+   something to act on — there is nothing to press until the audio lands. */
+.a2t-slot__note--arriving {
+    color: var(--text-muted, #9ca3af);
+    font-style: italic;
+}
+
+/* The confirmation shown before transcription starts.
+   Narrow on purpose: it asks one question about one recording, and a dialog as wide as the review
+   panel would suggest there is something here to read rather than something to decide. */
+.a2t-confirm-dialog { max-width: 28rem; }
+
+.a2t-confirm__facts {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    margin: 0;
+}
+
+.a2t-confirm__fact {
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.a2t-confirm__fact dt {
+    color: var(--text-muted);
+    font-size: .82rem;
+    margin: 0;
+}
+
+.a2t-confirm__fact dd {
+    font-size: .9rem;
+    font-weight: 600;
+    margin: 0;
+    text-align: right;
+}
+
+/* The destructive-looking side on the left, the action on the right: the order every other dialog in
+   this panel uses, so the button in the familiar place does the familiar thing. */
+.a2t-confirm__actions {
+    display: flex;
+    gap: .6rem;
+    justify-content: flex-end;
+    padding: .9rem 1.1rem 1.1rem;
+}
+
+/* Recordings arriving for a row, shown with the same bar the recordings page uses.
+   The bar counts channels the provider has ANSWERED FOR; the line under it counts what actually
+   arrived. Neither number means the other, and they are never shown apart. */
+.a2t-arriving {
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+}
+
+.a2t-arriving__bar {
+    background: var(--surface-sunken, rgba(255, 255, 255, .08));
+    border-radius: 999px;
+    height: .35rem;
+    overflow: hidden;
+    width: 100%;
+    max-width: 9rem;
+}
+
+.a2t-arriving__fill {
+    background: var(--primary);
+    display: block;
+    height: 100%;
+    transition: width 240ms ease-out;
+}

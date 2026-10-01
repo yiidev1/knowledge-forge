@@ -11,6 +11,7 @@ use App\Order58\Domain\CallImportItem;
 use App\Order58\Domain\CallImportMode;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\Order58ImportStatus;
+use App\Order58\Domain\RecordingAcquisitionReader;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -156,22 +157,138 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
         return $byCall;
     }
 
+    public function acquisitionsFor(int $storeSourceId, array $callSessionIds): array
+    {
+        if ($callSessionIds === []) {
+            return [];
+        }
+
+        // One statement for every call on the page, not one per row. The WHERE matches the leading two
+        // columns of `ux_order58_call_imports_identity`, so this is an index range read however many
+        // calls are listed — which is what keeps a five-second poll off the server's back.
+        /** @var list<array<string, mixed>> $rows */
+        $rows = (new Query($this->connection))
+            ->select(['call_session_id', 'channel', 'status', 'order_id', 'call_time_raw'])
+            ->from(self::IMPORTS)
+            ->where(['store_source_id' => $storeSourceId, 'call_session_id' => $callSessionIds])
+            ->all();
+
+        /** @var array<string, array<string, Order58ImportStatus>> $statuses */
+        $statuses = [];
+        /** @var array<string, array{order: ?string, time: ?string}> $facts */
+        $facts = [];
+        /**
+         * The session ids in the order first seen.
+         *
+         * Kept beside the maps rather than read back from their keys: a call session id is all digits,
+         * and PHP turns an array key that looks like an integer into one. Carrying the strings is
+         * simpler than casting them back at every use and getting one of them wrong.
+         *
+         * @var list<string> $sessions
+         */
+        $sessions = [];
+
+        foreach ($rows as $row) {
+            $status = Order58ImportStatus::fromStorage((string) $row['status']);
+            $session = (string) $row['call_session_id'];
+
+            if ($status === null) {
+                continue;
+            }
+
+            $statuses[$session][(string) $row['channel']] = $status;
+
+            if (!isset($facts[$session])) {
+                $sessions[] = $session;
+
+                // Identical across a call's three rows — they are written in one `queueCall` — so the
+                // first one seen is the answer and the rest confirm it.
+                $facts[$session] = [
+                    'order' => $this->nullableString($row['order_id'] ?? null),
+                    'time' => $this->nullableString($row['call_time_raw'] ?? null),
+                ];
+            }
+        }
+
+        $acquisitions = [];
+
+        foreach ($sessions as $session) {
+            $acquisition = RecordingAcquisitionReader::forCall(
+                $session,
+                $facts[$session]['order'],
+                $facts[$session]['time'],
+                $statuses[$session],
+            );
+
+            if ($acquisition !== null) {
+                $acquisitions[$session] = $acquisition;
+            }
+        }
+
+        return $acquisitions;
+    }
+
     public function claimNext(DateTimeImmutable $now): ?CallImportItem
+    {
+        return $this->claimOneOf($this->dueCandidates($now), $now);
+    }
+
+    public function claimNextForCall(
+        int $storeSourceId,
+        string $callSessionId,
+        DateTimeImmutable $now,
+    ): ?CallImportItem {
+        // Narrowed on the leading two columns of `ux_order58_call_imports_identity`, so this reads an
+        // index range of at most three rows rather than scanning the pending set again.
+        return $this->claimOneOf(
+            $this->dueCandidates($now, [
+                'store_source_id' => $storeSourceId,
+                'call_session_id' => $callSessionId,
+            ]),
+            $now,
+        );
+    }
+
+    /**
+     * Ids that are pending and whose backoff has elapsed, oldest first.
+     *
+     * @param array<string, mixed> $scope extra equality conditions, for the per-call variant
+     *
+     * @return list<string> strings, not ints: the driver returns column values as strings, which is why
+     *                      the cast at the claim is not the redundancy it looks like. An annotation
+     *                      claiming `list<int>` here was wrong, and removing the cast on the strength of
+     *                      it turned every claim into a TypeError.
+     */
+    private function dueCandidates(DateTimeImmutable $now, array $scope = []): array
     {
         $ts = DbDateTime::format($now);
 
-        // Strings, not ints: the driver returns column values as strings, which is why the cast below
-        // is not the redundancy it looks like. An annotation claiming `list<int>` here was wrong, and
-        // removing the cast on the strength of it turned every claim into a TypeError.
         /** @var list<string> $ids */
         $ids = (new Query($this->connection))
             ->select('id')
             ->from(self::IMPORTS)
-            ->where(['status' => Order58ImportStatus::Pending->value])
+            ->where($scope + ['status' => Order58ImportStatus::Pending->value])
             ->andWhere(['or', ['next_attempt_at' => null], ['<=', 'next_attempt_at', $ts]])
             ->orderBy(['id' => SORT_ASC])
             ->limit(self::CLAIM_CANDIDATES)
             ->column();
+
+        return $ids;
+    }
+
+    /**
+     * Take the first of these that is still pending when the write lands.
+     *
+     * The conditional `UPDATE … WHERE id = ? AND status = 'pending'` is the whole of the mutual
+     * exclusion: its affected-row count is the token, so a row another worker took between the read
+     * above and this write simply returns 0 and the loop moves on. Shared by both claims verbatim —
+     * there is one claiming rule here, not two that could drift.
+     *
+     * @param list<string> $ids
+     */
+    private function claimOneOf(array $ids, DateTimeImmutable $now): ?CallImportItem
+    {
+        $ts = DbDateTime::format($now);
 
         foreach ($ids as $id) {
             $affected = $this->connection->createCommand()->update(
@@ -339,19 +456,33 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
      * Three queries, whatever the page size, and the third is the same {@see itemQuery()} the
      * store-specific history uses. Nothing here loops over stores or issues a query per row.
      */
-    public function historyPage(int $page, int $perPage): CallImportHistoryPage
+    public function historyPage(int $page, int $perPage, ?CallImportMode $mode = null): CallImportHistoryPage
     {
         $page = max(1, $page);
         $perPage = max(1, $perPage);
 
-        $total = (int) (new Query($this->connection))
-            ->from(self::IMPORTS)
+        // The two pages ask different questions of the same table. Without a mode this is every import,
+        // which is what the calls page's history has always shown; with one it is only the batches asked
+        // for that way, which is what keeps download-only activity off that page and transcription
+        // imports off this one.
+        $scoped = static function (Query $query) use ($mode): Query {
+            if ($mode === null) {
+                return $query->from(['i' => self::IMPORTS]);
+            }
+
+            return $query
+                ->from(['i' => self::IMPORTS])
+                ->innerJoin(['b' => self::BATCHES], 'b.id = i.batch_id')
+                ->andWhere(['b.import_mode' => $mode->value]);
+        };
+
+        $total = (int) $scoped(new Query($this->connection))
             // COUNT over the pair, not over rows: rows would report roughly three times too many and
             // hand the pager pages that do not exist.
             //
             // An Expression, because the builder reads a plain string here as a column name and quotes
             // it into `COUNT(DISTINCT AS ...)`, which is a syntax error rather than a wrong answer.
-            ->select(new Expression('COUNT(DISTINCT store_source_id, call_session_id)'))
+            ->select(new Expression('COUNT(DISTINCT i.store_source_id, i.call_session_id)'))
             ->scalar();
 
         if ($total === 0) {
@@ -359,14 +490,13 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
         }
 
         /** @var list<array<string, mixed>> $keys */
-        $keys = (new Query($this->connection))
-            ->from(self::IMPORTS)
-            ->select(['store_source_id', 'call_session_id'])
-            ->groupBy(['store_source_id', 'call_session_id'])
+        $keys = $scoped(new Query($this->connection))
+            ->select(['store_source_id' => 'i.store_source_id', 'call_session_id' => 'i.call_session_id'])
+            ->groupBy(['i.store_source_id', 'i.call_session_id'])
             // By the call's newest row, matching how `history()` orders — the item id rather than a
             // timestamp, so calls queued in the same second keep a stable order. An Expression for the
             // same reason as the count above: a key here would be quoted as a column name.
-            ->orderBy(new Expression('MAX(id) DESC'))
+            ->orderBy(new Expression('MAX(i.id) DESC'))
             ->limit($perPage)
             ->offset(($page - 1) * $perPage)
             ->all();
@@ -511,6 +641,7 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
                 'generate_ai_audio' => 'b.generate_ai_audio',
                 'requested_by_admin_id' => 'b.requested_by_admin_id',
                 'import_mode' => 'b.import_mode',
+                'created_at' => 'i.created_at',
             ])
             ->from(['i' => self::IMPORTS])
             ->innerJoin(['b' => self::BATCHES], 'b.id = i.batch_id');
@@ -544,6 +675,7 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
             (int) $row['generate_ai_audio'] === 1,
             (int) $row['requested_by_admin_id'],
             CallImportMode::fromStorage($this->nullableString($row['import_mode'] ?? null)),
+            DbDateTime::parseNullable($this->nullableString($row['created_at'] ?? null)),
         );
     }
 

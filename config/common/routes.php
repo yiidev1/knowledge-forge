@@ -328,6 +328,19 @@ return [
             Route::post('/admin/order58/call-recordings/download')
                 ->action(Order58CallRecordings\DownloadAction::class)
                 ->name('order58.call-recordings.download'),
+            // One poll for the whole table: the page sends the call ids it is showing and gets them all
+            // back at once, so a live page costs one request rather than one per row.
+            Route::get('/admin/order58/call-recordings/status')
+                ->action(Order58CallRecordings\StatusAction::class)
+                ->name('order58.call-recordings.status'),
+            // What was downloaded and when. Only DOWNLOAD_ONLY activity — the calls page has its own
+            // history for the imports that were asked to be transcribed.
+            Route::get('/admin/order58/call-recordings/history')
+                ->action(Order58CallRecordings\HistoryAction::class)
+                ->name('order58.call-recordings.history'),
+            Route::post('/admin/order58/call-recordings/retry')
+                ->action(Order58CallRecordings\RetryAction::class)
+                ->name('order58.call-recordings.retry'),
             // The same import history the calls page shows, across every store and paged. Nested under
             // /calls because it reads that feature's rows; a GET, so it cannot collide with the two
             // POSTs above.
@@ -413,6 +426,13 @@ return [
             Route::methods([Method::GET, Method::POST], '/audio-to-text/store/{sourceId:\d+}')
                 ->action(AudioToText\Job\Store\Action::class)
                 ->name(AudioToTextRoute::STORE),
+            // What is still being downloaded for this store, read through the shared seam. One request
+            // for the whole page, asked only while something is outstanding, and answered in counts
+            // rather than in markup — a recording that has landed needs a player the browser cannot
+            // build, so the page reloads once instead of assembling one.
+            Route::get('/audio-to-text/store/{sourceId:\d+}/arriving')
+                ->action(AudioToText\Job\Store\ArrivingAction::class)
+                ->name(AudioToTextRoute::STORE_ARRIVING),
             // The data behind one row of that page. A row is an order, not an upload, so these are
             // addressed by the group key rather than by a conversation — the Original Transcript modal
             // shows a tab per recording of the call, and the Generate modal offers one choice per

@@ -19,6 +19,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use DateTimeImmutable;
 use Throwable;
+use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 use function array_map;
@@ -66,6 +67,7 @@ final readonly class Action
         private TodayCallFilter $today,
         private CallImportRepositoryInterface $imports,
         private ClockInterface $clock,
+        private UrlGeneratorInterface $urlGenerator,
         private bool $importEnabled,
     ) {}
 
@@ -92,7 +94,9 @@ final readonly class Action
                 : $this->loadCalls($storeId, $date);
 
             if ($calls !== []) {
-                $statuses = $this->imports->statusesFor(
+                // Per channel, not folded into one status per call: this page reports the three
+                // recordings individually, and the poll endpoint answers from the same read.
+                $statuses = $this->imports->acquisitionsFor(
                     $storeId,
                     array_map(static fn(CallSummary $c): string => $c->callSessionId, $calls),
                 );
@@ -118,6 +122,9 @@ final readonly class Action
                 'usingFixtures' => $usingFixtures,
                 // Carried through so the page's own links keep whatever source the operator asked for.
                 'source' => is_string($params['source'] ?? null) ? (string) $params['source'] : '',
+                // One endpoint for the whole table. The page appends the ids it is showing.
+                'statusUrl' => $this->urlGenerator->generate('order58.call-recordings.status'),
+                'historyUrl' => $this->urlGenerator->generate('order58.call-recordings.history'),
             ]);
     }
 

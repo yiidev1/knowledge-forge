@@ -47,11 +47,21 @@ use const LOCK_UN;
  * own would make every run skip. Both mistakes have been made in this project before and are documented
  * in `docs/server/cron/knowledge-forge-audio-transcription`.
  *
- * ## One recording at a time, on purpose
+ * ## One call at a time, one recording at a time within it
  *
- * No batching and no concurrency. The provider is a third party with undocumented rate limits, and the
- * pipeline this feeds already runs one transcription at a time — fetching ten recordings in parallel
- * would only move the queue from here to there, while multiplying the chance of a 429.
+ * No concurrency, ever. The provider is a third party with undocumented rate limits, and the pipeline
+ * this feeds already runs one transcription at a time — fetching ten recordings in parallel would only
+ * move the queue from here to there, while multiplying the chance of a 429.
+ *
+ * What a run does take is one **call**: the mixed recording and then that same call's two sides, one
+ * after another, before exiting. A call is what a person selected, and splitting it across three timer
+ * ticks added two scheduler intervals of latency to every click for no benefit — the provider is not
+ * slow, the schedule was. Each channel is finished and its temporary file consumed or removed before
+ * the next is claimed, so three sequential downloads peak at the same memory as one.
+ *
+ * It is still **not a drainer**: the next call waits for the next tick, and a run that is taking too
+ * long declines to start another channel rather than risking the unit's timeout. See
+ * {@see RecordingImportProcessor::processNextCall()}.
  *
  * ## It asks whether the machine can spare the room, before it claims anything
  *
@@ -108,7 +118,7 @@ final class ImportRecordingsCommand extends Command
             'once',
             null,
             InputOption::VALUE_NONE,
-            'Process at most one recording, then exit. Intended for a timer or cron.',
+            'Process at most one call — up to three recordings — then exit. Intended for a timer or cron.',
         );
     }
 
@@ -178,10 +188,10 @@ final class ImportRecordingsCommand extends Command
                     continue;
                 }
 
-                $did = $this->processor->processNext();
+                $handled = $this->processor->processNextCall();
 
-                if ($did) {
-                    $processed++;
+                if ($handled > 0) {
+                    $processed += $handled;
                 } elseif ($once) {
                     break;
                 } else {

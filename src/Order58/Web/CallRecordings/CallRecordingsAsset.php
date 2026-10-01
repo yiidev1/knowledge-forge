@@ -32,5 +32,12 @@ final class CallRecordingsAsset extends AssetBundle
     public ?string $sourcePath = '@assetsSource/order58-calls';
 
     public array $depends = [AdminAsset::class];
-    public array $js = ['order58-calls.js'];
+
+    /**
+     * The shared select-all, and this page's own live progress.
+     *
+     * `order58-recordings.js` is not shared: the calls page has nothing to poll, and giving it a script
+     * that looks for a status endpoint it does not render would be dead weight on every load.
+     */
+    public array $js = ['order58-calls.js', 'order58-recordings.js'];
 }

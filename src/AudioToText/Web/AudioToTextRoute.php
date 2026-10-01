@@ -24,6 +24,9 @@ final class AudioToTextRoute
      */
     public const STORE = 'audio-to-text.store';
 
+    /** The store page's own poll: what is still being downloaded, in counts. */
+    public const STORE_ARRIVING = 'audio-to-text.store.arriving';
+
     /**
      * One row of the store page, as data for its modals.
      *
