@@ -19,6 +19,7 @@ use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Application\ArrivingRecordingMerger;
+use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
@@ -103,6 +104,7 @@ final readonly class Action
          * one upload at a time — cannot answer without the caller grouping afterwards and paging wrong.
          */
         private StoreOrderGroupRepositoryInterface $groups,
+        private DemoOrderLinkReaderInterface $demoLinks,
         private ArrivingRecordingMerger $arriving,
         private ClockInterface $clock,
     ) {}
@@ -208,6 +210,12 @@ final readonly class Action
         $pageCount = max(1, (int) ceil($total / self::PER_PAGE));
         $page = min($this->requestedPage($request), $pageCount);
 
+        $groups = $this->arriving->merge(
+            $store->sourceId,
+            $this->groups->pageFor($store->sourceId, self::PER_PAGE, ($page - 1) * self::PER_PAGE),
+            $this->clock->now(),
+        );
+
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
             ->render(__DIR__ . '/template', [
@@ -227,15 +235,10 @@ final readonly class Action
                 // landed. Without the second half the page shows nothing for the minute or two between
                 // pressing Download and the first recording arriving, which reads as the press having
                 // done nothing. See ArrivingRecordingMerger.
-                'groups' => $this->arriving->merge(
-                    $store->sourceId,
-                    $this->groups->pageFor(
-                        $store->sourceId,
-                        self::PER_PAGE,
-                        ($page - 1) * self::PER_PAGE,
-                    ),
-                    $this->clock->now(),
-                ),
+                'groups' => $groups,
+                // Resolved for the whole page in one query, keyed by the order id each row shows. Doing
+                // it per row would be twenty queries for twenty orders.
+                'demoLinks' => $this->demoLinks->linksFor($store->sourceId, $this->orderIdsOf($groups)),
                 'total' => $total,
                 'page' => $page,
                 'pageCount' => $pageCount,
@@ -410,6 +413,24 @@ final readonly class Action
         $file = $request->getUploadedFiles()[$field] ?? null;
 
         return $file instanceof UploadedFileInterface ? $file : null;
+    }
+
+    /**
+     * The order ids this page is about to show, including the blanks.
+     *
+     * Every row is asked about, so the template never has to decide what an absent key means.
+     *
+     * @param list<\App\AudioToText\Domain\StoreOrderGroup> $groups
+     * @return list<string>
+     */
+    private function orderIdsOf(array $groups): array
+    {
+        $ids = [];
+        foreach ($groups as $group) {
+            $ids[] = $group->orderId ?? '';
+        }
+
+        return $ids;
     }
 
     private function requestedPage(ServerRequestInterface $request): int

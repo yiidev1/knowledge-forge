@@ -1681,6 +1681,9 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    with no natural length; a long one now truncates with an ellipsis instead of widening the row. */
 .a2t-table col.a2t-col-type { width: 9rem; }
 .a2t-table col.a2t-col-order { width: 7.5rem; }
+/* "Open Demo URL" and the longest unavailable message ("Order match ambiguous") both fit on one line,
+   so the column never reflows as rows change state. */
+.a2t-table col.a2t-col-demo { width: 11rem; }
 .a2t-table col.a2t-col-row-actions { width: 17rem; }
 
 /* One line, always. `min-width` matters as well as the column width: a fixed-layout table will still

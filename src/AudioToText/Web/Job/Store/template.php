@@ -8,6 +8,8 @@ use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\StoreOrderGroup;
+use App\Shared\Order58\DemoLinkStatus;
+use App\Shared\Order58\DemoOrderUrl;
 use App\AudioToText\Domain\StoreRecordingSlot;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Domain\WorkerStatusView;
@@ -33,6 +35,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $uploadOpen whether the upload dialog should render already open
  * @var array<string, list<string>> $errors
  * @var list<StoreOrderGroup> $groups one row per order, newest activity first
+ * @var array<string, \App\Shared\Order58\DemoOrderUrl> $demoLinks keyed by the order id each row shows
  * @var int $total
  * @var int $page
  * @var int $pageCount
@@ -624,6 +627,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                     <col class="a2t-col-slot">
                     <col class="a2t-col-slot">
                     <col class="a2t-col-status">
+                    <col class="a2t-col-demo">
                     <col class="a2t-col-tts">
                     <col class="a2t-col-row-actions">
                 </colgroup>
@@ -637,6 +641,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                         <th><?= Html::encode(RecordingType::Caller->label()) ?></th>
                         <th><?= Html::encode(RecordingType::Callee->label()) ?></th>
                         <th>Status</th>
+                        <th>Demo URL</th>
                         <th>Text to Audio</th>
                         <th>Actions</th>
                     </tr>
@@ -787,6 +792,31 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
                                     <?= Html::encode($status->label()) ?>
                                 </span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php
+            // Resolved for the whole page in one query before rendering; this cell only prints the
+            // answer. Every row was asked about, so a missing key would be a bug rather than a blank.
+            // The Action asks about every row, so a missing key would be a bug — but an explicit
+            // "not found" is a safer answer than a null nobody checks, and it keeps this cell to one
+            // type throughout.
+            $orderKey = $group->orderId ?? '';
+                    $demo = array_key_exists($orderKey, $demoLinks)
+                        ? $demoLinks[$orderKey]
+                        : DemoOrderUrl::unavailable(DemoLinkStatus::OrderNotFound);
+                    ?>
+                            <?php if ($demo->isReady()): ?>
+                                <?php
+                // `noopener noreferrer` is not decoration here. The destination carries a customer's
+                // phone number in its path, and without `noreferrer` the browser would hand this
+                // store page's URL to it as the Referer.
+                                ?>
+                                <a href="<?= Html::encode((string) $demo->url) ?>"
+                                   target="_blank" rel="noopener noreferrer">Open Demo URL</a>
+                            <?php else: ?>
+                                <?php // Plain text, not a dead link: nothing to click is clearer than something that cannot work.?>
+                                <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
                             <?php endif; ?>
                         </td>
                         <td>
