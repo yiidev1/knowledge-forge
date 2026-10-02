@@ -27,6 +27,7 @@ $items = [
     // ['label' => 'Knowledge bases', 'icon' => '❏', 'route' => 'kb.index', 'match' => ['kb.']],
     // ['label' => 'Order58 sync', 'icon' => '⇄', 'route' => 'order58.index', 'match' => ['order58.index', 'order58.sync', 'order58.check', 'order58.agents']],
     ['label' => 'Order58 stores', 'icon' => '🏬', 'route' => 'order58.stores', 'match' => ['order58.stores', 'order58.store.']],
+    ['label' => 'Order58 orders', 'icon' => '🧾', 'route' => 'order58.orders', 'match' => ['order58.orders']],
     ['label' => 'Store chat', 'icon' => '💬', 'route' => 'order58.store-chat', 'match' => ['order58.store-chat']],
     ['label' => 'Rule Chat', 'icon' => '📜', 'route' => 'admin.rule-chat.index', 'match' => ['admin.rule-chat.']],
     ['label' => 'Rule list', 'icon' => '📋', 'route' => 'order58.rules.readiness', 'match' => ['order58.rules.readiness']],

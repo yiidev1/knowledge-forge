@@ -150,6 +150,20 @@ final class Environment
         // reached only when that API explicitly rejects an agent's username/password. One URL and one static
         // Bearer token, declared once here, so changing the token is a single edit. Both default to empty:
         // an unconfigured install simply never uses the fallback.
+        // The Orders API: a DIFFERENT host, verb and credential from the accounts/sync API above. Kept as
+        // its own settings for the same reason ORDER58_VALIDATE_* are — one endpoint, one credential.
+        'ORDER58_ORDERS_API_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_ORDERS_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        'ORDER58_ORDERS_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 30],
+        // Capped below the web server's own 60s so a slow provider cannot be the thing that 504s us.
+        'ORDER58_ORDERS_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 40],
+        // Measured, not guessed: one order is ~5.3 KB encoded and decodes to at most ~4x that, so 8 MB is
+        // ~1,500 orders and ~20 MB of PHP arrays against a 128M limit.
+        'ORDER58_ORDERS_MAX_RESPONSE_MB' => ['type' => 'int', 'default' => 8, 'min' => 1, 'max' => 24],
+        // Total wall clock one sync may spend, checked between chunks. Under the 60s the web server
+        // allows, so the request ends by itself rather than being cut off mid-write.
+        'ORDER58_ORDERS_DEADLINE_SECONDS' => ['type' => 'int', 'default' => 45, 'min' => 5, 'max' => 55],
+
         'ORDER58_VALIDATE_API_URL' => ['type' => 'string', 'default' => ''],
         'ORDER58_VALIDATE_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
         // Short on purpose: this call happens AFTER a failed primary call, so its latency is additive on the

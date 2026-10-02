@@ -211,6 +211,13 @@ return [
         'recordingImportMinAvailableMb' => Environment::int('ORDER58_IMPORT_MIN_AVAILABLE_MB'),
         'recordingImportMaxLoadPerCore' => Environment::float('ORDER58_IMPORT_MAX_LOAD_PER_CORE'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
+        // Orders API (a separate Order58 API; see Order58\Client\Orders\HttpOrderDataClient).
+        'ordersUrl' => Environment::string('ORDER58_ORDERS_API_URL'),
+        'ordersToken' => Environment::string('ORDER58_ORDERS_API_TOKEN'),
+        'ordersConnectTimeoutSeconds' => Environment::int('ORDER58_ORDERS_CONNECT_TIMEOUT_SECONDS'),
+        'ordersTimeoutSeconds' => Environment::int('ORDER58_ORDERS_TIMEOUT_SECONDS'),
+        'ordersMaxResponseMb' => Environment::int('ORDER58_ORDERS_MAX_RESPONSE_MB'),
+        'ordersDeadlineSeconds' => Environment::int('ORDER58_ORDERS_DEADLINE_SECONDS'),
         // Fallback credential validation (a separate Order58 API; see Order58ValidateCredentials).
         'validateUrl' => Environment::string('ORDER58_VALIDATE_API_URL'),
         'validateToken' => Environment::string('ORDER58_VALIDATE_API_TOKEN'),

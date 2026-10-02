@@ -4,7 +4,13 @@ declare(strict_types=1);
 
 use App\Order58\Client\HttpOrder58Client;
 use App\Order58\Client\HttpOrder58CredentialValidator;
+use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Client\Order58RetryPolicy;
+use App\Order58\Client\Orders\HttpOrderDataClient;
+use App\Order58\Client\Orders\OrderDataClientInterface;
+use App\Order58\Client\Orders\OrderDataSettings;
+use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
+use App\Order58\Infrastructure\DbOrder58OrderRepository;
 use App\Order58\Contract\Order58ClientInterface;
 use App\Order58\Contract\Order58CredentialValidatorInterface;
 use App\Order58\Domain\Order58AgentRepositoryInterface;
@@ -52,6 +58,7 @@ return [
     App\Order58\Domain\DailySyncScheduleRepositoryInterface::class => App\Order58\Infrastructure\DbDailySyncScheduleRepository::class,
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
     CallImportRepositoryInterface::class => DbCallImportRepository::class,
+    Order58OrderRepositoryInterface::class => DbOrder58OrderRepository::class,
     StoreAudioCountsInterface::class => DbStoreAudioCounts::class,
     AudioProviderDefaultInterface::class => DbAudioProviderDefault::class,
 
@@ -154,6 +161,39 @@ return [
             ])),
             'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
             'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
+        ],
+    ],
+
+    // The Orders API: a separate host, verb and credential from the accounts client above, and the only
+    // Order58 call that runs inside a web request. Its timeouts are therefore its own and are kept under
+    // the web server's, so a slow provider ends the call rather than the request.
+    OrderDataSettings::class => DynamicReference::to(static fn(): OrderDataSettings => new OrderDataSettings(
+        url: $params['app/order58']['ordersUrl'],
+        token: $params['app/order58']['ordersToken'],
+        connectTimeoutSeconds: $params['app/order58']['ordersConnectTimeoutSeconds'],
+        timeoutSeconds: $params['app/order58']['ordersTimeoutSeconds'],
+        maxResponseBytes: $params['app/order58']['ordersMaxResponseMb'] * 1048576,
+    )),
+
+    OrderDataClientInterface::class => [
+        'class' => HttpOrderDataClient::class,
+        '__construct()' => [
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => $params['app/order58']['ordersConnectTimeoutSeconds'],
+                'timeout' => $params['app/order58']['ordersTimeoutSeconds'],
+                'http_errors' => false,
+                // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
+                'stream' => true,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
+        ],
+    ],
+
+    OrderSyncService::class => [
+        'class' => OrderSyncService::class,
+        '__construct()' => [
+            'deadlineSeconds' => $params['app/order58']['ordersDeadlineSeconds'],
         ],
     ],
 ];

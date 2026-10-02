@@ -26,6 +26,7 @@ use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
+use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
 use App\Order58\Web\TestRecordingChannels as Order58TestRecordingChannels;
@@ -307,6 +308,14 @@ return [
             Route::get('/admin/order58/calls')
                 ->action(Order58Calls\Action::class)
                 ->name('order58.calls'),
+            // Orders. The sync is POST because it writes, and it runs **in the request** — there is no
+            // worker behind this one, by design: the operator gets the real counts rather than a job id.
+            Route::get('/admin/order58/orders')
+                ->action(Order58Orders\Action::class)
+                ->name('order58.orders'),
+            Route::post('/admin/order58/orders/sync')
+                ->action(Order58Orders\SyncAction::class)
+                ->name('order58.orders.sync'),
             Route::post('/admin/order58/calls/sync')
                 ->action(Order58Calls\SyncAction::class)
                 ->name('order58.calls.sync'),
