@@ -747,37 +747,58 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 // recordings — which is what the reader actually wants to see.
                                 ?>
                                 <?php
-                // A disclosure, closed by default. This panel is seven lines of progress detail and it
-                // used to render in full in every arriving row, which is what made the table scroll for
-                // pages — on a store where many calls are mid-download, every row was ~300px tall.
+                // A badge in the cell, the detail in a modal.
                 //
-                // `<details>` and not JavaScript: the polling in admin.js addresses the elements inside
-                // by `data-a2t-arriving-*`, and a closed `<details>` keeps all of them in the DOM. The
-                // live updates therefore carry on while it is shut, and opening it shows current
-                // figures rather than the ones from page load.
+                // This panel is seven lines of progress and it used to render in full in every arriving
+                // row, which made the table scroll for pages. An inline disclosure fixed the height but
+                // not the width: a summary's parts have no column to wrap into, so on a real store they
+                // spilled sideways across the Demo URL cell. A modal takes the detail out of the table's
+                // geometry entirely, which is the only way a seven-line panel and a fixed column width
+                // can both be satisfied.
+                //
+                // `:target`, not JavaScript: the policy here is `script-src 'self'` with no inline
+                // handlers. The modal also stays *inside* this `<tr>`, because the poller in
+                // audio-store.js finds its targets with `row.querySelector(...)` — a hidden modal keeps
+                // every one of them in the DOM, so the figures stay live while it is shut and are
+                // current the moment it opens.
+                $arrivingId = 'a2t-arriving-' . $group->arriving->callSessionId;
                                 ?>
-                                <details class="a2t-arriving a2t-arriving--compact">
-                                    <summary class="a2t-arriving__heading">
-                                        <strong>Downloading recordings</strong>
-                                        <span class="a2t-arriving__badge" data-a2t-arriving-outcome>
-                                            <?= Html::encode($group->arriving->outcome()->label()) ?>
-                                        </span>
-                                        <?php // The one figure worth seeing without opening anything.?>
-                                        <span class="a2t-arriving__summary" data-a2t-arriving-progress>
-                                            <?= Html::encode($group->arriving->progressText()) ?>
-                                        </span>
-                                    </summary>
+                                <a class="a2t-badge a2t-badge--processing a2t-arriving__open"
+                                   href="#<?= Html::encode($arrivingId) ?>">Downloading<span
+                                   class="a2t-arriving__caret" aria-hidden="true">&rsaquo;</span></a>
 
-                                    <div class="a2t-arriving__overall">
-                                        <?php
-                                                        // The figure now lives in the summary above, where it is
-                                                        // visible without opening the panel. Repeating it here would
-                                                        // give the poller two targets for one value and a screen
-                                                        // reader the same number twice.
-                                ?>
-                                        <div class="a2t-arriving__label">
-                                            <span class="a2t-arriving__title">Overall progress</span>
+                                <div class="a2t-modal" id="<?= Html::encode($arrivingId) ?>"
+                                     role="dialog" aria-modal="true" aria-label="Download progress">
+                                    <a class="a2t-modal__backdrop" href="#" aria-label="Close"></a>
+                                    <div class="a2t-modal__panel">
+                                        <div class="a2t-modal__head">
+                                            <div>
+                                                <h3 class="a2t-modal__title">Downloading recordings</h3>
+                                                <p class="a2t-modal__sub">
+                                                    <?= $group->orderId === null
+                                                        ? 'No order'
+                                                        : 'Order #' . Html::encode($group->orderId) ?>
+                                                    &middot;
+                                                    <span data-a2t-arriving-outcome><?=
+                                                        Html::encode($group->arriving->outcome()->label())
+                                ?></span>
+                                                </p>
+                                            </div>
+                                            <a class="btn btn--sm a2t-modal__close" href="#">Close</a>
                                         </div>
+
+                                        <div class="a2t-modal__body a2t-arriving">
+                                            <div class="a2t-arriving__overall">
+                                                <div class="a2t-arriving__label">
+                                                    <span class="a2t-arriving__title">Overall progress</span>
+                                                    <?php
+                        // The one place this figure lives. The poller takes the first match in the row,
+                        // so a second copy in the cell would leave one of the two stale.
+                                ?>
+                                                    <span data-a2t-arriving-progress><?=
+                                    Html::encode($group->arriving->progressText())
+                                ?></span>
+                                                </div>
                                         <progress class="a2t-arriving__bar" max="100"
                                             value="<?= $group->arriving->percentChecked() ?>"
                                             aria-label="<?= Html::encode($group->arriving->progressText()) ?>"
@@ -807,7 +828,9 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                     <p class="a2t-arriving__detail" data-a2t-arriving-availability>
                                         <?= Html::encode($group->arriving->availabilityText()) ?>
                                     </p>
-                                </details>
+                                        </div>
+                                    </div>
+                                </div>
                             <?php else: ?>
                                 <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
                                     <?= Html::encode($status->label()) ?>
