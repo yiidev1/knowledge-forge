@@ -2604,6 +2604,49 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     padding: .5rem .6rem;
 }
 
+/* Closed, the panel is one line: the words, the outcome and the figure. `display: flex` on the summary
+   needs the marker restored explicitly, because setting any `display` other than `list-item` removes
+   the default triangle in WebKit and Blink. */
+/* The list footer: the count on the left, the size chooser on the right, one line on desktop. */
+.a2t-list-footer {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem 1.5rem;
+    justify-content: space-between;
+    margin-top: .75rem;
+}
+.a2t-list-footer > p { margin: 0; }
+.a2t-page-size { align-items: center; display: flex; gap: .5rem; }
+.a2t-page-size .field__label { margin: 0; white-space: nowrap; }
+/* `width: auto` because `.field__control` is `width: 100%` — built for stacked fields, not this row. */
+.a2t-page-size .field__control { width: auto; }
+
+/* ---- The conversions table: density -----------------------------------------------------------
+   Cells top-align by default (`.a2t-table th, td { vertical-align: top }`) because some carry stacked
+   blocks. Most carry one short value, and against a tall neighbour those floated to the ceiling with
+   the row's height stretched beneath them. Middle alignment is what makes a row read as one line of
+   information rather than a column of orphans. */
+.a2t-conversions td { padding: .55rem 1rem; vertical-align: middle; }
+/* The two that genuinely stack — recordings and the actions list — keep their top alignment. */
+.a2t-conversions td.a2t-cell-stacked { vertical-align: top; }
+/* Short values, one line each. The order cell wraps its own stacked label, so it is excluded. */
+.a2t-conversions td.a2t-cell-tight { white-space: nowrap; }
+
+.a2t-arriving--compact { gap: 0; }
+.a2t-arriving--compact[open] { gap: .35rem; }
+.a2t-arriving--compact > summary { align-items: baseline; cursor: pointer; display: flex; gap: .5rem; justify-content: flex-start; list-style: none; }
+.a2t-arriving--compact > summary::-webkit-details-marker { display: none; }
+/* The disclosure triangle, drawn rather than inherited so it sits where this layout wants it. */
+.a2t-arriving--compact > summary::before {
+    content: "▸";
+    color: var(--text-faint);
+    font-size: .7rem;
+    transition: transform 120ms ease-out;
+}
+.a2t-arriving--compact[open] > summary::before { content: "▾"; }
+.a2t-arriving__summary { color: var(--text-muted); font-size: .72rem; margin-left: auto; }
+
 .a2t-arriving__heading { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }
 .a2t-arriving__badge { color: var(--text-muted); font-size: .72rem; }
 .a2t-arriving__label { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }

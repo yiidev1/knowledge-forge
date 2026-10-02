@@ -39,6 +39,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var int $total
  * @var int $page
  * @var int $pageCount
+ * @var int $perPage
+ * @var list<int> $pageSizes
  * @var WorkerStatusView $worker
  * @var string $maxUploadLabel
  * @var string $maxDurationLabel
@@ -68,7 +70,13 @@ $storeUrl = $urlGenerator->generate(AudioToTextRoute::STORE, ['sourceId' => $sto
 // One endpoint for the whole page. The attribute that uses it is rendered only while something is
 // still being downloaded, so an idle page never asks.
 $arrivingUrl = $urlGenerator->generate(AudioToTextRoute::STORE_ARRIVING, ['sourceId' => $store->sourceId]);
-$pageUrl = static fn(int $p): string => $storeUrl . ($p > 1 ? '?page=' . $p : '');
+$pageUrl = static function (int $p) use ($storeUrl, $perPage): string {
+    // The size travels with every page link: without it, pressing Next would quietly put the reader
+    // back on the default size mid-list.
+    $query = array_filter(['page' => $p > 1 ? $p : null, 'per_page' => $perPage === 25 ? null : $perPage]);
+
+    return $query === [] ? $storeUrl : $storeUrl . '?' . http_build_query($query);
+};
 
 /**
  * @param list<string> $messages
@@ -616,7 +624,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
                 data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
             <?php endif; ?>>
-            <table class="table a2t-table a2t-orders">
+            <table class="table a2t-table a2t-orders a2t-conversions">
                 <?php
                         // Sized to content, with the three recording columns sharing the slack: a filename no
                         // longer appears here, so nothing in this table has an unbounded length.
@@ -738,25 +746,37 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                 // all, so this disappears and the row falls back to its ordinary
                                 // recordings — which is what the reader actually wants to see.
                                 ?>
-                                <div class="a2t-arriving">
-                                    <div class="a2t-arriving__heading">
+                                <?php
+                // A disclosure, closed by default. This panel is seven lines of progress detail and it
+                // used to render in full in every arriving row, which is what made the table scroll for
+                // pages — on a store where many calls are mid-download, every row was ~300px tall.
+                //
+                // `<details>` and not JavaScript: the polling in admin.js addresses the elements inside
+                // by `data-a2t-arriving-*`, and a closed `<details>` keeps all of them in the DOM. The
+                // live updates therefore carry on while it is shut, and opening it shows current
+                // figures rather than the ones from page load.
+                                ?>
+                                <details class="a2t-arriving a2t-arriving--compact">
+                                    <summary class="a2t-arriving__heading">
                                         <strong>Downloading recordings</strong>
                                         <span class="a2t-arriving__badge" data-a2t-arriving-outcome>
                                             <?= Html::encode($group->arriving->outcome()->label()) ?>
                                         </span>
-                                    </div>
+                                        <?php // The one figure worth seeing without opening anything.?>
+                                        <span class="a2t-arriving__summary" data-a2t-arriving-progress>
+                                            <?= Html::encode($group->arriving->progressText()) ?>
+                                        </span>
+                                    </summary>
 
                                     <div class="a2t-arriving__overall">
+                                        <?php
+                                                        // The figure now lives in the summary above, where it is
+                                                        // visible without opening the panel. Repeating it here would
+                                                        // give the poller two targets for one value and a screen
+                                                        // reader the same number twice.
+                                ?>
                                         <div class="a2t-arriving__label">
                                             <span class="a2t-arriving__title">Overall progress</span>
-                                            <?php
-                                            // `aria-hidden`: the bar below carries the same figure as
-                                            // a label, and announcing it twice makes the panel
-                                            // unusable with a screen reader.
-                                ?>
-                                            <span data-a2t-arriving-progress aria-hidden="true">
-                                                <?= Html::encode($group->arriving->progressText()) ?>
-                                            </span>
                                         </div>
                                         <progress class="a2t-arriving__bar" max="100"
                                             value="<?= $group->arriving->percentChecked() ?>"
@@ -787,14 +807,14 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                                     <p class="a2t-arriving__detail" data-a2t-arriving-availability>
                                         <?= Html::encode($group->arriving->availabilityText()) ?>
                                     </p>
-                                </div>
+                                </details>
                             <?php else: ?>
                                 <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
                                     <?= Html::encode($status->label()) ?>
                                 </span>
                             <?php endif; ?>
                         </td>
-                        <td>
+                        <td class="a2t-cell-tight">
                             <?php
             // Resolved for the whole page in one query before rendering; this cell only prints the
             // answer. Every row was asked about, so a missing key would be a bug rather than a blank.
@@ -813,7 +833,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 // store page's URL to it as the Referer.
                                 ?>
                                 <a href="<?= Html::encode((string) $demo->url) ?>"
-                                   target="_blank" rel="noopener noreferrer">Open Demo URL</a>
+                                   target="_blank" rel="noopener noreferrer">Demo URL</a>
                             <?php else: ?>
                                 <?php // Plain text, not a dead link: nothing to click is clearer than something that cannot work.?>
                                 <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
@@ -882,10 +902,34 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             ]) ?>
         <?php endif; ?>
 
-        <p class="util-muted">
-            <?= $total ?> order<?= $total === 1 ? '' : 's' ?> for this store, newest first.
-            Every recording of one order shares its row.
-        </p>
+        <?php
+        $first = $total === 0 ? 0 : (($page - 1) * $perPage) + 1;
+$last = min($page * $perPage, $total);
+?>
+        <div class="a2t-list-footer">
+            <p class="util-muted">
+                <?php // What is on screen, not just the total — the question a pager raises.?>
+                Showing <?= $first ?>&ndash;<?= $last ?> of <?= $total ?>
+                order<?= $total === 1 ? '' : 's' ?> for this store, newest first.
+                Every recording of one order shares its row.
+            </p>
+
+            <?php // A GET form, so a chosen size is a readable, shareable address.?>
+            <form method="get" action="<?= Html::encode($storeUrl) ?>" class="a2t-page-size">
+                <label class="field__label" for="a2t-per-page">Per page</label>
+                <select class="field__control" id="a2t-per-page" name="per_page">
+                    <?php foreach ($pageSizes as $size): ?>
+                        <option value="<?= $size ?>"<?= $size === $perPage ? ' selected' : '' ?>><?= $size ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?php
+// A real button rather than an `onchange` handler. The policy on this page is
+// `script-src 'self'` with no inline JavaScript, so an inline handler would be blocked by
+// the browser and caught by the test that asserts this page carries none.
+?>
+                <button class="btn btn--sm" type="submit">Apply</button>
+            </form>
+        </div>
     <?php endif; ?>
 </div>
 
