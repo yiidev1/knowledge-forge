@@ -3457,6 +3457,112 @@ final class AudioToTextStoreCest
         $I->seeCurrentUrlEquals('/');
     }
 
+    // ------------------------------------------------------- getting back to a running transcription
+
+    /**
+     * A recording being transcribed offers a way back into its progress, and survives a refresh.
+     *
+     * This is the requirement: the route back must be in the markup the server sent, not in a variable
+     * set by the click that started the work. Loading the page fresh — which is exactly what a refresh
+     * is — must produce a control carrying that recording's own status endpoint.
+     */
+    public function anActiveTranscriptionOffersAWayBackIntoItsProgress(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $publicId = (string) $child['public_id'];
+
+        $this->setJobStatus($publicId, 'PROCESSING', 'TRANSCRIBING');
+
+        // A fresh load, carrying no memory of anything.
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Transcribing');
+        $I->seeElement('button[data-a2t-progress="/audio-to-text/job/' . $publicId . '/status"]');
+
+        // The status endpoint it points at answers, so the control is not pointing at nothing.
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/status');
+        $I->seeResponseCodeIs(200);
+    }
+
+    /**
+     * A recording asked for but not started says so, and is equally reachable.
+     *
+     * Both states are active and both open the same view — but a recording nothing has begun on must
+     * not claim to be transcribing. The row reads the status rather than asserting a stage.
+     */
+    public function aRequestedTranscriptionSaysSoRatherThanClaimingToBeRunning(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->setJobStatus((string) $child['public_id'], 'QUEUED', 'QUEUED');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Transcription requested');
+        $I->seeElement('button[data-a2t-progress]');
+    }
+
+    /** Opening progress is a read: the control carries no way to ask for a transcript again. */
+    public function thewayBackIntoProgressCannotStartAnything(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $publicId = (string) $child['public_id'];
+        $this->setJobStatus($publicId, 'PROCESSING', 'TRANSCRIBING');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        // The watch control and the ask control are different things, and a running recording offers
+        // only the first. There is nothing here that could re-request a transcript.
+        $I->seeElement('button[data-a2t-progress]');
+        $I->dontSeeElement('button[data-a2t-transcribe]');
+
+        Assert::assertSame('PROCESSING', $this->jobStatus($publicId), 'Rendering the page started nothing.');
+    }
+
+    /** The three channels are watched independently, each by its own recording. */
+    public function eachChannelIsWatchedByItsOwnControl(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        $urls = [];
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->setJobStatus((string) $job['public_id'], 'PROCESSING', 'TRANSCRIBING');
+                $urls[] = '/audio-to-text/job/' . $job['public_id'] . '/status';
+            }
+        }
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        Assert::assertGreaterThan(1, count($urls), 'This test needs a call with several recordings.');
+
+        foreach ($urls as $url) {
+            $I->seeElement('button[data-a2t-progress="' . $url . '"]');
+        }
+    }
+
+    private function setJobStatus(string $publicId, string $status, string $stage): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['status' => $status, 'processing_stage' => $stage],
+            ['public_id' => $publicId],
+        )->execute();
+    }
+
     // ------------------------------------------------------------- confirming before transcription
 
     /**
