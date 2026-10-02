@@ -1,0 +1,30 @@
+# Everything this tool generates, kept out of the Knowledge Forge repository.
+#
+# A directory-local ignore rather than an addition to the root `.gitignore`, which is how this project
+# already handles a self-contained tool: see `tests/E2E/.gitignore`, which does the same three lines for
+# its node_modules. The root file stays untouched.
+#
+# The first two entries are the ones that matter. A saved Playwright session is a LIVE CREDENTIAL for
+# the Order58 admin panel — committing it would hand anyone with repository access a logged-in session.
+# Screenshots of a real admin panel contain customer names and phone numbers.
+
+# Authenticated session state. Never commit, never log, never paste.
+state/
+*.storage.json
+
+# Screenshots and logs: both can contain customer data from a live admin panel.
+screenshots/
+logs/
+
+# Local configuration, which may name real stores and phone numbers.
+config.json
+
+# The virtual environment and Python's own build artefacts.
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Playwright's browser download cache, if it is ever pointed here.
+.playwright/

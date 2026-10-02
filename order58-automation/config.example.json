@@ -1,0 +1,8 @@
+{
+  "demo_url": "https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150",
+  "customer_name": "Jignesh",
+  "order_type": "take-out",
+  "products": [
+    { "name": "Egg Roll", "qty": 1 }
+  ]
+}

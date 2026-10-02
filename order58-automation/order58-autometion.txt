@@ -1,0 +1,2742 @@
+================================================================================================
+ORDER58 DEMO ORDER AUTOMATION — COMPLETE TECHNICAL MANUAL (A TO Z)
+================================================================================================
+
+Document ...... order58-autometion.txt
+Location ...... /var/www/html/knowledge-forge/order58-automation/order58-autometion.txt
+Written for ... a supervisor who needs to understand what was built, and a developer who has
+                never seen this project before.
+Based on ...... read-only inspection of the actual source code, the installed virtual
+                environment, real `--help` output, and recorded run evidence.
+
+HOW TO TRUST THIS DOCUMENT
+    Every factual claim below was checked against the real files or the real environment.
+    Anything that could NOT be checked from this machine is labelled `NOT VERIFIED`.
+    No command, flag, version, file or behaviour in this document was invented.
+
+================================================================================================
+CHAPTER 0 — HOW TO READ THIS DOCUMENT
+================================================================================================
+
+0.1 WHAT THIS PROJECT IS, IN ONE PARAGRAPH
+
+    A Python program that opens Google Chrome, logs into the Order58 restaurant admin panel as a
+    real human would, and creates a DEMO (test) food order by clicking through the website:
+    fill the customer form, search a product, set quantity, add to cart, walk the checkout
+    wizard, choose Cash, and press Submit once. It is a robot that uses the website. It is NOT a
+    database script and NOT an API client.
+
+    Gujarati: aa ek Python program chhe je Chrome kholi ne, Order58 admin panel ma manush ni
+    jem click kari ne ek DEMO order banave chhe. Database ma sidha lakhvanu kaam nathi karto.
+
+0.2 WHAT IT IS NOT
+
+    - It is NOT part of the Knowledge Forge (Yii3/PHP) application. It shares no code, no
+      database, no configuration and no dependency with it.
+    - It does NOT write the order JSON files on EC2. A separate, already-existing listener does
+      that (see Chapter 11).
+    - It is NOT a finished product. Several advertised features are not implemented. Chapter 15
+      lists exactly which.
+
+0.3 SAFETY RULES THAT APPLY WHENEVER YOU USE THIS TOOL
+
+    1. Only `joymeal.order58.com` over HTTPS is allowed. Anything else is refused before Chrome
+       even starts.
+    2. Only an explicit list of exact demo page paths may be opened. See Chapter 10.
+    3. Never run a submission command without authorization from whoever owns the store data.
+    4. Never delete `state/phase-b-attempt-*.json`. It is the file that stops the same order
+       being submitted twice. See section 10.9.
+    5. Never commit or paste the contents of `state/`. It holds a live logged-in session, which
+       is as sensitive as a password.
+    6. The tool never asks for, stores or types your password. You log in by hand.
+
+0.4 VOCABULARY USED THROUGHOUT
+
+    Source Order ID ... The template order the demo is cloned from. Here: 16655531
+    Demo Order ID ..... The new test order the tool created. Here: 16630311
+    Customer ID ....... The customer the demo order belongs to. Here: 6959001
+    Allowlist ......... A written list of permitted things. Anything not on the list is refused.
+    Fail closed ....... When unsure, STOP. Never guess and continue.
+    Dry run ........... Do everything except the irreversible action.
+    UNKNOWN ........... The result could not be established. NOT the same as "failed".
+
+================================================================================================
+CHAPTER 1 — COMPLETE PROJECT REVIEW
+================================================================================================
+
+1.1 DIRECTORY TREE (verified)
+
+    /var/www/html/knowledge-forge/order58-automation/
+    |
+    |-- create_demo_order.py ........ 1835 lines. THE ENTRY POINT. All CLI commands live here.
+    |-- requirements.txt ............ Pins exactly one package: playwright==1.63.0
+    |-- config.example.json ......... Example config. *** NEVER READ BY ANY CODE *** (see 1.4)
+    |-- README.md ................... Short readme. *** CONTENTS ARE STALE *** (see 1.5)
+    |-- .gitignore .................. Directory-local ignore rules. Root .gitignore untouched.
+    |-- order58-autometion.txt ...... THIS DOCUMENT.
+    |
+    |-- order58/ .................... The library package (10 modules).
+    |   |-- __init__.py ............. 5 lines. Package docstring only.
+    |   |-- guard.py ................ 194 lines. Host + path allowlist. THE SAFETY BOUNDARY.
+    |   |-- browser.py .............. 159 lines. Chrome launch, session reuse, screenshots.
+    |   |-- cart.py ................. 327 lines. Reads the cart. Fail-closed parser.
+    |   |-- checkout.py ............. 221 lines. Reads a checkout screen. READ ONLY.
+    |   |-- inspect_page.py ......... 176 lines. Reports what is on any page. READ ONLY.
+    |   |-- order_form.py ........... 168 lines. The demo order form (name, phone, Take-Out).
+    |   |-- product_menu.py ......... 153 lines. Typeahead product search. Exact matching.
+    |   |-- product_popup.py ........ 166 lines. The product detail modal + quantity.
+    |   |-- logging_setup.py ........ 112 lines. Logging WITH automatic redaction.
+    |   |-- lockfile.py ............. 70 lines.  One run at a time per order (flock).
+    |   |-- workflow.py ............. The one-command orchestration. Gates, stages, outcomes.
+    |   |-- journal.py .............. The durable run record. Blocks duplicate creation.
+    |   |-- audit.py ................ The nine pre-submission checks. Pure functions.
+    |   |-- payment.py .............. Payment-stage readers, shared by `run` and `phase-b`.
+    |
+    |-- auto_order.py ............... ONE-CLICK LAUNCHER. Running it CREATES AND SUBMITS one
+    |                                   demo order. Five editable config lines at the top.
+    |
+    |-- tests/ ...................... Offline unit tests (stdlib unittest, no browser). 172 tests.
+    |   |-- test_screenshot_resilience.py ... 8  Screenshot fallback + `inspect` ordering.
+    |   |-- test_guard_paths.py ............ 24  Allowlist, approved tuple, refusal attempts.
+    |   |-- test_journal.py ................ 26  Durable journal, blocking states, resolution.
+    |   |-- test_audit.py .................. 26  The nine pre-submission checks.
+    |   |-- test_workflow.py ............... 43  Gates, writes-once, UNKNOWN handling.
+    |   |-- test_regression_existing.py .... 19  step3/step5/timing/phase-b seams.
+    |   |-- test_launcher.py ............... 26  Config pass-through, no-bypass checks.
+    |
+    |-- venv/ ....................... Python virtual environment. GIT-IGNORED.
+    |-- state/ ...................... Session + locks + submission marker. GIT-IGNORED.
+    |   |-- order58.storage.json .... Logged-in session. Permissions 0600. NEVER read/printed.
+    |   |-- phase-b-attempt-16630311.json ... Submission marker, 0600. DO NOT DELETE.
+    |   |-- locks/order-16630311.lock ....... Per-order execution lock file.
+    |-- screenshots/ ................ 26 PNG files. GIT-IGNORED (contain customer data).
+    |-- logs/automation.log ......... Redacted log. GIT-IGNORED.
+    |-- __pycache__/ ................ Python bytecode. GIT-IGNORED.
+
+    Total Python source: 11 files, 3586 lines.
+
+1.2 FILE-BY-FILE REFERENCE
+
+--- create_demo_order.py -----------------------------------------------------------------------
+PURPOSE   The single entry point. Defines every CLI command and the whole step-by-step workflow.
+KEY CONSTANTS (lines 39-47)
+          HERE           = the automation directory
+          SESSION_FILE   = HERE/state/order58.storage.json
+          SCREENSHOT_DIR = HERE/screenshots
+          LOG_DIR        = HERE/logs
+          LOCK_DIR       = HERE/state/locks
+          DEFAULT_URL    = https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150
+          MENU_URL       = https://joymeal.order58.com/admin/demo/product/menu/16655531-15163932150
+          DEMO_PATH_MARKER = "/admin/demo/"   <- checked before any submission
+MAIN FUNCTIONS
+          _bool(value)                -> bool. Accepts "--headless false" as well as "--headless".
+          _check_url(url)             -> str. Refuses non-HTTPS or wrong host BEFORE Chrome starts.
+          _require_live_session(s)    -> None. Exits if the saved session has expired.
+          cmd_inspect / cmd_login / cmd_step3 / cmd_step4 / cmd_step5 / cmd_step6 /
+          cmd_step6b / cmd_phase_a / cmd_timing / cmd_phase_b / cmd_run
+                                      -> int (exit code). One per CLI subcommand.
+          _payment_form_report(page)  -> dict. Reads every payment-stage field + its validators.
+          _payment_page_total(page)   -> str|None. The total AS THE PAYMENT PAGE STATES IT.
+          _settled_payment_total(page, expected, attempts=20)
+                                      -> str|None. Polls until the AJAX summary stops rebuilding.
+          _attempt_marker(order_id)   -> Path. The duplicate-submission marker path.
+          main(argv)                  -> int. Argparse wiring.
+CALLS     every module in order58/
+CALLED BY the terminal (it is the program you run)
+IN USE?   YES — this is the running workflow.
+
+--- order58/guard.py ---------------------------------------------------------------------------
+PURPOSE   Decide where the browser is allowed to go, and record every write request.
+          This is the file that makes the tool safe. If you read only one module, read this one.
+KEY ITEMS ALLOWED_HOST = "joymeal.order58.com"
+          ALLOWED_PATHS = frozenset of 6 EXACT paths (listed in Chapter 10.2)
+          class Mode (Enum): LOGIN (host-scoped, a person is driving) / AUTOMATED (exact paths)
+          class NavigationRefused(RuntimeError)
+          class Guard: fields visited, subresource_hosts, mutating_requests, refusal
+            .allows_navigation(url) -> (bool, reason). Parses the URL; compares hostname and
+              path EXACTLY. Not a substring test.
+            .attach(page)           -> hooks "framenavigated" and "request".
+            .raise_if_refused()     -> raises if anything went off-list.
+            .describe()             -> the evidence report.
+WHY EXACT MATCHING   `"order58.com" in url` would accept `order58.com.evil.example`, and
+          `"/admin/demo/" in path` would accept `/admin/live/order/make?x=/admin/demo/`.
+          Both look careful and are not.
+IMPORTANT `mutating_requests` records every non-GET request as (METHOD, path). This is the
+          evidence base for the question "did opening that page change anything on the server?"
+CALLED BY browser.py, and every command in create_demo_order.py
+IN USE?   YES — on every navigation of every command.
+
+--- order58/browser.py -------------------------------------------------------------------------
+PURPOSE   Start Chrome, carry the saved login, take screenshots, always clean up.
+KEY ITEMS DEFAULT_TIMEOUT_MS = 30_000
+          class SessionMissing(RuntimeError)
+          launch(*, headless, mode, session_file=None, require_session=False,
+                 screenshot_dir=None)  -> context manager yielding Session
+          class Session: .page, .context, .guard
+            .open(url)               -> checks the guard BEFORE navigating, and again after.
+            .screenshot(name)        -> screenshots/HHMMSS-name.png, full page.
+            .save_session(path)      -> writes storage_state, then chmod 0600.
+NOTABLE   channel="chrome" drives the ALREADY-INSTALLED /usr/bin/google-chrome. No ~150 MB
+          Chromium download, and no `playwright install` step is needed.
+          viewport is fixed at 1440x900. TLS verification is never disabled.
+IN USE?   YES — every command that opens a browser.
+
+--- order58/cart.py ----------------------------------------------------------------------------
+PURPOSE   Read the shopping cart and REFUSE TO GUESS.
+KEY ITEMS PANEL = "#right-sidebar"   (the cart drawer, on the PRODUCT MENU page)
+          TOGGLER = "div.right-sidebar-toggler-wrapper"
+          class CartStatus(Enum): EMPTY / HAS_ITEMS / UNKNOWN
+          class CartLine: text, name, quantity, price
+          class CartState: status, lines, subtotal, tax, total, delivery,
+                           stated_item_count, raw_text, why_unknown
+            .is_definitely_empty()   -> True ONLY if the page said so.
+            .count_of(product)       -> int
+            .describe()              -> human report including the RAW panel text
+          read(page)                 -> CartState
+          open_panel(page)           -> slides the off-canvas drawer into view
+          find_controls(page)        -> lists cart/checkout buttons (read only)
+WHY THE NAME `is_definitely_empty()` instead of `is_empty()`: the name is the contract. A parser
+          that returns "empty" when it merely failed would let the tool add a second cart line.
+IN USE?   YES.
+
+--- order58/logging_setup.py -------------------------------------------------------------------
+PURPOSE   Logging that is safe to paste into a ticket.
+KEY ITEMS _REDACTIONS  -> cookie/session/csrf/token/bearer/authorization rules. Applied EVERYWHERE,
+                          including inside URLs.
+          _OUTSIDE_URLS-> long-opaque-token and phone-number rules. Applied ONLY outside URLs.
+          _URL         -> r"https?://\S+|/[A-Za-z0-9_\-./]+"
+          _redact(text), class _RedactingFormatter, configure(log_dir=None, verbose=False)
+WHY REDACTION IS IN THE FORMATTER, NOT AT CALL SITES: a call site that has to remember is a call
+          site that will forget.
+WHY URLS ARE PROTECTED FROM THE PHONE RULE: the demo order id `16655531-15163932150` is
+          digits-dash-digits and looks exactly like a phone number. The first version redacted the
+          single most useful line in the log down to `.../make/<redacted-phone>50`.
+IN USE?   YES — every command calls configure() first.
+
+--- order58/lockfile.py ------------------------------------------------------------------------
+PURPOSE   Only one run at a time per demo order.
+KEY ITEMS class AlreadyRunning(RuntimeError)
+          for_order(lock_dir, order_id) -> context manager
+MECHANISM fcntl.flock(LOCK_EX | LOCK_NB) on state/locks/order-<id>.lock
+          NON-BLOCKING on purpose: a second run is told immediately, instead of queueing and then
+          acting on a cart that changed while it waited.
+          The kernel releases the lock when the process dies, so a crash cannot strand it.
+          The lock FILE is never deleted (deleting a held lock file is how two processes both
+          believe they are alone).
+IN USE?   YES — step5, step6, step6b, phase-a, timing, phase-b.
+
+--- order58/product_menu.py --------------------------------------------------------------------
+PURPOSE   Find a product using the search the page actually uses.
+KEY ITEMS SEARCH_INPUT = "#product-search"
+          SUGGESTION   = ".tt-menu .tt-dataset-ProductSearch .tt-suggestion"
+          SUGGEST_TIMEOUT_MS = 4000
+          class Suggestion: raw, code, name, category; .parse(raw)
+          class SearchResult: term, suggestions, exact, near; .describe()
+          search(page, term) -> SearchResult
+SUGGESTION FORMAT   "2 - Roast Pork Egg Roll (1) - Appetizer"
+          code split at the FIRST " - ", category at the LAST, so a hyphen in a product name
+          survives.
+EXACT MEANS EXACT   "Egg Roll" does NOT match "Shrimp Egg Roll". Near matches are recorded and
+          NEVER promoted. A silent substitution is worse than a failure: the order goes through,
+          looks right, and is wrong.
+IN USE?   YES.
+
+--- order58/product_popup.py -------------------------------------------------------------------
+PURPOSE   The product detail modal: what it needs before Add to Cart.
+KEY ITEMS MODAL = "#product-detail-modal"
+          NAME = MODAL + " span.view-product-name"
+          COUNT_INPUT = MODAL + " #cartform-count"
+          ADD_TO_CART = MODAL + " a.add-to-cart"
+          CLOSE = MODAL + " a.btn.pull-right[data-dismiss='modal']"
+          class PopupReport; open_for(page, selector); report_on(page); set_count(page, qty)
+VERIFIED FACT  Exactly ONE field is required: CartForm[count] (aria-required="true", min=1,
+          max=99) and it ARRIVES ALREADY SET TO 1. All add-on groups are optional and the sauce
+          group arrives with a default selected. So a plain order of one needs nothing typed.
+          set_count() therefore VERIFIES and only writes when the value differs.
+IN USE?   YES.
+
+--- order58/order_form.py ----------------------------------------------------------------------
+PURPOSE   The demo order form: fill the minimum, continue exactly once.
+KEY ITEMS NAME_INPUT = "#reservationform-name"
+          PHONE_INPUT = "#reservationform-phone"
+          DINE_TYPE_RADIO = 'input[name="ReservationForm[dine_type]"]'
+          CONTINUE_BUTTON = '#reservation-form button[type="submit"]'
+          find_existing_orders(page) -> list[ExistingOrder]
+          prepare(page, *, customer_name) -> dict describing what was done to each field
+          continue_once(page) -> ContinueResult(url, order_id, customer_id)
+IMPORTANT The PHONE field is NEVER written. It arrives with the real customer's number, and
+          overwriting it would address the order to somebody else.
+          Take-Out is verified if already selected, not re-clicked. If it cannot be selected the
+          run STOPS rather than ordering a delivery.
+IN USE?   YES — step3 only (the order 16630311 already exists).
+
+--- order58/checkout.py ------------------------------------------------------------------------
+PURPOSE   Read a checkout screen and report it.
+KEY ITEMS _STEP_HINTS, class CheckoutReport, report_on(page) -> CheckoutReport
+DESIGN    There is NO fill, NO select and NO submit function in this module. The inspection
+          cannot accidentally become a submission because the code to do it does not exist here.
+IN USE?   YES — step6, step6b, phase-a.
+
+--- order58/inspect_page.py --------------------------------------------------------------------
+PURPOSE   Report what is on any page (inputs, radios, buttons, forms, headings) and whether it
+          looks like a sign-in page.
+KEY ITEMS _SIGN_IN_HINTS, class PageReport, report_on(page) -> PageReport
+WHY IT EXISTS   Every selector in the original brief was inferred from screenshots. A screenshot
+          shows what a control LOOKS like, never what it is CALLED. So the first thing this tool
+          ever did was look, and report.
+IN USE?   YES — the `inspect` command.
+
+--- requirements.txt ---------------------------------------------------------------------------
+Contents: one dependency line, `playwright==1.63.0`, plus comments explaining that
+          channel="chrome" is used so `playwright install chromium` is NOT required.
+
+--- .gitignore (directory-local) ---------------------------------------------------------------
+Ignores: state/, *.storage.json, screenshots/, logs/, config.json, venv/, .venv/,
+          __pycache__/, *.py[cod], .pytest_cache/, .playwright/
+WHY LOCAL  The project already handles self-contained tools this way (tests/E2E/.gitignore does
+          the same). The ROOT .gitignore is deliberately NOT modified.
+
+1.3 WHICH MODULES ARE IN THE REAL RUNNING WORKFLOW
+
+    ALL TEN modules in order58/ are imported and used. None is dead code.
+    The only non-functional code path is `cmd_run` (see 1.4).
+
+1.4 *** IMPORTANT FINDING 1: config.example.json IS NEVER READ ***
+
+    `config.example.json` exists and looks like a supported feature:
+
+        {
+          "demo_url": "https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150",
+          "customer_name": "Jignesh",
+          "order_type": "take-out",
+          "products": [ { "name": "Egg Roll", "qty": 1 } ]
+        }
+
+    VERIFIED: a search of all 11 Python files found NO configuration-loading logic at all.
+    There is no `--config` flag, no `json.load` of a config file, no environment-variable
+    reading. STATUS: JSON configuration is **NOT IMPLEMENTED**. The file is aspirational.
+    Every input is passed as a CLI flag (Chapter 5).
+
+    Note also that the example still names "Egg Roll", which was later changed to "Spring Roll"
+    because no product named exactly "Egg Roll" exists on this menu.
+
+1.5 *** `run` IS NO LONGER A STUB — AND README.md IS STILL STALE ***
+
+    `run` is now the full one-command workflow (Chapter 4.3). What follows describes the state
+    BEFORE that work, and is kept only because `README.md` still says it.
+
+    `cmd_run` performs one safety check and then deliberately stops:
+
+        if args.submit and DEMO_PATH_MARKER not in urlparse(args.url).path:
+            raise SystemExit("Refusing to submit: ... is not a demo route ...")
+        raise SystemExit(
+            "The full workflow is not implemented yet. Cart, checkout and submission are still
+             to come ... Built and verified so far:  inspect . login . step3 . step4")
+
+    So `run` NEVER creates an order. Its own message is also out of date — step5, step6, step6b,
+    phase-a, timing and phase-b were all built after that line was written.
+
+    `README.md` is stale for the same reason. Its status table still says Take-Out, cart,
+    checkout and submission are "not started", which the Phase B evidence in Chapter 13
+    contradicts. This manual is the accurate description. README.md was deliberately NOT edited,
+    because this task permits writing only this one file.
+
+================================================================================================
+CHAPTER 2 — PYTHON, PACKAGES, LIBRARIES AND VERSIONS
+================================================================================================
+
+2.1 ENVIRONMENT (all verified on this machine)
+
+    Operating system .......... Ubuntu 22.04.5 LTS (Jammy Jellyfish)
+                                NOTE: the original brief assumed 24.04. It is 22.04.5.
+    Kernel .................... 6.8.0-138-generic
+    Python (venv) ............. 3.10.12
+    Python (system python3) ... 3.10.12  (the same interpreter)
+    pip ....................... 26.2.1
+    Virtual environment ....... stdlib `venv`; pyvenv.cfg says home=/usr/bin,
+                                include-system-site-packages=false (fully isolated)
+    Google Chrome ............. 143.0.7499.109, at /usr/bin/google-chrome
+    Node.js / npm ............. NOT REQUIRED by this implementation. No Python source file
+                                invokes node, npm or subprocess.
+
+2.2 INSTALLED PACKAGES (from `./venv/bin/pip list`)
+
+    +-------------------+----------+------------------------------------------+-------------+----------+
+    | Package / Library | Version  | Purpose                                  | Used By     | Required?|
+    +-------------------+----------+------------------------------------------+-------------+----------+
+    | playwright        | 1.63.0   | Drives Chrome: navigation, locators,     | browser.py  | YES      |
+    |                   |          | clicks, JS evaluation, screenshots,      | and every   | (the only|
+    |                   |          | storage_state session reuse              | module      | direct   |
+    |                   |          |                                          |             | dep)     |
+    | greenlet          | 3.5.6    | Lets Playwright offer a SYNCHRONOUS API  | playwright  | YES      |
+    |                   |          | (sync_api) over its async core, so the   | internally  | (transi- |
+    |                   |          | code reads top-to-bottom with no await   |             | tive)    |
+    | pyee              | 13.0.1   | Event emitter. Powers page.on("request") | playwright  | YES      |
+    |                   |          | and page.on("framenavigated") — which    | internally  | (transi- |
+    |                   |          | the guard depends on                     |             | tive)    |
+    | typing_extensions | 4.16.0   | Back-ported typing features for 3.10     | playwright  | YES      |
+    |                   |          |                                          | internally  | (transi- |
+    |                   |          |                                          |             | tive)    |
+    | pip               | 26.2.1   | Installer                                | setup only  | tooling  |
+    | setuptools        | 59.6.0   | Packaging support                        | setup only  | tooling  |
+    +-------------------+----------+------------------------------------------+-------------+----------+
+
+    THIRD-PARTY TOTAL: one direct dependency (playwright) and three of its own dependencies.
+    Nothing else. No requests, no selenium, no pandas, no dotenv.
+
+2.3 PINNED VERSUS INSTALLED
+
+    requirements.txt pins .... playwright==1.63.0
+    actually installed ....... playwright 1.63.0        <- MATCHES
+    transitive deps .......... NOT pinned in requirements.txt. They were resolved by pip and are
+                               recorded in section 2.2 for reference. A fresh install on another
+                               machine could resolve different transitive versions.
+                               RECOMMENDATION (not implemented): `pip freeze > requirements.lock`.
+
+2.4 PYTHON STANDARD LIBRARY MODULES USED (no installation needed)
+
+    argparse ....... the CLI (subcommands, flags, help)
+    json ........... reading/writing the submission marker file
+    sys, os ........ exit codes, process id for the lock file
+    time ........... timestamps in the marker, login wait loop
+    pathlib.Path ... every file path in the project
+    urllib.parse ... urlparse / parse_qs — URL and query-string validation (THE GUARD USES THIS)
+    logging ........ the logger and the redacting formatter
+    re ............. redaction patterns, cart line parsing, product name normalising
+    dataclasses .... every report/result object
+    enum ........... CartStatus, Mode
+    fcntl .......... flock() — the per-order execution lock (Linux/Unix only)
+    contextlib ..... @contextmanager for launch() and for_order()
+    datetime ....... screenshot filenames
+    typing ......... Iterator, Any
+
+    PORTABILITY NOTE: `fcntl` is Unix-only. This tool will not run on Windows as written.
+
+2.5 SUPPORTING CONCEPTS
+
+    Browser driver management ... None needed. Playwright talks to Chrome over the DevTools
+                                  protocol itself. There is no chromedriver to install or match.
+    Headless vs headed .......... Both supported, per command. See Chapter 4.
+    Session persistence ......... Playwright `storage_state` JSON, at state/order58.storage.json,
+                                  permissions 0600, git-ignored.
+    Logging dependencies ........ stdlib only.
+    Locking dependencies ........ stdlib only (fcntl).
+    Configuration parsing ....... NOT IMPLEMENTED (see 1.4).
+
+================================================================================================
+CHAPTER 3 — FIRST-TIME INSTALLATION AND SETUP
+================================================================================================
+
+    DO NOT RUN THESE UNLESS YOU ARE SETTING UP A NEW MACHINE.
+    On this machine the setup is already complete and verified.
+
+3.1 PREREQUISITES
+
+    - Ubuntu (verified on 22.04.5 LTS)
+    - Python 3.10 or newer, with the venv module
+    - Google Chrome installed at /usr/bin/google-chrome
+    - A normal user account that owns the project directory. Root is NOT required.
+    - Authorization from the owner of the Order58 store data.
+
+3.2 THE COMMANDS (documented, not executed by this review)
+
+    # 1. Go to the automation directory. Every command below assumes you are here.
+    cd /var/www/html/knowledge-forge/order58-automation
+
+    # 2. Create an isolated Python environment, so this tool's packages cannot affect
+    #    anything else on the server.
+    python3 -m venv venv
+
+    # 3. Update the installer inside that environment.
+    ./venv/bin/pip install --upgrade pip
+
+    # 4. Install the one dependency.
+    ./venv/bin/pip install -r requirements.txt
+
+    # 5. Confirm Chrome exists. This prints a version; it does NOT open a window.
+    /usr/bin/google-chrome --version
+
+    THERE IS NO `playwright install` STEP. Explanation: browser.py uses channel="chrome", which
+    drives the Chrome already on the machine. This avoids a ~150 MB Chromium download and means
+    the automation sees exactly what a human sees. The project's existing browser tests
+    (tests/E2E, puppeteer-core) make the same choice against the same binary.
+
+3.3 VALIDATION COMMANDS (safe, no browser, no network)
+
+    ./venv/bin/python --version                    # expect Python 3.10.12
+    ./venv/bin/pip list                            # expect playwright 1.63.0
+    ./venv/bin/python -m py_compile create_demo_order.py order58/*.py   # expect no output
+    ./venv/bin/python create_demo_order.py --help  # prints the command list
+
+3.4 AUTHENTICATION SETUP (opens a visible browser)
+
+    ./venv/bin/python create_demo_order.py login
+
+    What happens: a visible Chrome window opens on the demo page. YOU type the username and
+    password yourself. The tool waits (default 420 seconds), then saves the session to
+    state/order58.storage.json with permissions 0600.
+
+    The tool never sees, stores, logs or transmits your password. It only keeps the resulting
+    session cookie file.
+
+3.5 SECURITY PROTECTIONS CREATED BY SETUP
+
+    state/ ......... git-ignored; session file chmod 0600 (owner read/write only)
+    screenshots/ ... git-ignored (they are pictures of a live admin panel with customer data)
+    logs/ .......... git-ignored, and redacted by the formatter before anything is written
+    config.json .... git-ignored (would name real stores and phone numbers)
+
+3.6 COMMON SETUP ERRORS
+
+    "python3: command not found" ........... install Python 3.10+
+    "No module named venv" ................. sudo apt install python3-venv
+    "playwright._impl._errors.Error:
+     Chromium distribution 'chrome' is not
+     found at /usr/bin/google-chrome" ...... install Google Chrome
+    "Permission denied" writing state/ ..... you do not own the directory; check ownership
+    pip SSL errors .......................... network/proxy issue, not a project issue
+
+================================================================================================
+CHAPTER 4 — EXACTLY HOW TO RUN THE SCRIPT
+================================================================================================
+
+4.1 THE THREE THINGS YOU MUST GET RIGHT
+
+    1. DIRECTORY   Always: cd /var/www/html/knowledge-forge/order58-automation
+    2. INTERPRETER Always: ./venv/bin/python     (NOT plain `python` or `python3` — those do not
+                                                  have playwright installed)
+    3. SUBCOMMAND  Always required. The script will not run without one.
+
+    Template:
+        ./venv/bin/python create_demo_order.py <SUBCOMMAND> [flags]
+
+4.2 *** THE SYNTAX IN THE ORIGINAL BRIEF IS NOT SUPPORTED ***
+
+    The brief described this interface:
+
+        python create_demo_order.py --product "Spring Roll" --qty 1 --headless false
+
+    THIS FAILS. Verified against the real argparse configuration: `main()` calls
+    `parser.add_subparsers(dest="command", required=True)`, so a subcommand is mandatory. The
+    error you get is `the following arguments are required: command`.
+
+    The closest real form is:
+
+        ./venv/bin/python create_demo_order.py run --product "Spring Roll" --qty 1 --headless false
+
+    ...but `run` is the stub described in section 1.5 and will stop with "The full workflow is not
+    implemented yet". There is currently NO single command that performs the whole workflow.
+    The workflow is driven by the individual step commands below.
+
+4.3 COMPLETE CLI REFERENCE (from real `--help` output)
+
+    GLOBAL
+        --verbose            Log every step. Works with any subcommand.
+        -h, --help           Show help and exit. Safe; opens nothing.
+
+    The 11 subcommands:
+        inspect  login  step3  step4  step5  step6  step6b  phase-a  timing  phase-b  run
+
+    ------------------------------------------------------------------------------------------
+    inspect — Open a page and report what is on it. Changes nothing.
+        --url URL            default: the demo make URL (DEFAULT_URL)
+        --headless [BOOL]    default: False  (a window opens)
+        --json               machine-readable output
+      Safety: READ ONLY. No clicks, no typing, no submits.
+
+    ------------------------------------------------------------------------------------------
+    login — Sign in by hand once and save the session.
+        --url URL            default: DEFAULT_URL
+        --wait WAIT          seconds to wait for you. default: 420
+      Safety: opens a VISIBLE browser. You type the credentials. Nothing is submitted for you.
+
+    ------------------------------------------------------------------------------------------
+    step3 — Create ONE incomplete demo order and read the menu.    *** CREATES AN ORDER ***
+        --url URL            default: DEFAULT_URL
+        --customer-name NAME default: "Jignesh"
+        --product PRODUCT    default: "Spring Roll"
+        --headless [BOOL]    default: True
+      Safety: clicks Continue exactly ONCE. This is a server-side write. Needs authorization.
+
+    ------------------------------------------------------------------------------------------
+    step4 — Open a product popup on an EXISTING order. Adds nothing.
+        --order-id ID        REQUIRED
+        --customer-id ID     REQUIRED
+        --product PRODUCT    default: "Spring Roll"
+        --headless [BOOL]    default: True
+      Safety: READ ONLY with respect to the order. Never presses Add to Cart.
+
+    ------------------------------------------------------------------------------------------
+    step5 — Add ONE product to an EXISTING demo order's cart and verify. No checkout.
+        --source-order ID    REQUIRED
+        --order-id ID        REQUIRED
+        --customer-id ID     REQUIRED
+        --product PRODUCT    default: "Spring Roll"
+        --qty QTY            default: 1
+        --headless [BOOL]    default: True
+      Safety: *** WRITES A CART LINE *** — the first irreversible step. Refuses unless the cart
+      is CONFIRMED EMPTY and the product matches EXACTLY. Needs authorization.
+
+    ------------------------------------------------------------------------------------------
+    step6 — Open the first checkout screen and read it. Fills nothing, submits nothing.
+        --source-order / --order-id / --customer-id   REQUIRED
+        --product PRODUCT    default: "Spring Roll"
+        --qty QTY            default: 1
+        --expect-total TOTAL REQUIRED. The total the cart must show first, e.g. $2.04
+        --headless [BOOL]    default: True
+
+    ------------------------------------------------------------------------------------------
+    step6b — Read the approved checkout-info screen. Fills nothing, submits nothing.
+        --url URL            default: DEFAULT_URL
+        --source-order / --order-id / --customer-id / --expect-total   REQUIRED
+        --headless [BOOL]    default: True
+
+    ------------------------------------------------------------------------------------------
+    phase-a — Inspect the Shipping and Payment stages. Reads only.
+        --source-order / --order-id / --customer-id / --expect-total   REQUIRED
+        --product PRODUCT    default: "Spring Roll"
+        --qty QTY            default: 1
+        --headless [BOOL]    default: True
+
+    ------------------------------------------------------------------------------------------
+    timing — Submit the Timing & Info stage once. Does not touch payment.   *** WRITES ***
+        --source-order / --order-id / --customer-id / --expect-total   REQUIRED
+        --product PRODUCT    default: "Spring Roll"
+        --qty QTY            default: 1
+        --headless [BOOL]    default: True
+      Safety: submits #checkout-dining-form ONCE. No retry. Leaves pickup time EMPTY (the
+      application's automatic setting). Does NOT select Cash and does NOT submit payment.
+
+    ------------------------------------------------------------------------------------------
+    phase-b — Final demo submission. Reads and reports unless --submit is given.
+        --source-order / --order-id / --customer-id   REQUIRED
+        --product PRODUCT      default: "Spring Roll"
+        --qty QTY              default: 1
+        --expect-subtotal AMT  REQUIRED, e.g. $1.85
+        --expect-tax AMT       REQUIRED, e.g. $0.19
+        --expect-total AMT     REQUIRED, e.g. $2.04
+        --submit               Actually select Cash and submit, once. OMIT FOR A DRY RUN.
+        --headless [BOOL]      default: True
+      Safety: WITHOUT --submit it is a pure read-only verification and stops. WITH --submit it
+      selects Cash and presses Submit ONCE, after writing a duplicate-prevention marker.
+      *** HIGHEST-RISK COMMAND IN THE PROJECT. NEVER RUN WITH --submit WITHOUT AUTHORIZATION. ***
+
+    ------------------------------------------------------------------------------------------
+    run — Run the whole workflow (dry run unless --submit).   *** STUB: NOT IMPLEMENTED ***
+        --url URL / --product PRODUCT / --qty QTY / --headless [BOOL] / --submit
+      Behaviour: always exits with "The full workflow is not implemented yet."
+
+4.4 THE --headless FLAG
+
+    Implemented by `_bool()`, which accepts both styles:
+        --headless              -> True   (uses argparse const)
+        --headless true         -> True   ("1", "true", "yes", "y", "on" are all True)
+        --headless false        -> False  (anything else is False)
+        (flag omitted)          -> the command's own default
+
+    Defaults differ ON PURPOSE: `inspect` defaults to VISIBLE (False) because a human is reading
+    the page; every automated step defaults to headless (True).
+
+4.5 WORKED EXAMPLES
+
+    (a) Show help — completely safe, opens nothing
+        ./venv/bin/python create_demo_order.py --help
+        ./venv/bin/python create_demo_order.py phase-b --help
+
+    (b) Safe read-only page inspection (opens a visible browser, changes nothing)
+        ./venv/bin/python create_demo_order.py inspect
+
+    (c) Same, headless
+        ./venv/bin/python create_demo_order.py inspect --headless true
+
+    (d) First-time login (visible browser; you type the credentials)
+        ./venv/bin/python create_demo_order.py login
+
+    (e) Configuration-file-based run
+        NOT SUPPORTED. See section 1.4. There is no --config flag.
+
+    (f) Read-only verification of an existing demo order (no writes)
+        # Replace the placeholders with a NEWLY AUTHORIZED order's identifiers.
+        ./venv/bin/python create_demo_order.py phase-b \
+          --source-order <SOURCE_ORDER_ID> \
+          --order-id <NEW_DEMO_ORDER_ID> \
+          --customer-id <CUSTOMER_ID> \
+          --product "Spring Roll" --qty 1 \
+          --expect-subtotal '$1.85' --expect-tax '$0.19' --expect-total '$2.04'
+        # No --submit  =>  dry run. It verifies everything and stops.
+
+    (g) A single-product demo order, end to end (each step needs authorization)
+        # Step A: create the incomplete order. Prints the new order_id and customer_id.
+        ./venv/bin/python create_demo_order.py step3 --customer-name "Jignesh" --product "Spring Roll"
+        # Step B: add the product (use the IDs printed by step A)
+        ./venv/bin/python create_demo_order.py step5 \
+          --source-order <SOURCE_ORDER_ID> --order-id <NEW_ID> --customer-id <CUST_ID> \
+          --product "Spring Roll" --qty 1
+        # Step C: submit Timing & Info
+        ./venv/bin/python create_demo_order.py timing \
+          --source-order <SOURCE_ORDER_ID> --order-id <NEW_ID> --customer-id <CUST_ID> \
+          --expect-total '$2.04'
+        # Step D: verify payment stage WITHOUT submitting
+        ./venv/bin/python create_demo_order.py phase-b ... (as in example f)
+
+    (h) *** THE AUTHORIZED SUBMISSION — DOCUMENTATION EXAMPLE ONLY ***
+        #############################################################################
+        #  WARNING. This places a real demo order. It cannot be undone by this tool.
+        #  It may be run ONCE per order. Written authorization is required.
+        #  Do NOT reuse order 16630311 — it has already been submitted and its marker
+        #  file will refuse a second attempt.
+        #############################################################################
+        ./venv/bin/python create_demo_order.py phase-b \
+          --source-order <SOURCE_ORDER_ID> \
+          --order-id <NEW_DEMO_ORDER_ID> \
+          --customer-id <CUSTOMER_ID> \
+          --product "Spring Roll" --qty 1 \
+          --expect-subtotal '$1.85' --expect-tax '$0.19' --expect-total '$2.04' \
+          --submit
+
+    (i) Multiple products in one order
+        NOT IMPLEMENTED. --product takes a single string and --qty a single integer. See
+        Chapter 5.10.
+
+    (j) A different demo source URL / different store
+        NOT SUPPORTED without editing Python. See Chapter 5.12 and Chapter 6.
+
+4.6 COMMAND SAFETY CLASSIFICATION
+
+    +-----------+----------------+------------------+------------------+---------------------+
+    | Command   | Opens browser? | Server writes?   | Safe to run now? | Needs authorization?|
+    +-----------+----------------+------------------+------------------+---------------------+
+    | --help    | no             | none             | YES              | no                  |
+    | inspect   | YES (visible)  | none (GET only)  | yes, read-only   | no                  |
+    | login     | YES (visible)  | login session    | yes              | you must have creds |
+    | step3     | yes            | CREATES AN ORDER | NO               | YES                 |
+    | step4     | yes            | none             | yes, read-only   | no                  |
+    | step5     | yes            | WRITES CART LINE | NO               | YES                 |
+    | step6     | yes            | none             | yes, read-only   | no                  |
+    | step6b    | yes            | none             | yes, read-only   | no                  |
+    | phase-a   | yes            | none             | yes, read-only   | no                  |
+    | timing    | yes            | SUBMITS A STAGE  | NO               | YES                 |
+    | phase-b   | yes            | none WITHOUT     | dry run: yes     | --submit: YES       |
+    |           |                | --submit;        |                  |                     |
+    |           |                | SUBMITS ORDER    |                  |                     |
+    |           |                | WITH --submit    |                  |                     |
+    | run       | no             | none (stub)      | yes (it exits)   | no                  |
+    +-----------+----------------+------------------+------------------+---------------------+
+
+4.7 HOW TO STOP EXECUTION
+
+    Press Ctrl+C. The browser is closed by the `launch()` context manager's finally block, and
+    the kernel releases the flock automatically. No manual cleanup is needed.
+    IMPORTANT: if you interrupt during or just after a submit click, the outcome is UNKNOWN. Do
+    NOT re-run with --submit. Verify by hand first (Chapter 11).
+
+4.8 HOW TO READ THE RESULT
+
+    EXIT CODE  MEANING
+       0       Completed as intended (for phase-b without --submit: all checks passed)
+       5       Identity or cart verification FAILED. Nothing was written.
+       6       A pre-submission gate FAILED. Nothing was submitted.
+       7       Landed on a route that is not allowlisted. Recorded as UNKNOWN.
+       9       An attempt marker already exists for this order. Refused before opening a browser.
+
+    Check it with:  echo $?
+
+    The printed outcome line of phase-b --submit is one of:
+       "SUCCESS (the incomplete banner is gone)"
+       "UNKNOWN (navigated, but the order still reports itself incomplete)"
+       "VALIDATION FAILED"      (the page showed validation errors)
+       "UNKNOWN"                (the landing route was refused, or no navigation was observed)
+
+    READ THIS CAREFULLY: UNKNOWN does NOT mean the order failed. It means the tool could not
+    prove the result. The order may well have been placed. Never retry on UNKNOWN.
+
+4.9 WHERE OUTPUT GOES
+
+    Terminal ........ the full human-readable report (the primary output)
+    logs/automation.log ... every log line, redacted
+    screenshots/ .... HHMMSS-<name>.png, full page, at each significant point
+    state/ .......... session, locks, submission markers
+
+4.10 WHEN THE SESSION EXPIRES
+
+    Any command that loads a page calls `_require_live_session()`. If the browser has been
+    redirected to /admin/site/login it exits with:
+        "The saved session has expired. Run `login` again."
+    If the session FILE is missing entirely, browser.py raises SessionMissing before any
+    navigation:
+        "No saved sign-in was found. Run `python create_demo_order.py login` first"
+    Fix: run `login` again. Nothing else is affected.
+
+4.11 WHEN AN ORDER HAS ALREADY BEEN SUBMITTED
+
+    `phase-b` checks for state/phase-b-attempt-<order-id>.json BEFORE launching Chrome. If it
+    exists, it prints the marker's contents, explains that a previous attempt (successful OR of
+    unknown outcome) blocks another, and exits with code 9. No browser opens.
+
+================================================================================================
+CHAPTER 5 — URL, PRODUCT AND QUANTITY INPUT
+================================================================================================
+
+5.1 WHERE THE INPUTS COME FROM — THE SHORT ANSWER
+
+    ALL inputs come from COMMAND-LINE FLAGS. There is no config file support, no environment
+    variable support, and no interactive prompt.
+
+5.2 THE EXAMPLE VALUES, AND HOW EACH ONE REACHES THE CODE
+
+    +-------------------+--------------------------------+------------------------------------+
+    | Value             | Example                        | How it is supplied                 |
+    +-------------------+--------------------------------+------------------------------------+
+    | Demo URL          | https://joymeal.order58.com/   | HARDCODED as DEFAULT_URL           |
+    |                   | admin/demo/order/make/         | (create_demo_order.py:44).         |
+    |                   | 16655531-15163932150           | Overridable with --url on inspect, |
+    |                   |                                | login, step3, step6b, run only.    |
+    | Customer name     | Jignesh                        | --customer-name (step3 only).      |
+    |                   |                                | Default "Jignesh".                 |
+    | Product           | Spring Roll                    | --product. Default "Spring Roll".  |
+    | Quantity          | 1                              | --qty (int). Default 1.            |
+    | Order type        | take-out                       | NOT a flag. HARDCODED behaviour:   |
+    |                   |                                | order_form.prepare() always        |
+    |                   |                                | selects/verifies take-out.         |
+    | Payment method    | cash                           | NOT a flag. HARDCODED in           |
+    |                   |                                | cmd_phase_b as the CASH selector.  |
+    +-------------------+--------------------------------+------------------------------------+
+
+    Two of the six are NOT configurable at all: order type and payment method. Changing either
+    requires editing Python.
+
+5.3 HOW THE PRODUCT NAME IS READ AND USED
+
+    `--product` is a plain string. It is passed to `product_menu.search(page, term)`, which:
+      1. clears #product-search (so an earlier term's suggestions cannot be misread as these),
+      2. types the term,
+      3. waits up to 4000 ms for `.tt-menu .tt-dataset-ProductSearch .tt-suggestion`,
+      4. reads every suggestion's text,
+      5. parses each into code / name / category,
+      6. classifies each as EXACT or NEAR.
+
+5.4 HOW EXACT MATCHING WORKS
+
+    Comparison uses `_normalise()`, which collapses whitespace and lowercases, but KEEPS
+    punctuation — because punctuation distinguishes real products.
+
+        _normalise(suggestion.name) == _normalise(term)   -> EXACT
+        term is contained in the name                      -> NEAR
+
+    "Spring Roll" matches a product named "Spring Roll".
+    It does NOT match "Shrimp Spring Roll" or "Roast Pork Egg Roll (1)".
+
+5.5 HOW AN UNKNOWN PRODUCT IS HANDLED
+
+    NEAR matches are reported and NEVER used. If there is no exact match, the run STOPS and
+    reports the near matches explicitly as "NOT used, and not substituted".
+
+    Gujarati: jo product nu naam exactly match na thaay, to automation bijo product kadi pasand
+    nahi kare — e atkai jaay chhe. Khoto product order thai jaay e sauthi kharab result chhe.
+
+5.6 HOW QUANTITY IS SET AND VALIDATED
+
+    The popup field #cartform-count carries aria-required="true", min="1", max="99" and ARRIVES
+    ALREADY SET TO "1". `product_popup.set_count(page, qty)` reads the current value first:
+      - if it already equals the requested quantity, it returns
+        "already N — verified, not retyped" and writes NOTHING,
+      - otherwise it fills the new value and reports what it was before.
+
+    Writing "1" over "1" would be a change that looks like one and is not — and it would mask a
+    popup that had not loaded properly. There is no Python-side range check against min/max;
+    the browser's own validation applies.
+
+5.7 HOW INPUT ERRORS ARE REPORTED
+
+    Missing required flag ..... argparse error + usage, exit code 2
+    Bad URL (wrong host/scheme) `_check_url()` raises SystemExit before Chrome starts
+    Wrong identifiers ......... printed per-field comparison, then "Refusing to continue: the
+                                page is not the authorised demo order.", exit 5
+    Product not found ......... full search report + "NO EXACT MATCH", run stops
+    Cart not empty ............ cart report + "STOPPING before adding anything", exit 5
+    Totals mismatch ........... explicit expected-vs-actual line, exit 6
+
+5.8 CROSS-CHECKED NUMERIC EXPECTATIONS
+
+    step6, step6b, phase-a and timing require `--expect-total`.
+    phase-b additionally requires `--expect-subtotal` and `--expect-tax`.
+    These are not cosmetic: the run ABORTS if the page disagrees. You are asserting in advance
+    what the page must say, which is what makes the later submission trustworthy.
+
+5.9 WHAT YOU CAN CHANGE WITHOUT EDITING PYTHON
+
+    CAN CHANGE:  --product, --qty, --customer-name (step3), --order-id, --customer-id,
+                 --source-order, --expect-subtotal, --expect-tax, --expect-total,
+                 --headless, --verbose, --wait (login)
+    CANNOT CHANGE WITHOUT EDITING PYTHON:
+                 the store / source order (hardcoded in 4 places + the guard allowlist),
+                 the order type (always take-out),
+                 the payment method (always cash),
+                 the number of products (always one),
+                 any checkout route (each is an exact string in guard.ALLOWED_PATHS)
+
+5.10 MULTIPLE PRODUCTS
+
+    NOT IMPLEMENTED. `--product` is one string; `--qty` is one integer. `cmd_step5` searches for
+    one product, opens one popup, and presses Add to Cart once. It also REFUSES to run unless the
+    cart is confirmed EMPTY, so it cannot be called repeatedly to build a multi-line cart.
+
+    If multiple products were added later, the natural shape would be the `products` array in
+    config.example.json — but note that nothing reads that file today (section 1.4).
+
+5.11 EXAMPLE CONFIGURATION JSON — *** NOT IMPLEMENTED ***
+
+    The file below exists on disk as config.example.json. It is shown here for completeness and
+    future reference ONLY. No code reads it. Creating a config.json will have NO effect.
+
+        {
+          "demo_url": "https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150",
+          "customer_name": "Jignesh",
+          "order_type": "take-out",
+          "products": [ { "name": "Egg Roll", "qty": 1 } ]
+        }
+
+    (Note the stale product name: "Egg Roll" has no exact match on this menu; "Spring Roll" does.)
+
+5.12 DIFFERENT STORES OR SOURCE ORDERS
+
+    The segment `16655531-15163932150` is embedded in:
+      - DEFAULT_URL (create_demo_order.py:44)
+      - MENU_URL (create_demo_order.py:45)
+      - all six entries of guard.ALLOWED_PATHS
+      - the inline checkout URL strings in cmd_step6b, cmd_phase_a, cmd_timing, cmd_phase_b
+
+    So a different store requires editing Python in several places AND adding the new paths to
+    the allowlist. That friction is deliberate: the allowlist is what prevents the tool from ever
+    driving a live-order route, and a wildcard would remove the protection.
+
+================================================================================================
+CHAPTER 6 — DEMO URL GENERATION LOGIC
+================================================================================================
+
+6.1 THE CLIENT'S SPECIFIED FORMAT
+
+    https://ACCOUNTHOST/admin/demo/order/make/SOURCEORDERID-CUSTOMERPHONE
+
+    Component       Meaning                              Stated origin
+    ------------    ---------------------------------    ---------------------------------
+    ACCOUNTHOST     the store's admin hostname           Account.host
+    SOURCEORDERID   the template order being cloned      Order.id
+    CUSTOMERPHONE   the customer's phone number          Reservation.phone inside Order.data
+
+    Worked example:
+        ACCOUNTHOST   = joymeal.order58.com
+        SOURCEORDERID = 16655531
+        CUSTOMERPHONE = 15163932150
+        =>  https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150
+
+6.2 WHAT IS ACTUALLY IMPLEMENTED
+
+    DYNAMIC URL GENERATION IS **NOT IMPLEMENTED**.
+
+    The script consumes an ALREADY-GENERATED URL. There is no database connection, no Account /
+    Order / Reservation model, and no code that assembles the URL from parts. The complete URL
+    sits in `DEFAULT_URL` as a literal string and can be overridden with `--url` on four
+    commands.
+
+    No database connection was introduced by this review, and none should be added without a
+    separate decision.
+
+6.3 WHICH COMPONENT WOULD SUPPLY THE DATA LATER
+
+    NOT VERIFIED — no such component exists in this project. If built, it would need read access
+    to the Order58 Account, Order and Reservation data. That is a design decision, not a fact
+    about the current code.
+
+6.4 HOW THE URL AND IDs PREVENT TOUCHING THE WRONG ORDER OR STORE
+
+    This part IS implemented, in four independent layers:
+
+    LAYER 1 — before Chrome starts
+        `_check_url()` rejects any non-HTTPS scheme and any hostname that is not exactly
+        `joymeal.order58.com`.
+
+    LAYER 2 — on every navigation
+        `Guard.allows_navigation()` parses the URL and compares hostname EXACTLY and path
+        EXACTLY against ALLOWED_PATHS. Query strings are ignored (the demo pages legitimately
+        carry ?order_id=...), but the path itself must BE an approved page, not merely contain
+        one.
+
+    LAYER 3 — identity verification from the page's own response
+        Every write command re-derives all three identifiers from the URL the APPLICATION
+        returned, and compares them to what you passed:
+
+            source_order = path's last segment, before the "-"
+            order_id     = query parameter order_id
+            customer_id  = query parameter customer_id
+
+        Any mismatch => "Refusing to continue: the page is not the authorised demo order."
+        The identifiers are never written down in the tool; they are always read back from the
+        application.
+
+    LAYER 4 — the demo-route marker before submission
+        `DEMO_PATH_MARKER = "/admin/demo/"` must appear in the path of the page about to be
+        submitted. cmd_phase_b re-checks this immediately before the click.
+
+================================================================================================
+CHAPTER 7 — COMPLETE BROWSER AUTOMATION WORKFLOW
+================================================================================================
+
+    For every step: FUNCTION / FILE / SELECTOR / INPUT / ACTION / OUTPUT / FAILURES /
+    SERVER WRITE? / SAFETY.
+
+------------------------------------------------------------------------------------------------
+STEP 1 — START EXECUTION
+------------------------------------------------------------------------------------------------
+FUNCTION      main() -> cmd_* ; logging_setup.configure() ; _check_url() ; lockfile.for_order()
+FILE          create_demo_order.py, order58/logging_setup.py, order58/lockfile.py
+SELECTOR      none (nothing is open yet)
+INPUT         CLI flags
+ACTION        1. parse arguments
+              2. configure the redacting logger (terminal + logs/automation.log)
+              3. validate the URL scheme and host BEFORE a browser exists
+              4. acquire the per-order flock
+OUTPUT        "Holding the execution lock for demo order <id>."
+FAILURES      argparse error (exit 2) / SystemExit on a bad URL /
+              AlreadyRunning if another run holds the lock
+SERVER WRITE  NO
+SAFETY        Host validation precedes process startup. The lock is non-blocking, so a second run
+              is refused immediately rather than queueing behind the first.
+
+------------------------------------------------------------------------------------------------
+STEP 2 — AUTHENTICATION
+------------------------------------------------------------------------------------------------
+FUNCTION      browser_mod.launch(require_session=True) ; Session.save_session() ;
+              _require_live_session()
+FILE          order58/browser.py, create_demo_order.py
+SELECTOR      #loginform-username, #loginform-password, button[name="login-button"]
+              (discovered by `inspect`; the tool NEVER fills or submits these)
+INPUT         state/order58.storage.json
+ACTION        Reuse: Chrome starts with storage_state pointing at the saved session.
+              First time (`login`): a VISIBLE window opens, you sign in by hand, then
+              context.storage_state() is written and chmod 0600.
+OUTPUT        "Reusing the saved sign-in." / "Sign-in saved to <path> (owner-only)."
+FAILURES      SessionMissing (no file) / "The saved session has expired. Run `login` again."
+SERVER WRITE  Only the login itself, performed by YOU during `login`.
+SAFETY        The tool never requests, stores, logs or types a password. Mode.LOGIN relaxes the
+              path allowlist to host-only, because signing in follows unpredictable redirects and
+              a human is at the keyboard. Mode.AUTOMATED applies the exact path list.
+
+------------------------------------------------------------------------------------------------
+STEP 3 — OPEN THE DEMO URL
+------------------------------------------------------------------------------------------------
+FUNCTION      Session.open() / page.goto() ; Guard.attach() ; Guard.raise_if_refused()
+FILE          order58/browser.py, order58/guard.py
+SELECTOR      n/a
+INPUT         DEFAULT_URL or --url
+ACTION        Guard checks BEFORE the request, Chrome navigates, Guard checks AGAIN after (a
+              server-side redirect can land the browser somewhere the original URL did not name).
+OUTPUT        "Navigated to <url>"
+FAILURES      NavigationRefused / navigation timeout (this site has stalled at 30 s and 90 s on
+              pages that had loaded fine minutes earlier)
+SERVER WRITE  NO — a GET
+SAFETY        Exact host + exact path. Subresources (CSS/JS/fonts/XHR) are deliberately NOT
+              blocked — a login form stripped of its JavaScript may not work at all — but every
+              third-party host contacted is RECORDED and reported.
+
+------------------------------------------------------------------------------------------------
+STEP 4 — RESERVATION (the demo order form)            *** SERVER WRITE ***
+------------------------------------------------------------------------------------------------
+FUNCTION      order_form.find_existing_orders() ; order_form.prepare() ;
+              order_form.continue_once()
+FILE          order58/order_form.py  (driven by cmd_step3)
+SELECTOR      #reservationform-name
+              #reservationform-phone                      (PRE-POPULATED — never written)
+              input[name="ReservationForm[dine_type]"][value="take-out"]  (default checked)
+              #reservation-form button[type="submit"]      (Continue)
+INPUT         --customer-name (default "Jignesh")
+ACTION        Name: typed only if it differs. Phone: READ ONLY. Take-Out: verified if already
+              checked, otherwise checked, then ASSERTED. Continue: clicked EXACTLY ONCE.
+OUTPUT        ContinueResult(url, order_id, customer_id) — the identifiers are read from the
+              application's own response, never invented.
+FAILURES      RuntimeError if Take-Out cannot be selected (the run stops rather than ordering a
+              delivery) / unclear navigation after Continue => reported, NEVER repeated
+SERVER WRITE  **YES — this creates an incomplete demo order.**
+SAFETY        Exactly one click, no retry, no loop. Repeating it is how one authorised order
+              becomes two. Pre-existing orders on the page are listed first, so a pile-up from
+              earlier runs is visible and it is on record that this run touched none of them.
+
+------------------------------------------------------------------------------------------------
+STEP 5 — PRODUCT SEARCH
+------------------------------------------------------------------------------------------------
+FUNCTION      product_menu.search()
+FILE          order58/product_menu.py
+SELECTOR      #product-search
+              .tt-menu .tt-dataset-ProductSearch .tt-suggestion
+INPUT         --product
+ACTION        Clear the box, type the term, wait up to 4000 ms for suggestions, read them all,
+              parse each into code/name/category, classify EXACT vs NEAR.
+OUTPUT        SearchResult with .exact and .near
+FAILURES      No suggestions at all (a real answer, not an error) / no exact match => STOP
+SERVER WRITE  NO — the typeahead queries over the network but does not modify the order
+SAFETY        Exact matching only; near matches never promoted.
+HISTORICAL NOTE  The first implementation scanned the rendered product grid and was wrong twice:
+              the grid renders only ONE category, and search is a server-queried typeahead rather
+              than a filter over the visible list. That version produced a FALSE "Egg Roll not
+              found". The rewrite was then verified POSITIVELY (finding "Spring Roll") before any
+              negative result from it was trusted.
+
+------------------------------------------------------------------------------------------------
+STEP 6 — PRODUCT POPUP
+------------------------------------------------------------------------------------------------
+FUNCTION      product_popup.open_for() ; product_popup.report_on() ; product_popup.set_count()
+FILE          order58/product_popup.py
+SELECTOR      #product-detail-modal
+              #product-detail-modal span.view-product-name
+              #product-detail-modal #cartform-count
+              #product-detail-modal a.add-to-cart
+              #product-detail-modal a.btn.pull-right[data-dismiss='modal']
+INPUT         the suggestion to click; --qty
+ACTION        Click the suggestion, wait for the modal (8 s), verify the product NAME in the
+              modal, report required fields and add-on groups, then set_count() — which verifies
+              rather than retypes when the value is already correct.
+OUTPUT        PopupReport (heading, product name, count value/min/max/required, add-on groups)
+FAILURES      modal never appears / wrong product name => STOP
+SERVER WRITE  NO — opening the popup adds nothing
+SAFETY        Only ONE field is genuinely required (CartForm[count], already 1). Every add-on is
+              optional and the sauce group has a default. So a plain order of one needs nothing
+              typed, and the module never presses Add to Cart itself.
+
+------------------------------------------------------------------------------------------------
+STEP 7 — ADD TO CART                                   *** SERVER WRITE ***
+------------------------------------------------------------------------------------------------
+FUNCTION      cmd_step5 (guards) -> clicks ADD_TO_CART -> cart.read()
+FILE          create_demo_order.py, order58/cart.py, order58/product_popup.py
+SELECTOR      #product-detail-modal a.add-to-cart ; #right-sidebar
+INPUT         --source-order, --order-id, --customer-id, --product, --qty
+ACTION        Four gates run BEFORE the click:
+                guard 1: the session is live
+                guard 2: all THREE identifiers match the page's own response
+                guard 3: the cart is READABLE and CONFIRMED EMPTY (is_definitely_empty())
+                guard 4: the product is an EXACT match
+              Then Add to Cart is clicked ONCE and the cart is re-read and reported.
+OUTPUT        Cart lines, subtotal, tax, total, the cart's own stated item count, and the RAW
+              panel text so the parse can be checked against what was really on screen.
+FAILURES      cart UNKNOWN => stop (exit 5) / cart not empty => stop / unclear result after the
+              click => REPORTED as unclear, never retried
+SERVER WRITE  **YES — this writes a cart line, and the tool cannot undo it.**
+SAFETY        Every guard runs before the click and NONE of them runs again afterwards as a
+              reason to click a second time. The flock makes guard 3 meaningful: without it, two
+              runs could each read an empty cart, each decide to add, and both report success.
+TOTALS        Read where the page states them. Nothing is computed: if the page did not say it,
+              the value is None, not arithmetic.
+HISTORICAL NOTE  An early version reported the total as $1.85 instead of $2.04, because the regex
+              `total` matched inside "Sub-total-", and tax was missed because the label is
+              "TAX(10.00%):" with the rate between the word and the colon. The rewrite anchors
+              every pattern to the start of a line (`^sub\s*-?\s*total\b`, `^tax\b`, `^total\b`)
+              and cross-checks against the cart's own "1 items" count.
+
+------------------------------------------------------------------------------------------------
+STEP 8 — CHECKOUT (the wizard)
+------------------------------------------------------------------------------------------------
+FUNCTION      cart.open_panel() ; cart.find_controls() ; checkout.report_on() ;
+              cmd_step6 / cmd_step6b / cmd_phase_a / cmd_timing
+FILE          order58/cart.py, order58/checkout.py, create_demo_order.py
+STAGES AND THEIR EXACT PATHS (each separately approved and added to the allowlist)
+              Cart          -> #right-sidebar  ("Manage Cart", "Go to Checkout")
+              Customer      -> /admin/demo/order/checkout-customer/16655531-15163932150
+                               (a DISPATCHER: it redirects)
+              Timing & Info -> /admin/demo/order/checkout-info/16655531-15163932150
+              Shipping      -> /admin/demo/order/checkout-shipping/16655531-15163932150
+              Payment       -> /admin/demo/order/checkout-payment/16655531-15163932150
+TIMING & INFO FORM (verified from the live page)
+              form .......... #checkout-dining-form, POSTs to its own URL
+              pickup time ... #reservationform-schedule_datetime — readonly, flatpickr, EMPTY
+              customer count  #reservationform-customer_count — hidden, value 1
+              Continue ...... button[type=submit].btn-sm.btn-info
+THE PICKUP-TIME QUESTION, SETTLED FROM THE FORM'S OWN VALIDATORS
+              schedule_datetime:
+                  yii.validation.string(value, messages,
+                      {"max":45, "tooLong":"...", "skipOnEmpty":1});
+                  ...and NO yii.validation.required() call.
+              dine_type, on the SAME form, for contrast:
+                  yii.validation.range(value, messages, {"range":["delivery","take-out",
+                      "dine-in"], "skipOnEmpty":1});
+                  yii.validation.required(value, messages,
+                      {"message":"Dine Type cannot be blank."});
+              CONCLUSION: dine_type IS required; schedule_datetime is NOT. An empty pickup time
+              is accepted. The field is readonly and calendar-driven, so empty is the state a
+              person gets unless they open the picker, and the page prints
+              "(AUTO) Pickup Time: 15 minutes". Nothing had to be invented.
+              VERIFIED AFTERWARDS: the server accepted the empty value, advanced the stage, and
+              still stores schedule_datetime as "". The AUTO 15 minutes is applied at
+              display/fulfilment time, NOT persisted on the reservation.
+SERVER WRITE  checkout-customer / checkout-info / checkout-shipping / checkout-payment are GETs
+              when merely read. `timing` performs ONE POST to checkout-info.
+SAFETY        checkout.py has no fill/select/submit functions at all. The off-canvas cart drawer
+              (position:fixed; right:-800px) needs `div.right-sidebar-toggler-wrapper` before its
+              controls are clickable — measured as purely presentational, zero non-GET requests.
+              Each checkout path was approved INDIVIDUALLY. A `/admin/demo/order/checkout-*`
+              prefix was deliberately REFUSED, because a prefix would silently admit every future
+              stage including whichever one submits.
+
+------------------------------------------------------------------------------------------------
+STEP 9 — CASH PAYMENT
+------------------------------------------------------------------------------------------------
+FUNCTION      cmd_phase_b Step 2 ; _settled_payment_total() ; _payment_page_total()
+FILE          create_demo_order.py
+SELECTOR      #checkout-payment-form
+              input[name='CheckoutPaymentMethod[payment_method]'][value='cash']
+              input[name='CheckoutPaymentMethod[payment_method]'][value='credit card']
+              input[name="_csrf-backend"]   (hidden; its value is NEVER logged)
+INPUT         none from the CLI — Cash is hardcoded
+ACTION        .check() the cash radio, WAIT for the summary to settle, then read the state and
+              apply the gates.
+VERIFIED PAYMENT-FORM FIELDS (10)
+              _csrf-backend ............................. hidden, value withheld from all output
+              CheckoutPaymentMethod[payment_method] ..... hidden (Yii's unselect placeholder, "")
+              CheckoutPaymentMethod[payment_method] ..... radio, Cash
+              CheckoutPaymentMethod[payment_method] ..... radio, Credit Card
+              PurchaseBillingForm[credit_card_num] ...... REQUIRED but DISABLED and HIDDEN
+              PurchaseBillingForm[expires_month] ........ hidden select
+              PurchaseBillingForm[expires_year] ......... hidden select
+              PurchaseBillingForm[credit_card_cvv] ...... REQUIRED but DISABLED and HIDDEN
+              ReservationForm[schedule_datetime] ........ text ("Pick Up at"), optional
+              ReservationForm[name] ..................... "Who will pick up the order" = Jignesh
+              A disabled field is neither submitted nor validated, so the two REQUIRED card
+              fields cannot block a Cash submission.
+REGISTERED VALIDATORS (2)
+              checkoutpaymentmethod-payment_method .. required=True, rules: range, required, trim
+              reservationform-schedule_datetime ..... required=False, rules: string, trim
+*** THE AJAX RE-RENDER RACE — THE MOST IMPORTANT GOTCHA IN THIS PROJECT ***
+              Selecting a payment method fires the page's own handler, which re-requests
+              /admin/demo/cart/list/16655531-15163932150?... and REPLACES the order-summary block.
+              Read during that window and BOTH of these are wrong:
+                  - the total reads None
+                  - the payment radios read as UNCHECKED
+              This caused a genuine false alarm. An early read reported the cash radio as
+              checked=False three seconds after load, while the server's own HTML plainly
+              contains `value="cash" checked`. It looked exactly like a state change caused by
+              the automation. It was a transient snapshot of a block being rebuilt.
+              FIX: `_settled_payment_total()` POLLS (up to 20 attempts, 1 s apart) until the
+              page's own stated total matches the expected value, and the radio state is read
+              only AFTER that. A single fixed wait_for_timeout() cannot fix this, because the
+              refresh may start after it elapses.
+              Gujarati: payment method pasand karya pachhi page potani summary fari thi load kare
+              chhe. Te waqt total ane radio button khota vanchay chhe — etle settle thaay tya
+              sudhi wait karvu jaruri chhe.
+GATES         cash checked is True AND credit card checked is False
+              no card input is BOTH visible AND enabled
+              no new required-and-empty field appeared
+              order_id and customer_id still match, and "/admin/demo/" is still in the path
+              the page's own stated total still equals --expect-total
+              ANY failure => exit 6, nothing submitted
+SERVER WRITE  NO. Verified: the radio handler's cart/list call is a GET. Across every run the
+              guard recorded no non-GET request at this point.
+SAFETY        Five independent gates, all of which must pass before Step 10 is reached.
+
+------------------------------------------------------------------------------------------------
+STEP 10 — FINAL SUBMIT                                 *** IRREVERSIBLE SERVER WRITE ***
+------------------------------------------------------------------------------------------------
+FUNCTION      cmd_phase_b Step 3 ; _attempt_marker()
+FILE          create_demo_order.py
+SELECTOR      #checkout-payment-form button[type=submit].submit-btn
+INPUT         --submit (without it this step is UNREACHABLE)
+ACTION        1. REFUSE if state/phase-b-attempt-<id>.json already exists — checked before Chrome
+                 is even launched.
+              2. WRITE the marker (order ids, timestamp, total, payment method, and
+                 "outcome: attempt recorded before the click; outcome unknown at this point"),
+                 then chmod 0600.
+                 *** The marker is written BEFORE the click on purpose. If the process dies
+                 mid-POST, the marker still refuses a second attempt. That is the whole point. ***
+              3. Click Submit ONCE inside expect_navigation(wait_until="commit", timeout=90 s).
+              4. Wait for domcontentloaded (best effort), then 4 s.
+              5. Record the landing URL.
+              6. If the guard refused that route: note it, READ NOTHING FROM IT, clear the
+                 refusal, and verify via approved pages instead.
+              7. Rewrite the marker with the landing URL and the final outcome.
+OUTPUT        one of SUCCESS / VALIDATION FAILED / UNKNOWN
+FAILURES      timeout or no navigation => UNKNOWN, NOT retried
+              refused landing route => UNKNOWN, nothing read from that page
+              validation errors on the landing page => VALIDATION FAILED
+SERVER WRITE  **YES — exactly one POST to
+              /admin/demo/order/checkout-payment/16655531-15163932150**
+SAFETY        One click. No retry under any circumstance. The marker makes the operation
+              effectively once-only even across crashes. The landing page's ADDRESS is treated as
+              evidence (the application chose it), but its CONTENT is not read unless the route is
+              approved.
+
+------------------------------------------------------------------------------------------------
+STEP 11 — VERIFICATION
+------------------------------------------------------------------------------------------------
+FUNCTION      cmd_phase_b Step 4 ; _payment_form_report() ; cart.read() ;
+              Guard.mutating_requests
+FILE          create_demo_order.py, order58/cart.py, order58/guard.py
+ACTION        Re-open the approved payment and menu pages and read:
+                - the "Order incomplete..." banner (present or gone?)
+                - the order rows, diffed against the rows captured before submission
+                - the cart (still populated, or emptied?)
+                - every non-GET request the whole run made
+OUTPUT        The evidence report, and the final outcome classification.
+BROWSER SIGNALS OF COMPLETION (all observed in the real run — see Chapter 13)
+                - the redirect target is the application's own checkout-completed route
+                - the cart is empty
+                - checkout-info and checkout-payment now bounce to
+                  checkout-customer?_redirect=0 instead of rendering
+                - the incomplete banner is gone
+JSON VERIFICATION   Chapter 11. Must be run by a person with EC2 access. NOT VERIFIED here.
+SERVER WRITE  NO — all GETs
+SAFETY        Status is never inferred from the cart alone. The authorized read-only status source
+              is the application's OWN banner text, "Order incomplete, Dot not close this browser
+              window!!!!" (the typo is theirs), which is a statement about this order rather than
+              a deduction.
+
+================================================================================================
+CHAPTER 8 — EXECUTION FLOWCHART
+================================================================================================
+
+    [IMPLEMENTED] = built and exercised      [STUB] = not implemented
+
+    +--------------------------------------------------------------+
+    |  CLI INPUT   ./venv/bin/python create_demo_order.py <CMD>    |  [IMPLEMENTED]
+    |  (flags only - no config file support)                       |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  CONFIG VALIDATION                                            |
+    |   _check_url(): HTTPS? host == joymeal.order58.com?          |  [IMPLEMENTED]
+    |   (JSON config loading .......................... [NOT IMPLEMENTED])
+    +------------------------------+-------------------------------+
+                                   | fail -> SystemExit, no browser
+                                   v
+    +--------------------------------------------------------------+
+    |  ORDER IDENTITY GUARD   Guard.allows_navigation()            |  [IMPLEMENTED]
+    |   exact host + exact path, on EVERY navigation                |
+    +------------------------------+-------------------------------+
+                                   | refused -> NavigationRefused
+                                   v
+    +--------------------------------------------------------------+
+    |  PER-ORDER LOCK   flock(LOCK_EX|LOCK_NB)                     |  [IMPLEMENTED]
+    |   state/locks/order-<id>.lock                                 |
+    +------------------------------+-------------------------------+
+                                   | held -> AlreadyRunning, stop
+                                   v
+    +--------------------------------------------------------------+
+    |  BROWSER / SESSION   channel="chrome", storage_state         |  [IMPLEMENTED]
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  LOGIN CHECK   _require_live_session()                       |  [IMPLEMENTED]
+    +------------------------------+-------------------------------+
+                                   | expired -> "run login again"
+                                   v
+    +--------------------------------------------------------------+
+    |  DEMO FORM   name / phone(read-only) / Take-Out              |  [IMPLEMENTED] step3
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  INCOMPLETE ORDER   Continue clicked ONCE  >>> WRITE <<<     |  [IMPLEMENTED] step3
+    |  order_id + customer_id read from the app's own response      |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  SEARCH PRODUCT   #product-search typeahead, EXACT match     |  [IMPLEMENTED]
+    +------------------------------+-------------------------------+
+                                   | no exact match -> STOP (no substitution)
+                                   v
+    +--------------------------------------------------------------+
+    |  QUANTITY   #cartform-count (already 1; verified not retyped)|  [IMPLEMENTED]
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  ADD TO CART   4 gates, then ONE click    >>> WRITE <<<      |  [IMPLEMENTED] step5
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  CART VERIFICATION   EMPTY / HAS_ITEMS / UNKNOWN             |  [IMPLEMENTED]
+    |   UNKNOWN is fail-closed: the caller stops                    |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  CHECKOUT   customer -> info -> shipping -> payment          |  [IMPLEMENTED]
+    |   Timing & Info POSTed once by `timing`   >>> WRITE <<<       |  step6/6b/phase-a/timing
+    |   pickup time left EMPTY (no required validator)              |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  PAYMENT   select Cash, WAIT for AJAX summary to settle      |  [IMPLEMENTED] phase-b
+    |   card inputs confirmed hidden + disabled                     |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  SUBMISSION GATE                                              |  [IMPLEMENTED]
+    |   --submit present?  marker absent?  5 gates passed?          |
+    +------------------------------+-------------------------------+
+                                   | any no -> DRY RUN / exit 6 / exit 9
+                                   v
+    +--------------------------------------------------------------+
+    |  WRITE MARKER (before the click!) then SUBMIT ONCE >>> WRITE  |  [IMPLEMENTED]
+    |   POST /admin/demo/order/checkout-payment/...                 |
+    |   NO RETRY, EVER                                              |
+    +------------------------------+-------------------------------+
+                                   v
+    +--------------------------------------------------------------+
+    |  REDIRECT   checkout-completed?id=<demo order id>            |  [IMPLEMENTED]
+    |   NOT allowlisted -> guard refuses -> nothing read from it     |
+    +------------------------------+-------------------------------+
+                                   v
+            +----------------------+----------------------+
+            v                      v                      v
+      +-----------+        +----------------+      +--------------+
+      |  SUCCESS  |        | VALIDATION     |      |   UNKNOWN    |
+      | banner    |        | FAILED         |      | unproven -   |
+      | gone      |        | errors on page |      | NEVER retry  |
+      +-----+-----+        +--------+-------+      +------+-------+
+            |                       |                     |
+            +-----------+-----------+---------------------+
+                        v
+    +--------------------------------------------------------------+
+    |  EXTERNAL VERIFICATION                                        |  [NOT VERIFIED
+    |   /data/orders/demo_mix_orders/<source>-<demo>.json on EC2    |   from this machine]
+    |   read-only jq check, run by a person with access             |
+    +--------------------------------------------------------------+
+
+    NOT IN THIS FLOW AT ALL:
+      - a single end-to-end `run` command .............. [STUB]
+      - JSON/config-file driven input .................. [NOT IMPLEMENTED]
+      - multiple products ............................... [NOT IMPLEMENTED]
+      - dynamic demo-URL generation ..................... [NOT IMPLEMENTED]
+      - scheduling / background execution ............... [NOT IMPLEMENTED]
+
+================================================================================================
+CHAPTER 9 — PLAYWRIGHT DETAILS
+================================================================================================
+
+9.1 HOW PLAYWRIGHT CONTROLS CHROME
+
+    Playwright speaks the Chrome DevTools Protocol directly. There is no chromedriver, no
+    Selenium server and no version-matching problem. `channel="chrome"` tells it to use the
+    Chrome already installed on the machine:
+
+        browser = playwright.chromium.launch(channel="chrome", headless=headless)
+
+9.2 WHY THE SYNCHRONOUS API
+
+    The project imports `playwright.sync_api`. That is why `greenlet` is a dependency: it lets a
+    synchronous API sit on top of an async core, so the workflow reads top to bottom with no
+    `async`/`await`. For a linear, human-mimicking script this is far easier to audit.
+
+9.3 BROWSER CONTEXT
+
+        context = browser.new_context(
+            storage_state=state,                      # the saved login, or None
+            viewport={"width": 1440, "height": 900},
+        )
+        context.set_default_timeout(30_000)
+
+    One context, one page, per run. TLS verification is left ON and must never be disabled.
+
+9.4 SESSION REUSE
+
+    `context.storage_state(path=...)` writes cookies and local storage to JSON. Passing that file
+    back as `storage_state` restores the logged-in session. The file is chmod 0600 and
+    git-ignored. Its CONTENTS are never logged, printed or included in this document.
+
+9.5 NAVIGATION AND WAITING
+
+    Two patterns are used deliberately:
+
+        # Normal: wait for the DOM
+        page.goto(url, wait_until="domcontentloaded")
+
+        # For a site that stalls: commit first, then settle separately
+        page.goto(url, wait_until="commit", timeout=60000)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+        except Exception:
+            pass          # a stalled settle must not fail the run
+        page.wait_for_timeout(3000)
+
+    "commit" means the navigation has been committed and the URL is known, which is enough to
+    tell WHERE the browser is. This matters because this site produced 30 s and 90 s navigation
+    timeouts on pages that had loaded fine minutes earlier.
+
+9.6 THE NAVIGATION GUARD, IN CODE
+
+        page.on("framenavigated", on_navigated)   # only the MAIN frame counts
+        page.on("request", on_request)            # records every non-GET as (METHOD, path)
+
+    Attached in Session.__init__ BEFORE the first navigation, so nothing can slip past during
+    startup. An embedded iframe is not "where the browser is", hence the parent_frame check.
+
+9.7 LOCATORS AND SELECTORS
+
+    Every selector in this project was READ FROM THE LIVE DOM by the `inspect` command. None was
+    guessed from a screenshot. Full list in Chapter 17.4.
+
+9.8 THE TYPEAHEAD
+
+    The product search is a Twitter typeahead that queries the SERVER. Results arrive
+    asynchronously in `.tt-menu .tt-dataset-ProductSearch` as `.tt-suggestion` elements. The code
+    waits for the selector (4 s) and treats "no suggestions" as a real answer rather than an
+    error.
+
+9.9 DYNAMIC AJAX UPDATES — AND HOW THEY ARE SURVIVED
+
+    See Step 9 in Chapter 7 for the full story. The pattern worth copying:
+
+        def _settled_payment_total(page, expected, attempts=20):
+            for _ in range(attempts):
+                total = _payment_page_total(page)
+                if total == expected:
+                    return total
+                page.wait_for_timeout(1000)
+            return _payment_page_total(page)
+
+    Poll for the condition you actually need. Do not sleep a fixed time and hope.
+
+9.10 TIMEOUTS IN USE
+
+    context default .......... 30_000 ms
+    page.set_default_timeout .. 90_000 ms in timing and phase-b
+    navigation (goto) ......... 60_000 ms
+    submit expect_navigation .. 90_000 ms
+    typeahead suggestions ..... 4_000 ms
+    product modal ............. 8_000 ms
+    settle poll ............... 20 x 1_000 ms
+
+9.11 MODAL INTERACTION
+
+    `page.wait_for_selector(MODAL, state="visible", timeout=8000)` then a 500 ms settle, because
+    the popup fades in and its fields need a moment.
+
+9.12 THE OFF-CANVAS DRAWER
+
+    `#right-sidebar` is `position: fixed; right: -800px` — parked past the viewport edge. Its TEXT
+    is readable from the DOM wherever it sits, which is why every cart READ works without
+    opening it. But a control at x=2064 on a 1440-wide viewport cannot be clicked, and Playwright
+    correctly refuses to try. Widening the viewport does not help, because the offset is relative
+    to the right edge. `cart.open_panel()` clicks `div.right-sidebar-toggler-wrapper` instead —
+    measured as presentational only, with zero non-GET requests.
+
+9.13 HEADLESS MODE
+
+    Per-command default (Chapter 4.4). Headless is used for automated steps; visible for `login`
+    and `inspect`, where a human is involved.
+
+9.14 SCREENSHOTS — TWO ATTEMPTS, AND A `required` CONTRACT
+
+    Named `HHMMSS-<name>.png`. They are pictures of a live admin panel containing customer names
+    and phone numbers, which is exactly why `screenshots/` is git-ignored.
+
+    `Session.screenshot(name, *, required=True)` makes TWO attempts:
+
+        1. full page    page.screenshot(..., full_page=True,  timeout=20_000)
+        2. viewport     page.screenshot(..., full_page=False, timeout=10_000)
+                        saved as HHMMSS-<name>-viewport.png
+
+    The `-viewport` suffix is deliberate: a partial capture must never be mistaken for a full one.
+    Worst case is 20 s + 10 s, the same ceiling as the single 30 s attempt it replaced, so a
+    slow-but-working capture cannot regress.
+
+    If BOTH attempts fail:
+        required=True  -> raises. This is what makes a capture taken BEFORE an irreversible click
+                          fail closed: no picture, no click. Used at step3-before-continue,
+                          step5-before-add, timing-before, phase-b-cash-selected.
+        required=False -> logs a WARNING, returns None, and the run continues. Used for the
+                          `inspect` diagnostic and for all seven captures taken AFTER a server-side
+                          write, where raising would discard the verification and outcome reporting
+                          for something the server has already done.
+
+    WHY A RETRY IS ALLOWED HERE AND NOWHERE ELSE
+        A screenshot is a pure read. It is the only operation in this project that can be retried
+        without risking a duplicate action. Every write is still clicked once and never repeated.
+
+    WHY THIS EXISTS
+        A full-page capture timed out after 30 s in a HEADED browser, hanging immediately after
+        Playwright's "fonts loaded" step, and took a complete successful inspection down with it.
+        The browser-level cause is **NOT PROVEN**. Page size was ruled out by evidence (no capture
+        in this project exceeds 1440x1780, far inside Chrome's limits) and fonts were ruled out by
+        the call log, but whether the blockage was frame compositing, a busy renderer or something
+        else was never established. The failure did NOT reproduce on retest: after the change, both
+        headless and headed runs captured the full page in about 6 seconds. So treat this as
+        improved resilience and error handling, not a diagnosed and cured defect.
+
+9.15 ERROR RECOVERY PHILOSOPHY
+
+    There is deliberately very little. Reads are retried where safe (the settle poll). WRITES ARE
+    NEVER RETRIED. An unclear write outcome is reported as unclear. A retry on an unclear write
+    is how one order becomes two.
+
+9.16 BROWSER CLEANUP
+
+    `launch()` is a `@contextmanager` whose `finally` block always closes the context and the
+    browser. A browser left running after a crash is a process somebody has to hunt down, and on
+    a desktop it is a window that stays on screen.
+
+9.17 WHY BROWSER AUTOMATION RATHER THAN AN INVENTED API
+
+    No documented Order58 API was available. Any "API" would have had to be reverse-engineered
+    from the site's own JavaScript, which means:
+      - guessing undocumented endpoints and payloads,
+      - reimplementing CSRF handling and session semantics,
+      - bypassing the validation the UI enforces.
+    Driving the UI means the application's own validation, authorization and business rules all
+    still apply. The automation is a user, not a back door. It is slower, and it is honest.
+
+================================================================================================
+CHAPTER 10 — SAFETY, DUPLICATE PREVENTION AND IDEMPOTENCY
+================================================================================================
+
+10.1 HOSTNAME ALLOWLIST ...................................... IMPLEMENTED
+     ALLOWED_HOST = "joymeal.order58.com". Checked twice: by `_check_url()` before Chrome
+     starts, and by the Guard on every navigation. HTTPS is required.
+     Why exact: `"order58.com" in url` would accept `order58.com.evil.example`.
+
+10.2 ROUTE ALLOWLIST ......................................... IMPLEMENTED
+     Six exact paths, written out in full in guard.py:
+        /admin/demo/order/make/16655531-15163932150
+        /admin/site/login
+        /admin/demo/product/menu/16655531-15163932150
+        /admin/demo/order/checkout-customer/16655531-15163932150
+        /admin/demo/order/checkout-info/16655531-15163932150
+        /admin/demo/order/checkout-shipping/16655531-15163932150
+        /admin/demo/order/checkout-payment/16655531-15163932150
+     (The set contains seven entries including the login path.)
+     Query strings are ignored; the PATH must BE an approved page, not merely contain one.
+     A `/admin/demo/order/checkout-*` prefix was deliberately REFUSED: a prefix would silently
+     admit every future checkout stage, including whichever one submits.
+     NOTE: `checkout-completed` is deliberately NOT on the list. That is why the real submission
+     ended as UNKNOWN — see Chapter 13.
+
+10.3 IDENTITY CHECKS ......................................... IMPLEMENTED
+     All three of source_order, order_id and customer_id are re-derived from the URL the
+     APPLICATION returned and compared to what you passed. Mismatch => refuse. The identifiers
+     are never hardcoded as expectations; they are read back from the app every time.
+
+10.4 EXACT PRODUCT MATCHING .................................. IMPLEMENTED
+     Near matches are reported and never substituted. See Chapter 5.4.
+
+10.5 EMPTY VERSUS UNKNOWN CART ............................... IMPLEMENTED
+     CartStatus has THREE values. An unreadable, missing or self-contradictory cart is UNKNOWN,
+     and the caller stops. `is_definitely_empty()` returns True only when the page SAID it was
+     empty. The method name is the contract.
+     Gujarati: cart vanchi na shakay to "khali chhe" em kadi na manvu — UNKNOWN kahi ne atkvu.
+
+10.6 CART QUANTITY VERIFICATION .............................. IMPLEMENTED
+     Lines are parsed from the real shape `1 [1]Spring Roll` with the price on the following
+     line, and cross-checked against the cart's own printed "1 items" count. If the two disagree
+     the state is UNKNOWN rather than a guess about which is right. Money is read where the page
+     prints it, never computed.
+
+10.7 PER-ORDER FILE LOCK ..................................... IMPLEMENTED
+     flock(LOCK_EX | LOCK_NB) on state/locks/order-<id>.lock. Non-blocking, kernel-released on
+     crash, and the lock file is never deleted. PROVEN in practice: a second process was refused
+     and a third acquired the lock after release.
+
+10.8 ONE-CLICK SUBMISSION AND NO AUTOMATIC RETRY ............. IMPLEMENTED
+     Every write click happens exactly once. There is no retry loop anywhere around a write. An
+     ambiguous outcome is classified UNKNOWN and reported.
+
+10.9 *** THE SUBMISSION ATTEMPT MARKER *** ................... IMPLEMENTED
+     FILE      state/phase-b-attempt-16630311.json   (permissions 0600, git-ignored)
+     CREATED   by cmd_phase_b, immediately BEFORE the Submit click
+     CONTAINS  order_id, customer_id, attempted_at, total, payment_method, landed_on, outcome
+     CHECKED   at the very start of phase-b, BEFORE Chrome is launched. If present: print it,
+               explain, exit 9.
+
+     WHY IT IS WRITTEN BEFORE THE CLICK, NOT AFTER
+         If it were written afterwards and the process died mid-POST, nothing would record the
+         attempt — and the next run would happily submit the same order again. Writing first
+         means a crash leaves the marker behind, and the order is protected.
+
+     *** WHY YOU MUST NOT DELETE IT ***
+         An order whose submission outcome is UNKNOWN may ALREADY BE PLACED. Deleting the marker
+         removes the only thing preventing a duplicate real order. Treat it as a permanent record.
+         Removing one is a deliberate decision that needs the data owner's approval, never a
+         troubleshooting step.
+     Gujarati: aa file ne bhuli ne pan delete na karvi. Aa file j duplicate order atkave chhe.
+
+10.10 TIMEOUT HANDLING ....................................... IMPLEMENTED
+     Every timeout is finite. A stalled settle is swallowed (it must not fail a run), but a
+     stalled WRITE is reported as UNKNOWN and never retried.
+
+10.11 UNEXPECTED REDIRECT .................................... IMPLEMENTED
+     The guard records a refusal. After a submission the tool notes the landing URL as evidence
+     (the application chose it), reads NOTHING from that page, and verifies via approved pages
+     instead.
+
+10.12 SECRET HANDLING ........................................ IMPLEMENTED
+     Redaction lives in the logging FORMATTER, so a call site cannot forget it. Cookie, session,
+     csrf, token, bearer and authorization patterns are removed everywhere including inside URLs.
+     CSRF field values are reported as `<withheld>`. The session file is 0600 and git-ignored.
+     No password is ever handled by the tool.
+
+10.13 GIT ISOLATION .......................................... IMPLEMENTED
+     A directory-local .gitignore covers state/, *.storage.json, screenshots/, logs/,
+     config.json, venv/, __pycache__/ and more. The ROOT .gitignore was never modified. No Yii3
+     file, route, migration, service or configuration was touched by this project at any point.
+
+10.14 WHAT IS ONLY RECOMMENDED, NOT IMPLEMENTED
+     - pinning transitive dependency versions (pip freeze)
+     - any automated test suite (Chapter 14)
+     - server-side confirmation of completion inside the tool (Chapter 11)
+     - a machine-readable run report (only --json on `inspect` exists)
+
+================================================================================================
+CHAPTER 11 — EC2 / WEBSOCKET / JSON DATA FLOW
+================================================================================================
+
+    EVERYTHING IN THIS CHAPTER IS `NOT VERIFIED`.
+    This review had no EC2 access. The description below is the role as STATED in the project
+    brief and README, not something confirmed from this machine.
+
+11.1 THE FOUR SEPARATE THINGS (do not confuse them)
+
+    1. BROWSER ORDER CREATION  — this Python/Playwright tool. Creates the order through the UI.
+    2. WEBSOCKET ORDER RECEPTION — /root/order58/get-mix-order.py on EC2. A different program.
+    3. PM2 PROCESS MANAGEMENT  — keeps that listener running. Nothing to do with this tool.
+    4. PRODUCTION DATABASE     — Order58's own storage. This tool never connects to it.
+
+    Gujarati: aa tool fakt website par order banave chhe. JSON file EC2 upar bijo program lakhe
+    chhe. Be alag cheejo chhe.
+
+11.2 THE STATED FLOW                                          [NOT VERIFIED]
+
+    Order58 creates an order
+        -> emits a `new-order-created` event
+        -> the Python WebSocket listener on EC2 receives the order JSON
+        -> the listener writes the JSON to disk
+
+    Live orders ... /data/orders/mix_orders/
+    Demo orders ... /data/orders/demo_mix_orders/
+    Demo filename . SOURCE_ORDER_ID-DEMO_ORDER_ID.json
+    For this test . /data/orders/demo_mix_orders/16655531-16630311.json
+
+11.3 WHAT THIS TOOL DOES *NOT* DO — VERIFIED FROM SOURCE
+
+    Nothing in these 11 Python files writes to /data/orders/, connects to EC2, uses SSH, restarts
+    PM2, or imports any WebSocket library. The only network egress is Chrome's own traffic to
+    joymeal.order58.com (plus whatever subresources that site requests, all recorded).
+
+11.4 READ-ONLY VERIFICATION COMMAND — FOR A PERSON WITH EC2 ACCESS
+
+    Run this ON EC2. It only reads.
+
+        F=/data/orders/demo_mix_orders/16655531-16630311.json
+
+        ls -l "$F"
+
+        jq '{id, is_test, status, payment_method, total_amount,
+             items: [.items[] | {name, qty}]}' "$F"
+
+    A one-line pass/fail:
+
+        jq -e '.id==16630311 and .is_test=="1" and .status=="completed"
+               and .payment_method=="cash" and (.total_amount|tonumber)==2.04
+               and (.items|length)==1 and .items[0].name=="Spring Roll"
+               and (.items[0].qty|tonumber)==1' "$F" \
+          && echo "DEMO ORDER OK" || echo "MISMATCH - inspect manually"
+
+    EXPECTED FIELDS   id, is_test, status, payment_method, total_amount, items[].name,
+                      items[].qty
+    EXPECTED VALUES   id 16630311 / is_test "1" / status "completed" / payment_method "cash" /
+                      total_amount 2.04 (or "2.04000") / exactly one item, Spring Roll, qty 1
+
+    *** DO NOT ASSUME THIS FILE EXISTS. ***
+    Whether it exists, and whether `status` is "completed", is `NOT VERIFIED`. Until somebody
+    runs the command above, server-side completion of order 16630311 remains unconfirmed.
+
+11.5 ABSOLUTE PROHIBITIONS
+
+    Do not connect to EC2 from this tool. Do not modify the listener. Do not restart PM2. Do not
+    write into /data/orders/. Do not fabricate a JSON file to make a check pass.
+
+================================================================================================
+CHAPTER 12 — TROUBLESHOOTING
+================================================================================================
+
+    Format: PROBLEM -> LIKELY CAUSE -> HOW TO VERIFY -> SAFE RESOLUTION
+    No item below ever tells you to delete state, remove a lock, or retry a submission blindly.
+
+ 1. "python3: command not found"
+    Cause: Python not installed / not on PATH.
+    Verify: `which python3`
+    Fix: install Python 3.10+. Then rebuild the venv (Chapter 3.2).
+
+ 2. "No such file or directory: ./venv/bin/python"
+    Cause: the virtual environment does not exist, or you are in the wrong directory.
+    Verify: `pwd` and `ls -d venv`
+    Fix: cd to the automation directory; if venv is genuinely missing, follow Chapter 3.2.
+
+ 3. "ModuleNotFoundError: No module named 'playwright'"
+    Cause: you used the system `python`/`python3` instead of `./venv/bin/python`, or
+           dependencies were never installed.
+    Verify: `./venv/bin/pip list | grep playwright`  (expect 1.63.0)
+    Fix: always use `./venv/bin/python`. If missing: `./venv/bin/pip install -r requirements.txt`
+
+ 4. "Chromium distribution 'chrome' is not found"
+    Cause: Google Chrome is not installed at /usr/bin/google-chrome.
+    Verify: `/usr/bin/google-chrome --version`  (expect 143.0.7499.109 on this machine)
+    Fix: install Google Chrome. Do NOT switch to bundled Chromium without a decision — the
+         project deliberately drives the same binary the existing E2E tests use.
+
+ 5. "The saved session has expired. Run `login` again."
+    Cause: the admin panel logged the session out.
+    Verify: the message itself; the browser was redirected to /admin/site/login.
+    Fix: `./venv/bin/python create_demo_order.py login` and sign in by hand. Nothing else is
+         affected; no order state changes.
+
+ 6. "No saved sign-in was found."
+    Cause: state/order58.storage.json does not exist.
+    Verify: `ls -l state/order58.storage.json`  (check existence and 0600 — never print contents)
+    Fix: run `login`.
+
+ 7. Login redirect loop, or a page that keeps returning to the login form
+    Cause: cookies rejected, or the saved state is stale/partial.
+    Verify: run `inspect`; PageReport.looks_like_sign_in will be True.
+    Fix: run `login` again to overwrite the session file. Do not hand-edit it.
+
+ 8. "Refusing a non-HTTPS URL" / "Refusing '<host>': this tool only drives joymeal.order58.com"
+    Cause: a bad `--url`.
+    Verify: re-read the URL you passed.
+    Fix: correct the URL. Never relax the host check. This is the outermost safety layer.
+
+ 9. "path '<...>' is not an approved page"
+    Cause: the page is not in guard.ALLOWED_PATHS — often a legitimate redirect, as when
+           checkout-customer dispatches elsewhere, or the post-submit checkout-completed page.
+    Verify: the log line names the exact refused path (paths survive redaction intact, by design).
+    Fix: this is usually CORRECT behaviour, not a bug. If a new path is genuinely needed, add
+         ONE exact path after approval from the data owner. NEVER add a wildcard or prefix.
+
+10. "Refusing to continue: the page is not the authorised demo order." (exit 5)
+    Cause: --source-order / --order-id / --customer-id do not match what the application returned.
+    Verify: the printed per-field expected-vs-actual table.
+    Fix: correct the flags. Do not relax the check.
+
+11. "NO EXACT MATCH for '<product>'"
+    Cause: no product has exactly that name. Near matches may exist.
+    Verify: the printed search report lists every suggestion with code, name and category.
+    Fix: use the exact name from the report. NEVER accept a near match as a substitute — that is
+         how an order goes through, looks right, and is wrong. ("Egg Roll" does not exist on this
+         menu; "Spring Roll" does.)
+
+12. Duplicate product / two identical cart lines
+    Cause: Add to Cart ran twice — most likely two concurrent runs.
+    Verify: read the cart report (lines and the cart's own stated item count).
+    Fix: this is what the flock prevents; confirm you are not running two processes. Correct the
+         cart through the normal admin UI, by hand. The tool cannot undo a cart line.
+
+13. The product popup does not open, or shows the wrong product
+    Cause: slow modal, or a mis-click on the wrong suggestion.
+    Verify: screenshots/ around that timestamp; the report prints the modal's product name.
+    Fix: re-run the READ-ONLY `step4` to inspect. It never presses Add to Cart.
+
+14. Quantity did not change
+    Cause: it was already correct. set_count() verifies rather than retyping.
+    Verify: the report says "already N — verified, not retyped".
+    Fix: nothing. This is intended.
+
+15. Unexpected add-ons or required options in the popup
+    Cause: a product with mandatory option groups (the verified case, Spring Roll, has none).
+    Verify: PopupReport prints required_fields and every add-on group with whether a default is
+            selected.
+    Fix: STOP and ask the data owner what should be chosen. Do not invent a selection.
+
+16. Cart status UNKNOWN
+    Cause: the panel was missing, rendered no text, or said two contradictory things.
+    Verify: `why_unknown` plus the verbatim raw panel text in the report.
+    Fix: re-run the read-only inspection. If the page is genuinely broken, stop and report. Never
+         "assume empty" — that is precisely the failure the three-state design prevents.
+
+17. Total mismatch (exit 6)
+    Cause: the page states a different amount than --expect-total.
+    Verify: the printed expected-vs-actual line, and the raw cart text.
+    Fix: find out WHY the amount differs before doing anything else. Do not just change the
+         expected value to make the gate pass.
+
+18. The payment total reads `None`, or the Cash radio reads unchecked
+    Cause: THE AJAX RE-RENDER RACE. Selecting a payment method makes the page re-request
+           /admin/demo/cart/list/... and replace the summary block; during that window both the
+           total and the radio states read wrongly.
+    Verify: wait and read again — the values settle. The server's own HTML contains
+            `value="cash" checked`.
+    Fix: already handled by `_settled_payment_total()`, which polls up to 20 x 1 s. If you write
+         new code against this page, poll for the condition; never use one fixed sleep.
+         This race caused a false "the automation changed server state" alarm once. It had not.
+
+19. Unexpected checkout redirect (e.g. you asked for checkout-info and landed on
+    checkout-customer?_redirect=0)
+    Cause: either checkout-customer acting as a dispatcher, or the order has ADVANCED beyond that
+           stage (a completed order no longer renders the wizard).
+    Verify: compare the requested URL with the landed URL — both are printed.
+    Fix: interpret it as information about the order's state. Do not force the old stage.
+
+20. Pickup-time validation worry ("is schedule_datetime required?")
+    Cause: uncertainty about whether an empty pickup time is accepted.
+    Verify: the form's own validators. schedule_datetime has only
+            `yii.validation.string(..., skipOnEmpty:1)` and NO `required` rule, whereas dine_type
+            on the same form DOES have `required`.
+    Fix: leave it EMPTY. That is the application's automatic "(AUTO) Pickup Time: 15 minutes"
+         path, and the server accepted it. Never invent a date or time.
+
+21. Payment selection seems not to apply
+    Cause: usually item 18 above.
+    Verify: read cash.checked and card.checked AFTER the summary settles.
+    Fix: rely on the settle poll. Also confirm no card input is both visible and enabled — the
+         two REQUIRED card fields are disabled and hidden, so they cannot block a Cash submit.
+
+22. Navigation timeout (30 s / 90 s) on a page that worked earlier
+    Cause: the remote site stalling. Observed repeatedly; not a defect in this code.
+    Verify: the timeout message plus the log timestamps.
+    Fix: for READS, re-run. For a WRITE, treat the outcome as UNKNOWN and go to item 24. Never
+         re-run a write because it timed out.
+
+23. "path '/admin/demo/order/checkout-completed' is not an approved page"
+    Cause: the submission succeeded and the application redirected to its completion page, which
+           is deliberately not allowlisted.
+    Verify: the printed landing URL contains your demo order id.
+    Fix: nothing is wrong. The tool records the URL as evidence, reads nothing from that page,
+         and verifies via approved pages. To read it directly, the path would have to be approved
+         and added as one exact entry — a decision for the data owner.
+
+24. Submission outcome UNKNOWN
+    Cause: refused landing route, a timeout, or the order still reporting itself incomplete.
+    Verify: IN THIS ORDER —
+            (a) the guard's non-GET list: was a POST to checkout-payment actually made?
+            (b) the landing URL that was recorded;
+            (c) the approved pages: is the cart empty? is the incomplete banner gone?
+            (d) the EC2 JSON (Chapter 11.4) — the authoritative answer.
+    Fix: *** DO NOT RE-SUBMIT. *** UNKNOWN frequently means SUCCESS that could not be proven.
+         Establish the truth from (d) before any further action.
+
+25. "an attempt was already recorded for this order" (exit 9)
+    Cause: state/phase-b-attempt-<id>.json exists — this order already had a submission attempt.
+    Verify: the command prints the marker's contents.
+    Fix: this is the duplicate-prevention system WORKING. Verify the real status (Chapter 11.4).
+         If a new test is needed, create a NEW demo order. Do not delete the marker.
+
+26. "Another run already holds demo order <id>"
+    Cause: a second process is working on that order.
+    Verify: `ls -l state/locks/` and check for a running process.
+    Fix: wait for the other run to finish. NEVER delete a lock file another process holds —
+         that is how two processes each come to believe they are alone.
+
+27. Missing EC2 JSON file
+    Cause: the listener did not receive the event, is not running, or the order did not complete.
+    Verify: `ls -l /data/orders/demo_mix_orders/` on EC2 (read-only).
+    Fix: report it to whoever owns the EC2 listener. Do NOT restart PM2 from here, do not modify
+         the listener, and never create the file by hand to make a check pass.
+
+28. EC2 JSON field mismatch
+    Cause: the order differs from expectations, or the schema differs from what was documented.
+    Verify: the `jq` output in Chapter 11.4.
+    Fix: report the actual values. Do not edit the JSON.
+
+29. Browser crash mid-run
+    Cause: resource exhaustion or a Chrome fault.
+    Verify: the traceback plus the last screenshot.
+    Fix: the flock is released by the kernel and the context manager closes the browser, so no
+         cleanup is needed. For a READ step, re-run. If it crashed around a WRITE, treat the
+         outcome as UNKNOWN (item 24) and verify before doing anything.
+
+30. A screenshot is named `*-viewport.png`
+    Cause: the full-page capture failed and the viewport fallback was used.
+    Verify: a WARNING line in the output names both the file and the original error.
+    Fix: nothing is broken, but the image shows only the visible area, NOT the whole page. Do not
+         treat it as full-page evidence. If it happens repeatedly, capture the warning text - the
+         underlying browser cause is still unproven.
+
+31. A screenshot failed entirely and the run continued
+    Cause: both attempts failed on a capture marked `required=False` (the `inspect` diagnostic, or
+           post-write evidence).
+    Verify: the WARNING naming both failures; the printed report is still complete.
+    Fix: intended behaviour. The printed report, not the PNG, is the evidence. A pre-write capture
+         would instead have raised and stopped before the click.
+
+32. No screenshots or no log output
+    Cause: the directory could not be created, or a permissions problem.
+    Verify: `ls -ld screenshots logs` and check ownership.
+    Fix: ensure your user owns the automation directory. `Session.screenshot()` returns None
+         harmlessly when no directory is configured, so a run is not failed by this.
+
+================================================================================================
+CHAPTER 13 — THE ACTUAL PHASE B TEST CASE
+================================================================================================
+
+13.1 WHAT WAS SUBMITTED
+
+    Source Order ID ... 16655531
+    Demo Order ID ..... 16630311
+    Customer ID ....... 6959001
+    Product ........... Spring Roll  (exact match, code 1)
+    Quantity .......... 1
+    Subtotal .......... $1.85
+    Tax ............... $0.19   (label on the page: "TAX(10.00%):")
+    Total ............. $2.04
+    Order type ........ Take-Out
+    Payment method .... Cash
+    Customer name ..... Jignesh  (pre-filled as "Who will pick up the order")
+
+13.2 THE EXACT COMMAND USED
+
+    ./venv/bin/python create_demo_order.py phase-b \
+      --source-order 16655531 --order-id 16630311 --customer-id 6959001 \
+      --product "Spring Roll" --qty 1 \
+      --expect-subtotal '$1.85' --expect-tax '$0.19' --expect-total '$2.04' \
+      --submit --headless true
+
+13.3 RECORDED EVIDENCE
+
+    - Exactly ONE payment POST: POST /admin/demo/order/checkout-payment/16655531-15163932150
+      It was the only non-GET to any /admin/... endpoint in the entire run.
+    - Redirect to: https://joymeal.order58.com/admin/demo/order/checkout-completed?id=16630311
+    - The cart became EMPTY (it held 1 x Spring Roll at $2.04 immediately before).
+    - Checkout route behaviour CHANGED: checkout-info and checkout-payment now bounce to
+      checkout-customer?_redirect=0 instead of rendering. Before submission they rendered
+      directly.
+    - The "Order incomplete, Dot not close this browser window!!!!" banner DISAPPEARED. It had
+      been present on both stages right up to the click.
+    - NO validation errors on the landing page.
+    - NO automatic retry of any kind.
+
+13.4 HOW TO READ THAT RESULT
+
+    TOOLING CLASSIFICATION .... UNKNOWN
+        Why: the application redirected to `checkout-completed`, which is deliberately not on the
+        allowlist. The guard refused it, the tool read nothing from that page, and by its own
+        rules an unproven outcome is UNKNOWN, never SUCCESS.
+
+    HUMAN INTERPRETATION ...... high-confidence SUCCESS
+        Five independent signals converge: the application's own completion route carrying this
+        order's id, the single correct POST, the emptied cart, the changed route behaviour, and
+        the vanished incomplete banner.
+
+    SERVER-SIDE COMPLETION .... NOT VERIFIED
+        No approved page prints the literal status string. The authoritative check is the EC2
+        JSON (Chapter 11.4), which requires access this review did not have.
+
+    The distinction matters: "UNKNOWN" is a statement about the strength of the evidence, not a
+    claim that something went wrong.
+
+13.5 PRE-SUBMISSION VERIFICATION THAT PASSED
+
+    Identifiers ALL MATCH / cart readable / exactly 1 line / 1 x Spring Roll / quantity 1 /
+    subtotal $1.85 / tax $0.19 / total $2.04 / dine_type "take-out" / customer_count "1" /
+    incomplete banner present / payment form found, POSTing to a /admin/demo/ route with our ids /
+    the two required credit-card fields disabled AND hidden / NO new required conditions /
+    non-GET requests so far: NONE.
+
+13.6 DEFECTS FOUND AND FIXED DURING DEVELOPMENT
+
+    (a) CART SUBTOTAL / TOTAL CONFUSION ...................................... FIXED
+        The regex `total` matched inside "Sub-total-", so the subtotal was reported as the total
+        ($1.85 instead of $2.04). Patterns are now anchored to the start of a line (`^sub`,
+        `^total`) so one cannot match inside the other.
+
+    (b) TAX LABEL NOT PARSED ................................................. FIXED
+        The label is "TAX(10.00%):", with the rate between the word and the colon. The pattern
+        now allows for that instead of assuming a bare label.
+
+    (c) WHOLE CART PANEL READ AS ONE LINE .................................... FIXED
+        A cart with two products would still have counted as one. Lines are now parsed from the
+        real shape `1 [1]Spring Roll` with the price on the following line, and cross-checked
+        against the cart's own "1 items".
+
+    (d) WRONG PAGE SELECTOR FOR THE CART TOTAL ............................... FIXED
+        `cart.read()` targets `#right-sidebar`, which exists only on the product-menu page. Asking
+        it for a total on the PAYMENT page returned None and stopped two runs at the final gate.
+        The gate was correct; the source was wrong. `_payment_page_total()` now reads the payment
+        page's own summary (a label element with the amount in the next sibling).
+
+    (e) TEMPORARY `None` TOTALS DURING THE PAYMENT SUMMARY REFRESH ........... FIXED
+        The AJAX re-render race of Chapter 7 Step 9. Fixed by `_settled_payment_total()` polling
+        until the stated total matches. This also explained a false alarm in which the cash radio
+        appeared to have been changed by the automation; it had not.
+
+    (f) BROKEN PRODUCT SCANNER / FALSE "NOT FOUND" ........................... FIXED
+        The original grid scanner captured price blobs rather than names and could only see one
+        category, producing a false "Egg Roll not found". Rebuilt around the real typeahead and
+        verified POSITIVELY (finding "Spring Roll") before any negative result was trusted.
+
+    (g) SOURCE FILE ACCIDENTALLY EXPANDED TO 86,239 LINES .................... FIXED
+        A runaway string-replace corrupted create_demo_order.py. It was deleted and rewritten
+        cleanly. Later edits assert occurrence counts before substituting.
+
+    (h) REDACTION DESTROYED THE USEFUL PART OF EVERY LOG LINE ................ FIXED
+        `16655531-15163932150` is digits-dash-digits and matched the phone-number rule, reducing
+        URLs to `.../make/<redacted-phone>50`. URLs and bare paths are now lifted out before the
+        phone and token rules run, while the cookie/token rules still apply inside them.
+
+    (i) "Go to Checkout" CLICK TIMED OUT ..................................... FIXED
+        The cart is an off-canvas drawer at x=2064 on a 1440-wide viewport. Playwright correctly
+        refused to click it. Resolved via `div.right-sidebar-toggler-wrapper`.
+
+13.7 SAFETY GATES THAT CORRECTLY PREVENTED SUBMISSIONS
+
+    Three phase-b runs stopped BEFORE submitting: two on the total-source bug (d) and one on the
+    AJAX race (e). In every case no marker was written and no click occurred. The gates did their
+    job — they failed closed on a defect in the tool rather than submitting on bad data.
+
+13.8 REMAINING UNTESTED BEHAVIOUR
+
+    - Server-side completion of 16630311 ................... NOT VERIFIED (needs the EC2 check)
+    - A second end-to-end order from scratch ............... never run
+    - Any product other than Spring Roll ................... never run through checkout
+    - Any quantity other than 1 ............................ never run through checkout
+    - Any order type other than take-out ................... not supported
+    - Credit-card payment .................................. not supported, never attempted
+    - A store other than 16655531 .......................... not supported without code changes
+    - VALIDATION FAILED classification ..................... never triggered, so never observed
+    - Marker-refusal path (exit 9) ......................... verified by reasoning, not by a run
+                                                              against an existing marker
+    - The 86k-line rewrite's full behavioural equivalence ... only py_compile and live runs
+
+================================================================================================
+CHAPTER 14 — TESTING AND QUALITY CHECKS
+================================================================================================
+
+14.1 THE TEST SUITE IS ONE FILE, COVERING ONE THING
+
+    tests/test_screenshot_resilience.py — 8 tests, stdlib `unittest`, fully offline.
+    Run it with:
+
+        ./venv/bin/python -m unittest discover -s tests -v
+
+    It needs NO browser, NO network and NO live site, and it adds NO dependency: `pytest` is still
+    not installed, which is why these are written against `unittest` instead.
+
+    WHAT IT COVERS
+        - a full-page capture succeeds and does NOT fall back (and uses timeout=20_000)
+        - a full-page failure falls back to a viewport capture named `*-viewport.png`
+        - a fallback that succeeds satisfies even a `required=True` capture
+        - both captures failing with required=False returns None, writes nothing, does not raise
+        - both captures failing with required=True raises (pre-write fail-closed preserved)
+        - no screenshot directory configured is not an error
+        - `inspect` PRINTS ITS FULL REPORT even when both capture attempts fail
+        - a screenshot failure touches no goto / click / locator / evaluate / reload, and records
+          no mutating request
+
+    THE SUITE WAS VERIFIED NOT TO BE VACUOUS
+        The ordering test was run against a copy of the source with the OLD ordering restored
+        (screenshot before the print, required=True). It FAILED there with the original
+        `Page.screenshot: Timeout` error, and passes against the fixed ordering. A test that
+        guards an ordering property is worthless unless it has been seen to fail, so this was
+        checked rather than assumed.
+
+    WHAT IS STILL NOT COVERED — and it is most of the project
+        NO tests exist for the navigation guard, the cart parser, redaction, product matching, the
+        lock, the attempt marker, or any checkout stage. There is no conftest.py, no pytest.ini, no
+        tox.ini, no Makefile and no pyproject.toml/setup.cfg, and no linter or type checker is
+        installed (no mypy, ruff, flake8 or black).
+
+        So "the tests pass" means exactly one thing in this project: screenshot resilience behaves
+        as specified. It says nothing about the safety machinery. The Level 1 proposals in 14.4
+        remain the real gap.
+
+14.2 WHAT WAS ACTUALLY CHECKED, AND ITS RESULT
+
+    +--------------------------------+------------+------------------------------------------+
+    | Check                          | Result     | Notes                                    |
+    +--------------------------------+------------+------------------------------------------+
+    | py_compile, all 12 files       | PASS       | ./venv/bin/python -m py_compile          |
+    |                                |            | create_demo_order.py order58/*.py        |
+    |                                |            | tests/*.py                               |
+    | offline unit tests (8)         | PASS       | ./venv/bin/python -m unittest discover   |
+    |                                |            | -s tests -v   (screenshot resilience     |
+    |                                |            | only - see 14.1)                         |
+    | mutation check on the ordering | PASS       | the inspect-ordering test was seen to    |
+    |                                |            | FAIL against the old ordering            |
+    | inspect, headless (read-only)  | PASS       | full report printed, full-page capture    |
+    |                                |            | 1440x1780                                |
+    | inspect, headed (read-only)    | PASS       | full report printed, full-page capture    |
+    |                                |            | 1425x1780; the reported 30 s timeout did  |
+    |                                |            | NOT reproduce                            |
+    | CLI help, top level            | PASS       | lists all 11 subcommands                 |
+    | CLI help, each subcommand      | PASS       | all 11 produce usage without error       |
+    | git status cleanliness         | PASS       | only `?? order58-automation/`; nothing   |
+    |                                |            | tracked changed outside this directory   |
+    | .gitignore effectiveness       | PASS       | git check-ignore confirms state/,        |
+    |                                |            | screenshots/, logs/ are ignored          |
+    | session file permissions       | PASS       | state/order58.storage.json is 0600       |
+    | marker file permissions        | PASS       | phase-b-attempt-16630311.json is 0600    |
+    | flock mutual exclusion         | PASS       | demonstrated: a 2nd process was refused, |
+    |                                |            | a 3rd acquired the lock after release    |
+    | cart parser, both directions   | PASS       | verified it finds a product that exists  |
+    |                                |            | BEFORE trusting a "not found" result     |
+    | unit tests, screenshot path    | PRESENT    | 8 tests, offline, stdlib unittest        |
+    | unit tests, everything else    | ABSENT     | guard, cart, redaction, lock, marker:    |
+    |                                |            | no tests exist                           |
+    | integration tests              | ABSENT     | none exist                                |
+    | browser/E2E tests              | ABSENT     | none exist for this tool                  |
+    | static analysis / type checks  | ABSENT     | no linter or type checker installed       |
+    | Yii3 application test suite    | NOT RERUN  | out of scope; no Yii3 file was touched    |
+    +--------------------------------+------------+------------------------------------------+
+
+14.3 THE EVIDENCE DISCIPLINE ACTUALLY USED INSTEAD OF TESTS
+
+    Since there is no suite, correctness was established by other means, which is worth knowing:
+      - Every selector was read from the live DOM by `inspect` before being used.
+      - The product parser was verified POSITIVELY before any negative result was trusted.
+      - The lock was PROVEN with real concurrent processes before being relied upon.
+      - `Guard.mutating_requests` gives an evidence-based answer to "did this change anything?",
+        rather than an assumption. This is how "no POST was ever made to any /admin endpoint" was
+        established for the read-only phases.
+      - Totals are read where the page prints them and cross-checked against the cart's own
+        stated item count.
+
+14.4 RECOMMENDED FUTURE TESTING STRATEGY (NOT IMPLEMENTED — a proposal only)
+
+    LEVEL 1, unit tests, no browser — the highest value for the least risk:
+        - guard.allows_navigation(): the attack cases. `order58.com.evil.example`,
+          `/admin/live/order/make?x=/admin/demo/`, http:// , a path that merely contains an
+          approved one, and each approved path with and without a trailing slash.
+        - logging_setup._redact(): a cookie/token is removed; a URL and a bare path survive
+          intact; a phone number outside a URL is masked.
+        - cart._parse_lines() / _amount_for() / _stated_item_count(): fixtures of real panel text,
+          including the "Sub-total vs total" and "TAX(10.00%)" cases, and a contradictory panel
+          that must yield UNKNOWN.
+        - product_menu.Suggestion.parse(): a product name containing a hyphen.
+        - product_menu exact-vs-near classification.
+    LEVEL 2, integration with a fake page — serve saved HTML locally and assert the readers.
+    LEVEL 3, contract checks against the live site — read-only; assert the selectors still exist.
+    LEVEL 4, write paths — only against a disposable demo order, with the marker system active.
+
+    Add pytest to requirements.txt and pin transitive versions at the same time.
+
+================================================================================================
+CHAPTER 15 — CURRENT LIMITATIONS AND FUTURE DEVELOPMENT
+================================================================================================
+
+15.1 FEATURE STATUS TABLE (evidence-based)
+
+    +-------------------------------------------+--------------------------------------------+
+    | Feature                                   | Status                                     |
+    +-------------------------------------------+--------------------------------------------+
+    | Static single-product demo order          | IMPLEMENTED + TESTED (once, end to end)    |
+    | Exact product-name matching               | IMPLEMENTED + TESTED                       |
+    | Quantity handling (qty 1)                 | IMPLEMENTED + TESTED at 1 only             |
+    | Variable quantities (2, 3, ...)           | IMPLEMENTED, UNTESTED                      |
+    | Multiple products in one order            | NOT SUPPORTED                              |
+    | Dynamic demo-URL generation               | NOT SUPPORTED                              |
+    | Alternative order types (delivery/dine-in)| NOT SUPPORTED (take-out is hardcoded)      |
+    | Payment: Cash                             | IMPLEMENTED + TESTED                       |
+    | Payment: Credit Card                      | NOT SUPPORTED                              |
+    | CLI execution                             | IMPLEMENTED + TESTED                       |
+    | Single end-to-end `run` command            | IMPLEMENTED; offline-TESTED only. Never    |
+    |                                           | yet run against the live site.             |
+    | One-click launcher (auto_order.py)        | IMPLEMENTED; offline-TESTED only           |
+    | Three write gates (--create/--submit)     | IMPLEMENTED + TESTED (offline)             |
+    | Resume a prepared order (--resume)        | IMPLEMENTED; offline-TESTED only           |
+    | Durable run journal + duplicate blocking  | IMPLEMENTED + TESTED (offline)             |
+    | Nine-check pre-submission audit           | IMPLEMENTED + TESTED (offline)             |
+    | Approved host/source/phone tuple          | IMPLEMENTED + TESTED (offline)             |
+    | JSON configuration file                   | NOT IMPLEMENTED (example file is unread)   |
+    | Environment-variable configuration        | NOT IMPLEMENTED                            |
+    | Manual login + session reuse              | IMPLEMENTED + TESTED                       |
+    | Automatic authentication renewal          | NOT SUPPORTED (by design — no passwords)   |
+    | Session expiry detection                  | IMPLEMENTED + TESTED                       |
+    | Per-order execution locking               | IMPLEMENTED + TESTED (proven concurrently) |
+    | Duplicate-submission prevention (marker)  | IMPLEMENTED, refusal path UNTESTED         |
+    | Host + route allowlist                    | IMPLEMENTED + TESTED (refusals observed)   |
+    | Fail-closed cart reading                  | IMPLEMENTED + TESTED                       |
+    | Redacted logging                          | IMPLEMENTED + TESTED                       |
+    | Screenshot evidence                       | IMPLEMENTED + TESTED (26 captured)         |
+    | End-to-end browser validation             | PARTIALLY IMPLEMENTED (approved pages only)|
+    | Server-side completion verification       | NOT IMPLEMENTED (manual EC2 jq check)      |
+    | Automated test suite                      | IMPLEMENTED (172 offline tests across 7    |
+    |                                           | files: guard, journal, audit, workflow,    |
+    |                                           | launcher, regression, screenshots).        |
+    |                                           | Cart parser and redaction still UNTESTED.  |
+    | Screenshot full-page/viewport fallback    | IMPLEMENTED + unit-TESTED; the fallback    |
+    |                                           | has NOT been exercised against a real      |
+    |                                           | browser failure                            |
+    | Static analysis / type checking           | NOT IMPLEMENTED                            |
+    | Deployment to EC2                         | NOT IMPLEMENTED (runs locally only)        |
+    | Scheduling / background execution         | NOT IMPLEMENTED                            |
+    | Integration with Knowledge Forge (Yii3)   | NONE, BY DESIGN                            |
+    | Integration with the WebSocket listener   | NONE, BY DESIGN                            |
+    | Windows support                           | NOT SUPPORTED (fcntl is Unix-only)         |
+    +-------------------------------------------+--------------------------------------------+
+
+15.2 THE HONEST SUMMARY
+
+    This is a careful, well-guarded, SINGLE-SCENARIO tool. It does one thing that has been done
+    once: one Spring Roll, quantity 1, Take-Out, Cash, on one store, through an order whose IDs
+    you supply. Its safety machinery is considerably more developed than its feature set — which
+    is the right way round for something that writes to a live admin panel, but it does mean it
+    is not yet a general-purpose automation.
+
+15.3 IS IT PRODUCTION-READY?
+
+    NO, and it is not meant to be yet. Blocking gaps:
+      1. No automated tests.
+      2. `run` is a stub, so there is no one-command workflow.
+      3. Store and source order are hardcoded in several places.
+      4. No server-side completion verification inside the tool.
+      5. Only one product, one quantity, one order type and one payment method are exercised.
+      6. Transitive dependencies are unpinned.
+
+15.4 RECOMMENDED NEXT STEPS (proposals — NOT implemented, and needing approval)
+
+    1. Add the Level 1 unit tests from 14.4. They need no browser and no live site, and they
+       protect the guard and the parsers, which are where a silent failure would be worst.
+    2. Implement the config file that config.example.json already advertises, OR delete that file
+       so it stops implying a feature that does not exist.
+    3. Refresh README.md, whose status table is now wrong.
+    4. Parameterise the store / source order, keeping the allowlist strict (for example, build
+       the allowed paths from a validated source-order argument rather than hardcoding them).
+    5. Implement `run` as a thin, authorization-gated sequence over the existing step functions.
+    6. Add `--json` structured output to the write commands so results can be checked by machine.
+    7. Pin transitive dependencies.
+    8. Decide, with the data owner, whether `checkout-completed` should be allowlisted so the
+       tool can read its own confirmation and report SUCCESS instead of UNKNOWN.
+
+================================================================================================
+CHAPTER 16 — SUPERVISOR QUESTIONS AND ANSWERS
+================================================================================================
+
+Q1. What is this automation, in one sentence?
+    A Python program that drives Google Chrome to create a DEMO order in the Order58 admin panel
+    by clicking through the website the way a person would.
+
+Q2. Why Python?
+    It was the stated requirement, it has first-class Playwright support, and the EC2 listener
+    this work sits alongside is already Python. It also keeps the tool completely separate from
+    the PHP application.
+
+Q3. Why Playwright and not Selenium?
+    Playwright needs no separate driver binary to install and version-match, has built-in waiting
+    that reduces flaky timing bugs, and can reuse a saved login via `storage_state`. It can also
+    drive the Chrome already on the machine, so no extra browser download is needed.
+
+Q4. Which Python version?
+    3.10.12, inside an isolated virtual environment at order58-automation/venv.
+
+Q5. Which Playwright version?
+    1.63.0 — the only package pinned in requirements.txt, and the version actually installed.
+
+Q6. Which browser, and where does it come from?
+    The Google Chrome already installed on the server, version 143.0.7499.109 at
+    /usr/bin/google-chrome. We use `channel="chrome"`, so no ~150 MB Chromium is downloaded and
+    there is no `playwright install` step.
+
+Q7. Do we need Node.js or npm?
+    No. Verified: nothing in the Python sources invokes node, npm or any subprocess.
+
+Q8. How do I execute the script?
+    cd /var/www/html/knowledge-forge/order58-automation
+    ./venv/bin/python create_demo_order.py <SUBCOMMAND> [flags]
+    Start with `--help`. Always use ./venv/bin/python, never plain python3.
+
+Q9. Where is the entry point?
+    create_demo_order.py — 1835 lines, containing every CLI command. The reusable library lives
+    in order58/ (10 modules).
+
+Q10. Can I just run `create_demo_order.py --product "Spring Roll" --qty 1`?
+    No. A subcommand is mandatory, so that form errors out. And the `run` subcommand that would
+    accept those flags is a stub that exits with "not implemented". Use the step commands.
+
+Q11. Where do I pass the URL?
+    Usually nowhere — it is hardcoded as DEFAULT_URL. Four commands (inspect, login, step3,
+    step6b) accept `--url`. The host is locked to joymeal.order58.com and the path must be on the
+    allowlist.
+
+Q12. Where do I pass the product name?
+    `--product "Spring Roll"`. It must match EXACTLY. If it does not exist, the tool stops rather
+    than substituting something similar.
+
+Q13. How does quantity work?
+    `--qty 1`. The popup's quantity field already arrives set to 1, so the tool verifies it
+    instead of retyping. Values above 1 are supported by the code but have never been run end to
+    end.
+
+Q14. Can I submit multiple products in one order?
+    No. Not implemented. One product, one quantity. `step5` also refuses to run unless the cart
+    is confirmed empty, so it cannot be called repeatedly to build up a cart.
+
+Q15. Can I use another store or another source order?
+    Not without editing Python. The segment 16655531-15163932150 is hardcoded in four places and
+    in every allowlist entry. That friction is deliberate — the allowlist is what prevents the
+    tool ever driving a live-order route.
+
+Q16. How is login handled? Do we store a password?
+    We never store, see, log or type a password. You run `login`, a visible Chrome window opens,
+    YOU sign in by hand, and the resulting session is saved.
+
+Q17. Where does the session live, and how is it protected?
+    state/order58.storage.json, permissions 0600 (owner only), git-ignored. Its contents are
+    never logged or printed. Treat it as equivalent to a password.
+
+Q18. What if the session expires?
+    The tool detects the redirect to the login page and stops with "The saved session has expired.
+    Run `login` again." No order state is affected.
+
+Q19. How does product search work?
+    The page uses a Twitter typeahead that queries the server. We type into #product-search, wait
+    up to 4 seconds for `.tt-suggestion` results, and read them. We do NOT scan the visible
+    product grid — the grid only renders one category, which once produced a false "not found".
+
+Q20. How does the cart work, and what if it cannot be read?
+    `cart.read()` returns one of three states: EMPTY, HAS_ITEMS or UNKNOWN. UNKNOWN means we
+    could not tell, and the run stops. That third state is the whole point: a parser that said
+    "empty" when it had merely failed would let us add a second line to a cart that already had
+    one.
+
+Q21. How is Cash selected?
+    By the radio `input[name='CheckoutPaymentMethod[payment_method]'][value='cash']`. We then
+    wait for the page's AJAX summary to finish rebuilding, and only then verify that Cash is
+    checked, Credit Card is not, and no card input is both visible and enabled.
+
+Q22. What does a dry run do?
+    `phase-b` WITHOUT `--submit` performs every verification — identifiers, cart, totals,
+    Take-Out, the incomplete banner, the whole payment form and its validators — then stops and
+    reports. It makes no non-GET request at all.
+
+Q23. How do we avoid submitting the same order twice?
+    Three layers. A per-order flock stops two runs at once. A marker file
+    state/phase-b-attempt-<id>.json is written BEFORE the click and checked before Chrome even
+    launches, so even a crash mid-POST blocks a second attempt. And there is no retry logic
+    anywhere around a write.
+
+Q24. Why is the marker written BEFORE the click rather than after?
+    Because if it were written afterwards and the process died mid-POST, nothing would record the
+    attempt, and the next run would submit the same order again.
+
+Q25. What happens if the browser crashes?
+    The kernel releases the flock, and the context manager closes the browser. No cleanup is
+    needed. If it crashed near a write, the outcome is UNKNOWN and must be verified before
+    anything else is done.
+
+Q26. What if a timeout occurs after pressing Submit?
+    It is reported as UNKNOWN and NEVER retried. The order may well have been placed. We verify
+    from the approved pages and then from the EC2 JSON.
+
+Q27. What does UNKNOWN actually mean? Did it fail?
+    Not necessarily. UNKNOWN means the tool could not PROVE the outcome. In our real run the
+    evidence strongly indicates success; the tool still said UNKNOWN because the completion page
+    is deliberately not on the allowlist. It is a statement about evidence, not about failure.
+
+Q28. Where is the order output stored?
+    Not by this tool. The order lives in Order58's own system. A separate EC2 listener writes the
+    JSON. Locally we keep only the terminal report, logs/automation.log, screenshots/ and state/.
+
+Q29. Who generates the JSON file?
+    /root/order58/get-mix-order.py on EC2, managed by PM2, which listens for `new-order-created`
+    and writes /data/orders/demo_mix_orders/<source>-<demo>.json. NOT VERIFIED from this machine.
+
+Q30. Did we modify the WebSocket listener or restart PM2?
+    No. Verified from source: nothing here touches EC2, SSH, PM2, /data/orders/ or any WebSocket
+    library.
+
+Q31. Did this change the Knowledge Forge Yii3 application?
+    No. `git status` shows only the untracked order58-automation/ directory. No PHP file, route,
+    migration, service, dependency or configuration was modified, and the root .gitignore was not
+    touched.
+
+Q32. How do we test it? Are there unit tests?
+    There is NO automated test suite — no pytest, no test files, no linters. What we do have:
+    py_compile passes on all 11 files, all CLI help works, the lock was proven with real
+    concurrent processes, the parser was verified in both directions, and every selector was read
+    from the live DOM. Chapter 14.4 proposes a real test suite.
+
+Q33. Can it run automatically in the background, on a schedule?
+    No. Not implemented, and not advisable yet: it needs a human-created login session, and it
+    writes to a live admin panel. Scheduling it would remove the human authorization step that is
+    currently the main control.
+
+Q34. Is it production-ready?
+    No. See 15.3: no tests, `run` is a stub, the store is hardcoded, only one scenario has been
+    exercised, and completion is not verified in-tool.
+
+Q35. What has actually been proven to work?
+    One complete demo order: Spring Roll x1, Take-Out, Cash, $2.04, on order 16630311, with
+    exactly one payment POST and a redirect to the application's own completion route.
+
+Q36. What is the single biggest risk right now?
+    That server-side completion of 16630311 has not been independently confirmed. The EC2 jq
+    check in Chapter 11.4 closes that gap and takes seconds to run.
+
+Q37. What is the next development step?
+    The Level 1 unit tests in 14.4 — they need no browser or live site and they protect the guard
+    and the parsers, where a silent failure would do the most damage. After that, either implement
+    the config file or delete the misleading example, and refresh README.md.
+
+Q38. Why does the pickup time get left empty? Isn't that a missing field?
+    No. The form's own validator for schedule_datetime is a max-length check with
+    `skipOnEmpty: 1` and NO `required` rule, while dine_type on the same form DOES have
+    `required`. Empty is the application's automatic "(AUTO) Pickup Time: 15 minutes" path, and
+    the server accepted it. We never invent a date or time.
+
+Q39. Why so many separate step commands instead of one button?
+    Each was built and approved only after the previous one's real selectors had been read off the
+    page, and each write step needed its own authorization. The commands are the audit trail of
+    that process. Consolidating them into `run` is proposed in 15.4.
+
+Q40. What is that scary red warning on the payment page?
+    "WARNING!! You are not at this store's call session! please double checking!!" It is a
+    page-level banner outside the payment form, identical on all three checkout stages, with no
+    validation styling. It was displayed when the Timing & Info stage submitted successfully, so
+    it does not block submissions. It was judged environmental rather than order-specific.
+
+Q41. Can the tool accidentally create a LIVE (real customer) order?
+    Several layers make this very unlikely: the host is locked, only seven exact paths are
+    reachable, every path is a /admin/demo/ route, "/admin/demo/" must be in the path immediately
+    before any submission, and all three identifiers are re-checked against the application's own
+    response. A prefix wildcard was explicitly refused for this reason.
+
+Q42. How much does a run cost in time?
+    A dry-run phase-b verification takes roughly 15-30 seconds in headless mode. The remote site
+    has occasionally stalled for 30-90 seconds, which dominates when it happens.
+
+================================================================================================
+CHAPTER 16A — THE ONE-COMMAND WORKFLOW AND THE ONE-CLICK LAUNCHER
+================================================================================================
+
+16A.1 THE THREE WRITE GATES
+
+    run                      preflight. Reads only. Zero server writes.
+    run --create             create, add to cart, check out, select Cash, then STOP as `prepared`.
+    run --create --submit    all of the above, and ONE submission.
+    run --resume             re-verify a prepared order. Reads only.
+    run --resume --submit    submit THAT order. CANNOT create one.
+
+    `--submit` on its own is refused. So is `--create --resume`. Both refusals happen at argument
+    parsing, before a browser opens. A single flag that both created an order and submitted it
+    would be one typo away from an order nobody wanted.
+
+    WHY A PREFLIGHT CANNOT CHECK THE PRODUCT OR THE TOTALS
+        The product menu and every checkout stage are addressed by `?order_id=`, and that id does
+        not exist until an order has been created. So a zero-write run can validate the URL, the
+        session, the approved tuple, the phone on the page and the make-page form — and nothing
+        more. It says so rather than implying otherwise.
+
+16A.2 auto_order.py — ONE FILE, PRESS RUN
+
+    *** RUNNING IT CREATES AND SUBMITS ONE DEMO ORDER. There is no confirmation prompt. ***
+
+    Four writes reach the live admin panel: Continue, Add to Cart, the Timing & Info POST, and the
+    payment POST. None can be undone by this tool.
+
+    Configuration — the only five lines to edit:
+
+        DEMO_URL      = "https://joymeal.order58.com/admin/demo/order/make/16655531-15163932150"
+        CUSTOMER_NAME = "Jignesh"
+        PRODUCT       = "Spring Roll"
+        QUANTITY      = 1
+        HEADLESS      = False
+
+    It builds the same argparse Namespace the command line would produce and calls
+    `create_demo_order.cmd_run` directly. No subprocess, no shell, no second copy of the workflow,
+    no selector of its own — there are tests asserting each of those (tests/test_launcher.py).
+
+    TO RUN IT FROM AN IDE the interpreter MUST be `order58-automation/venv/bin/python`, because
+    Playwright is installed there and nowhere else.
+        VS Code : Ctrl+Shift+P, "Python: Select Interpreter", pick ./order58-automation/venv/bin/python
+        PyCharm : Settings > Project > Python Interpreter > add that path as an existing environment
+
+    PREREQUISITE: a saved sign-in. `./venv/bin/python create_demo_order.py login`. The launcher
+    never asks for, stores or logs a password.
+
+16A.3 THE RUN JOURNAL — WHAT BLOCKS A SECOND ORDER
+
+    state/runs/run-<segment>-<timestamp>.json, mode 0600, created with exclusive `open(path,"x")`
+    and fsynced — file AND directory — BEFORE the first write.
+
+    Status                Resumable?   Blocks a new --create?
+    in_progress           no           YES   (this is also what a crashed run leaves behind)
+    prepared              YES          YES   (resume it; do not orphan it)
+    unknown               NEVER        YES   (and never retried)
+    aborted_after_write   no           YES
+    validation_failed     no           YES
+    aborted_no_write      no           no
+    completed             no           no
+    resolved_by_operator  no           no
+
+    TWO GUARANTEES WORTH KNOWING
+      1. A run that attempted a write can NEVER be filed as `aborted_no_write`. `close()`
+         reclassifies it to `aborted_after_write` automatically. So "the order was created but the
+         product was not found" blocks the next creation, as it must.
+      2. `completed` is reachable only from a positive confirmation. A timeout, an exception or a
+         redirect to a route the guard refused all produce `unknown`.
+
+    NOTHING EXPIRES ON ITS OWN. No TTL, no sweeper, no auto-release. The only way out:
+
+        python create_demo_order.py journal                       # read-only listing
+        python create_demo_order.py journal --show <file>          # read-only detail
+        python create_demo_order.py journal --resolve <file> \
+            --reason "..." --evidence "..."                        # the only route out
+
+    Both a reason and the supporting verification are required and must be substantive. Resolving a
+    journal changes NO order and removes NO submission marker.
+
+16A.4 THE NINE PRE-SUBMISSION CHECKS
+
+    Matching totals prove the two stages agree, not that either is right. So:
+
+      1  exactly one cart line
+      2  product name matches exactly
+      3  quantity matches
+      4  line price x quantity == subtotal
+      5  subtotal + tax == total          <- an unintended charge cannot hide from this
+      6  the add-on selection is byte-identical before and after setting the quantity
+      7  every money row is one of {Subtotal, TAX, TOTAL, Delivery}
+      8  the payment page's own stated total == the cart total
+      9  no enabled AND visible required field on the payment form
+
+    Check 7 accounts for a verified quirk: a take-out cart prints `Delivery $3.49` and EXCLUDES it
+    from the $2.04 total. A check that summed every money row would abort every correct order.
+    A number the page never printed FAILS its check rather than being skipped.
+
+16A.5 LOCKS
+
+    state/locks/source-<segment>.lock   held for the whole run (the order does not exist yet)
+    state/locks/order-<id>.lock         acquired the moment the application issues the id
+
+    Both are flock(LOCK_EX|LOCK_NB), released by the kernel on a crash.
+
+================================================================================================
+CHAPTER 17 — QUICK START CHEAT SHEET
+================================================================================================
+
+17.1 THE ESSENTIALS
+
+    Working directory ..... /var/www/html/knowledge-forge/order58-automation
+    Entry point ........... create_demo_order.py
+    Interpreter ........... ./venv/bin/python        (NEVER plain python3)
+    OS .................... Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic
+    Python ................ 3.10.12
+    Playwright ............ 1.63.0
+    Chrome ................ 143.0.7499.109 at /usr/bin/google-chrome
+    Packages .............. playwright 1.63.0 (+ greenlet 3.5.6, pyee 13.0.1,
+                            typing_extensions 4.16.0)
+    Node.js ............... not required
+    Config file ........... NONE — config.example.json is NOT read by any code
+    Authentication ........ manual `login`, saved to state/order58.storage.json (0600)
+    Logs .................. logs/automation.log (redacted)
+    Screenshots ........... screenshots/HHMMSS-<name>.png, or HHMMSS-<name>-viewport.png
+                            when the full-page capture had to fall back (28 so far)
+    Offline tests ......... ./venv/bin/python -m unittest discover -s tests -v  (172 tests)
+    ONE-CLICK LAUNCHER .... auto_order.py  — press Run in the IDE. CREATES AND SUBMITS an order.
+    State ................. state/ (session, locks/, submission markers) — all git-ignored
+    EC2 JSON path ......... /data/orders/demo_mix_orders/<SOURCE>-<DEMO>.json   [NOT VERIFIED]
+
+17.2 THE COMMAND TEMPLATE
+
+    cd /var/www/html/knowledge-forge/order58-automation
+    ./venv/bin/python create_demo_order.py <SUBCOMMAND> [flags]
+
+    Subcommands: inspect login step3 step4 step5 step6 step6b phase-a timing phase-b run
+
+17.3 COPY-PASTE COMMANDS
+
+    # Completely safe. Opens nothing.
+    ./venv/bin/python create_demo_order.py --help
+    ./venv/bin/python create_demo_order.py phase-b --help
+    ./venv/bin/python -m py_compile create_demo_order.py order58/*.py
+
+    # Safe read-only page inspection (opens a browser, changes nothing)
+    ./venv/bin/python create_demo_order.py inspect
+
+    # First-time login (visible browser; you type the credentials)
+    ./venv/bin/python create_demo_order.py login
+
+    # Read-only verification of an existing demo order — NO WRITES
+    ./venv/bin/python create_demo_order.py phase-b \
+      --source-order <SOURCE> --order-id <DEMO> --customer-id <CUST> \
+      --product "Spring Roll" --qty 1 \
+      --expect-subtotal '$1.85' --expect-tax '$0.19' --expect-total '$2.04'
+
+    # !!! AUTHORIZED SUBMISSION ONLY — ONE PER ORDER, NEVER REUSE 16630311 !!!
+    # ...same as above, plus:  --submit
+
+17.4 EVERY VERIFIED SELECTOR, IN ONE PLACE
+
+    Login ......... #loginform-username / #loginform-password / button[name="login-button"]
+    Order form .... #reservationform-name
+                    #reservationform-phone                       (pre-filled, never written)
+                    input[name="ReservationForm[dine_type]"][value="take-out"]
+                    #reservation-form button[type="submit"]      (Continue)
+    Product ....... #product-search
+                    .tt-menu .tt-dataset-ProductSearch .tt-suggestion
+    Popup ......... #product-detail-modal
+                    #product-detail-modal span.view-product-name
+                    #product-detail-modal #cartform-count
+                    #product-detail-modal a.add-to-cart
+    Cart .......... #right-sidebar
+                    div.right-sidebar-toggler-wrapper            (opens the drawer)
+                    a.close-menucart
+    Timing ........ #checkout-dining-form
+                    #reservationform-schedule_datetime           (readonly, optional, EMPTY)
+                    #reservationform-customer_count              (hidden, 1)
+    Payment ....... #checkout-payment-form
+                    input[name="CheckoutPaymentMethod[payment_method]"][value="cash"]
+                    #checkout-payment-form button[type=submit].submit-btn
+                    input[name="_csrf-backend"]                  (value never logged)
+
+17.5 EXIT CODES
+
+    0 ok  |  5 identity/cart mismatch  |  6 pre-submit gate failed  |
+    7 refused route (UNKNOWN)  |  9 attempt marker exists  |  2 argparse error
+
+17.6 THE FIVE RULES
+
+    1. Always use ./venv/bin/python from the automation directory.
+    2. `--submit` places a real demo order. One per order. Authorization required.
+    3. NEVER delete state/phase-b-attempt-*.json or a lock file.
+    4. UNKNOWN does not mean failed. Verify; never retry a write.
+    5. An exact product name, or nothing. No substitutions, ever.
+
+17.7 KNOWN LIMITATIONS, AT A GLANCE
+
+    one product only  |  one quantity tested  |  take-out only  |  cash only  |
+    one hardcoded store  |  no config file  |  `run` is a stub  |  no automated tests  |
+    local execution only  |  no scheduling  |  Unix only  |
+    server-side completion of 16630311 NOT VERIFIED
+
+================================================================================================
+HOW TO EXPLAIN THIS PROJECT TO MY SIR IN 2 MINUTES
+================================================================================================
+
+    "We needed to create test orders in the Order58 admin panel without doing it by hand every
+     time. So I wrote a small Python program that opens Chrome and clicks through the website
+     exactly like a person: it fills the customer form, searches for the product, sets the
+     quantity, adds it to the cart, walks through the checkout, picks Cash, and presses Submit.
+
+     I deliberately did NOT build it by calling hidden APIs or writing into the database. By
+     driving the real website, all of Order58's own validation and permission rules still apply.
+     The automation is just a user — it can't do anything a logged-in person couldn't do.
+
+     Safety was the main part of the work, because this touches a live admin panel. It can only
+     ever reach one website and seven specific demo pages — anything else is refused before the
+     browser even opens. It checks all three order identifiers against what the application
+     itself returns before it writes anything. It presses every button only once and never
+     retries, because a retry is how one order becomes two. It takes an exclusive lock so two
+     copies can't run on the same order. And before it submits, it writes a marker file, so even
+     if the machine crashed mid-submission, it will refuse to submit that order a second time.
+
+     We tested it end to end once: one Spring Roll, Take-Out, Cash, two dollars four cents, on
+     demo order 16630311. It made exactly one payment request, the site redirected to its own
+     'checkout-completed' page, the cart emptied, and the 'order incomplete' warning disappeared.
+     The tool still labelled the result UNKNOWN rather than SUCCESS — on purpose, because that
+     confirmation page isn't on its allowed list, so it won't claim a success it couldn't read
+     directly. I'd rather it under-claim than over-claim. There's a one-line check on the EC2 box
+     that confirms it properly, and that's the one thing still outstanding.
+
+     On the honest side: it does one scenario. One product, quantity one, Take-Out, Cash, one
+     store. Multiple products, a config file, and a single one-command run are not built yet, and
+     there is no automated test suite — only the checks I ran by hand. And it does not touch our
+     Knowledge Forge PHP application at all: separate folder, separate dependencies, nothing
+     shared. Git confirms not one existing file was changed.
+
+     Next step I'd recommend is a small set of unit tests for the safety guard and the cart
+     parser. They need no browser, and those two pieces are where a quiet bug would do the most
+     damage."
+
+================================================================================================
+END OF DOCUMENT
+================================================================================================
+
+Document status: complete, 18 chapters (0-17).
+Verification basis: direct read-only inspection of all 11 Python source files, requirements.txt,
+config.example.json, README.md, .gitignore, pyvenv.cfg, `pip list`, `--version` output, real
+`--help` output for all 11 subcommands, and recorded run evidence.
+Items explicitly labelled NOT VERIFIED: the EC2 WebSocket listener, PM2 state, the existence and
+contents of /data/orders/demo_mix_orders/16655531-16630311.json, server-side completion of order
+16630311, and the "which component would supply Account/Order/Reservation data" question.
+No credentials, cookies, tokens or session contents appear anywhere in this document.

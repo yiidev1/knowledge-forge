@@ -1,0 +1,7 @@
+# Pinned to what actually resolved on this machine — Ubuntu 22.04.5 LTS, Python 3.10.12 — rather than
+# to a version chosen from documentation. Verified by installing it here.
+#
+# Playwright drives the Google Chrome already installed at /usr/bin/google-chrome via channel="chrome",
+# so `playwright install chromium` is NOT required and no ~150 MB browser is downloaded. The project's
+# existing browser tests (tests/E2E, puppeteer-core) make the same choice against the same binary.
+playwright==1.63.0
