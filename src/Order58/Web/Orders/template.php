@@ -10,12 +10,12 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 /**
  * Order58 Orders: synchronise a store's orders for a date range, then read what is stored.
  *
- * ## The phone is masked
+ * ## The phone is shown in full
  *
- * `reservation_phone` is a customer's number. The column holds it in full because other workflows need
- * it, but a list on a screen is not one of them — so the table shows the last four digits and the full
- * value appears nowhere in the HTML, not even in a `title`. There is nothing here for a shoulder, a
- * screenshot or a cached page to leak.
+ * `reservation_phone` is a customer's number, and this table prints it. That is deliberate — an operator
+ * following up an order needs the number they can actually ring — and it is why the page sends
+ * `Cache-Control: no-store, private` and sits behind the admin gate. It is still never logged, and it
+ * reaches no response other than this one.
  *
  * ## No raw payload on this page
  *
@@ -46,16 +46,15 @@ $pageUrl = $urlGenerator->generate('order58.orders');
 $pages = (int) ceil($total / max(1, $perPage));
 $currentPage = max(1, $listQuery->page);
 
-/** Last four digits only. The rest never reaches the browser. */
-$maskPhone = static function (?string $phone): string {
-    if ($phone === null || $phone === '') {
-        return '—';
-    }
-
-    $digits = preg_replace('/\D/', '', $phone) ?? '';
-
-    return strlen($digits) <= 4 ? '••••' : '•••• ' . substr($digits, -4);
-};
+/**
+ * The stored number, in full.
+ *
+ * Shown rather than masked at the administrator's request: this page is already behind the admin gate,
+ * the number is the one an operator rings to follow up an order, and the last four digits alone are not
+ * enough to do that. It is escaped like every other cell and is still a customer's phone number, so it
+ * stays out of logs and out of any response that is not this authenticated page.
+ */
+$phoneOf = static fn(?string $phone): string => $phone === null || $phone === '' ? '—' : $phone;
 
 $money = static fn(mixed $value): string => $value === null ? '—' : number_format((float) $value, 2);
 
@@ -119,11 +118,16 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
     <?php endif; ?>
 </section>
 
-<section class="card">
+<?php
+// `o58-wide` is the marker `.content:has(.o58-wide)` looks for: it opens the page column past the
+// standard 1240px so this ten-column table fits without each row wrapping. The same marker the Calls
+// and Call Recordings pages already use, so all three widen alike.
+?>
+<section class="card o58-wide">
     <h2 class="card__title">Stored orders</h2>
 
     <?php // A GET form: a filtered list is a readable, shareable address.?>
-    <form method="get" action="<?= Html::encode($pageUrl) ?>" class="store-picker" role="group">
+    <form method="get" action="<?= Html::encode($pageUrl) ?>" class="store-picker o58-filters" role="group">
         <label class="util-visually-hidden" for="o58o-filter-store">Store</label>
         <select class="field__control store-picker__select" id="o58o-filter-store" name="account_id">
             <option value="">All stores</option>
@@ -136,16 +140,23 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
         </select>
 
         <label class="util-visually-hidden" for="o58o-order-id">Order ID</label>
-        <input class="field__control" type="text" inputmode="numeric" id="o58o-order-id" name="order_id"
-               placeholder="Order ID" value="<?= Html::encode((string) $listQuery->sourceOrderId) ?>">
+        <?php // Sized explicitly: `.field__control` is `width: 100%`, which in this flex row would claim the whole line.?>
+        <input class="field__control o58-filters__id" type="text" inputmode="numeric" id="o58o-order-id"
+               name="order_id" placeholder="Order ID"
+               value="<?= Html::encode((string) $listQuery->sourceOrderId) ?>">
 
-        <label class="field__label store-picker__label" for="o58o-list-from">From</label>
+        <?php
+        // Hidden visually, not removed: a date input already shows its own format, and two inline
+        // labels are what pushed this row past the width five controls have to share. Screen readers
+        // and the `title` still name both fields.
+?>
+        <label class="util-visually-hidden" for="o58o-list-from">Placed from</label>
         <input class="field__control store-picker__date" type="date" id="o58o-list-from" name="list_from"
-               value="<?= Html::encode((string) $listQuery->dateFrom) ?>">
+               title="Placed from" value="<?= Html::encode((string) $listQuery->dateFrom) ?>">
 
-        <label class="field__label store-picker__label" for="o58o-list-to">To</label>
+        <label class="util-visually-hidden" for="o58o-list-to">Placed to</label>
         <input class="field__control store-picker__date" type="date" id="o58o-list-to" name="list_to"
-               value="<?= Html::encode((string) $listQuery->dateTo) ?>">
+               title="Placed to" value="<?= Html::encode((string) $listQuery->dateTo) ?>">
 
         <button class="btn" type="submit">Filter</button>
     </form>
@@ -155,8 +166,8 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
     <?php else: ?>
         <p class="field__hint"><?= number_format($total) ?> order<?= $total === 1 ? '' : 's' ?> stored.</p>
 
-        <div class="a2t-table-scroll">
-            <table class="table">
+        <div class="o58-table-scroll">
+            <table class="table o58-orders-table">
                 <thead>
                     <tr>
                         <th>Order ID</th>
@@ -176,8 +187,8 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
                         <?php $accountId = (int) $row['account_id']; ?>
                         <tr>
                             <td class="util-mono"><?= Html::encode((string) $row['source_order_id']) ?></td>
-                            <td><?= Html::encode($storeOptions[$accountId] ?? ('#' . $accountId)) ?></td>
-                            <td class="util-mono"><?= Html::encode($maskPhone(
+                            <td class="o58-cell-store"><?= Html::encode($storeOptions[$accountId] ?? ('#' . $accountId)) ?></td>
+                            <td class="util-mono"><?= Html::encode($phoneOf(
                                 $row['reservation_phone'] === null ? null : (string) $row['reservation_phone'],
                             )) ?></td>
                             <td><?= Html::encode((string) ($row['type'] ?? '—')) ?></td>

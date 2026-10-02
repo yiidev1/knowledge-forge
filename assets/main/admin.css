@@ -972,6 +972,39 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
     .store-picker .btn { width: 100%; }
 }
 
+/* ---- Order58 orders -------------------------------------------------------------------------- */
+
+/* The page itself is widened by the existing `.o58-wide` marker further down this file — the one the
+   Calls and Call Recordings pages already use, which also widens the breadcrumb bar to match. The
+   orders template opts in rather than declaring a second, narrower rule that would silently win or
+   lose depending on source order. */
+
+/* The stored-orders filter row.
+   `.field__control` is `width: 100%` by design — it is built for stacked form fields — so an input
+   dropped into this flex row with no sizing of its own claims the whole line and pushes everything
+   after it onto the next. That is what split these five controls across three rows. Each control is
+   therefore given its own basis here, and only inside this row. */
+.o58-filters { row-gap: .6rem; }
+.o58-filters .field__control { width: auto; }
+/* Wide enough for an order id, narrow enough that five controls still fit a 1366px viewport. */
+.o58-filters__id { flex: 0 1 11rem; min-width: 7rem; }
+/* Smaller than the shared 380px: this row carries four controls beside the store, not one. */
+.o58-filters .store-picker__select { flex: 0 1 20rem; max-width: 22rem; }
+
+@media (max-width: 860px) {
+    /* Below this the five controls genuinely cannot share a line; wrapping beats shrinking them all
+       past usefulness. The shared rule already stacks everything under 560px. */
+    .o58-filters__id { flex: 1 1 100%; }
+}
+
+/* Short values on one line each. The store name is the one column with no natural length, so it keeps
+   normal wrapping and takes the slack instead of widening the row. */
+.o58-orders-table th, .o58-orders-table td { white-space: nowrap; }
+.o58-orders-table .o58-cell-store { white-space: normal; min-width: 11rem; }
+
+/* The page body must never scroll sideways: if the table cannot fit, it scrolls inside its own box. */
+.o58-table-scroll { overflow-x: auto; }
+
 .btn--ghost { background: transparent; color: var(--text-muted); border-color: transparent; }
 .btn--ghost:hover { background: var(--surface-2); color: var(--text); }
 
