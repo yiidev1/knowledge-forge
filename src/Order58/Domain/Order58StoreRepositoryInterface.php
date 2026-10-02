@@ -53,6 +53,20 @@ interface Order58StoreRepositoryInterface
     public function markSeen(int $sourceId, int $runId, DateTimeImmutable $now): void;
 
     /**
+     * Writes a store's hostname, and only when it actually moved.
+     *
+     * Exists because the sync's cheapest path writes nothing at all: a record whose `_sync_hash` is
+     * unchanged is stamped seen and skipped, so a host that changed underneath an otherwise identical
+     * record would never reach the database. This is the one narrow write that path is allowed to make.
+     *
+     * @param string|null $host already normalised; null means the source gave nothing usable, and the
+     *                          stored value is left alone rather than cleared
+     *
+     * @return bool whether a row was actually changed
+     */
+    public function updateHostIfChanged(int $sourceId, ?string $host, DateTimeImmutable $now): bool;
+
+    /**
      * Deactivates active rows not seen by this run (NULL-safe: also catches rows whose marker is NULL).
      *
      * @return list<int> The source ids that were deactivated, so their knowledge bases can be updated.

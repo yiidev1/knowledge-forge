@@ -27,5 +27,16 @@ final readonly class StoreMirror
         public ?DateTimeImmutable $sourceUpdatedAt,
         public array $snapshot,
         public ?DateTimeImmutable $syncedAt = null,
+        /**
+         * The store's hostname, already normalised, or null when the source gave nothing usable.
+         *
+         * Last and defaulted so every existing construction site keeps compiling; they all pass named
+         * arguments, so position carries no meaning here anyway.
+         *
+         * Null means "the source said nothing I could use", never "this store has no host". The two are
+         * worth keeping apart: the write path treats null as *leave what is already stored alone*, so a
+         * malformed or absent field can never blank a host that was previously good.
+         */
+        public ?string $host = null,
     ) {}
 }

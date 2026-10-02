@@ -95,6 +95,17 @@ final readonly class StoresSyncHandler implements Order58SyncHandlerInterface
         if ($existingHash === $account->syncHash) {
             // Unchanged: stamp seen only (so the sweep never deactivates it); no rewrite, no re-index.
             $this->stores->markSeen($account->id, $runId, $now);
+
+            // The one exception. `_sync_hash` is computed by the provider, and whether it covers `host`
+            // is their business, not something this application can observe — so an identical hash is no
+            // evidence the hostname stayed put. A hostname is also the kind of value that is wrong in a
+            // way nobody notices until something tries to reach it, so it is refreshed here rather than
+            // left to a full-record change that may never come.
+            //
+            // This stays the cheap path: one narrow UPDATE that fires only when the value really moved,
+            // no snapshot rewrite, no knowledge base, no document, no re-index. The store is still
+            // counted as unchanged, because for every purpose the counters describe it is.
+            $this->stores->updateHostIfChanged($account->id, $this->mapper->hostFor($account), $now);
             $progress->unchanged++;
 
             return;
@@ -104,6 +115,10 @@ final readonly class StoresSyncHandler implements Order58SyncHandlerInterface
             // The record arrived without a recognisable active flag. Never guess "inactive": stamp it seen
             // so the sweep preserves it and leave any existing local status untouched, then warn.
             $this->stores->markSeen($account->id, $runId, $now);
+
+            // The host is independent of the active flag and was not in doubt, so an unreadable `active`
+            // is no reason to also drop a hostname change on the floor.
+            $this->stores->updateHostIfChanged($account->id, $this->mapper->hostFor($account), $now);
             $progress->warnings++;
 
             return;
@@ -111,6 +126,11 @@ final readonly class StoresSyncHandler implements Order58SyncHandlerInterface
 
         $mirror = $this->mapper->toMirror($account);
         $this->stores->save($mirror, $runId, $now);
+
+        // `save()` carries the host on INSERT but deliberately leaves it out of the UPDATE half, so that
+        // an omitted field can never blank a good value. Existing rows therefore take their host through
+        // the same narrow write the unchanged path uses — one definition of "write a host", not two.
+        $this->stores->updateHostIfChanged($account->id, $mirror->host, $now);
         $knowledgeBaseId = $this->ensureKnowledgeBase->ensure($account->id, $account->name, $account->active, $now);
 
         $result = $this->documents->upsertGenerated(

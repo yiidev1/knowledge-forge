@@ -74,6 +74,11 @@ final class OneStoreMirror implements Order58StoreRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
+    public function updateHostIfChanged(int $sourceId, ?string $host, DateTimeImmutable $now): bool
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
     public function deactivateNotSeen(int $runId, DateTimeImmutable $now): array
     {
         throw new RuntimeException('Not used by these tests.');

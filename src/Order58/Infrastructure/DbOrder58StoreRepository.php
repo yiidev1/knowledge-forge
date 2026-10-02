@@ -66,6 +66,7 @@ final readonly class DbOrder58StoreRepository implements Order58StoreRepositoryI
             sourceUpdatedAt: DbDateTime::parseNullable($row['source_updated_at'] === null ? null : (string) $row['source_updated_at']),
             snapshot: is_array($snapshot) ? $snapshot : [],
             syncedAt: DbDateTime::parseNullable($row['synced_at'] === null ? null : (string) $row['synced_at']),
+            host: ($row['host'] ?? null) === null ? null : (string) $row['host'],
         );
     }
 
@@ -77,6 +78,7 @@ final readonly class DbOrder58StoreRepository implements Order58StoreRepositoryI
             'source_id' => $store->sourceId,
             'name' => $store->name,
             'company' => $store->company,
+            'host' => $store->host,
             'active' => $store->active ? 1 : 0,
             'snapshot_json' => (string) json_encode($store->snapshot),
             'sync_hash' => $store->syncHash,
@@ -88,7 +90,10 @@ final readonly class DbOrder58StoreRepository implements Order58StoreRepositoryI
         ];
 
         $update = $insert;
-        unset($update['source_id'], $update['created_at']);
+        // `host` is seeded on INSERT and then maintained only by updateHostIfChanged(). Leaving it in the
+        // UPDATE half would write NULL over a good hostname whenever the source omitted the field, which
+        // is the one thing the null-means-unknown rule exists to prevent.
+        unset($update['source_id'], $update['created_at'], $update['host']);
 
         $this->connection->createCommand()->upsert(self::TABLE, $insert, $update)->execute();
     }
@@ -115,6 +120,7 @@ final readonly class DbOrder58StoreRepository implements Order58StoreRepositoryI
                 sourceUpdatedAt: DbDateTime::parseNullable($row['source_updated_at'] === null ? null : (string) $row['source_updated_at']),
                 snapshot: is_array($snapshot) ? $snapshot : [],
                 syncedAt: DbDateTime::parseNullable($row['synced_at'] === null ? null : (string) $row['synced_at']),
+                host: ($row['host'] ?? null) === null ? null : (string) $row['host'],
             );
         }
 
@@ -139,6 +145,27 @@ final readonly class DbOrder58StoreRepository implements Order58StoreRepositoryI
             ['last_seen_sync_run_id' => $runId, 'synced_at' => $ts, 'updated_at' => $ts],
             ['source_id' => $sourceId],
         )->execute();
+    }
+
+    public function updateHostIfChanged(int $sourceId, ?string $host, DateTimeImmutable $now): bool
+    {
+        // Null is "the source said nothing usable", never "this store has no host". Writing it would
+        // blank a good value because one response omitted a field.
+        if ($host === null) {
+            return false;
+        }
+
+        // The comparison is in the WHERE clause, not in PHP, so no row is rewritten unless the value
+        // genuinely moved — which is what keeps an unchanged store's `updated_at` where it was. The
+        // NULL-safe arm matters for the backfill's leftovers: `host <> ?` is NULL, not true, for a row
+        // that has none yet, so without it a store with no host could never acquire one.
+        $affected = $this->connection->createCommand()->update(
+            self::TABLE,
+            ['host' => $host, 'updated_at' => DbDateTime::format($now)],
+            ['and', ['source_id' => $sourceId], ['or', ['host' => null], ['<>', 'host', $host]]],
+        )->execute();
+
+        return $affected > 0;
     }
 
     public function deactivateNotSeen(int $runId, DateTimeImmutable $now): array
