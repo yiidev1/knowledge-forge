@@ -9,6 +9,7 @@ use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\JobPageGuard;
+use App\Shared\Audio\RecordingProcessingPolicy;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
@@ -60,6 +61,23 @@ final readonly class Action
 
         if ($job === null) {
             return $this->guard->notFound();
+        }
+
+        // A mixed recording, which nothing transcribes. Refused here as well as withheld by the page,
+        // because withholding a button is not a rule and this endpoint takes a POST: the policy answers
+        // the same question for both, so what is offered and what is honoured cannot drift apart.
+        //
+        // Said in the recording's own terms rather than as a status, because the status is not what is
+        // wrong — the file holds two people nobody separated, and this application no longer guesses
+        // which is which. The Customer and Agent recordings of the same call are where its words are.
+        if (!RecordingProcessingPolicy::allowsTranscription($job->sourceRole?->value)) {
+            return $this->json(409, [
+                'success' => false,
+                'message' => 'This is a mixed recording of both speakers, so it is kept as audio only. '
+                    . 'Transcribe the Customer and Agent recordings of this call instead.',
+                'status' => $job->status->value,
+                'statusLabel' => $job->status->label(),
+            ]);
         }
 
         // A recording that was never acquired without a transcript, or one already being transcribed, or

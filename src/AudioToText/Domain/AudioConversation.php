@@ -155,12 +155,21 @@ final readonly class AudioConversation
     /**
      * Whether the shape of this conversation matches what its mode promises.
      *
-     * COMMON is exactly one COMMON child; SEPARATE is exactly one CUSTOMER and one AGENT. The enqueue
-     * writes parent and children in one transaction so this cannot drift, and the assertion exists to
-     * make that a fact the tests check rather than a comment.
+     * SEPARATE is exactly one CUSTOMER and one AGENT — the pair that mode exists to describe. COMMON is
+     * exactly **one** child, of any role: a mixed recording's child is COMMON, and a deterministic
+     * caller or callee channel's child carries the side the importer declared. Both are one file, which
+     * is the only thing the mode claims; which side that file holds is the child's own fact, and it is
+     * what suppresses diarization and labels the screens.
+     *
+     * The enqueue writes parent and children in one transaction so this cannot drift, and the assertion
+     * exists to make that a fact the tests check rather than a comment.
      */
     public function hasValidShape(): bool
     {
+        if ($this->mode === ConversationMode::Common) {
+            return count($this->children) === 1;
+        }
+
         $expected = $this->mode->childRoles();
 
         if (count($this->children) !== count($expected)) {

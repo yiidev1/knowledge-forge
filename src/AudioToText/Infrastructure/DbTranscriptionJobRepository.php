@@ -495,6 +495,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         int $id,
         SourceRole $sourceRole,
         ?string $retainedAudioPath = null,
+        ?string $segmentsJson = null,
     ): void {
         $speakerRole = $sourceRole->speakerRole();
 
@@ -520,9 +521,14 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             // The whole recording is one speaker, so the whole transcript is that role's text.
             'agent_text' => $speakerRole === SpeakerRole::AGENT ? $transcript : null,
             'customer_text' => $speakerRole === SpeakerRole::CUSTOMER ? $transcript : null,
-            // No turns: a single-speaker recording has no exchange to segment, and inventing one
-            // boundary per sentence would be a timeline nobody measured.
-            'speaker_segments' => null,
+            // Turns, when the engine gave timings to measure them from.
+            //
+            // This used to be unconditionally null, on the reasoning that "inventing one boundary per
+            // sentence would be a timeline nobody measured". That reasoning still holds and is why
+            // punctuation alone never creates a boundary — but the silence between words *is* measured,
+            // by the engine, and SingleSpeakerUtteranceSegmenter cuts on that. Null remains the answer
+            // when the timings are unusable: one bubble is honest, a guessed timeline is not.
+            'speaker_segments' => $segmentsJson,
             // Every separation column stays NULL. Nothing was inferred, so nothing is claimed — and
             // that includes the diagnosis, which answers "why was this left for review" about a
             // recording that was never up for review.

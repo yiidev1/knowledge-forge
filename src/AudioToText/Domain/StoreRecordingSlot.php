@@ -156,12 +156,28 @@ final readonly class StoreRecordingSlot
     /**
      * Whether this recording is waiting for somebody to ask for its text.
      *
-     * True only for audio acquired without a transcript in mind. It is the one state that offers an
-     * action rather than reporting progress, and the one where no transcript view has anything to show.
+     * True only for audio acquired without a transcript in mind **and holding one declared speaker**. It
+     * is the one state that offers an action rather than reporting progress.
+     *
+     * A mixed recording is excluded, and not as a presentation choice: nothing transcribes one any more,
+     * so a button offering to would be refused by the endpoint behind it. {@see isAudioOnly()} is that
+     * recording's state, and the two together cover NOT_REQUESTED exactly once.
      */
     public function isReadyForTranscription(): bool
     {
-        return $this->status === JobStatus::NOT_REQUESTED;
+        return $this->status === JobStatus::NOT_REQUESTED && $this->sourceRole->isProvided();
+    }
+
+    /**
+     * Whether this recording is kept for its audio, with no transcript of its own and none coming.
+     *
+     * The settled state of every mixed recording now. It is not an incomplete one: the call's words come
+     * from the Customer and Agent recordings beside it, where the two speakers were actually recorded
+     * apart, and the mixed file is the playable original of the whole call.
+     */
+    public function isAudioOnly(): bool
+    {
+        return $this->status === JobStatus::NOT_REQUESTED && !$this->sourceRole->isProvided();
     }
 
     public function isReviewable(): bool

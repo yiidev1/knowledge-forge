@@ -7,11 +7,11 @@ namespace App\Tests\Support\Fake\AudioToText;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
-use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\Speaker\SeparationReviewReason;
+use App\AudioToText\Domain\Speaker\SpeakerSeparatedTranscript;
 use App\AudioToText\Domain\SpeakerSeparationStatus;
 use App\AudioToText\Domain\TranscriptionJob;
-use App\AudioToText\Domain\Speaker\SeparationReviewReason;
 use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
 use Closure;
@@ -19,29 +19,44 @@ use DateTimeImmutable;
 use RuntimeException;
 
 /**
- * The one lookup a file-serving action performs, answered from a single job.
+ * Several jobs, answered by id and by public id.
  *
- * Serving a recording's bytes is a lookup and a read — no queue, no writes — so this answers
- * {@see findByPublicId()} and nothing else. Every other method throws, in the spirit of
- * {@see FixedRecordingTypes}: a test that starts depending on one of them fails loudly rather than
- * quietly reading a default that was never thought about.
+ * {@see OneJobRepository} holds one, which is all a file-serving action ever looks up. A combined
+ * conversation is assembled from **two** rows — the Customer channel and the Agent channel — and the
+ * whole point of the projection is that they are separate rows with separate versions, so a fake that
+ * could only hold one of them would make the thing under test untestable.
+ *
+ * Everything else throws, in the spirit of its sibling: a test that starts depending on another method
+ * fails loudly rather than quietly reading a default nobody thought about.
  *
  * @psalm-suppress MissingImmutableAnnotation the interface is not readonly
  */
-final class OneJobRepository implements TranscriptionJobRepositoryInterface
+final class JobsById implements TranscriptionJobRepositoryInterface
 {
-    public function __construct(private ?TranscriptionJob $job) {}
+    /** @var array<int, TranscriptionJob> */
+    private array $jobs = [];
 
-    /** Matches on the public id, so asking for somebody else's recording finds nothing. */
-    public function findByPublicId(string $publicId): ?TranscriptionJob
+    public function __construct(TranscriptionJob ...$jobs)
     {
-        return $this->job !== null && $this->job->publicId === $publicId ? $this->job : null;
+        foreach ($jobs as $job) {
+            $this->jobs[$job->id] = $job;
+        }
     }
 
-    /** Matched on the id, for the readers that hold one rather than a public id. */
     public function findById(int $id): ?TranscriptionJob
     {
-        return $this->job !== null && $this->job->id === $id ? $this->job : null;
+        return $this->jobs[$id] ?? null;
+    }
+
+    public function findByPublicId(string $publicId): ?TranscriptionJob
+    {
+        foreach ($this->jobs as $job) {
+            if ($job->publicId === $publicId) {
+                return $job;
+            }
+        }
+
+        return null;
     }
 
     public function recent(int $limit, int $previewLength, int $offset = 0): array
@@ -84,19 +99,8 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function create(
-        string $publicId,
-        int $uploadedByAdminId,
-        string $originalFilename,
-        ?string $storedAudioPath,
-        ?float $durationSeconds,
-        ?DateTimeImmutable $expiresAt,
-        ?int $conversationId = null,
-        ?SourceRole $sourceRole = null,
-        ?TranscriptionProvider $transcriptionProvider = null,
-        JobStatus $status = JobStatus::QUEUED,
-        ?string $retainedAudioPath = null,
-    ): string {
+    public function create(string $publicId, int $uploadedByAdminId, string $originalFilename, ?string $storedAudioPath, ?float $durationSeconds, ?DateTimeImmutable $expiresAt, ?int $conversationId = null, ?SourceRole $sourceRole = null, ?TranscriptionProvider $transcriptionProvider = null, JobStatus $status = JobStatus::QUEUED, ?string $retainedAudioPath = null): string
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 
@@ -125,20 +129,13 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function markCompleted(
-        int $id,
-        SpeakerSeparatedTranscript $separation,
-        ?string $retainedAudioPath = null,
-    ): void {
+    public function markCompleted(int $id, SpeakerSeparatedTranscript $separation, ?string $retainedAudioPath = null): void
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function markCompletedWithProvidedRole(
-        int $id,
-        SourceRole $sourceRole,
-        ?string $retainedAudioPath = null,
-        ?string $segmentsJson = null,
-    ): void {
+    public function markCompletedWithProvidedRole(int $id, SourceRole $sourceRole, ?string $retainedAudioPath = null, ?string $segmentsJson = null): void
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 
@@ -162,25 +159,13 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function saveReview(
-        int $id,
-        string $reviewedSegmentsJson,
-        ?string $reviewedAgentText,
-        ?string $reviewedCustomerText,
-        int $reviewedByAdminId,
-        int $expectedReviewCount,
-    ): bool {
+    public function saveReview(int $id, string $reviewedSegmentsJson, ?string $reviewedAgentText, ?string $reviewedCustomerText, int $reviewedByAdminId, int $expectedReviewCount): bool
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function confirmRoles(
-        int $id,
-        string $segmentsJson,
-        string $agentText,
-        string $customerText,
-        int $confirmedByAdminId,
-        int $expectedReviewCount,
-    ): bool {
+    public function confirmRoles(int $id, string $segmentsJson, string $agentText, string $customerText, int $confirmedByAdminId, int $expectedReviewCount): bool
+    {
         throw new RuntimeException('Not used by these tests.');
     }
 
@@ -194,18 +179,13 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    /**
-     * Not part of what this fake is for.
-     *
-     * The diagnosis is written after an outcome is settled and read only to explain it, so the worker
-     * paths these fakes stand in for never touch it.
-     *
-     * @return list<TranscriptionJob>
-     */
     public function needingSpeakerReviewDiagnosis(int $limit): array
     {
-        return [];
+        throw new RuntimeException('Not used by these tests.');
     }
 
-    public function recordSpeakerReviewDiagnosis(int $id, SeparationReviewReason $reason): void {}
+    public function recordSpeakerReviewDiagnosis(int $id, SeparationReviewReason $reason): void
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
 }

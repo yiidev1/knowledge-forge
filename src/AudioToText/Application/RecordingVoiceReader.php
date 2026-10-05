@@ -52,8 +52,26 @@ final readonly class RecordingVoiceReader
         return $this->conversations->recordingTypeFor($job->conversationId);
     }
 
+    /**
+     * What to call this recording's speaker on screen, or null where it holds a conversation.
+     *
+     * Two columns are consulted, in order of how much they claim. A file whose `source_role` was
+     * **declared** — every deterministic Customer or Agent channel the processing policy produces, and
+     * every half of a legacy manual pair — already names whose words it holds, and that is the stronger
+     * fact: it is a role, not a channel. Only when nothing was declared does the recording type answer,
+     * which is the Caller / Callee case.
+     *
+     * Asking in that order is what keeps a deterministic channel from falling through to the publish
+     * gate, which would find no inferred separation (correctly: none was attempted) and label every turn
+     * "Unidentified speaker". It is also what withholds Confirm Roles and Move from those screens, since
+     * every view already treats a named voice as "nothing left to establish".
+     *
+     * {@see typeFor()} is deliberately **not** changed by this: it answers a question about the channel,
+     * and the AI-audio voice mapping is built on that answer.
+     */
     public function for(TranscriptionJob $job): ?TranscriptVoice
     {
-        return TranscriptVoice::forRecording($this->typeFor($job));
+        return TranscriptVoice::forProvidedRole($job->sourceRole)
+            ?? TranscriptVoice::forRecording($this->typeFor($job));
     }
 }

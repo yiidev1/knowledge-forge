@@ -142,7 +142,8 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
             Download a store's call recordings so they can be listened to. Each call brings down up to
             three separate recordings — the mixed call and each side of it — and they appear on that
             store's Audio to Text page, ready to play. Nothing is transcribed until you ask for it,
-            one recording at a time.
+            one recording at a time, and only the Customer and Agent sides can be: the mixed recording
+            holds both speakers on one track and is kept as the playable original of the call.
         </p>
     </div>
     <?php

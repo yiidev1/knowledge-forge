@@ -146,14 +146,35 @@ final readonly class TranscriptionQueue
          * what this has always done.
          */
         bool $transcribe = true,
+        /**
+         * Whose words the single recording of a COMMON conversation holds, when its side was declared.
+         *
+         * A caller or callee channel is **one file**, so its conversation has one child — but that child
+         * is not a mixed recording: the importer named its side, and that name is what suppresses
+         * diarization, labels the screens and lets the combined projection find it. Without this the
+         * child would be written as COMMON and the whole deterministic architecture would be unreachable.
+         *
+         * Null is every other upload, and keeps the mode's own roles — which is also the only thing a
+         * SEPARATE pair may do, since its two children are the shape that mode means.
+         */
+        ?SourceRole $declaredRole = null,
     ): string {
         $conversationPublicId = bin2hex(random_bytes(16));
         $children = [];
         $stored = [];
 
+        // A declared side replaces the mode's role, never adds to it: one file is one child. Refused
+        // outright for SEPARATE, whose two children are what that mode *is* — silently dropping one of
+        // them would store half a pair as though it were whole.
+        if ($declaredRole !== null && $mode !== ConversationMode::Common) {
+            throw AudioTranscriptionException::unexpected();
+        }
+
+        $roles = $declaredRole === null ? $mode->childRoles() : [$declaredRole];
+
         try {
             // Slow work first and outside the lock: writing bytes and probing each recording.
-            foreach ($mode->childRoles() as $role) {
+            foreach ($roles as $role) {
                 $file = $files[$role->value] ?? null;
 
                 if ($file === null) {

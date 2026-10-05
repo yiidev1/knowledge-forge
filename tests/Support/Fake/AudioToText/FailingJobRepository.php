@@ -156,6 +156,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
         int $id,
         SourceRole $sourceRole,
         ?string $retainedAudioPath = null,
+        ?string $segmentsJson = null,
     ): void {
         $this->inner->markCompletedWithProvidedRole($id, $sourceRole, $retainedAudioPath);
     }

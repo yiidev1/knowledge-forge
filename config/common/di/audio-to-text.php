@@ -270,4 +270,14 @@ return [
     ): SpeakerDiarizerInterface => $settings->diarization->enabled && $sherpa->isAvailable()
         ? $sherpa
         : $disabled,
+
+    // Single-speaker utterance segmentation. Its numbers are configuration, not literals: the right gap
+    // is a property of the telephony rather than of this code — see UtteranceSettings.
+    App\AudioToText\Application\Settings\UtteranceSettings::class => [
+        '__construct()' => [
+            'gapMs' => $params['app/audio-utterance']['gapMs'],
+            'maxDurationMs' => $params['app/audio-utterance']['maxDurationMs'],
+            'minDurationMs' => $params['app/audio-utterance']['minDurationMs'],
+        ],
+    ],
 ];

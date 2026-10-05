@@ -26,6 +26,7 @@ use App\AudioToText\Web\AudioToTextRoute;
 use App\Auth\Application\CurrentAdmin;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
+use App\Shared\Audio\RecordingProcessingPolicy;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -179,6 +180,22 @@ final readonly class Action
 
             if ($errors === []) {
                 try {
+                    // The same policy the Order58 importer applies, on the same two questions: whose
+                    // words this file holds, and whether a transcript of it is wanted. Routed through
+                    // it here rather than left to the form so a recording uploaded by hand and the same
+                    // recording imported cannot be processed two different ways — and so a crafted POST
+                    // gets the same answer as the page, because the page is not the one deciding.
+                    //
+                    // Only for a single-file upload. A SEPARATE pair already declares both its sides,
+                    // has its own validator and its own two-child shape, and nothing here improves on it.
+                    // The type as it will be STORED, not the one the form happens to be showing: the
+                    // policy and the `recording_type` column have to be looking at the same fact, or an
+                    // upload could be kept as audio-only while recording no type for the projection to
+                    // find it by — a row nothing would ever read.
+                    [$files, $declaredRole, $transcribe] = $mode === ConversationMode::Common
+                        ? $this->applyPolicy($files, $this->recordingType($body, $mode))
+                        : [$files, null, true];
+
                     $conversationId = $this->queue->enqueueConversation(
                         $mode,
                         $store->sourceId,
@@ -194,6 +211,12 @@ final readonly class Action
                         // what decides how the recording is processed.
                         $this->recordingType($body, $mode),
                         OrderId::fromInput($orderId),
+                        // No call session: only the importer knows one, and the manual form neither
+                        // renders nor accepts one.
+                        null,
+                        null,
+                        $transcribe,
+                        $declaredRole,
                     );
 
                     // To the conversion, not back to this page. For a common upload that redirects on
@@ -360,6 +383,48 @@ final readonly class Action
      *
      * @param mixed $body the parsed request body, in whatever shape it arrived
      */
+    /**
+     * What the processing policy makes of this single-file upload.
+     *
+     * Returns the files map re-keyed to the role the policy named, that role, and whether a transcript
+     * is wanted. Three things rather than one because they have to agree: the enqueue looks the file up
+     * **by** the role it is told to create, so naming a side without moving the file would send it
+     * hunting for a key that is not there.
+     *
+     * ## What changes for an operator
+     *
+     * Choosing the **Caller** or **Callee** card produces a deterministic single-speaker recording —
+     * transcribed, segmented on its own pauses, labelled Customer or Agent — instead of a mixed
+     * recording handed to a two-speaker diarizer that had only one speaker to find.
+     *
+     * Choosing **Mix / Common** stores the recording and transcribes nothing. The file is playable from
+     * the moment it is uploaded; the conversation, if there is to be one, comes from the Customer and
+     * Agent recordings of the same order. A mixed file holds two people whom nobody separated, and
+     * guessing which is which is the thing this architecture exists to stop doing.
+     *
+     * The form is not what decides this, which is the point: the policy answers the same for a crafted
+     * request as for the page, so there is no shape of POST that transcribes a mixed recording.
+     *
+     * @param array<string, UploadedFileInterface> $files
+     *
+     * @return array{array<string, UploadedFileInterface>, ?SourceRole, bool}
+     */
+    private function applyPolicy(array $files, ?RecordingType $type): array
+    {
+        $policy = RecordingProcessingPolicy::decide($type?->value);
+
+        $role = SourceRole::fromStorage($policy->sourceRole) ?? SourceRole::Common;
+        $file = $files[SourceRole::Common->value] ?? null;
+
+        if ($file === null) {
+            // Collected and validated above, so this cannot happen from the form. Left as-is rather
+            // than invented: the enqueue refuses an incomplete files map in its own words.
+            return [$files, null, $policy->transcribe];
+        }
+
+        return [[$role->value => $file], $role, $policy->transcribe];
+    }
+
     private function recordingType(mixed $body, ConversationMode $mode): ?RecordingType
     {
         if ($mode !== ConversationMode::Common) {

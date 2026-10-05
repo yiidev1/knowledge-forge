@@ -152,6 +152,16 @@ final class Environment
         // an unconfigured install simply never uses the fallback.
         // The Orders API: a DIFFERENT host, verb and credential from the accounts/sync API above. Kept as
         // its own settings for the same reason ORDER58_VALIDATE_* are — one endpoint, one credential.
+        // Single-speaker utterance segmentation. A caller or callee recording has one speaker and no
+        // exchange to discover, but it does have pauses — these decide where one message ends.
+        // Conservative defaults: the smallest gap measured between consecutive turns of one speaker in
+        // a real sample was 510 ms, so 900 sits clear of it without reaching the 2.9-3.9 s median.
+        'AUDIO_UTTERANCE_GAP_MS' => ['type' => 'int', 'default' => 900, 'min' => 200, 'max' => 5000],
+        // A safety net for a monologue with no qualifying pause anywhere in it.
+        'AUDIO_UTTERANCE_MAX_MS' => ['type' => 'int', 'default' => 20000, 'min' => 2000, 'max' => 120000],
+        // Below this a fragment is kept with the sentence it belongs to rather than standing alone.
+        'AUDIO_UTTERANCE_MIN_MS' => ['type' => 'int', 'default' => 1200, 'min' => 0, 'max' => 10000],
+
         'ORDER58_ORDERS_API_URL' => ['type' => 'string', 'default' => ''],
         'ORDER58_ORDERS_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
         'ORDER58_ORDERS_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 30],

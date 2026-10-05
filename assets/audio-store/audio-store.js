@@ -348,6 +348,57 @@ window.KFAudioStages = {
 }());
 
 /* ------------------------------------------------------------------------------------------------
+ * Store-audio page only: what the upload form offers for each kind of recording.
+ *
+ * A Mix / Common file holds both people on one track and is never converted to text, so the two fields
+ * that describe what happens to a transcript — which engine reads it, whether to buy clean AI audio of
+ * it — describe nothing for one, and a button promising "Upload & Transcribe" promises something that
+ * will not happen. Both follow the chosen type.
+ *
+ * **This is presentation only.** The server decides the same thing from the same rule whatever arrives,
+ * so a request that skips this page is answered identically; with scripting off the fields simply stay
+ * visible and the upload still stores a mixed recording without a transcript. Hiding a control is never
+ * what stops an operation here — see RecordingProcessingPolicy.
+ * ------------------------------------------------------------------------------------------------ */
+(function () {
+    var choice = document.querySelector('[data-a2t-type-choice]');
+    if (!choice) {
+        return; // not the store page, or a build without the upload form
+    }
+
+    var options = document.querySelector('[data-a2t-transcription-options]');
+    var note = document.querySelector('[data-a2t-mixed-note]');
+    var submit = document.querySelector('[data-a2t-upload-submit]');
+
+    function selected() {
+        var checked = choice.querySelector('input[name=recording_type]:checked');
+
+        // Nothing checked reads as Mix / Common: that is what an upload naming no side is, and it is
+        // what the server would make of it too.
+        return checked ? checked.value : 'MIXED';
+    }
+
+    function apply() {
+        var transcribes = selected() !== 'MIXED';
+
+        if (options) {
+            options.hidden = !transcribes;
+        }
+        if (note) {
+            note.hidden = transcribes;
+        }
+        if (submit) {
+            submit.textContent = transcribes
+                ? submit.getAttribute('data-a2t-transcribe-label')
+                : submit.getAttribute('data-a2t-store-label');
+        }
+    }
+
+    choice.addEventListener('change', apply);
+    apply();
+}());
+
+/* ------------------------------------------------------------------------------------------------
  * Store-audio page only: the grouped conversions table.
  *
  * A row on this page is an **order**, and everything an administrator needs to do with one happens
@@ -1100,8 +1151,17 @@ window.KFAudioStages = {
      * comes from a rendered input and travels as `X-CSRF-Token`, the header the existing middleware
      * already accepts; nothing about it is composed here.
      */
-    function correct(url, fields) {
-        if (busy || reviewToken === null) {
+    function correct(url, fields, ownerVersion) {
+        // A combined conversation has no single version: every message locks against the recording that
+        // owns it, which the row carries. `version` remains the answer for one recording's own dialog,
+        // where there is exactly one. A projected payload sends -1 for it precisely so that anything
+        // reaching for the conversation-level number is refused here rather than locking against the
+        // wrong row — and refused again by the service, which would match no row either.
+        var expected = ownerVersion === null || ownerVersion === undefined || ownerVersion === ''
+            ? version
+            : parseInt(ownerVersion, 10);
+
+        if (busy || reviewToken === null || !isFinite(expected) || expected < 0) {
             return;
         }
         busy = true;
@@ -1116,7 +1176,7 @@ window.KFAudioStages = {
         say(reviewStatus, 'Saving…');
 
         var body = new URLSearchParams();
-        body.set('expected_review_count', String(version));
+        body.set('expected_review_count', String(expected));
         Object.keys(fields).forEach(function (name) { body.set(name, fields[name]); });
 
 
@@ -1169,7 +1229,16 @@ window.KFAudioStages = {
             }
         });
 
-        correct(form.getAttribute('action') || '', fields);
+        // Which recording this correction belongs to. The inline editor sits inside its own message, so
+        // the row answers; the two confirmations live in dialogs outside the thread and were stamped
+        // with the row's version when they opened. Both are empty on a single recording's dialog, where
+        // `correct` falls back to the one version there is.
+        var row = form.closest ? form.closest('[data-a2t-turn]') : null;
+        var owned = row === null
+            ? form.getAttribute('data-a2t-version')
+            : row.getAttribute('data-a2t-version');
+
+        correct(form.getAttribute('action') || '', fields, owned);
     }
 
     /** The confirm / discard strip, in the correction page's own classes and its own words. */
@@ -1177,6 +1246,39 @@ window.KFAudioStages = {
         empty(reviewNoticeBox);
 
         var strip = el('div', 'a2t-review__status');
+
+        // A combined conversation first, because it is the strongest statement about what is on screen:
+        // these messages belong to two other recordings, each message is corrected against the one that
+        // owns it, and the operations that are per-recording — discarding every correction, reading the
+        // revision trail — are offered there rather than invented here.
+        if (data.combined) {
+            if (data.combined.explanation) {
+                strip.appendChild(el(
+                    'span',
+                    'a2t-review__state',
+                    data.combined.explanation
+                ));
+            } else {
+                strip.appendChild(el(
+                    'span',
+                    'a2t-review__state a2t-review__state--confirmed',
+                    'Both sides of this call, from the Customer and Agent recordings. Correcting a '
+                        + 'message here changes it on its own recording too.'
+                ));
+            }
+
+            data.combined.children.forEach(function (child) {
+                var link = document.createElement('a');
+                link.className = 'btn btn--sm';
+                link.href = child.url;
+                link.textContent = child.label + ' recording'
+                    + (child.isReviewed ? ' · corrected' : '');
+                strip.appendChild(link);
+            });
+
+            reviewNoticeBox.appendChild(strip);
+            return;
+        }
 
         // Borrowed words come first, because it is the stronger statement about what is on screen:
         // these are not this recording's own turns, and there is nowhere here to correct them.
@@ -1274,8 +1376,19 @@ window.KFAudioStages = {
 
         // Everything the shared module reads off a turn. It asks the DOM rather than a payload,
         // because the page it was written for has no payload — so the dialog answers in the same way.
+        // The OWNER-LOCAL index, in a combined conversation — never the position on screen. Every url
+        // on this row already ends with the same number, and the merge neighbour lookup reads it.
         row.setAttribute('data-a2t-turn', String(turn.index));
         row.setAttribute('data-a2t-label', turn.label);
+        // Present only in a combined conversation, where two recordings' messages share one thread and
+        // both number their own from zero. It scopes the neighbour search to one recording.
+        if (typeof turn.owner === 'string') {
+            row.setAttribute('data-a2t-owner', turn.owner);
+        }
+        // This message's own optimistic lock, for the same reason.
+        if (typeof turn.version === 'number') {
+            row.setAttribute('data-a2t-version', String(turn.version));
+        }
         if (turn.canMove) {
             row.setAttribute('data-a2t-target-role', turn.targetRole);
             row.setAttribute('data-a2t-target-label', turn.targetLabel);
@@ -2564,6 +2677,31 @@ window.KFAudioStages = {
             target.recordingTypeLabel + ' · order ' + target.orderId,
         );
 
+        // A mixed recording is never converted to text, so the engine choice, the paid reading of the
+        // transcript and the line promising a new transcription all describe something that will not
+        // happen. Named by the SERVER — `recordingType` is the stored value, not the label — so the
+        // dialog never has to work out which of the three it is looking at.
+        //
+        // Presentation only. `ReplaceAction` uploads through the same ingestion seam as every other
+        // upload, and the policy there refuses a mixed recording whatever this form posts.
+        var transcribes = target.recordingType !== 'MIXED';
+        var settings = updateDialog.querySelector('[data-a2t-update-transcription]');
+        var audioOnly = updateDialog.querySelector('[data-a2t-update-audio-only]');
+
+        if (settings) {
+            settings.hidden = !transcribes;
+            // Disabled as well as hidden, so a hidden select contributes nothing to the submission —
+            // the endpoint would ignore it, but a form that posts a value nobody chose is its own
+            // small lie about what was asked for.
+            var inputs = settings.querySelectorAll('select, input');
+            for (var i = 0; i < inputs.length; i++) {
+                inputs[i].disabled = !transcribes;
+            }
+        }
+        if (audioOnly) {
+            audioOnly.hidden = transcribes;
+        }
+
         quiet(updateStatus);
         // A previous replacement may still be being watched. Its worker carries on either way; this
         // dialog is now about a different recording and must not report the old one's stages.
@@ -3462,7 +3600,14 @@ window.KFAudioStages = {
     /** Draw one recording's payload into the dialog. Reached from a fresh read and from the cache. */
     function paintReview(data, requested, message, resumeAt, fromCache) {
         version = data.version;
-        reviewMeta.textContent = [channelLabel, data.filename, data.provider, 'Version ' + data.version]
+        reviewMeta.textContent = [
+            channelLabel,
+            data.filename,
+            data.provider,
+            // A combined conversation has two versions and neither of them describes this recording, so
+            // the line says what it is instead of printing a number that belongs to nothing.
+            data.combined ? 'Combined from both sides' : 'Version ' + data.version
+        ]
             .filter(function (part) { return part; })
             .join(' · ');
 

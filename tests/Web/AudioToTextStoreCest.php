@@ -568,7 +568,15 @@ final class AudioToTextStoreCest
 
     // ---------------------------------------------------------------------------- common mode
 
-    public function aMixedRecordingQueuesOneJobForThisStore(WebTester $I): void
+    /**
+     * A mixed recording is stored as the playable original of its call, and transcribed never.
+     *
+     * NOT_REQUESTED is outside both the active and the terminal status lists, so no worker will ever
+     * claim it, it costs no queue slot, and no orphan sweep or retention purge considers it. The file
+     * holds two people nobody separated; this application no longer guesses which is which, and the
+     * call's words come from its Customer and Agent recordings instead.
+     */
+    public function aMixedRecordingIsStoredAsAudioAndNeverQueued(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
@@ -580,8 +588,52 @@ final class AudioToTextStoreCest
         $children = $this->childrenOf((int) $conversations[0]['id']);
         Assert::assertCount(1, $children);
         Assert::assertSame('COMMON', $children[0]['source_role']);
-        Assert::assertSame('QUEUED', $children[0]['status']);
+        Assert::assertSame('NOT_REQUESTED', $children[0]['status']);
         Assert::assertNull($children[0]['transcript'], 'The web request must not transcribe anything.');
+    }
+
+    /**
+     * And a request that asks for one anyway gets the same answer.
+     *
+     * The form has no such field, so this is the crafted shape: `transcribe` posted alongside a mixed
+     * recording. The policy only ever withdraws transcription, so there is no value of it — and no
+     * field the page does not render — that turns a mixed recording into a transcription job.
+     */
+    public function askingToTranscribeAMixedUploadChangesNothing(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
+        $I->submitForm($this->uploadForm(), [
+            'recording_type' => 'MIXED',
+            'transcribe' => '1',
+        ]);
+
+        $children = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id']);
+
+        Assert::assertCount(1, $children);
+        Assert::assertSame('NOT_REQUESTED', $children[0]['status']);
+    }
+
+    /**
+     * Omitting the type is not a way round it either.
+     *
+     * An upload naming no side is a mixed recording by every other measure, and a permissive branch for
+     * it would have made "leave the field out" the documented bypass.
+     */
+    public function omittingTheRecordingTypeIsNotAWayToGetATranscript(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+        $I->attachFile('#a2t-audio', 'kf_store_valid.wav');
+        $I->submitForm($this->uploadForm(), ['recording_type' => '']);
+
+        $children = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id']);
+
+        Assert::assertCount(1, $children);
+        Assert::assertSame('NOT_REQUESTED', $children[0]['status']);
     }
 
     public function callerAndCalleeRecordingsUseTheExistingSingleFileQueue(WebTester $I): void
@@ -733,9 +785,16 @@ final class AudioToTextStoreCest
      * prefix intact and no host written down anywhere. Asserted for all three cards, because all three
      * go through the same flow and a regression in one would be a regression in all.
      *
-     * @example ["common"]
-     * @example ["caller"]
-     * @example ["callee"]
+     * Only the two sides: they are what gets transcribed, so they are what there is anything to wait
+     * for. A mixed recording is covered by {@see aMixedUploadWaitsForNothingBecauseNothingIsComing()},
+     * which asserts the other half of the same rule.
+     *
+     * The storage values rather than the card names, which were never recording types — the old
+     * permissive branch accepted anything and queued it, so passing "caller" here looked like it
+     * worked while actually testing an untyped upload.
+     *
+     * @example ["CALLER"]
+     * @example ["CALLEE"]
      */
     public function aPendingJobNamesItsOwnReviewPageAsTheFinishedDestination(
         WebTester $I,
@@ -751,6 +810,24 @@ final class AudioToTextStoreCest
         // once conversion succeeds. The token is this job's own — nothing is hardcoded.
         $I->seeCurrentUrlEquals('/audio-to-text/job/' . $token);
         $I->seeElement('[data-a2t-poll][data-a2t-done="/audio-to-text/job/' . $token . '/review"]');
+    }
+
+    /**
+     * A mixed upload lands on its detail page and waits for nothing, because nothing is coming.
+     *
+     * The poller's absence is the assertion. A page that kept checking would be checking for a
+     * transcript no worker will ever produce, and would eventually have to explain why none arrived.
+     */
+    public function aMixedUploadWaitsForNothingBecauseNothingIsComing(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        $I->seeCurrentUrlEquals('/audio-to-text/job/' . $child['public_id']);
+        $I->dontSeeElement('[data-a2t-poll]');
+        Assert::assertSame('NOT_REQUESTED', $this->jobStatus((string) $child['public_id']));
     }
 
     /**
@@ -776,9 +853,9 @@ final class AudioToTextStoreCest
     /**
      * The destination itself: a completed job's review page loads, for every card.
      *
-     * @example ["common"]
-     * @example ["caller"]
-     * @example ["callee"]
+     * @example ["MIXED"]
+     * @example ["CALLER"]
+     * @example ["CALLEE"]
      */
     public function aCompletedJobsReviewPageLoadsForEveryCard(WebTester $I, \Codeception\Example $example): void
     {
@@ -870,6 +947,140 @@ final class AudioToTextStoreCest
     }
 
     /**
+     * The upload form offers the transcription settings only for a recording that will be transcribed.
+     *
+     * Presentation, and only presentation: the server answers the same whatever arrives, which the two
+     * tests above prove by posting shapes this page cannot produce. What is asserted here is that the
+     * page carries the hooks the script toggles and the two labels the button swaps between — so an
+     * operator choosing Mix / Common is not offered an engine for a transcript nobody will make, and is
+     * not promised one by the button either.
+     */
+    public function theUploadFormCarriesWhatItNeedsToFollowTheChosenType(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement($this->uploadForm() . ' [data-a2t-type-choice]');
+        // The block that holds the engine choice and the paid AI-audio option — both of which describe
+        // what happens to a transcript, so neither applies to a file that will not have one.
+        $I->seeElement($this->uploadForm() . ' [data-a2t-transcription-options] select[name=transcription_provider]');
+        $I->seeElement($this->uploadForm() . ' [data-a2t-mixed-note]');
+        $I->seeElement($this->uploadForm() . ' [data-a2t-upload-submit][data-a2t-store-label="Upload"]');
+        $I->seeElement(
+            $this->uploadForm() . ' [data-a2t-upload-submit][data-a2t-transcribe-label="Upload & Transcribe"]',
+        );
+
+        // And the rule itself is on the page in words, for a reader who never changes the radio.
+        $I->see('is not converted to text');
+    }
+
+    /**
+     * The Update Audio dialog offers transcription settings only to a recording that will be transcribed.
+     *
+     * The markup is rendered once with the page and filled per recording by the script, so what is
+     * asserted here is that the two halves exist and are addressable: the block that holds the engine
+     * and the paid reading, and the line that replaces it for a mixed recording.
+     */
+    public function theUpdateAudioDialogSeparatesTranscriptionSettingsFromTheFileChoice(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->seeElement('[data-a2t-update-form] [data-a2t-update-transcription] select[name=transcription_provider]');
+        $I->seeElement('[data-a2t-update-form] [data-a2t-update-transcription] input[name=generate_ai_audio]');
+        $I->seeElement('[data-a2t-update-form] [data-a2t-update-audio-only]');
+        // The file choice is outside the toggled block, because replacing the audio is the one thing a
+        // mixed recording's Update dialog is still for.
+        $I->seeElement('[data-a2t-update-form] input[type=file][name=audio]');
+        $I->see('is not converted to text', '[data-a2t-update-audio-only]');
+    }
+
+    /**
+     * Replacing a mixed recording stores audio and starts nothing, whatever the request asks for.
+     *
+     * The crafted shape: an engine, the paid audio opt-in and a `transcribe` flag the form does not
+     * render, all posted against a mixed recording. `ReplaceAction` uploads through the one ingestion
+     * seam, and the policy there answers the same for this request as for the page.
+     */
+    public function replacingAMixedRecordingStartsNoTranscriptionHoweverItIsAsked(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+
+        // Transcribed before this rule existed: the historical row an administrator is replacing the
+        // audio of. Written directly, because nothing queues a mixed recording any more.
+        $old = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation((string) $old['public_id']);
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'MIXED', [
+            'transcription_provider' => 'WHISPER',
+            'generate_ai_audio' => '1',
+            'transcribe' => '1',
+        ]);
+        $I->seeResponseCodeIs(200);
+
+        $rows = $this->conversationsFor(self::STORE_A);
+        $newJob = $this->childrenOf((int) $rows[0]['id'])[0];
+
+        Assert::assertSame('NOT_REQUESTED', $newJob['status'], 'The replacement is audio, not a job.');
+        Assert::assertSame('COMMON', $newJob['source_role']);
+        Assert::assertNull($newJob['transcript']);
+        Assert::assertSame(
+            0,
+            (int) $rows[0]['generate_ai_audio'],
+            'An intent that can never be honoured must not be recorded as though it will be.',
+        );
+
+        // And the recording it replaced is untouched — the existing replacement semantics, unchanged.
+        // Its transcript in particular: a new rule about new recordings must not reach backwards and
+        // take away something somebody already has.
+        Assert::assertCount(2, $rows, 'The previous recording is kept as history.');
+
+        $kept = $this->childrenOf((int) $rows[1]['id'])[0];
+
+        Assert::assertSame($old['public_id'], $kept['public_id']);
+        Assert::assertSame('COMPLETED', $kept['status']);
+        Assert::assertNotNull($kept['transcript'], 'The historical transcript survives the replacement.');
+    }
+
+    /** A Customer replacement keeps everything it had: an engine, the opt-in, and a queued job. */
+    public function replacingACustomerRecordingStillTranscribes(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLER', [
+            'transcription_provider' => 'WHISPER',
+            'generate_ai_audio' => '1',
+        ]);
+        $I->seeResponseCodeIs(200);
+
+        $rows = $this->conversationsFor(self::STORE_A);
+        $newJob = $this->childrenOf((int) $rows[0]['id'])[0];
+
+        Assert::assertSame('QUEUED', $newJob['status']);
+        Assert::assertSame('CUSTOMER', $newJob['source_role']);
+        Assert::assertSame(1, (int) $rows[0]['generate_ai_audio'], 'The opt-in still means something here.');
+    }
+
+    /** An Agent replacement, the same. */
+    public function replacingAnAgentRecordingStillTranscribes(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLEE', '16513791');
+
+        $this->replace($I, self::STORE_A, 'order:16513791', 'CALLEE', [
+            'transcription_provider' => 'WHISPER',
+        ]);
+        $I->seeResponseCodeIs(200);
+
+        $newJob = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+
+        Assert::assertSame('QUEUED', $newJob['status']);
+        Assert::assertSame('AGENT', $newJob['source_role']);
+    }
+
+    /**
      * An upload with an order id: both values persisted, and the recording lands in its own column.
      *
      * The type is no longer a word in a cell — it is *which cell*. Asserting on the column is what
@@ -890,13 +1101,26 @@ final class AudioToTextStoreCest
         $conversation = $this->conversationsFor(self::STORE_A)[0];
         Assert::assertSame($example[0], $conversation['recording_type']);
         Assert::assertSame('16513791', $conversation['order_id']);
-        // The mode is untouched: all three are still COMMON uploads with one COMMON child, which is
-        // what keeps the transcription path identical for all of them.
+        // The mode is untouched: all three are one file, so all three are COMMON conversations with one
+        // child. The mode describes the SHAPE of the upload, and SEPARATE means a Customer file and an
+        // Agent file arriving together — a different upload, with two children and its own screens.
         Assert::assertSame('COMMON', $conversation['mode']);
         $children = $this->childrenOf((int) $conversation['id']);
         Assert::assertCount(1, $children);
-        Assert::assertSame('COMMON', $children[0]['source_role']);
-        Assert::assertSame('QUEUED', $children[0]['status']);
+        // The child's role is the side the card declared, which is the whole deterministic pipeline in
+        // one column: a Caller file holds the Customer and a Callee file holds the Agent, so neither is
+        // handed to a two-speaker diarizer that has only one speaker to find. A mixed file declares
+        // nothing about who is on it, and still has its speakers worked out here.
+        Assert::assertSame(
+            ['MIXED' => 'COMMON', 'CALLER' => 'CUSTOMER', 'CALLEE' => 'AGENT'][$example[0]],
+            $children[0]['source_role'],
+        );
+        // And whether anything was queued for it: a declared side is transcribed, a mixed recording is
+        // kept as audio. The two facts are written in the same row, so they are asserted together.
+        Assert::assertSame(
+            ['MIXED' => 'NOT_REQUESTED', 'CALLER' => 'QUEUED', 'CALLEE' => 'QUEUED'][$example[0]],
+            $children[0]['status'],
+        );
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Order No#');
@@ -2417,8 +2641,10 @@ final class AudioToTextStoreCest
     public function anOrderWithNothingFinishedIsNotAWayIn(WebTester $I): void
     {
         $this->signIn($I);
-        // Uploaded, never completed: the job stays QUEUED, so nothing in the row is reviewable.
-        $this->uploadCard($I, self::STORE_A, 'MIXED', '16513791');
+        // Uploaded, never completed: the job stays QUEUED, so nothing in the row is reviewable. A
+        // declared side rather than a mixed recording, because a mixed one is never queued at all —
+        // it is audio from the moment it lands, and audio is something the row can already open.
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
@@ -3575,7 +3801,9 @@ final class AudioToTextStoreCest
     public function theTranscribeButtonOpensAConfirmationRatherThanStarting(WebTester $I): void
     {
         $this->signIn($I);
-        $this->uploadCommon($I, self::STORE_A);
+        // A Customer recording: the only kind that offers this control now. A mixed recording is kept
+        // as audio, so the button is not drawn for one and the endpoint behind it refuses.
+        $this->uploadCard($I, self::STORE_A, 'CALLER');
         $this->makeReadyForTranscription(self::STORE_A);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
@@ -3595,13 +3823,13 @@ final class AudioToTextStoreCest
     public function eachTranscribeButtonCarriesItsOwnRecordingsFacts(WebTester $I): void
     {
         $this->signIn($I);
-        $this->uploadCard($I, self::STORE_A, 'MIXED', '16674631');
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16674631');
         $this->makeReadyForTranscription(self::STORE_A);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
         $I->seeElement('button[data-a2t-transcribe-order="16674631"]');
-        $I->seeElement('button[data-a2t-details-label="Mix / Common"]');
+        $I->seeElement('button[data-a2t-details-label="Customer"]');
         // The provider the request will actually use, named on the button.
         $I->seeElement('button[data-a2t-transcribe-provider]');
     }
@@ -3638,7 +3866,7 @@ final class AudioToTextStoreCest
     public function theTranscribeEndpointStillAcceptsOnlyOneAsk(WebTester $I): void
     {
         $this->signIn($I);
-        $this->uploadCommon($I, self::STORE_A);
+        $this->uploadCard($I, self::STORE_A, 'CALLER');
         $this->makeReadyForTranscription(self::STORE_A);
 
         $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];

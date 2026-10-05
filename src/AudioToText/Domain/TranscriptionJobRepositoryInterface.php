@@ -156,6 +156,12 @@ interface TranscriptionJobRepositoryInterface
         int $id,
         SourceRole $sourceRole,
         ?string $retainedAudioPath = null,
+        /**
+         * The speaker's own utterances, already JSON-encoded, or null when the engine's timings could
+         * not be measured. A single-speaker recording has no exchange to discover, but it does have
+         * pauses, and those are what separate one message from the next.
+         */
+        ?string $segmentsJson = null,
     ): void;
 
     public function markFailed(int $id, string $userMessage): void;

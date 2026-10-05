@@ -7,6 +7,7 @@ namespace App\AudioToText\Application\Speaker;
 use App\AudioToText\Domain\Speaker\AlignmentQuality;
 use App\AudioToText\Domain\Speaker\SpeakerSegment;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
+use App\AudioToText\Domain\Speaker\TranscriptControlTokens;
 use App\AudioToText\Domain\Speaker\TranscriptToken;
 use App\AudioToText\Domain\SpeakerRole;
 
@@ -14,7 +15,6 @@ use function count;
 use function max;
 use function min;
 use function preg_match;
-use function preg_replace;
 use function trim;
 use function usort;
 
@@ -342,17 +342,12 @@ final readonly class SpeakerTranscriptAligner
     /**
      * Strips whisper's control tokens, which are markers rather than speech.
      *
-     * The pattern must not require a trailing underscore: whisper emits both `[_BEG_]` and timestamp
-     * markers like `[_TT_390]`. An earlier version only matched the first form, so nine `[_TT_nnn]`
-     * markers leaked into the aligned text of the reference call.
-     *
-     * Only these are removed. No rewriting, no punctuation normalisation, no case folding — the stored
-     * role columns have to contain what was said, not a tidied paraphrase of it.
+     * The rule itself moved to {@see TranscriptControlTokens} when single-speaker segmentation needed
+     * the same answer. It was a private method here, which is exactly how the markers then leaked into
+     * a second set of stored columns through a path that could not see it.
      */
     private function cleanTokenText(string $text): string
     {
-        $cleaned = (string) preg_replace('/\[_[A-Z0-9_]+\]/', '', $text);
-
-        return trim($cleaned) === '' ? '' : $cleaned;
+        return TranscriptControlTokens::strip($text);
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review\Fragment;
 
+use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\ConversationPresenter;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\ConversationHistoryBuilder;
@@ -18,7 +19,11 @@ use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Application\Tts\TtsScriptBuilder;
+use App\AudioToText\Domain\Speaker\CombinedConversation;
+use App\AudioToText\Domain\Speaker\CombinedChild;
+use App\AudioToText\Domain\Speaker\CombinedTurn;
 use App\AudioToText\Domain\Speaker\MergeRefusal;
+use App\AudioToText\Domain\Speaker\SpeakerMarkers;
 use App\AudioToText\Domain\Speaker\ReviewedConversationTurns;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -83,6 +88,12 @@ final readonly class Action
          * conversation, which is also where {@see \App\AudioToText\Domain\RecordingType} is stored.
          */
         private AudioConversationRepositoryInterface $conversationRecords,
+        /**
+         * The two channel recordings a deterministic call's mixed row shows instead of a transcript of
+         * its own. Answers null for every other recording, which is what keeps the legacy path below
+         * reachable and unchanged.
+         */
+        private CombinedConversationReader $combined,
     ) {}
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
@@ -94,6 +105,29 @@ final readonly class Action
         }
 
         $effective = $this->conversations->for($job);
+
+        // A deterministic call's mixed recording stores no transcript: the Customer and Agent channels
+        // hold the words and this row keeps only the audio. Its conversation is therefore read from
+        // them — but only when this recording genuinely has nothing of its own, so a legacy mixed
+        // recording that was diarized and corrected keeps rendering its own turns through the path
+        // below, exactly as it always has. The emptiness test comes first and is what stops a working
+        // conversation from ever being replaced by a projection of it.
+        $combined = $effective->isEmpty() ? $this->combined->for($job) : null;
+
+        // Served for every state the projection can report, not only the ones with words in them. A
+        // call whose two sides conflict, or whose channels have not been imported, is exactly the case
+        // that needs a sentence: the legacy gate below would answer 404 for all of them, and a dialog
+        // that refuses to open tells an administrator nothing about why.
+        //
+        // The NOT_REQUESTED clause is what covers a mixed recording kept as audio only — now every new
+        // one — whose call has no channels at all. The alternative condition keeps a **completed** mixed
+        // recording that happens to hold no segments on its existing path, so a legacy row with a plain
+        // transcript is not quietly reported as an empty combined call.
+        if ($combined !== null
+            && ($combined->hasChildren() || $job->status === JobStatus::NOT_REQUESTED)
+        ) {
+            return $this->json($this->combinedPayload($job, $publicId, $combined));
+        }
 
         // The same gate the page applies. A job with nothing to correct has nothing to put in a modal
         // either, and answering 404 keeps "no such job" and "nothing to show" indistinguishable.
@@ -290,6 +324,168 @@ final readonly class Action
                 ),
             ],
         ]);
+    }
+
+    /**
+     * A deterministic call, read from its two channels, in the shape the dialog already renders.
+     *
+     * ## The one thing that has to be right
+     *
+     * Every row's `urls`, `index` and `version` are built from the message's **owner** — the channel job
+     * that holds those words — and never from this mixed recording or from the row's position in the
+     * list. The combined thread interleaves two independent transcriptions, so visual position 2 is
+     * routinely a different message's local index 1 in the other recording; a correction composed from
+     * the display position would silently overwrite somebody else's sentence. `owner` and `version`
+     * ride along beside the url so the browser never has to work either of them out.
+     *
+     * ## What is deliberately not offered
+     *
+     * **Confirm roles** — there is nothing to confirm. Each side's role was declared at import, not
+     * inferred, so the claim this control exists to make has already been made by the importer.
+     *
+     * **Move** — a message cannot change speaker when the speaker is which file it arrived in. Refused
+     * by the endpoint too, so withholding it here is presentation rather than protection.
+     *
+     * **A conversation-level Revert, and per-message History** — both are per job, and there are two
+     * jobs. A "discard all corrections" button here would have to mean discarding from both of them in
+     * one implied transaction, which is not something anybody asked for; and a history keyed on a local
+     * turn index would collide, because both sides number their turns from zero. Instead the notice
+     * strip names each side and links to its own correction page, where Discard and the revision trail
+     * already exist and already mean exactly one thing.
+     *
+     * @return array<string, mixed>
+     */
+    private function combinedPayload(
+        TranscriptionJob $job,
+        string $publicId,
+        CombinedConversation $combined,
+    ): array {
+        $rows = [];
+
+        foreach ($combined->turns as $turn) {
+            $rows[] = $this->combinedRow($turn, $combined->childOwning($turn->ownerJobPublicId));
+        }
+
+        return [
+            // Never read while a projection is on screen: no control here performs a conversation-level
+            // operation, and every message carries its own owner's count. Sent as -1 so that anything
+            // which did reach for it is refused by the browser and refused again by the service, rather
+            // than quietly locking against the wrong row.
+            'version' => -1,
+            'isReviewed' => false,
+            'rolesPublished' => true,
+            'canConfirm' => false,
+            'confirmBlockedReason' => null,
+            'reviewExplanation' => null,
+            'confirmedLine' => null,
+            'voice' => null,
+            'derivedFrom' => null,
+            // What this projection is, and what is missing from it. The dialog renders this instead of
+            // the confirm/discard strip; its presence is also how the browser knows it is looking at a
+            // combined conversation rather than one recording's own.
+            'combined' => [
+                'state' => $combined->state->value,
+                'explanation' => $combined->state->explanation(),
+                'interleaved' => $combined->interleaved,
+                'children' => $this->combinedChildren($combined),
+            ],
+            'audio' => $this->audio($job, $publicId),
+            'filename' => $job->originalFilename,
+            'provider' => $job->transcriptionProvider()->label(),
+            'replace' => $this->replaceTarget($job),
+            'turns' => $rows,
+            'urls' => [
+                'full' => $this->urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $publicId]),
+                // Absent, not null-valued: there is no mixed-level confirmation, discard or history to
+                // offer, and a url present in the payload is a url something will eventually call.
+            ],
+        ];
+    }
+
+    /**
+     * One projected message, addressed to the row that owns it.
+     *
+     * @return array<string, mixed>
+     */
+    private function combinedRow(CombinedTurn $turn, ?CombinedChild $owner): array
+    {
+        $index = $turn->ownerLocalTurnIndex;
+        $ownerPublicId = $turn->ownerJobPublicId;
+
+        return [
+            // The owner's own index. This is what `data-a2t-turn` carries and what every url below ends
+            // with, so a merge's neighbour lookup and an edit's target are the same number the service
+            // will apply the change at.
+            'index' => $index,
+            // Which recording this message lives in. The browser scopes its neighbour search by it, so
+            // the bubble above a message on screen is never mistaken for the message beside it in its
+            // own transcript.
+            'owner' => $ownerPublicId,
+            // This message's optimistic lock — its owner's `review_count`, not the other side's and not
+            // the mixed recording's.
+            'version' => $turn->ownerReviewCount,
+            'label' => $turn->label(),
+            // Always: the side was declared at import. This is why a combined view never shows a
+            // neutral "Speaker 1" label.
+            'confirmed' => true,
+            'display' => SpokenPrice::formatUnlessReviewed(
+                SpeakerMarkers::strip($turn->text),
+                $owner?->isReviewed ?? false,
+            ),
+            'text' => $turn->text,
+            'role' => $turn->role->value,
+            'side' => $turn->side()->value,
+            'time' => $turn->timing->rangeLabel(),
+            'delay' => $turn->timing->delayLabel(),
+            'edited' => $turn->edited,
+            'approx' => $turn->approx,
+            // Per job, and there are two. The strip links to each side's own page instead — see the
+            // note on {@see combinedPayload()}.
+            'hasHistory' => false,
+            'canEdit' => true,
+            'canMove' => false,
+            'targetRole' => null,
+            'targetLabel' => null,
+            'moveMerges' => false,
+            // The owner's verdict on its own neighbours, which in a combined thread is frequently not
+            // the bubble above or below on screen.
+            'mergePrevious' => $this->merge($turn->mergeWithPrevious),
+            'mergeNext' => $this->merge($turn->mergeWithNext),
+            'urls' => [
+                'moveText' => null,
+                'text' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_TEXT, $ownerPublicId, $index),
+                'merge' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $ownerPublicId, $index),
+            ],
+        ];
+    }
+
+    /**
+     * The two sides, named, with somewhere to go for the operations this view does not offer.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function combinedChildren(CombinedConversation $combined): array
+    {
+        $children = [];
+
+        foreach ($combined->children() as $child) {
+            $children[] = [
+                'role' => $child->role->value,
+                'label' => $child->role->label(),
+                'status' => $child->status->label(),
+                'turnCount' => $child->turnCount(),
+                'isReviewed' => $child->isReviewed,
+                'version' => $child->reviewCount,
+                // Where corrections to this side's wording are discarded and its revisions read. The
+                // existing page, unchanged, for the existing job.
+                'url' => $this->urlGenerator->generate(
+                    AudioToTextRoute::JOB_REVIEW,
+                    ['publicId' => $child->jobPublicId],
+                ),
+            ];
+        }
+
+        return $children;
     }
 
     /**

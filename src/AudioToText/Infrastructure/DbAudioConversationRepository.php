@@ -178,6 +178,68 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         return count($rows) === 1 ? (int) $rows[0] : null;
     }
 
+    public function channelJobIdsForCallSession(int $storeSourceId, string $callSessionId): array
+    {
+        return $this->channelJobIds([
+            'c.store_source_id' => $storeSourceId,
+            'c.call_session_id' => $callSessionId,
+        ]);
+    }
+
+    public function channelJobIdsForOrder(int $storeSourceId, string $orderId): array
+    {
+        return $this->channelJobIds(['c.store_source_id' => $storeSourceId, 'c.order_id' => $orderId]);
+    }
+
+    public function orderIdFor(int $conversationId): ?string
+    {
+        $value = (new Query($this->connection))
+            ->select('order_id')
+            ->from(self::TABLE)
+            ->where(['id' => $conversationId])
+            ->scalar();
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Caller and callee job ids grouped by side, for whichever grouping column the caller named.
+     *
+     * @param array<string, mixed> $scope
+     *
+     * @return array<string, list<int>>
+     */
+    private function channelJobIds(array $scope): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = (new Query($this->connection))
+            ->select(['id' => 'j.id', 'recording_type' => 'c.recording_type'])
+            ->from(['c' => self::TABLE])
+            ->innerJoin(['j' => self::JOBS], 'j.conversation_id = c.id')
+            ->where($scope)
+            ->andWhere([
+                // The two sides, named explicitly. A mixed row is the caller of this method and an
+                // untyped row predates recording types, so neither can be one side of a call.
+                'c.recording_type' => [RecordingType::Caller->value, RecordingType::Callee->value],
+            ])
+            ->orderBy(['j.id' => SORT_ASC])
+            ->all();
+
+        $grouped = [];
+
+        foreach ($rows as $row) {
+            $type = $row['recording_type'];
+
+            if (!is_string($type)) {
+                continue;
+            }
+
+            $grouped[$type][] = (int) $row['id'];
+        }
+
+        return $grouped;
+    }
+
     public function unlinkedForCallSessionBackfill(int $limit): array
     {
         /** @var list<array<string, mixed>> $rows */

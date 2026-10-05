@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
+use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
@@ -56,6 +57,11 @@ if ($job === null) {
 $builder = new TtsScriptBuilder(
     new EffectiveConversationReader(new SpeakerSegmentsDecoder()),
     new RecordingVoiceReader(new DbAudioConversationRepository($c)),
+    new CombinedConversationReader(
+        new DbAudioConversationRepository($c),
+        new DbTranscriptionJobRepository($c, new SystemClock()),
+        new EffectiveConversationReader(new SpeakerSegmentsDecoder()),
+    ),
 );
 
 $voice = $builder->voiceFor($job);

@@ -196,6 +196,12 @@ return [
         'operationMaxAttempts' => Environment::int('AI_OPERATION_MAX_ATTEMPTS'),
     ],
 
+    'app/audio-utterance' => [
+        'gapMs' => Environment::int('AUDIO_UTTERANCE_GAP_MS'),
+        'maxDurationMs' => Environment::int('AUDIO_UTTERANCE_MAX_MS'),
+        'minDurationMs' => Environment::int('AUDIO_UTTERANCE_MIN_MS'),
+    ],
+
     'app/order58' => [
         'baseUrl' => Environment::string('ORDER58_API_BASE_URL'),
         'token' => Environment::string('ORDER58_API_TOKEN'),

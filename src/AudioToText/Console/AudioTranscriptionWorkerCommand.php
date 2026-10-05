@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Console;
 
+use App\AudioToText\Application\Speaker\SingleSpeakerUtteranceSegmenter;
+use App\AudioToText\Domain\Speaker\SpeakerUtterance;
+use App\AudioToText\Domain\SourceRole;
+use App\AudioToText\Domain\Speaker\TranscriptToken;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\ForeignLockGuard;
 use App\AudioToText\Application\QueuedAudioStorage;
@@ -31,6 +35,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 use Throwable;
 use Yiisoft\Yii\Console\ExitCode;
 
+use function array_map;
+use function json_encode;
 use function fclose;
 use function flock;
 use function fopen;
@@ -50,6 +56,7 @@ use function strtolower;
 use function time;
 use function usleep;
 
+use const JSON_THROW_ON_ERROR;
 use const LOCK_EX;
 use const LOCK_NB;
 use const LOCK_UN;
@@ -95,6 +102,7 @@ final class AudioTranscriptionWorkerCommand extends Command
         private readonly QueuedAudioStorage $storage,
         private readonly AudioTranscriber $transcriber,
         private readonly SpeakerSeparationService $separation,
+        private readonly SingleSpeakerUtteranceSegmenter $segmenter,
         private readonly WorkerAdmissionGuard $admission,
         private readonly ForeignLockGuard $foreignLocks,
         private readonly AudioToTextSettings $settings,
@@ -278,6 +286,10 @@ final class AudioTranscriptionWorkerCommand extends Command
 
             $separation = null;
 
+            /** @var list<\App\AudioToText\Domain\Speaker\TranscriptToken> $channelTokens */
+
+            $channelTokens = [];
+
             $result = $this->transcriber->transcribeFile(
                 $source,
                 // As persisted at enqueue. The global default is never consulted here: a job queued
@@ -297,7 +309,8 @@ final class AudioTranscriptionWorkerCommand extends Command
                 function (string $wavPath, AudioTranscriptionResult $transcription) use (
                     $job,
                     $mode,
-                    &$separation
+                    &$separation,
+                    &$channelTokens
                 ): void {
                     // The transcript is committed here, before diarization is allowed to start. From
                     // this point a crash, an OOM kill or a MemoryMax enforcement can cost the speaker
@@ -309,6 +322,13 @@ final class AudioTranscriptionWorkerCommand extends Command
                     // then report a confidence for a mapping nobody inferred. The whole stage is skipped
                     // and the job completes with no separation claimed at all.
                     if ($job->sourceRole !== null && $job->sourceRole->isProvided()) {
+                        // Nothing to discover, but something to measure. The role came from the channel
+                        // the file arrived on, so the diarizer is skipped exactly as before — and the
+                        // engine's own word timings are kept so the speaker's speech can be cut into
+                        // messages below. Without that the whole call is one bubble, which is what a
+                        // single-speaker file fed to a two-speaker diarizer produced before.
+                        $channelTokens = $transcription->tokens;
+
                         return;
                     }
 
@@ -330,7 +350,16 @@ final class AudioTranscriptionWorkerCommand extends Command
             if ($job->sourceRole !== null && $job->sourceRole->isProvided()) {
                 // Known roles: complete with the separation columns left NULL. Nothing was inferred,
                 // so nothing is claimed — not a status, not a method, and above all not a confidence.
-                $this->jobs->markCompletedWithProvidedRole($job->id, $job->sourceRole, $retained);
+                //
+                // The utterances are measured, not inferred, which is why they may be stored beside
+                // those NULLs without contradicting them: the boundaries come from the silence the
+                // engine timed, and the role from the channel the file arrived on.
+                $this->jobs->markCompletedWithProvidedRole(
+                    $job->id,
+                    $job->sourceRole,
+                    $retained,
+                    $this->channelSegments($channelTokens, $job->sourceRole),
+                );
             } else {
                 // Defensive: separate() never throws, but if the callback somehow did not run there is
                 // still a transcript to save, and saving it is more important than the split.
@@ -434,6 +463,35 @@ final class AudioTranscriptionWorkerCommand extends Command
                 'error_message' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * One speaker's utterances, encoded for `speaker_segments` — or null when they cannot be measured.
+     *
+     * Null is a real answer, not a failure: an engine that returned no usable word timings gives nothing
+     * to cut on, and the job completes with one transcript and no turns exactly as it did before this
+     * existed. Guessing boundaries from punctuation would dress an assumption as a measurement.
+     *
+     * @param list<TranscriptToken> $tokens
+     */
+    private function channelSegments(array $tokens, SourceRole $role): ?string
+    {
+        $speakerRole = $role->speakerRole();
+
+        if ($speakerRole === null || $tokens === []) {
+            return null;
+        }
+
+        $utterances = $this->segmenter->segment($tokens, $speakerRole);
+
+        if ($utterances === []) {
+            return null;
+        }
+
+        return json_encode(
+            array_map(static fn(SpeakerUtterance $u): array => $u->toArray(), $utterances),
+            JSON_THROW_ON_ERROR,
+        );
     }
 
     /**

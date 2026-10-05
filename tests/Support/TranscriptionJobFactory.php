@@ -116,6 +116,52 @@ final class TranscriptionJobFactory
         );
     }
 
+    /**
+     * One deterministic channel of an Order58 call — a Caller or a Callee file, transcribed alone.
+     *
+     * The shape {@see \App\Shared\Audio\RecordingProcessingPolicy} now produces and
+     * `markCompletedWithProvidedRole()` now writes: the role was declared by the importer rather than
+     * inferred, so every separation column stays NULL and `roles_confirmed_at` is never set — but
+     * `speaker_segments` **is** populated, by the utterance segmenter, because a single speaker still
+     * pauses between messages.
+     *
+     * That last part is what distinguishes it from {@see separateRecording()}, which models a legacy
+     * manual half and has no segments at all. A combined projection needs the segments, so it needs
+     * this.
+     *
+     * @param list<array{start_ms?: int, end_ms?: int, speaker?: string, role: string, text: string, confidence?: float}>|null $segments
+     * @param list<array{start_ms?: int, end_ms?: int, speaker?: string, role: string, text: string, confidence?: float}>|null $reviewedSegments
+     */
+    public static function channelRecording(
+        SourceRole $role,
+        ?array $segments = null,
+        ?array $reviewedSegments = null,
+        ?string $transcript = 'one side of the call',
+        JobStatus $status = JobStatus::COMPLETED,
+        int $id = 1,
+        string $publicId = 'c2874477e25adc345cf8f5f399afddb1',
+        int $conversationId = 42,
+        int $reviewCount = 0,
+    ): TranscriptionJob {
+        return self::build(
+            id: $id,
+            publicId: $publicId,
+            status: $status,
+            transcript: $transcript,
+            agentText: $role === SourceRole::Agent ? $transcript : null,
+            customerText: $role === SourceRole::Customer ? $transcript : null,
+            segmentsJson: $segments === null ? null : (string) json_encode($segments),
+            separationStatus: null,
+            reviewedSegmentsJson: $reviewedSegments === null ? null : (string) json_encode($reviewedSegments),
+            reviewedAgentText: null,
+            reviewedCustomerText: null,
+            rolesConfirmedAt: null,
+            reviewCount: $reviewCount,
+            sourceRole: $role,
+            conversationId: $conversationId,
+        );
+    }
+
     private static function build(
         int $id,
         string $publicId,

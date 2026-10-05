@@ -1259,6 +1259,10 @@ window.KFReviewTurns = (function () {
         parts.hint.value = '';
         parts.role.value = turn.getAttribute('data-a2t-target-role') || '';
         parts.form.setAttribute('action', turn.getAttribute('data-a2t-move-url') || '');
+        // The version of the row this was opened on, so the confirmation locks against the recording
+        // that owns the message rather than against whatever the dialog last read. Empty on a single
+        // recording's page, where there is one version and the caller already has it.
+        parts.form.setAttribute('data-a2t-version', turn.getAttribute('data-a2t-version') || '');
 
         parts.preview.textContent = text;
         parts.from.textContent = turn.getAttribute('data-a2t-label') || '';
@@ -1277,11 +1281,28 @@ window.KFReviewTurns = (function () {
         return true;
     }
 
+    /**
+     * The message beside this one **inside the recording that owns it**.
+     *
+     * On a single recording's page that is simply the bubble above or below, and `data-a2t-owner` is
+     * absent, so the lookup is unchanged. In a combined conversation two transcriptions are interleaved:
+     * both number their messages from zero, so index 1 exists twice, and the bubble above a message on
+     * screen very often belongs to the other speaker's recording. Scoping the query by owner is what
+     * makes "merge with previous" mean the same thing here as the server will do — and what stops a
+     * merge preview showing two messages that are never going to be joined.
+     */
     function neighbourOf(root, turn, direction) {
         var index = parseInt(turn.getAttribute('data-a2t-turn'), 10);
         var wanted = direction === 'previous' ? index - 1 : index + 1;
+        var owner = turn.getAttribute('data-a2t-owner');
 
-        return root.querySelector('[data-a2t-turn="' + wanted + '"]');
+        if (owner === null) {
+            return root.querySelector('[data-a2t-turn="' + wanted + '"]');
+        }
+
+        return root.querySelector(
+            '[data-a2t-owner="' + owner + '"][data-a2t-turn="' + wanted + '"]'
+        );
     }
 
     /**
@@ -1310,6 +1331,7 @@ window.KFReviewTurns = (function () {
 
         parts.direction.value = direction;
         parts.form.setAttribute('action', turn.getAttribute('data-a2t-merge-url') || '');
+        parts.form.setAttribute('data-a2t-version', turn.getAttribute('data-a2t-version') || '');
 
         parts.start.disabled = range === null;
         parts.end.disabled = range === null;

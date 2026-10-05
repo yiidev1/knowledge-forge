@@ -63,6 +63,14 @@ final readonly class ReviewConversationService
          */
         private TtsGenerationService $aiAudio,
         private AudioConversationRepositoryInterface $conversations,
+        /**
+         * Whether a recording's speaker was declared rather than discovered.
+         *
+         * Consulted by {@see apply()} for one operation only: a MOVE on a single-speaker channel. The
+         * screens already withhold that control, and this is what makes the rule the service's rather
+         * than the template's — a crafted POST does not need a button.
+         */
+        private RecordingVoiceReader $voices,
         private LoggerInterface $logger,
     ) {}
 
@@ -353,6 +361,19 @@ final readonly class ReviewConversationService
         callable $change,
     ): void {
         $job = $this->load($publicId);
+
+        // A recording that holds one declared speaker has nobody to move a message to, and "which
+        // speaker said this" is not a judgement on such a file — it is which file the words arrived in.
+        // Checked for MOVE alone: correcting the wording, splitting a message and joining two of them
+        // are all meaningful on a single-speaker channel, and all stay available.
+        if ($operation === ReviewOperation::Move) {
+            $voice = $this->voices->for($job);
+
+            if ($voice !== null) {
+                throw ReviewRejected::speakerIsDeclared($voice->label);
+            }
+        }
+
         $current = $this->currentTurns($job);
 
         if ($current->isEmpty()) {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Application\RecordingVoiceReader;
+use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Application\Tts\TtsScriptBuilder;
@@ -16,6 +17,7 @@ use App\AudioToText\Application\ReviewConversationService;
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
 use App\AudioToText\Domain\Exception\ReviewConflict;
 use App\AudioToText\Domain\Exception\ReviewRejected;
+use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\Speaker\ConversationView;
 use App\AudioToText\Infrastructure\DbSegmentRevisionRepository;
@@ -90,10 +92,19 @@ final class ReviewConversationServiceTest extends Unit
                 new TtsScriptBuilder(
                     $this->effective,
                     new RecordingVoiceReader(new DbAudioConversationRepository($this->connection)),
+                    new CombinedConversationReader(
+                        new DbAudioConversationRepository($this->connection),
+                        $this->jobs,
+                        $this->effective,
+                    ),
                 ),
                 AudioToTextSettingsFactory::create(),
             ),
             new DbAudioConversationRepository($this->connection),
+            // The real reader. These conversations declare no recording type and no source role, so it
+            // answers "no declared speaker" for every one of them and the MOVE guard stays out of the
+            // way — which is the behaviour a legacy mixed recording must keep.
+            new RecordingVoiceReader(new DbAudioConversationRepository($this->connection)),
             new NullLogger(),
         );
 
@@ -419,11 +430,101 @@ final class ReviewConversationServiceTest extends Unit
         return $row;
     }
 
+    /**
+     * A deterministic channel refuses MOVE, and refuses it in the service rather than on the screen.
+     *
+     * The screens already withhold the control — a recording with a named speaker has nowhere to move a
+     * message to — but withholding a button is not a rule, and this endpoint is reachable by POST. A
+     * Caller file holds one person: which speaker said a sentence in it is not a judgement anybody can
+     * revise, it is which file the words arrived in.
+     */
+    public function testADeclaredChannelRefusesAMoveHoweverItIsAsked(): void
+    {
+        $publicId = $this->seed(sourceRole: 'CUSTOMER');
+
+        foreach (
+            [
+                fn(): mixed => $this->service->moveToAgent($publicId, $this->adminId, 0, 0),
+                fn(): mixed => $this->service->moveToCustomer($publicId, $this->adminId, 1, 0),
+                fn(): mixed => $this->service->moveText(
+                    $publicId,
+                    $this->adminId,
+                    0,
+                    'Yes. For pikup',
+                    SpeakerRole::AGENT,
+                    null,
+                    0,
+                ),
+            ] as $attempt
+        ) {
+            $refused = false;
+
+            try {
+                $attempt();
+            } catch (ReviewRejected) {
+                $refused = true;
+            }
+
+            self::assertTrue($refused, 'every route into MOVE must refuse a declared channel');
+        }
+
+        // And nothing was written: no reviewed layer, no revision, no version bump.
+        $job = $this->jobs->findByPublicId($publicId);
+
+        self::assertNotNull($job);
+        self::assertFalse($job->isReviewed());
+        self::assertSame(0, $job->reviewCount);
+        self::assertSame([], $this->revisions->forJob($job->id));
+    }
+
+    /**
+     * The operations that stay available on a declared channel, because they still mean something.
+     *
+     * A single speaker's transcript can be misheard, and its message boundaries can be in the wrong
+     * place — correcting the wording, splitting a message and joining two of them are all meaningful.
+     * Only "who said this" is not.
+     */
+    public function testADeclaredChannelStillAllowsTheWordingToBeCorrected(): void
+    {
+        $publicId = $this->seed(sourceRole: 'CUSTOMER');
+
+        $this->service->editText($publicId, $this->adminId, 0, 'Yes. For pickup', 0);
+
+        $job = $this->jobs->findByPublicId($publicId);
+
+        self::assertNotNull($job);
+        self::assertTrue($job->isReviewed());
+        self::assertSame(
+            'Yes. For pickup',
+            $this->effective->for($job)->utterances[0]->text ?? null,
+        );
+    }
+
+    /** A legacy mixed recording keeps MOVE exactly as it had it. */
+    public function testAMixedRecordingStillAllowsAMove(): void
+    {
+        $publicId = $this->seed();
+
+        $this->service->moveToAgent($publicId, $this->adminId, 0, 0);
+
+        $job = $this->jobs->findByPublicId($publicId);
+
+        self::assertNotNull($job);
+        self::assertTrue($job->isReviewed());
+    }
+
     private function seed(
         string $status = 'COMPLETED',
         string $separation = 'COMPLETED',
         ?string $agentText = 'or delivery?',
         ?string $customerText = 'Yes. For pikup',
+        /**
+         * Whose words the file holds, when the upload declared it.
+         *
+         * Null is a mixed recording, which is what every other test here uses. A value makes it a
+         * deterministic channel, and that is what the MOVE guard reads.
+         */
+        ?string $sourceRole = null,
     ): string {
         $publicId = bin2hex(random_bytes(16));
         $this->createdPublicIds[] = $publicId;
@@ -450,6 +551,7 @@ final class ReviewConversationServiceTest extends Unit
             'customer_text' => $customerText,
             'speaker_segments' => json_encode($segments),
             'speaker_separation_status' => $separation,
+            'source_role' => $sourceRole,
             'created_at' => '2026-08-31 10:00:00',
             'completed_at' => $status === 'COMPLETED' ? '2026-08-31 10:05:00' : null,
         ])->execute();

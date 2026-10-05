@@ -118,6 +118,26 @@ final class ReviewRejected extends RuntimeException
         );
     }
 
+    /**
+     * Moving a message between speakers, on a recording that holds only one of them.
+     *
+     * A deterministic Customer or Agent channel is a file containing one person. Which speaker a
+     * message belongs to is therefore not a judgement anybody can revise — it is which file the words
+     * arrived in — and there is no second speaker on the recording to move anything to.
+     *
+     * Refused in the service rather than only withheld by the screens, because the screens withhold it
+     * by not drawing a button and a crafted POST does not need one. The wording names the file rather
+     * than the control, since that is the fact that makes the operation meaningless.
+     */
+    public static function speakerIsDeclared(string $speaker): self
+    {
+        return new self(sprintf(
+            'This recording holds only the %s, so its messages cannot be reassigned to another '
+            . 'speaker. Correct the wording instead, or open the mixed recording of this call.',
+            $speaker,
+        ));
+    }
+
     public static function nothingToRevert(): self
     {
         return new self('This conversation has no corrections to undo.');

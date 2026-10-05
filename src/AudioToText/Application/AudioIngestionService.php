@@ -10,6 +10,7 @@ use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\Shared\Audio\AudioIngestionOutcome;
+use App\Shared\Audio\RecordingProcessingPolicy;
 use App\Shared\Audio\AudioIngestionPortInterface;
 use HttpSoft\Message\UploadedFile;
 use Psr\Http\Message\UploadedFileInterface;
@@ -83,12 +84,32 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
             return IngestionResult::rejected($problems);
         }
 
-        // One file, one recording — the shape every modern upload has. SEPARATE is the legacy pair and is
-        // not reachable from here; see the class docblock.
+        // One file, one recording. Whose words it holds — a side of the call, or both — is decided by
+        // the policy rather than here, so the importer and the manual upload form cannot drift into two
+        // opinions about which channel is the customer.
+        $policy = RecordingProcessingPolicy::decide($recordingType->value, $transcribe);
+
+        $role = SourceRole::fromStorage($policy->sourceRole) ?? SourceRole::Common;
+
+        // "Generate clean AI audio **after transcription**" is what the checkbox says, and a recording
+        // nothing will transcribe has no transcription for it to happen after. Dropped here rather than
+        // withheld by a form, because this is the seam every upload passes through — the store page's
+        // own form, the Update Audio dialog and the Order58 importer alike — so no shape of request can
+        // record an intent that will never be honoured and that an administrator would reasonably read
+        // as "audio is coming".
+        //
+        // It takes nothing away: a mixed recording's AI audio is generated from the conversation its two
+        // channels hold, on request, from the Details dialog.
+        $generateAiAudio = $generateAiAudio && $policy->transcribe;
+
         return IngestionResult::queued($this->queue->enqueueConversation(
+            // COMMON whatever side this file holds: the mode describes the SHAPE of the upload, and one
+            // file is one child. SEPARATE means a Customer file and an Agent file arriving together,
+            // which is a different upload with two children and its own screens — passing it here for a
+            // single channel is what made every caller import look for a second file that never existed.
             ConversationMode::Common,
             $storeSourceId,
-            [SourceRole::Common->value => $file],
+            [$role->value => $file],
             $adminUserId,
             $provider,
             $generateAiAudio,
@@ -96,7 +117,11 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
             $orderId,
             $callSessionId,
             $callTimeRaw,
-            $transcribe,
+            $policy->transcribe,
+            // The child's own role. For a mixed recording this is COMMON and changes nothing; for a
+            // caller or callee it is the declared side, and it is the single fact that makes the
+            // deterministic pipeline reachable at all.
+            $role,
         ));
     }
 

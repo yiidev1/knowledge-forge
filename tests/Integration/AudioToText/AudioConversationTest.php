@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Application\AudioIngestionService;
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\AudioUploadValidator;
 use App\AudioToText\Application\QueuedAudioStorage;
 use App\AudioToText\Application\TranscriptionQueue;
 use App\AudioToText\Domain\AudioTranscriptionException;
@@ -34,6 +36,7 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use function bin2hex;
 use function fopen;
 use function fwrite;
+use function file_put_contents;
 use function glob;
 use function is_dir;
 use function pack;
@@ -42,6 +45,7 @@ use function random_int;
 use function rewind;
 use function rmdir;
 use function str_repeat;
+use function strtolower;
 use function strlen;
 use function sys_get_temp_dir;
 use function unlink;
@@ -478,6 +482,173 @@ final class AudioConversationTest extends Unit
         self::assertCount(2, $conversation->children);
     }
 
+    /**
+     * Every channel of an imported call, through the seam the importer actually calls.
+     *
+     * This is the end-to-end statement of the business rule, at the one boundary both the Order58
+     * importer and the manual upload form pass through. It is here rather than in a unit test because
+     * the thing that was wrong before could not be seen from the policy alone: the policy answered
+     * correctly and the row still came out transcribed.
+     *
+     * The mixed recording is audio in every shape of call. There is no sibling lookup, no ordering
+     * dependency and nothing to resolve first — which is the point: the same file gets the same answer
+     * whether it arrives alone, first or last.
+     *
+     * @dataProvider importedChannels
+     */
+    public function testEachImportedChannelIsProcessedByWhatItIs(
+        string $recordingType,
+        string $expectedRole,
+        string $expectedStatus,
+    ): void {
+        $path = $this->wavFile('channel-' . strtolower($recordingType) . '.wav');
+
+        $outcome = $this->ingestion()->ingestFile(
+            $this->storeSourceId,
+            $path,
+            $recordingType . '.wav',
+            $recordingType,
+            '16513791',
+            'WHISPER',
+            false,
+            $this->adminId,
+            '22633299',
+            '2026-10-01 01:43:12',
+            // What a transcribing batch asks for. The policy withdraws it for a mixed recording and
+            // honours it for a side, which is the whole assertion below.
+            true,
+        );
+
+        self::assertTrue($outcome->wasQueued(), $outcome->firstProblem());
+
+        @unlink($path);
+
+        $conversation = $this->conversations->findByPublicId((string) $outcome->conversationPublicId);
+        $child = $conversation?->singleChild();
+
+        self::assertNotNull($child);
+        self::assertSame($recordingType, $conversation?->recordingType?->value);
+        self::assertSame($expectedRole, $child->sourceRole->value);
+        self::assertSame($expectedStatus, $child->status->value);
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function importedChannels(): iterable
+    {
+        yield 'mixed is audio only' => ['MIXED', 'COMMON', 'NOT_REQUESTED'];
+        yield 'caller is the customer' => ['CALLER', 'CUSTOMER', 'QUEUED'];
+        yield 'callee is the agent' => ['CALLEE', 'AGENT', 'QUEUED'];
+    }
+
+    /**
+     * A deterministic channel is **one** child carrying the side the importer declared.
+     *
+     * The regression this exists for: an earlier draft read the processing policy's answer as a
+     * conversation mode, which made a caller recording a SEPARATE upload — so the enqueue went looking
+     * for a second, Agent file that an imported channel never has, and every caller and callee import
+     * failed before writing anything. One file is one child; which side it holds is the child's own
+     * fact, and it is the fact that suppresses diarization and labels every screen.
+     *
+     * Asserted against real MySQL because the shape is a database guarantee: the row has to come back
+     * with the declared role on it, not merely be asked for with one.
+     */
+    public function testADeclaredChannelIsOneChildCarryingItsSide(): void
+    {
+        foreach (
+            [
+                [RecordingType::Caller, SourceRole::Customer],
+                [RecordingType::Callee, SourceRole::Agent],
+            ] as [$type, $role]
+        ) {
+            $publicId = $this->queue()->enqueueConversation(
+                ConversationMode::Common,
+                $this->storeSourceId,
+                [$role->value => $this->wavUpload('channel.wav')],
+                $this->adminId,
+                TranscriptionProvider::Whisper,
+                false,
+                $type,
+                '22633299',
+                '22633299',
+                null,
+                true,
+                $role,
+            );
+
+            $conversation = $this->conversations->findByPublicId($publicId);
+
+            self::assertNotNull($conversation);
+            self::assertSame(ConversationMode::Common, $conversation->mode);
+            self::assertSame($type, $conversation->recordingType);
+            self::assertTrue($conversation->hasValidShape(), $type->value . ' is a valid one-child shape');
+            self::assertCount(1, $conversation->children);
+            self::assertNotNull($conversation->childFor($role));
+            self::assertNull(
+                $conversation->childFor(SourceRole::Common),
+                'a declared channel must not be written as a mixed recording',
+            );
+        }
+    }
+
+    /**
+     * A mixed recording of a complete group keeps its audio and asks for no transcript.
+     *
+     * NOT_REQUESTED rather than a missing row: the file is the playable original of the call, and the
+     * "Transcribe audio" button on the store page is what makes the decision recoverable if a side
+     * later turns out to be unusable.
+     */
+    public function testAMixedRecordingCanBeStoredWithoutAskingForATranscript(): void
+    {
+        $publicId = $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            RecordingType::Mixed,
+            '22633299',
+            '22633299',
+            null,
+            false,
+        );
+
+        $conversation = $this->conversations->findByPublicId($publicId);
+        $child = $conversation?->singleChild();
+
+        self::assertNotNull($child);
+        self::assertSame(JobStatus::NOT_REQUESTED, $child->status);
+        self::assertTrue($conversation?->hasValidShape());
+    }
+
+    /**
+     * A declared side may not be smuggled into a SEPARATE upload.
+     *
+     * That mode's two children are what it means, and accepting one would store half a pair as though
+     * it were whole — which would then read as a complete Customer + Agent upload on every screen.
+     */
+    public function testADeclaredSideIsRefusedForASeparateUpload(): void
+    {
+        $this->expectException(AudioTranscriptionException::class);
+
+        $this->queue()->enqueueConversation(
+            ConversationMode::Separate,
+            $this->storeSourceId,
+            [SourceRole::Customer->value => $this->wavUpload('customer.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            null,
+            null,
+            null,
+            null,
+            true,
+            SourceRole::Customer,
+        );
+    }
+
     public function testASeparateUploadCreatesOneConversationWithBothRoles(): void
     {
         $publicId = $this->queue()->enqueueConversation(
@@ -690,6 +861,11 @@ final class AudioConversationTest extends Unit
 
     // ---------------------------------------------------------------------------------- helpers
 
+    private function ingestion(): AudioIngestionService
+    {
+        return new AudioIngestionService(new AudioUploadValidator($this->settings()), $this->queue());
+    }
+
     private function queue(int $maxQueue = 0, ?int $failAfterChildren = null): TranscriptionQueue
     {
         $settings = $this->settings($maxQueue);
@@ -753,6 +929,28 @@ final class AudioConversationTest extends Unit
      * Real PCM rather than a bare header, because real ffprobe reads it and a header claiming zero
      * data bytes has no duration to report.
      */
+    /**
+     * The same WAV on disk, for the seam the Order58 importer actually uses.
+     *
+     * {@see AudioIngestionService::ingestFile()} takes a path rather than an upload, because the
+     * importer has downloaded a file rather than received one. Removed by the caller.
+     */
+    private function wavFile(string $filename): string
+    {
+        // The system temp dir, not this suite's workspace: the workspace is created lazily by the
+        // storage on its first write, and the importer's file exists before any of that happens.
+        $path = sys_get_temp_dir() . '/kf-' . bin2hex(random_bytes(6)) . '-' . $filename;
+        $samples = 2000;
+        $data = str_repeat("\0\0", $samples);
+        $bytes = 'RIFF' . pack('V', 36 + strlen($data)) . 'WAVEfmt ' . pack('V', 16)
+            . pack('v', 1) . pack('v', 1) . pack('V', 8000) . pack('V', 16000)
+            . pack('v', 2) . pack('v', 16) . 'data' . pack('V', strlen($data)) . $data;
+
+        file_put_contents($path, $bytes);
+
+        return $path;
+    }
+
     private function wavUpload(string $filename): UploadedFileInterface
     {
         $samples = 2000;

@@ -86,10 +86,27 @@ final readonly class TtsGenerationService
      *
      * Completion is required for the obvious reason — there is no transcript before it — and the roles
      * gate for the one above.
+     *
+     * ## The second route, and why it is not a loophole
+     *
+     * A deterministic call's mixed recording is deliberately never transcribed: its two channels were,
+     * each holding one declared speaker, and the mixed row keeps only the audio. It therefore sits in
+     * NOT_REQUESTED for ever and the completion gate would refuse audio for a call whose transcript is
+     * sitting right there, in two rows, already corrected.
+     *
+     * So a non-complete recording is eligible when — and only when — it speaks for a combined call that
+     * actually has words. That is not a weaker test than the first: the script exists, which means both
+     * the transcript and the roles exist, and the roles came from the importer rather than from a
+     * confidence score. Nothing else can reach this branch, because the projection answers null for
+     * every recording that is not the mixed row of a linked call.
      */
     public function isEligible(TranscriptionJob $job): bool
     {
-        return $job->status === JobStatus::COMPLETED && $this->rolesAreKnown($job);
+        if ($job->status === JobStatus::COMPLETED) {
+            return $this->rolesAreKnown($job);
+        }
+
+        return $this->scripts->combinedCallScript($job) !== null;
     }
 
     /**
@@ -164,11 +181,14 @@ final readonly class TtsGenerationService
             throw TtsException::outputNotAvailable($outputType);
         }
 
-        if ($job->status !== JobStatus::COMPLETED) {
-            throw TtsException::nothingToSpeak($outputType);
-        }
+        // One gate, so the page's offer and the endpoint's acceptance cannot disagree — including on the
+        // combined route, which is the only way a NOT_REQUESTED recording gets here. The two refusals
+        // are kept apart because they say different things to the administrator reading them.
+        if (!$this->isEligible($job)) {
+            if ($job->status !== JobStatus::COMPLETED) {
+                throw TtsException::nothingToSpeak($outputType);
+            }
 
-        if (!$this->rolesAreKnown($job)) {
             throw TtsException::rolesNotKnown();
         }
 

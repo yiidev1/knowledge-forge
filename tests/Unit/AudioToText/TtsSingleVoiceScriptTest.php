@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\AudioToText;
 
+use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\EffectiveConversationReader;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
@@ -20,6 +21,7 @@ use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Domain\Tts\TtsVoice;
 use App\Tests\Support\AudioToTextSettingsFactory;
 use App\Tests\Support\Fake\AudioToText\FixedRecordingTypes;
+use App\Tests\Support\Fake\AudioToText\JobsById;
 use App\Tests\Support\Fake\AudioToText\InMemoryTtsRenditionRepository;
 use App\Tests\Support\TranscriptionJobFactory;
 use Codeception\Test\Unit;
@@ -292,6 +294,13 @@ final class TtsSingleVoiceScriptTest extends Unit
         return new TtsScriptBuilder(
             new EffectiveConversationReader(new SpeakerSegmentsDecoder()),
             new RecordingVoiceReader(FixedRecordingTypes::everything($type)),
+            // Answers null for every recording here: none of these conversations records a call
+            // session, so none of them is one side of a deterministic call.
+            new CombinedConversationReader(
+                FixedRecordingTypes::everything($type),
+                new JobsById(),
+                new EffectiveConversationReader(new SpeakerSegmentsDecoder()),
+            ),
         );
     }
 

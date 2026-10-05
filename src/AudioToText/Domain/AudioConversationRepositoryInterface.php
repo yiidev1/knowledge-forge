@@ -114,6 +114,46 @@ interface AudioConversationRepositoryInterface
     public function confirmedMixedJobIdForCallSession(int $storeSourceId, string $callSessionId): ?int;
 
     /**
+     * Every Caller and Callee recording of one call, as job ids grouped by the side they record.
+     *
+     * The combined projection's child lookup. It returns **all** of them rather than one per side,
+     * because "how many are there" is the question that decides whether a combined conversation may be
+     * assembled at all: two recordings of the same side is a real state — the same file imported twice,
+     * or a replacement uploaded beside the original — and nothing in this application records which of
+     * them speaks for the call. Handing back a single id would resolve that silently, and the two
+     * halves of one sentence could then come from two different recordings of it.
+     *
+     * Keyed by the stored `recording_type` value, so a caller reads it with
+     * {@see RecordingType::Caller}->value rather than by position. Mixed rows are excluded: this
+     * answers what a mixed recording can borrow from, and it cannot borrow from itself. A side with no
+     * recording is absent from the result rather than present and empty.
+     *
+     * Ordered by job id within each side, so a caller that reports several has a stable order to print
+     * them in.
+     *
+     * @return array<string, list<int>>
+     */
+    public function channelJobIdsForCallSession(int $storeSourceId, string $callSessionId): array;
+
+    /**
+     * The same question for an upload that records no call session: the order is the group.
+     *
+     * Only the importer writes `call_session_id`, so every recording added by hand has none — and the
+     * store page has always grouped those by order, which is how an operator builds a Customer + Agent
+     * set for one call with the "+ Add audio" controls on a row. This is that grouping, asked of the
+     * database rather than inferred.
+     *
+     * Deliberately the **fallback**, never the primary: an order can hold more than one call, so a
+     * recording that knows which call it is of must be grouped by that and nothing else.
+     *
+     * @return array<string, list<int>>
+     */
+    public function channelJobIdsForOrder(int $storeSourceId, string $orderId): array;
+
+    /** The order one conversation belongs to, or null when the upload named none. */
+    public function orderIdFor(int $conversationId): ?string;
+
+    /**
      * Conversations that record no call session yet, with the filename their recording was uploaded as.
      *
      * For `kf:audio:link-call-sessions` and nothing else. Only rows where the column is still NULL are

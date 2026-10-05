@@ -327,6 +327,12 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
         $html .= '<span class="a2t-slot__note a2t-slot__note--ready">Ready for transcription</span>';
     }
 
+    if ($slot->isAudioOnly()) {
+        // Not "ready for" anything: this is the settled state of a mixed recording, not a step before
+        // one. The call's words live in its Customer and Agent recordings.
+        $html .= '<span class="a2t-slot__note">Audio only</span>';
+    }
+
     if ($slot->isProcessing()) {
         // The same control and the same words as a current recording's — one way of saying "this is
         // happening, and here is how to watch it", wherever the recording sits.
@@ -453,6 +459,17 @@ $slotCell = static function (
             . ' data-a2t-transcribe-duration="' . Html::encode($clock($slot->durationSeconds)) . '"'
             . ' data-a2t-transcribe-provider="' . Html::encode($globalDefault->shortLabel()) . '"'
             . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Transcribe audio</button>';
+    } elseif ($slot->isAudioOnly()) {
+        // A mixed recording: the playable original of the call, and never converted to text. Details
+        // still opens, because there is something to show — the conversation assembled from this call's
+        // Customer and Agent recordings, or, when it has none, the audio and a sentence saying so.
+        // Offering "Transcribe audio" here would offer something the endpoint refuses.
+        $html .= '<span class="a2t-slot__note">Audio only</span>'
+            . '<button class="a2t-slot__link" type="button"'
+            . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
+            . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
+            . ' data-a2t-details-label="' . Html::encode($slot->label()) . '">Details</button>';
     } elseif ($slot->status->value === 'FAILED') {
         $html .= '<span class="a2t-slot__note">Failed</span>';
     } elseif ($slot->isProcessing()) {
@@ -1006,7 +1023,7 @@ $last = min($page * $perPage, $total);
     // The one thing three cards said that one form has to say some other way. The
     // server allow-lists whatever arrives, so this is a convenience, not the control.
     ?>
-                    <div class="a2t-type-choice">
+                    <div class="a2t-type-choice" data-a2t-type-choice>
                         <?php foreach (RecordingType::cases() as $type): ?>
                             <label class="a2t-checkbox" for="a2t-type-<?= Html::encode(strtolower($type->value)) ?>">
                                 <input type="radio" name="recording_type"
@@ -1018,13 +1035,32 @@ $last = min($page * $perPage, $total);
                         <?php endforeach; ?>
                     </div>
                     <div class="field__hint">
-                        Which side of the call this file holds. Speakers are still worked out on this
-                        server for a mixed recording.
+                        Which side of the call this file holds. A Caller or Callee file holds one
+                        person, so its speaker is taken as given — the Customer or the Agent — and
+                        nothing is guessed from the audio.
+                    </div>
+                    <?php
+    // Shown for Mix / Common, hidden for the two sides. The browser toggles it; the server decides
+    // the same thing either way, so the page is describing a rule rather than setting one.
+    ?>
+                    <div class="field__hint a2t-type-note" data-a2t-mixed-note hidden>
+                        A Mix / Common file holds both people on one track, so it is stored as the
+                        playable original of the call and is not converted to text. The call's words
+                        come from its Customer and Agent recordings — upload those under the same
+                        order to build the conversation.
                     </div>
                 </div>
 
-                <?= $providerField('a2t-provider') ?>
-                <?= $aiAudioField('a2t-ai-audio') ?>
+                <?php
+    // Both of these describe what happens to a transcript, so neither applies to a Mix / Common file:
+    // nothing transcribes one. Wrapped rather than removed because the choice is made in the browser
+    // and this form has no page reload to rebuild itself on — and with scripting off the wrapper
+    // simply stays visible, which costs nothing because the server refuses the transcription anyway.
+    ?>
+                <div data-a2t-transcription-options>
+                    <?= $providerField('a2t-provider') ?>
+                    <?= $aiAudioField('a2t-ai-audio') ?>
+                </div>
 
                 <?php
                 // The same card the manual dialogs render — one file, one structure. This one names the
@@ -1071,7 +1107,14 @@ $last = min($page * $perPage, $total);
                         . 'View conversion <span aria-hidden="true">&#8599;</span></a>',
                 ]) ?>
 
-                <button class="btn btn--primary a2t-upload-submit" type="submit">Upload &amp; Transcribe</button>
+                <?php
+    // The label is a promise about what the press does, so it follows the type: a Mix / Common file is
+    // uploaded and nothing else. `data-a2t-transcribe-label` is what the script swaps.
+    ?>
+                <button class="btn btn--primary a2t-upload-submit" type="submit"
+                        data-a2t-upload-submit
+                        data-a2t-transcribe-label="Upload &amp; Transcribe"
+                        data-a2t-store-label="Upload">Upload &amp; Transcribe</button>
             </form>
         </div>
     </dialog>
@@ -1357,12 +1400,27 @@ $last = min($page * $perPage, $total);
         // falls back to the replaced recording's own engine when the field posts nothing, and re-checks
         // that the chosen one can actually run.
 ?>
-        <?= $providerField('a2t-update-provider') ?>
-        <?= $aiAudioField('a2t-update-ai-audio') ?>
+        <?php
+    // Hidden for a Mix / Common recording, which is never converted to text — so an engine for its
+    // transcript and a reading of that transcript are both settings for something that will not happen.
+    // The server answers the same either way: `ReplaceAction` goes through the one ingestion seam, and
+    // the policy there refuses a mixed recording whatever the form posts.
+?>
+        <div data-a2t-update-transcription>
+            <?= $providerField('a2t-update-provider') ?>
+            <?= $aiAudioField('a2t-update-ai-audio') ?>
 
-        <p class="field__hint">
-            Replacing this recording starts a new transcription. The recording it replaces stays in use,
-            and keeps its transcript, corrections and generated audio, until the new one finishes.
+            <p class="field__hint">
+                Replacing this recording starts a new transcription. The recording it replaces stays in
+                use, and keeps its transcript, corrections and generated audio, until the new one
+                finishes.
+            </p>
+        </div>
+
+        <p class="field__hint" data-a2t-update-audio-only hidden>
+            This is the mixed recording of the call, so it is stored as the playable original and is not
+            converted to text. Replacing it changes the audio and nothing else — the recording it
+            replaces stays in use, and any transcript it already has is left exactly as it is.
         </p>
 
         <div class="a2t-confirm__actions">

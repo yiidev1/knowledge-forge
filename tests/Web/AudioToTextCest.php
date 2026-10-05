@@ -582,7 +582,7 @@ final class AudioToTextCest
     public function aNeedsReviewSplitNeverLabelsTurnsWithARole(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
-        $publicId = $this->upload($I);
+        $publicId = $this->uploadMixed($I);
         // Roles are present in the stored segments — exactly as the mapper writes them for a result
         // that then fails the confidence gate. The status alone must suppress them.
         $this->completeJobWithSeparation($publicId, 'NEEDS_REVIEW', 0.077, $this->mappedSegments());
@@ -603,7 +603,7 @@ final class AudioToTextCest
     public function aNeedsReviewSplitPresentsItsRoleGuessAsTentative(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
-        $publicId = $this->upload($I);
+        $publicId = $this->uploadMixed($I);
         $this->completeJobWithSeparation($publicId, 'NEEDS_REVIEW', 0.077, $this->mappedSegments());
 
         $I->amOnPage('/audio-to-text/job/' . $publicId);
@@ -615,7 +615,7 @@ final class AudioToTextCest
     public function aCompletedSplitLabelsTurnsWithRoles(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
-        $publicId = $this->upload($I);
+        $publicId = $this->uploadMixed($I);
         $this->completeJobWithSeparation(
             $publicId,
             'COMPLETED',
@@ -697,17 +697,39 @@ final class AudioToTextCest
     }
 
     /**
-     * One mixed recording, uploaded from the test store's own page.
+     * One Customer recording, uploaded from the test store's own page.
      *
      * The form is addressed by its mode rather than by position: the page carries a common form and a
      * separate form, and `form:first-of-type` would silently start uploading the wrong one the day
      * they are reordered.
+     *
+     * A **Caller** file rather than a mixed one, because this suite is about the queue and a mixed
+     * recording no longer enters it: it is stored as the playable original of its call and transcribed
+     * never. Only a file that names a side is queued, so only a file that names a side can exercise
+     * admission, position, status and the processing limit.
      */
+    /**
+     * One mixed recording, for the screens that are about telling two speakers apart.
+     *
+     * Uploaded as audio — nothing transcribes a mixed recording any more — and then completed directly
+     * by the helpers below, which is exactly the historical row these tests describe: a call that was
+     * diarized when diarizing mixed recordings was what this application did. Those rows still exist,
+     * still render, and the publish gate still governs what may be claimed about them.
+     */
+    private function uploadMixed(WebTester $I): string
+    {
+        $I->amOnPage(self::STORE_URL);
+        $I->attachFile('#a2t-audio', 'kf_audio_valid.wav');
+        $I->submitForm('#a2t-upload-form', ['recording_type' => 'MIXED']);
+
+        return $this->newestPublicId();
+    }
+
     private function upload(WebTester $I): string
     {
         $I->amOnPage(self::STORE_URL);
         $I->attachFile('#a2t-audio', 'kf_audio_valid.wav');
-        $I->submitForm('#a2t-upload-form', []);
+        $I->submitForm('#a2t-upload-form', ['recording_type' => 'CALLER']);
 
         return $this->newestPublicId();
     }

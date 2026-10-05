@@ -27,7 +27,7 @@ use function count;
  */
 final class LinkedConversations implements AudioConversationRepositoryInterface
 {
-    /** @var array<int, array{store: int|null, type: ?RecordingType, session: ?string, jobId: int, confirmed: bool}> */
+    /** @var array<int, array{store: int|null, type: ?RecordingType, session: ?string, order: ?string, jobId: int, confirmed: bool}> */
     private array $rows = [];
 
     /** Every call to {@see recordCallSession()}, in order, so the backfill's writes can be asserted. */
@@ -40,11 +40,14 @@ final class LinkedConversations implements AudioConversationRepositoryInterface
         int $jobId = 0,
         bool $rolesConfirmed = false,
         ?int $storeSourceId = 831,
+        /** The order this upload named, which is the grouping a manual upload has instead of a call. */
+        ?string $orderId = null,
     ): self {
         $this->rows[$conversationId] = [
             'store' => $storeSourceId,
             'type' => $type,
             'session' => $callSessionId,
+            'order' => $orderId,
             'jobId' => $jobId,
             'confirmed' => $rolesConfirmed,
         ];
@@ -89,6 +92,49 @@ final class LinkedConversations implements AudioConversationRepositoryInterface
         }
 
         return count($found) === 1 ? $found[0] : null;
+    }
+
+    /**
+     * Every Caller and Callee recording of one call, grouped by side — computed, not stubbed.
+     *
+     * Built from the rows the same way the SQL builds it, so a test says "this call has two Caller
+     * recordings" by adding a second row rather than by asserting the answer the reader is on trial for.
+     */
+    public function channelJobIdsForCallSession(int $storeSourceId, string $callSessionId): array
+    {
+        return $this->channelJobIds($storeSourceId, 'session', $callSessionId);
+    }
+
+    public function channelJobIdsForOrder(int $storeSourceId, string $orderId): array
+    {
+        return $this->channelJobIds($storeSourceId, 'order', $orderId);
+    }
+
+    public function orderIdFor(int $conversationId): ?string
+    {
+        return $this->rows[$conversationId]['order'] ?? null;
+    }
+
+    /**
+     * @return array<string, list<int>>
+     */
+    private function channelJobIds(int $storeSourceId, string $key, string $value): array
+    {
+        $grouped = [];
+
+        foreach ($this->rows as $row) {
+            if ($row['store'] !== $storeSourceId || ($row[$key] ?? null) !== $value) {
+                continue;
+            }
+
+            if ($row['type'] !== RecordingType::Caller && $row['type'] !== RecordingType::Callee) {
+                continue;
+            }
+
+            $grouped[$row['type']->value][] = $row['jobId'];
+        }
+
+        return $grouped;
     }
 
     public function recordCallSession(int $conversationId, string $callSessionId): bool

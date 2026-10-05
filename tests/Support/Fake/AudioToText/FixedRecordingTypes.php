@@ -50,14 +50,38 @@ final class FixedRecordingTypes implements AudioConversationRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
+    /**
+     * Null, which is the fact rather than a convenience.
+     *
+     * These conversations were never linked to a provider call session — only the Order58 importer
+     * writes that column — so the combined projection cannot apply to them, and it asks this question
+     * second. Throwing here would make it impossible to build a script for a mixed recording at all,
+     * which is most of what this fake exists for.
+     */
     public function callSessionFor(int $conversationId): ?string
     {
-        throw new RuntimeException('Not used by these tests.');
+        return null;
     }
 
     public function confirmedMixedJobIdForCallSession(int $storeSourceId, string $callSessionId): ?int
     {
         throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function channelJobIdsForCallSession(int $storeSourceId, string $callSessionId): array
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    public function channelJobIdsForOrder(int $storeSourceId, string $orderId): array
+    {
+        throw new RuntimeException('Not used by these tests.');
+    }
+
+    /** Null, like the call session beside it: these conversations name no order either. */
+    public function orderIdFor(int $conversationId): ?string
+    {
+        return null;
     }
 
     public function unlinkedForCallSessionBackfill(int $limit): array
@@ -85,9 +109,16 @@ final class FixedRecordingTypes implements AudioConversationRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
+    /**
+     * Null, like the call session and the order beside it.
+     *
+     * These conversations belong to no store, which is the fact: they are built to exercise which voice
+     * a declared recording type selects, and a recording with no store can be no side of anybody's call.
+     * Throwing would make it impossible to build a script for a mixed recording at all.
+     */
     public function storeSourceIdFor(int $conversationId): ?int
     {
-        throw new RuntimeException('Not used by these tests.');
+        return null;
     }
 
     public function publicIdFor(int $conversationId): ?string

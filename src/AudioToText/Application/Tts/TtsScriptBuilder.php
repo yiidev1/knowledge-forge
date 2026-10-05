@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Application\Tts;
 
+use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\EffectiveConversationReader;
+use App\AudioToText\Domain\Speaker\CombinedTurn;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\TranscriptionJob;
@@ -46,6 +48,14 @@ final readonly class TtsScriptBuilder
     public function __construct(
         private EffectiveConversationReader $effective,
         private RecordingVoiceReader $voices,
+        /**
+         * The two channel recordings a deterministic call's mixed row speaks for.
+         *
+         * Null for every other recording, so the three paths below are reached exactly as before. It
+         * reads through the same effective-conversation authority this class already uses, which is
+         * what makes a correction on either side change what the generated audio says.
+         */
+        private CombinedConversationReader $combined,
     ) {}
 
     /**
@@ -67,9 +77,61 @@ final readonly class TtsScriptBuilder
             return $this->singleVoice($job, $voice);
         }
 
+        // A deterministic call's mixed recording holds no transcript of its own — the two channels do,
+        // and they were never diarized because the attribution arrived with the files. Asked before the
+        // three paths below because there is nothing for them to read: `speaker_segments` is NULL and
+        // `transcript` is NULL on such a row, so `mixed()` would hand back an empty script and the page
+        // would report a call with words in it as having nothing to say.
+        $combined = $this->combinedCallScript($job);
+
+        if ($combined !== null) {
+            return $combined;
+        }
+
         return $outputType === TtsOutputType::Mixed
             ? $this->mixed($job)
             : $this->singleRole($job, $outputType === TtsOutputType::Agent ? SpeakerRole::AGENT : SpeakerRole::CUSTOMER);
+    }
+
+    /**
+     * What a deterministic call's mixed recording says, or null when it is not one.
+     *
+     * ## Why the digest comes out right for free
+     *
+     * {@see TtsSourceDigest} hashes the ordered (role, text) pairs of exactly this script. Both sides'
+     * words are in it, read through the effective layer, so correcting a sentence on **either** channel
+     * changes the script, changes the digest, and makes the existing audio report itself stale — with no
+     * rule about children anywhere in the digest, and nothing reading the mixed row's own
+     * `review_count`, which is a counter on a row that holds no words.
+     *
+     * The order is the projection's order, so the voices alternate the way the call did. A turn whose
+     * role is neither Agent nor Customer cannot occur: a channel's turns carry the role its file
+     * declared, and that is one of the two by construction.
+     *
+     * Public because {@see \App\AudioToText\Application\Tts\TtsGenerationService::isEligible()} asks
+     * the same question — a mixed row of a deterministic call is NOT_REQUESTED, so the completion gate
+     * would otherwise refuse audio for a call whose transcript is sitting right there.
+     */
+    public function combinedCallScript(TranscriptionJob $job): ?TtsScript
+    {
+        $combined = $this->combined->for($job);
+
+        if ($combined === null || $combined->isEmpty()) {
+            return null;
+        }
+
+        $utterances = [];
+
+        foreach ($combined->turns as $turn) {
+            /** @var CombinedTurn $turn */
+            $text = TtsSourceText::prepare($turn->text);
+
+            if ($text !== '') {
+                $utterances[] = new TtsUtterance($turn->role, $text);
+            }
+        }
+
+        return $utterances === [] ? null : new TtsScript($utterances);
     }
 
     /** The voice this recording declared, or null where it holds a conversation. */
