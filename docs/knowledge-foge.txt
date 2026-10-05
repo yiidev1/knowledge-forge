@@ -5,12 +5,23 @@ KNOWLEDGE FORGE - COMPLETE A-TO-Z TECHNICAL DOCUMENTATION
 Written for   : a developer who has never worked on this codebase before, and for the
                 developer who has to debug or extend it at 2am.
 Date written  : 2026-09-28
+Last revised  : 2026-10-05  - the DETERMINISTIC CALL ARCHITECTURE landed. See section 23
+                for the whole change, and read it BEFORE sections 10.6, 11.1-11.4, 11.7
+                and 11.8, every one of which was revised by it. Revised passages are
+                marked [REVISED 2026-10-05] so you can tell what moved.
 Method        : deep audit of the working tree. SOURCE CODE IS THE SOURCE OF TRUTH.
                 Existing documents were read only as supporting material; where they
                 disagree with the code, the code is documented and the conflict is
                 named explicitly (section 3.4).
 Scope         : the whole application - 16 modules, 137 routes, 33 tables,
                 19 console commands, 6 external systems.
+
+STATE OF THE 2026-10-05 CHANGE SET
+                Implemented, tested and green in the working tree. NOT committed, NOT
+                pushed, NOT deployed. Production is still running the behaviour this
+                document described on 2026-09-28. If you are reading this to understand
+                the PRODUCTION system, read sections 10-11 as written and treat section
+                22 as what is about to arrive.
 
 
 --------------------------------------------------------------------------------------
@@ -285,6 +296,46 @@ INV-17 THERE MUST BE EXACTLY ONE EXTERNAL SCHEDULER PER WORKER.
        worker. Running a worker without `--once` turns it into a daemon that holds its
        lock forever and makes every scheduled tick skip. [CODE]
 
+
+INV-18 A MIXED RECORDING IS NEVER TRANSCRIBED.          [NEW 2026-10-05]
+       Only a file that names ONE side of a call - CALLER or CALLEE - is converted to
+       text. A mixed recording holds two people on one track; it is stored as the
+       playable original of the call and nothing else. A call whose two sides were never
+       recorded therefore has NO TRANSCRIPT AT ALL, and that is the accepted outcome.
+       Why: the alternative is a two-speaker diarizer guessing which of two voices is
+       the agent, which is the error this architecture exists to stop making. An earlier
+       draft made this conditional on whether the sides existed; that meant the
+       behaviour an operator saw depended on which recordings a call happened to have.
+       SIBLING AVAILABILITY DOES NOT DECIDE HOW A FILE IS PROCESSED. WHAT THE FILE IS
+       DECIDES IT.
+       Owner: `src/Shared/Audio/RecordingProcessingPolicy.php` - one class, two public
+       methods, and the only place the rule is written down.
+       Enforced by: `tests/Unit/Shared/RecordingProcessingPolicyTest.php`,
+       `tests/Unit/Order58/CallGroupProcessingPolicyTest.php`,
+       `tests/Integration/AudioToText/AudioConversationTest.php` [CODE]
+
+INV-19 A PROJECTED TURN IS ADDRESSED BY ITS OWNER, NEVER BY ITS POSITION. [NEW 2026-10-05]
+       The mixed recording's Details dialog shows a conversation assembled from the two
+       channel recordings. Every message in it carries three things: the public id of
+       the job that owns it, its index INSIDE THAT JOB'S OWN TURN LIST, and that job's
+       `review_count`. The combined display position is never any part of an edit.
+       Why: the two sides are interleaved by timestamp, so visual position and
+       owner-local index disagree for most messages of most calls. Observed on live
+       data: visual #4 was Customer local 1 and visual #6 was Agent local 4 in the same
+       thread. An edit composed from the display position would silently overwrite a
+       different sentence, in the other speaker's words, with no error anywhere.
+       Enforced by: `tests/Unit/AudioToText/CombinedConversationReaderTest.php`,
+       `tests/Web/AudioToTextCombinedDetailsCest.php`,
+       `tests/Unit/AudioToText/CombinedTurnOwnershipInBrowserTest.php` [CODE]
+
+INV-20 THE PROJECTION OWNS NO ROWS AND COPIES NOTHING.   [NEW 2026-10-05]
+       `CombinedConversation` is read on every request from the two child jobs through
+       the existing effective-conversation reader. Nothing is written to the mixed row,
+       no transcript is duplicated into it, and there is no synchronisation job.
+       Why: one copy of each message means a correction appears on both screens on the
+       next read, and there is nothing that can drift. It is the mirror image of
+       `SharedConversationReader`, which runs the other way for a LEGACY call - see
+       23.4 for why the direction depends on where the attribution came from. [CODE]
 
 --------------------------------------------------------------------------------------
 3. TECHNOLOGY STACK
@@ -3054,10 +3105,33 @@ All 19 classes on disk are registered - there are no orphan commands.
       Mixed -> 'MIXED'   Caller -> 'CALLER'   Callee -> 'CALLEE'
     written out rather than shared, because the two modules may not name each other's
     enums. They happen to agree on all three names.
-    CALLER IS NEVER REWRITTEN AS "CUSTOMER". It cannot be, because nothing in this path
-    produces a speaker role at all: every conversation is enqueued with mode=COMMON and
-    source_role=COMMON. Who spoke is decided later, by diarization, and confirmed by a
-    human [CODE].
+
+  WHO SPOKE - AND THIS REVERSED ON 2026-10-05       [REVISED 2026-10-05]
+
+    WHAT THIS SECTION SAID BEFORE, and it is worth keeping because the reasoning was
+    sound at the time:
+
+      "CALLER IS NEVER REWRITTEN AS 'CUSTOMER'. It cannot be, because nothing in this
+       path produces a speaker role at all: every conversation is enqueued with
+       mode=COMMON and source_role=COMMON. Who spoke is decided later, by diarization,
+       and confirmed by a human."
+
+    THAT IS NO LONGER TRUE, and the reversal was deliberate rather than a drift.
+    `CALLER = CUSTOMER` and `CALLEE = AGENT` is now an asserted business rule for this
+    integration. It is a decision about the product, not something the audio proves, and
+    it had been withheld from the pipeline on exactly that ground.
+
+    WHY IT WAS WITHHELD, AND WHY THAT WAS WRONG: withholding it meant a single-speaker
+    file was handed to a two-speaker diarizer, which - correctly - found one cluster and
+    produced ONE SEGMENT SPANNING THE WHOLE CALL. A four-minute recording arrived as one
+    bubble. The caution cost the feature its usefulness and bought nothing, because the
+    channel the provider delivered already names the side.
+
+    The mapping now lives in ONE place, `src/Shared/Audio/RecordingProcessingPolicy.php`,
+    and the importer passes the channel to it rather than deciding anything itself.
+    Scattering it across an importer, a controller and a template is how two of them end
+    up disagreeing, and a disagreement about which side is the customer is not a bug
+    anybody notices quickly [CODE]. See INV-18 and section 23.
 
 10.7 QUEUE BACK-PRESSURE
 
@@ -3110,22 +3184,54 @@ All 19 classes on disk are registered - there are no orphan commands.
 11. AUDIO-TO-TEXT - COMPLETE PIPELINE
 --------------------------------------------------------------------------------------
 
-11.1 THE TWO UPLOAD SHAPES
+11.1 THE TWO UPLOAD SHAPES                              [REVISED 2026-10-05]
 
-  COMMON / MIXED   one file containing both people. The pipeline works out who is
-                   speaking. This is what Order58 imports always produce.
-  SEPARATE         two files, customer and agent, already split at source. Speaker
-                   attribution is known, so there is nothing to diarize and nothing to
-                   correct. This is the LEGACY pair shape and is not reachable from the
+  THE SHAPE OF AN UPLOAD IS NOT THE SAME QUESTION AS WHAT IS DONE WITH IT. Read this
+  section for the shape, then section 23 for the processing rule, which changed.
+
+  COMMON / MIXED   ONE file. The conversation has one child.
+  SEPARATE         TWO files, customer and agent, uploaded together. The conversation
+                   has two children. LEGACY manual pair shape; never reachable from the
                    Order58 import path [CODE].
 
   ConversationMode = COMMON | SEPARATE
   SourceRole       = COMMON | CUSTOMER | AGENT
 
-11.2 STATUS LIFECYCLE
+  WHAT CHANGED ON 2026-10-05, and it is easy to misread:
+
+    A CALLER or CALLEE recording is still ONE file, so it is still a COMMON-mode
+    conversation with ONE child. What changed is that the child now carries
+    `source_role = CUSTOMER` or `AGENT` instead of `COMMON`.
+
+    DO NOT reach for ConversationMode::SEPARATE for a single channel. That mode means
+    "a Customer file and an Agent file arrived together", its `childRoles()` returns
+    BOTH roles, and the enqueue goes looking for a second file a channel import never
+    has. An earlier draft of this change did exactly that and every caller and callee
+    import failed before writing anything [CODE, section 23.9].
+
+    The mode describes the SHAPE. `source_role` describes WHOSE WORDS THE FILE HOLDS,
+    and it is the column everything downstream actually reads.
+
+  THE OLD TEXT SAID: "COMMON / MIXED - the pipeline works out who is speaking. This is
+  what Order58 imports always produce." Both halves are now wrong. Order58 imports
+  produce three recordings per call, and the pipeline works out who is speaking for
+  NONE of them - see INV-18.
+
+11.2 STATUS LIFECYCLE                                   [REVISED 2026-10-05]
 
   audio_transcription_jobs.status  (JobStatus)
       QUEUED -> PROCESSING -> COMPLETED | FAILED
+      NOT_REQUESTED                       - a terminal state OFF that line entirely
+
+  NOT_REQUESTED IS SUCCESS, NOT A WAITING ROOM. It sits in neither `activeValues()` nor
+  `terminalValues()`, which is what makes it invisible to the claim query, the queue
+  limit, the orphan sweep and the retention purge at once. Two recordings reach it:
+    - a channel downloaded without a transcript being asked for (Call Recordings page),
+      which an operator can still ask for later;
+    - EVERY mixed recording created since 2026-10-05, for which it is the FINAL state
+      and no button will ever move it (INV-18).
+  A reader - or a poller - that treats NOT_REQUESTED as "incomplete" will wait forever.
+  Section 23.7 is the bug that was.
 
   audio_conversations.status  (ConversationStatus) - DERIVED from its children
       QUEUED | PROCESSING | COMPLETED | PARTIALLY_COMPLETED | FAILED
@@ -3136,10 +3242,21 @@ All 19 classes on disk are registered - there are no orphan commands.
   audio_transcription_jobs speaker separation  (SpeakerSeparationStatus)
       PENDING | PROCESSING | COMPLETED | NEEDS_REVIEW | FAILED | NOT_SUPPORTED
 
-11.3 THE WORKER'S JOB SEQUENCE
+11.3 THE WORKER'S JOB SEQUENCE                          [REVISED 2026-10-05]
 
   claim (conditional UPDATE) -> CONVERTING (ffmpeg normalise) -> TRANSCRIBING
   -> [DIARIZING -> MAPPING_SPEAKERS] -> SAVING -> COMPLETED
+
+  THE DIARIZATION STAGE IS SKIPPED ENTIRELY for a job whose `source_role` is CUSTOMER or
+  AGENT. The worker short-circuits immediately after transcription
+  (`AudioTranscriptionWorkerCommand`, the `$job->sourceRole?->isProvided()` branch) and
+  completes with EVERY separation column left NULL - nothing was inferred, so nothing is
+  claimed. In its place the token stream goes through
+  `SingleSpeakerUtteranceSegmenter`, which cuts one speaker into messages using the
+  silence the engine already measured. See 22.5.
+
+  NOTE WHAT THE GATE READS: the JOB's `source_role`, never the conversation's mode. That
+  is why a single channel can be a COMMON-mode conversation and still skip diarization.
 
   The stages run SEQUENTIALLY inside one job, so the memory peak is
   max(whisper, diarization) + ~60 MB for the PHP worker, NOT their sum [CODE].
@@ -3161,7 +3278,21 @@ All 19 classes on disk are registered - there are no orphan commands.
   database the moment Whisper succeeds, so stale recovery completes the job and only
   the speaker split is lost [CODE].
 
-11.4 THE ENQUEUE PATH  (TranscriptionQueue::enqueueConversation)
+11.4 THE ENQUEUE PATH  (TranscriptionQueue::enqueueConversation)   [REVISED 2026-10-05]
+
+  TWO PARAMETERS WERE ADDED, both at the end and both defaulted, so every pre-existing
+  caller is unchanged:
+
+    bool $transcribe = true        false stores the recording and queues nothing: the
+                                   job is written NOT_REQUESTED and the audio is moved
+                                   straight to retained storage, so it is playable from
+                                   the moment the row exists and no worker will ever
+                                   claim it.
+    ?SourceRole $declaredRole      the role the SINGLE child of a COMMON conversation
+                                   carries. Null keeps the mode's own roles.
+                                   REFUSED OUTRIGHT for SEPARATE: that mode's two
+                                   children are what it means, and silently dropping one
+                                   would store half a pair as though it were whole.
 
   Order of operations, and it matters:
     1. SLOW WORK FIRST AND OUTSIDE THE LOCK - write the bytes and probe each recording
@@ -3280,6 +3411,18 @@ All 19 classes on disk are registered - there are no orphan commands.
   MERGE HAS A PRECONDITION: the two turns must share the same voice AND the same role.
   Merging across roles would assert something the reviewer has not stated [CODE].
 
+  MOVE IS REFUSED FOR A DECLARED CHANNEL          [NEW 2026-10-05]
+    A recording holding one declared speaker has nobody to move a message to, and "who
+    said this" is not a judgement on such a file - it is which file the words arrived in.
+    Refused in `ReviewConversationService::apply()`, keyed on
+    `ReviewOperation::Move`, so all three routes into it (move, move-text, and the
+    dialog's own) are covered by one check. The screens already withheld the control;
+    withholding a button is not a rule and the endpoint takes a POST.
+    EDIT_TEXT, SPLIT and MERGE stay available - a single speaker's transcript can still
+    be misheard and its boundaries can still be wrong. Only "who" is settled.
+    Enforced by: `tests/Integration/AudioToText/ReviewConversationServiceTest.php` -
+    including the counter-test that a LEGACY mixed recording still allows a move [CODE].
+
   CONFIRM WRITES TWO THINGS AS ONE STATEMENT
     `ReviewConversationService.php:249-250`: "Confirmation and the derived text are one
     statement: 'roles are confirmed' and 'aggregate text exists' must never disagree,
@@ -3305,6 +3448,22 @@ All 19 classes on disk are registered - there are no orphan commands.
 
   ELIGIBILITY: roles must be confirmed. The effective transcript (corrected where a
   human corrected it, machine otherwise) is what gets voiced.
+
+  SECOND ELIGIBILITY ROUTE                        [NEW 2026-10-05]
+    A deterministic call's mixed recording is NOT_REQUESTED for ever, so the completion
+    gate would refuse audio for a call whose transcript is sitting right there in two
+    rows. `TtsGenerationService::isEligible()` therefore accepts a non-complete recording
+    when - and only when - it speaks for a combined call that actually has words. That is
+    not a weaker test: the script existing means both the transcript and the roles exist,
+    and the roles came from the importer rather than from a confidence score.
+
+    THE DIGEST NEEDED NO CHANGE AT ALL. `TtsSourceDigest` hashes the ordered (role, text)
+    pairs of the script; the script IS the projection; the projection reads both children
+    through the effective layer. So correcting a sentence on EITHER side moves the digest
+    and marks the audio stale - with no rule about children anywhere in the digest, and
+    nothing reading the mixed row's own `review_count`, which is a counter on a row that
+    holds no words.
+    Enforced by: `tests/Unit/AudioToText/TtsCombinedCallScriptTest.php` [CODE].
 
   VOICES: separate models per role -
     DEEPGRAM_TTS_MODEL_CUSTOMER / _AGENT / _CALLER / _CALLEE
@@ -5136,6 +5295,15 @@ AUDIO
                                WorkerAdmissionGuard,ForeignLockGuard}.php
   src/AudioToText/Application/Speaker/SpeakerSeparationService.php
 
+AUDIO - THE DETERMINISTIC CALL ARCHITECTURE        [NEW 2026-10-05, section 23]
+  src/Shared/Audio/RecordingProcessingPolicy.php            THE RULE - start here
+  src/AudioToText/Application/Combined/CombinedConversationReader.php
+  src/AudioToText/Domain/Speaker/{CombinedConversation,CombinedTurn,CombinedChild,
+                                  CombinedConversationState}.php
+  src/AudioToText/Application/Speaker/SingleSpeakerUtteranceSegmenter.php
+  src/AudioToText/Application/Settings/UtteranceSettings.php
+  src/AudioToText/Domain/Speaker/TranscriptControlTokens.php
+
 DEPLOYMENT
   docs/server/systemd/*.service|.timer       6 unit files
   docs/server/cron/knowledge-forge-audio-transcription
@@ -5151,6 +5319,643 @@ RELATED DOCUMENTS (supporting; this file supersedes them where they disagree)
   docs/server/deepgram_tts_flow.txt 637 lines
   docs/PROJECT_GUIDE.md           332 lines   OLDEST - least reliable
   docs/deploy/worker.md           255 lines
+
+--------------------------------------------------------------------------------------
+23. THE DETERMINISTIC CALL ARCHITECTURE            [NEW 2026-10-05 - the whole change]
+--------------------------------------------------------------------------------------
+
+STATUS OF THIS SECTION
+  Implemented, tested and green in the working tree on 2026-10-05. NOT committed, NOT
+  pushed, NOT deployed. No database migration - see 23.10.
+  Everything below is [CODE] unless tagged otherwise. [DEV] marks a fact measured on
+  this machine against real call audio.
+
+
+23.1 THE ONE-PARAGRAPH VERSION
+
+  An Order58 call arrives as THREE files: the mixed recording and each side of it
+  separately. The application used to transcribe and diarize the mixed one and ignore
+  what the other two were. It now transcribes THE TWO SIDES - each of which contains
+  exactly one person, so there is nothing to guess - and keeps the mixed file as the
+  playable original. The mixed recording's Details screen shows a conversation
+  ASSEMBLED from its two children, merged by timestamp, with every message still owned
+  and edited by the child it came from.
+
+  Cost per complete call: 2 transcriptions and 0 diarizations, down from 3 and 3.
+
+
+23.2 WHY - THE DEFECT THIS EXISTS TO REMOVE
+
+  A Caller recording holds one person. Handed to a two-speaker diarizer it produces ONE
+  cluster, therefore ONE segment, therefore ONE bubble spanning the entire call. That
+  was the visible symptom: a 162-second recording rendering as a single message.
+  Confirmed from the database before any code was written - those jobs had
+  JSON_LENGTH(speaker_segments) = 1 [DEV].
+
+  Two ideas were ruled out by measurement rather than by argument:
+
+    VAD / silence detection as a segmentation signal. `ffmpeg silencedetect` found ZERO
+    silences at -30, -40, -50 and -60 dB on the sample channels (mean level -20.3 dB
+    across 1,973,440 samples). The line carries comfort noise; there is no digital
+    silence to find [DEV].
+
+    Re-diarizing with a cluster count of one. The diarizer is not the wrong tool used
+    badly - it is the right tool for a question these files do not pose.
+
+  What remains is the word timings the speech engine already produced, which both
+  providers give: whisper.cpp through `-ojf` token offsets, Deepgram through per-word
+  start/end. That is the signal section 23.5 uses.
+
+  AND THE DEEPER POINT: the channel the provider delivered already names the side. The
+  attribution arrives WITH the files. Spending a minute of CPU rediscovering it, badly,
+  was the whole mistake.
+
+
+23.3 WHAT - THE RULE, IN FULL
+
+  +-----------------+----------------------+-------------+---------------------------+
+  | recording_type  | job source_role      | transcribe  | diarize / classify roles  |
+  +-----------------+----------------------+-------------+---------------------------+
+  | CALLER          | CUSTOMER             | YES         | NO - nothing to infer     |
+  | CALLEE          | AGENT                | YES         | NO - nothing to infer     |
+  | MIXED           | COMMON               | NO, ever    | NO                        |
+  | (none named)    | COMMON               | NO, ever    | NO                        |
+  +-----------------+----------------------+-------------+---------------------------+
+
+  THE FOURTH ROW IS NOT AN ACCIDENT. An upload naming no side is a mixed recording by
+  every other measure, and a permissive branch there would have made "leave the field
+  out" the documented way to get a mixed recording transcribed.
+
+  `$transcribeRequested` - what the caller asked for - CAN ONLY WITHDRAW, NEVER GRANT.
+  A download made without a transcript in mind passes false and the side stays
+  untranscribed; a mixed recording is refused whatever anybody asks.
+
+  CONSEQUENCE, STATED PLAINLY BECAUSE IT IS A BUSINESS DECISION AND NOT A BUG:
+  a call for which only the mixed recording exists has NO TRANSCRIPT. It is playable and
+  nothing more. That is accepted. The alternative is the giant bubble.
+
+
+23.4 WHERE - THE FILES, AND WHY EACH ONE IS WHERE IT IS
+
+  THE RULE
+    src/Shared/Audio/RecordingProcessingPolicy.php            [NEW]
+      Two static methods and three constants. `decide()` answers for an upload;
+      `allowsTranscription()` answers the same question for a row that already exists,
+      keyed on `source_role`.
+      IN `Shared/` BECAUSE IT HAS TWO CONSUMERS IN TWO MODULES - the Audio-to-Text
+      module and the Order58 importer - and INV-2 forbids either from naming the other.
+      It therefore speaks in STORAGE STRINGS, not enums; the transcription module maps
+      them back to its own enums and rejects anything it does not recognise, so the
+      looseness costs nothing.
+
+  THE PROJECTION
+    src/AudioToText/Domain/Speaker/CombinedConversation.php       [NEW]
+    src/AudioToText/Domain/Speaker/CombinedTurn.php               [NEW]
+    src/AudioToText/Domain/Speaker/CombinedChild.php              [NEW]
+    src/AudioToText/Domain/Speaker/CombinedConversationState.php  [NEW] 10-case enum
+    src/AudioToText/Application/Combined/CombinedConversationReader.php [NEW]
+
+  SEGMENTATION
+    src/AudioToText/Application/Speaker/SingleSpeakerUtteranceSegmenter.php [NEW]
+    src/AudioToText/Application/Settings/UtteranceSettings.php              [NEW]
+    src/AudioToText/Domain/Speaker/TranscriptControlTokens.php              [NEW]
+
+  CHANGED
+    AudioTranscriptionWorkerCommand      provided-role branch now stores segments
+    TranscriptionQueue                   `$declaredRole` parameter
+    AudioIngestionService                applies the policy; drops a meaningless opt-in
+    AudioConversation::hasValidShape()   COMMON is one child OF ANY ROLE
+    RecordingVoiceReader                 reads `source_role` before `recording_type`
+    TranscriptVoice::forProvidedRole()   Customer / Agent labels for a declared channel
+    ReviewConversationService            MOVE refused for a declared channel
+    StoreRecordingSlot                   NOT_REQUESTED split: ready-to-transcribe vs
+                                         audio-only, mutually exclusive and exhaustive
+    Review/Fragment/Action               serves the projection for a mixed recording
+    Job/Status/Action                    publishes `transcriptionExpected`
+    Job/Transcribe/Action                refuses a mixed recording, 409
+    TtsScriptBuilder / TtsGenerationService   combined script + second eligibility route
+    Store/Action + template + both JS bundles
+
+  THE DIRECTION OF BORROWING - THE ONE THING MOST LIKELY TO CONFUSE A READER
+
+    There are now TWO readers that look superficially alike and run OPPOSITE ways:
+
+      SharedConversationReader     a CHANNEL page borrows from the MIXED recording.
+                                   For a LEGACY call, where the mixed file was the only
+                                   place the two speakers had ever been told apart.
+
+      CombinedConversationReader   the MIXED page borrows from the two CHANNELS.
+                                   For a DETERMINISTIC call, where the attribution
+                                   arrived with the files and the mixed row holds
+                                   nothing.
+
+    THE DIRECTION FOLLOWS WHERE THE ATTRIBUTION CAME FROM. Neither is more correct; they
+    describe two different kinds of call, and both will exist in the database for as long
+    as the historical rows do.
+
+
+23.5 HOW A SINGLE SPEAKER IS CUT INTO MESSAGES
+
+  THE INPUT is the token stream the engine already produced. `TranscriptToken` holds
+  {startMs, endMs, text} and both providers normalise to it, so one implementation
+  serves both.
+
+  STEP 0 - CONTROL TOKENS ARE REMOVED FIRST, and this was a live defect
+    whisper.cpp emits `[_BEG_]` and `[_TT_390]`-style markers IN the token stream. They
+    are instructions to a decoder, not speech. `SpeakerTranscriptAligner` already
+    stripped them - in a PRIVATE METHOD - and the single-speaker path bypasses that
+    class entirely, so every one of them landed in stored segments, on screen, in the
+    TTS script and in the digest. Observed on real output [DEV]:
+
+      "text": "?[_TT_350] For a pick up?[_TT_500] What's your address?[_TT_700] ..."
+
+    AND THEY HID THE PAUSES. A `[_TT_nnn]` marker SPANS the silence between two
+    sentences, so the gap detector saw no gap: five sentences arrived in one bubble.
+    The rule now lives in `TranscriptControlTokens::strip()` and both paths call it.
+    THE LESSON, written down because it has now cost two bugs: a rule two code paths
+    need is not a private method.
+
+  STEP 1 - BOUNDARIES. Asked in this order, and the order is the design:
+
+    1. MAX DURATION (`AUDIO_UTTERANCE_MAX_MS`, 20000)
+       A safety net. A monologue with no qualifying pause anywhere in it is still broken
+       up, so nothing can produce a single bubble spanning a whole call.
+
+    2. A QUALIFYING PAUSE WHERE A SENTENCE JUST FINISHED
+       The normal boundary, and the one that reads well.
+
+    3. A QUALIFYING PAUSE MID-SENTENCE, once the turn has already run past
+       `AUDIO_UTTERANCE_SOFT_MAX_MS` (9000)
+       The fallback.
+
+    A pause shorter than `AUDIO_UTTERANCE_GAP_MS` (900) is never a boundary. Punctuation
+    with no pause after it is never a boundary either - punctuation only decides WHICH
+    of the pauses that already qualify are worth cutting at.
+
+  STEP 2 - FRAGMENT ABSORPTION. A group shorter than `AUDIO_UTTERANCE_MIN_MS` (1200) is
+    folded into the one before it, UNLESS that one already ended like a sentence.
+    "…with $2" / "each." is one sentence the speaker paused inside; "…please?" / "Yes."
+    is two turns.
+
+  WHY THE RULE IS NOT SIMPLY "CUT ON SILENCE" - MEASURED, NOT ASSUMED
+
+    It was, until 2026-10-05, and on live channels it produced 22 OF 29 TURNS STARTING
+    MID-PHRASE: ", like super combo for two?" reads as a transcription fault, not as the
+    hesitation it was.
+
+    The measurement that explains it. One Customer channel's eleven pauses [DEV]:
+
+        0, 210, 970, 970, 980, 980, 1180, 1180, 1200, 1220, 1270 ms
+
+    and exactly ONE of its twelve turns ended in terminal punctuation. These speakers
+    pause INSIDE a sentence about as often as they finish one, AT THE SAME LENGTHS.
+    No threshold separates the two kinds of pause, which is also why an earlier
+    measurement found the gap distribution flat between 500 and 1500 ms.
+
+    RAISING THE THRESHOLD MAKES IT WORSE, NOT BETTER. At 1500 ms that channel has no
+    qualifying pause at all and collapses back into the single bubble this whole feature
+    exists to remove.
+
+    AFTER the sentence-first rule, on the same call: 29 turns -> 20, mid-phrase 75% ->
+    60% [DEV]. A real improvement and an honest one - not the near-elimination that was
+    estimated beforehand. Every remaining cut is the length fallback, because in this
+    material the pauses and the sentence endings simply do not coincide.
+
+    PROVIDER IS NOT THE LEVER, tested before assuming: terminal marks per 100 words are
+    Whisper 18.6, Deepgram 17.6, legacy rows 21.5 [DEV]. Punctuation is plentiful; it is
+    just not where the speakers breathe.
+
+  REMAINING OPTION, NOT IMPLEMENTED: when a qualifying pause arrives on a long turn, cut
+  at the LAST SENTENCE BOUNDARY INSIDE the accumulated text rather than at the pause.
+  That makes the utterance timings approximate - the domain already has an `approx` flag
+  and a `~` display marker for exactly that case.
+
+  SETTINGS - all four in `.env`, documented in `.env.example`:
+    AUDIO_UTTERANCE_GAP_MS       900     silence that may end a message
+    AUDIO_UTTERANCE_MAX_MS       20000   hard cap
+    AUDIO_UTTERANCE_SOFT_MAX_MS  9000    past this, a mid-sentence pause may cut too
+    AUDIO_UTTERANCE_MIN_MS       1200    below this a fragment is folded back
+  NONE OF THESE IS A MEASURED OPTIMUM. They are starting points, which is why they are
+  environment variables and not literals.
+
+
+23.6 THE COMBINED PROJECTION - HOW MIX DETAILS IS ASSEMBLED
+
+  FINDING THE CHILDREN
+    Scope is ALWAYS the store, plus ONE grouping key:
+      1. `call_session_id` when there is one. The provider's own id for one
+         conversation; only the importer writes it.
+      2. `order_id` otherwise. How the store page has always grouped, and how an
+         operator builds a Customer + Agent set by hand with "+ Add audio" on a row.
+    THE SESSION WINS WHENEVER THERE IS ONE, because an order can hold more than one
+    call and preferring the order would merge two conversations into one thread.
+
+  AMBIGUITY REFUSES RATHER THAN CHOOSES
+    Two recordings of the same side is a NORMAL state - a replacement uploaded beside
+    the original, or the same file imported twice. Nothing records which is
+    authoritative, so picking the newest or the longest would be inventing a rule. The
+    projection reports AMBIGUOUS_CHILDREN and shows no words at all. The consequence of
+    guessing is not cosmetic: two halves of the same exchange could come from two
+    different recordings of it.
+
+  OWNER-LOCAL INDEX - THE CORRECTNESS ARGUMENT (INV-19)
+    Each child's list is walked with its own index, and THE INDEX IS WRITTEN INTO THE
+    ENTRY BEFORE ANYTHING IS SORTED. The sort then moves whole entries that already know
+    their own address. There is no step at which a combined position could be mistaken
+    for a local one, because after the sort the local index is a value that was CARRIED
+    IN rather than a number that can be recomputed.
+
+    Live data, one real call [DEV]:
+
+        visual #0  Customer  owner=2a0ad337  local=0
+        visual #1  Agent     owner=c5f585a4  local=0
+        visual #4  Customer  owner=2a0ad337  local=1     <- not 4
+        visual #6  Agent     owner=c5f585a4  local=4     <- not 6
+
+  ORDERING
+    Stable merge-sort by `startMs`, tie broken by append order (Customer first). PHP's
+    sort is stable; the tie-break is explicit so the guarantee is the code's rather than
+    the runtime's. OVERLAPS ARE KEPT AND NO TIMESTAMP IS ADJUSTED - two people talking
+    over each other is a fact about the call.
+
+    WHEN TIMESTAMPS CANNOT ORDER ANYTHING - a turn ending before it starts, a recording
+    running backwards, or every turn sharing one start - the thread is rendered as TWO
+    SECTIONS instead, each in its own recording's order. Interleaving on those numbers
+    would assert a sequence nobody measured.
+
+  THE REPLY DELAY IS THE ONE THING THE PROJECTION ADDS
+    The pause between the Agent finishing and the Customer answering exists in NEITHER
+    channel: each file contains only one of them. It is measured across the merged
+    thread, by handing the existing `ResponseTiming` rule a set of synthetic utterances
+    whose `speaker` is the role. (The children's own stored `speaker` is the same
+    channel marker on both sides, so passing it through would read every message of the
+    call as a continuation of the last and report no response times at all.)
+
+  TEN STATES, with prose and a documented precedence
+    COMPLETE  CUSTOMER_ONLY  AGENT_ONLY  CUSTOMER_PROCESSING  AGENT_PROCESSING
+    CUSTOMER_FAILED  AGENT_FAILED  AMBIGUOUS_CHILDREN  INVALID_TIMELINE  NO_CHILDREN
+    Precedence: ambiguity -> no children -> failure -> processing -> invalid timeline ->
+    one-sided -> complete. Customer before Agent at equal urgency, so the answer never
+    depends on which side the reader loaded first.
+    PARTIAL IS SHOWN AS PARTIAL: a call whose Customer side is still transcribing shows
+    the Agent side under a line saying what is missing.
+
+  EDIT OPERATIONS FROM THE COMBINED VIEW
+    EDIT_TEXT   existing route, owner publicId + owner local index + owner review_count
+    SPLIT       same ownership. Not offered in the MODAL - it never was; it lives on
+                each child's own review page
+    MERGE       same-owner only. CROSS-OWNER IS STRUCTURALLY IMPOSSIBLE: the route
+                merges turn N with N+-1 WITHIN ONE JOB, so it cannot even be expressed.
+                It is also never offered - a property test proves every permitted merge
+                has a same-owner neighbour, AND that the dangerous arrangement (a
+                permitted merge whose on-screen neighbour is the other recording)
+                actually occurs in the fixture, so the test is not vacuous
+    MOVE        refused - see 11.7
+    REVERT      NO MIXED-LEVEL REVERT. It would have to mean discarding from both jobs
+                in one implied transaction, which nobody asked for. The notice strip
+                links to each side's own page, where Discard already means one thing
+    HISTORY     per job, and there are two. Also: a history keyed on a local turn index
+                would COLLIDE, because both sides number their turns from zero
+
+  IN THE BROWSER
+    `data-a2t-owner` scopes the merge-neighbour lookup (both sides have an index 1, so
+    an unscoped `querySelector` would find whichever came first in document order).
+    `data-a2t-version` is what each correction sends. The projected payload sends a
+    top-level `version` of -1 deliberately, so anything reaching for a
+    conversation-level number is refused by the browser and would match no row anyway.
+
+
+23.7 THE PROGRESS UX, AND THE BUG THAT MADE IT NECESSARY
+
+  SYMPTOM, reported from the browser: a Mix/Common upload reached 100%, said "Audio file
+  uploaded successfully", then entered "02 Conversion", went to "Reconnecting", and
+  finally showed "Connection interrupted. Your recording remains uploaded; conversion may
+  still be running." The upload had succeeded. Nothing was interrupted.
+
+  ROOT CAUSE, and it is worth reading because the failure mode is instructive:
+
+      if (!['QUEUED','PROCESSING','COMPLETED','FAILED'].includes(data.status)) {
+          throw new Error('Unrecognized status');
+      }
+
+  NOT_REQUESTED is not in that list. The status endpoint answered CORRECTLY, the poller
+  THREW, the throw landed in the NETWORK-FAILURE handler, and a finished upload was
+  reported as a connection error - then re-polled for ever. A FABRICATED ERROR MANUFACTURED
+  FROM A SUCCESS.
+
+  There was a second half. The job detail page ALREADY omits `[data-a2t-poll]` for a
+  mixed recording - the server was saying "nothing to wait for" - but the uploader
+  overrode it:
+
+      var statusUrl = new URL(pendingJob ? pendingJob.dataset.a2tPoll
+                                         : jobPath[1] + '/status', destination);
+
+  That fallback exists for the OPPOSITE case: a job that finished before polling started.
+  Both pages omit the attribute, so the two silences were indistinguishable.
+
+  THE FIX - the server states the fact, the browser does not infer it
+
+    GET /audio-to-text/job/{publicId}/status now returns:
+
+      { "status": "NOT_REQUESTED",
+        "stage": "QUEUED",
+        "transcriptionExpected": false,     <- NEW
+        "speakerSeparation": null,
+        "eta": null }
+
+    `transcriptionExpected` is `JobStatus::transcriptionRequested()`. It answers a
+    different question from `status`: not "how far along", but "is there a transcript in
+    this recording's life at all". Every other field describes progress THROUGH a
+    transcription, and a mixed recording has none to progress through.
+
+    The job detail page also renders `data-a2t-audio-only` for a NOT_REQUESTED job, so
+    the uploader can tell "nothing coming" from "already finished".
+
+    IN THE BROWSER (`assets/audio-store/audio-store.js`):
+      - the uploader checks `[data-a2t-audio-only]` BEFORE the fallback
+      - `finishAudioOnly()` - one step, conversion row HIDDEN rather than drawn at 100%
+        (it never ran, and a full bar would say it had), link reworded to "View
+        recording", polling stopped
+      - `trackConversion()` checks `transcriptionExpected === false` BEFORE the
+        allow-list. The ORDER is the fix: after it, the status it is about throws first.
+        A test asserts the ordering by string position
+      - `processingViewModel()` gained a terminal `audioOnly` branch, which fixes the
+        Manage and Update dialogs too - every other branch of that model describes
+        progress through a transcription
+      - `watchReplacement()` treats `COMPLETED || model.audioOnly` as arrived
+
+  THE GENERAL LESSON: an allow-list of statuses in a client is a place where a new
+  legitimate server state becomes a client-side exception. The server now says what it
+  means and the client reads it.
+
+
+23.8 WHAT AN OPERATOR SEES, SCREEN BY SCREEN
+
+  ADD AUDIO (store page dialog)
+    Choosing Mix / Common hides the Transcription provider and the "Generate clean AI
+    audio after transcription" checkbox, swaps the button from "Upload & Transcribe" to
+    "Upload", and shows a line saying the file is stored as the playable original.
+    Choosing Customer or Agent restores all of it.
+    PRESENTATION ONLY. With scripting off the fields stay visible and the server still
+    refuses - which is the point of testing the backend separately.
+
+  UPDATE / MANAGE AUDIO
+    Same treatment, driven by the SERVER-PROVIDED `recordingType` (the stored value, not
+    the label). The hidden fields are also DISABLED, so a hidden select contributes
+    nothing to the submission - the endpoint would ignore it, but a form that posts a
+    setting nobody was shown is its own small misreport.
+    The file chooser and the Update button stay: replacing the audio is what a mixed
+    recording's Update dialog is still for.
+
+  THE STORE TABLE
+    A mixed recording's cell reads "Audio only" and offers DETAILS. It does not offer
+    "Transcribe audio", because the endpoint behind that button refuses it (409).
+    `StoreRecordingSlot::isReadyForTranscription()` and `isAudioOnly()` split
+    NOT_REQUESTED between them, mutually exclusive and together exhaustive.
+
+  MIX DETAILS
+    Original mixed audio, the interleaved conversation, deterministic Customer/Agent
+    labels, NO "Speaker 1 / Speaker 2", NO Confirm Roles, NO Move. Edit controls address
+    the owner. The notice strip names both sides and links to each one's own page.
+    When there is nothing to combine it says so and still plays the recording.
+
+  CUSTOMER / AGENT DETAILS
+    Delivered through an EXISTING seam rather than a new branch:
+    `RecordingVoiceReader::for()` now asks `TranscriptVoice::forProvidedRole($job->
+    sourceRole)` first. Every screen already treats a named voice as "nothing left to
+    establish", so Confirm Roles and Move disappear everywhere at once.
+    THIS ALSO FIXED A LIVE BUG: deterministic channels now store `speaker_segments`, and
+    without this change every one of those turns rendered as "Unidentified speaker" -
+    the publish gate correctly found no inferred separation, because none was attempted.
+
+  STILL TRUE AND WORTH KNOWING
+    The STANDALONE `/review` page is NOT combined. A NOT_REQUESTED mixed job redirects
+    to the job detail page, exactly as any non-completed job does. The Details MODAL is
+    the combined surface, and it links to each child's full editor.
+
+
+23.9 THE TWO BUGS FOUND DURING IMPLEMENTATION
+
+  Recorded because both were introduced by this change set and caught before anybody
+  else met them, and because each one has a transferable lesson.
+
+  (a) `ConversationMode::Separate` FOR A SINGLE CHANNEL
+      The policy originally returned a conversation MODE. `Separate` means "a Customer
+      file and an Agent file arriving together" and its `childRoles()` returns BOTH, so
+      `enqueueConversation()` went looking for a second file a channel import never has.
+      EVERY caller and callee import would have failed before writing anything.
+      It was missed because the tests exercised the POLICY in isolation, and the policy
+      was answering correctly - the wiring was wrong.
+      FIX: the policy no longer has a `mode` field at all. It answers `sourceRole` and
+      `transcribe`, with `isDeterministic()` derived. The shape of the upload belongs to
+      whoever is doing the uploading.
+      LESSON: a unit test of a decision does not test the wiring that consumes it. The
+      regression test is now an INTEGRATION test against real MySQL, because the thing
+      that was wrong could not be seen from the policy.
+
+  (b) WHISPER CONTROL TOKENS - see 23.5 step 0.
+      LESSON: a rule two code paths need is not a private method.
+
+
+23.10 DATABASE - NO MIGRATION, AND WHY NOT
+
+  `git status --short src/Migration/` -> 0 files. Every column this feature needs
+  already existed:
+
+    audio_transcription_jobs.source_role        CUSTOMER | AGENT | COMMON - already there
+                                                for the legacy manual pair, now carrying
+                                                the importer's declared side
+    audio_transcription_jobs.status             NOT_REQUESTED already existed for the
+                                                download-without-transcribing feature
+    audio_transcription_jobs.speaker_segments   the segmenter writes the same JSON shape
+                                                the diarizer wrote: {start_ms, end_ms,
+                                                speaker, role, text, confidence}
+    audio_conversations.recording_type          MIXED | CALLER | CALLEE - already there
+    audio_conversations.call_session_id         already there, written by the importer
+    audio_conversations.order_id                already there
+
+  WHAT THE NEW ROWS LOOK LIKE
+
+    a deterministic channel     conversation: mode=COMMON, recording_type=CALLER
+                                job: source_role=CUSTOMER, status=QUEUED->COMPLETED,
+                                     speaker_separation_status=NULL (nothing inferred),
+                                     speaker_segments = one speaker's utterances,
+                                     each {"speaker":"CHANNEL","role":"CUSTOMER",...}
+
+    a mixed recording           conversation: mode=COMMON, recording_type=MIXED
+                                job: source_role=COMMON, status=NOT_REQUESTED,
+                                     started_at=NULL, transcript=NULL,
+                                     speaker_segments=NULL,
+                                     retained_audio_path='source.wav' (playable at once),
+                                     stored_audio_path=NULL (no workspace copy, so no
+                                     worker has anything to find)
+
+  ONE READING TRAP: `speaker_separation_status` on a new mixed row reads PENDING. That is
+  the COLUMN DEFAULT for a new row, not a separation that is waiting to run. Nothing was
+  attempted and nothing will be.
+
+  TWO QUERIES WERE ADDED to `audio_conversations`, both the same shape - caller and
+  callee job ids for one group, by call session or by order - plus `orderIdFor()`.
+
+  HISTORICAL ROWS ARE UNTOUCHED. Verified on live dev data: orders #33, #555 and #1212
+  are still COMPLETED with their transcripts, their 1 / 63 / 24 segments, and #1212's
+  `review_count = 1` correction intact [DEV]. The projection is consulted ONLY when a
+  mixed row's own effective conversation is EMPTY, so a historical call that was diarized
+  and corrected is never replaced by a combined view of recordings sitting beside it.
+
+
+23.11 VALIDATION AND BACKEND ENFORCEMENT - EVERY WAY IN
+
+  THE PRINCIPLE: withholding a control is not a rule. Every screen that hides something
+  has an endpoint behind it that refuses the same thing, and the refusal is tested
+  separately from the hiding.
+
+  +--------------------------------------------+------------------------------------+
+  | Crafted request against a MIXED recording   | Result                             |
+  +--------------------------------------------+------------------------------------+
+  | transcribe=1 on upload                      | ignored - policy returns false     |
+  | recording_type omitted entirely             | treated as mixed; not a bypass     |
+  | transcription_provider=WHISPER              | validated, stored, never acted on; |
+  |                                             | job is NOT_REQUESTED               |
+  | generate_ai_audio=1                         | dropped at the ingestion seam      |
+  | POST /job/{id}/transcribe                   | 409, "kept as audio only"          |
+  | POST /review/turn/{i}/move  (a channel)     | ReviewRejected::speakerIsDeclared  |
+  | POST .../move-text          (a channel)     | same - one check, three routes     |
+  | Update Audio with all of the above          | same answers; ReplaceAction goes   |
+  |                                             | through the one ingestion seam     |
+  +--------------------------------------------+------------------------------------+
+
+  WHY `generate_ai_audio` IS DROPPED RATHER THAN STORED: the checkbox says "generate
+  clean AI audio AFTER TRANSCRIPTION", and a recording nothing will transcribe has no
+  transcription for it to happen after. Storing it would record an intent that can never
+  fire and that an administrator would reasonably read as "audio is coming". It takes
+  nothing away - a mixed recording's AI audio is generated from the combined projection,
+  on request, from the Details dialog.
+
+  ONE SEAM, WHICH IS WHY THE CRAFTED REQUESTS ALL GET THE SAME ANSWER
+    store page upload --+
+    Update / Replace ---+--> AudioIngestionService::ingest() --> RecordingProcessingPolicy
+    Order58 importer ---+                                   --> TranscriptionQueue
+  `ReplaceAction` already went through `ingest()` before this change, so the Update Audio
+  path was protected by the policy alone - only its DIALOG needed fixing.
+
+  OPTIMISTIC LOCKING ACROSS TWO ROWS
+    Each projected message carries ITS OWNER'S `review_count`. The two sides hold
+    different counts in every fixture, so a mixed-up lock cannot hide behind equal
+    numbers. A stale edit posted from the combined view is refused by the EXISTING guard
+    and the message is unchanged - tested end to end over HTTP.
+
+
+23.12 TESTS - WHAT PROVES WHAT
+
+  The claim and the test that holds it, so a reviewer can check rather than trust.
+
+  THE RULE
+    tests/Unit/Shared/RecordingProcessingPolicyTest.php          mixed never; omitted
+                                                                 type never; asking
+                                                                 changes nothing;
+                                                                 allowsTranscription()
+    tests/Unit/Order58/CallGroupProcessingPolicyTest.php          every shape of call
+                                                                 over a data provider -
+                                                                 one STT per declared
+                                                                 side, never for mixed
+    tests/Integration/AudioToText/AudioConversationTest.php       the END-TO-END seam, on
+                                                                 real MySQL, with
+                                                                 transcribe=true asked
+                                                                 for in all three cases.
+                                                                 THIS is the test that
+                                                                 would have caught 23.9(a)
+
+  THE PROJECTION
+    tests/Unit/AudioToText/CombinedConversationReaderTest.php     23 tests: interleaving,
+                                                                 owner-local index,
+                                                                 combined-#2-is-Agent-#1,
+                                                                 per-owner review counts,
+                                                                 ambiguity, partial
+                                                                 states, invalid
+                                                                 timeline, overlap kept,
+                                                                 order grouping, session
+                                                                 preferred over order,
+                                                                 no cross-owner merge
+    tests/Web/AudioToTextCombinedDetailsCest.php                  16 tests over real HTTP:
+                                                                 owner address in every
+                                                                 url, edit from either
+                                                                 view visible in the
+                                                                 other, stale version
+                                                                 refused, historical mixed
+                                                                 keeps its own
+                                                                 conversation, transcribe
+                                                                 refused, order grouping
+
+  SEGMENTATION
+    tests/Unit/AudioToText/SingleSpeakerUtteranceSegmenterTest.php  24 tests, including
+                                                                 control markers removed
+                                                                 AND not hiding a pause
+
+  THE BROWSER (source-text assertions - there is no JS runner in this project, and the
+  alternative was asserting nothing about the one behaviour that fails silently)
+    tests/Unit/AudioToText/CombinedTurnOwnershipInBrowserTest.php  owner-scoped neighbour
+                                                                 lookup, per-row version,
+                                                                 audio-only upload never
+                                                                 polls, and the ORDER of
+                                                                 the audio-only guard
+                                                                 against the allow-list
+
+  SUITE TOTALS AS OF 2026-10-05
+    Unit          2202 pass / 9163 assertions
+    Integration    404 pass / 1394 assertions
+    Web            586 run, 6 fail - ALL PRE-EXISTING (ChatSources x2, ChatReports x2,
+                   RuleListPage, RuleReadiness); none in AudioToText or Order58
+    Psalm            8 errors - all pre-existing (Chat, Document)
+    php-cs-fixer     2 files   - both pre-existing
+
+  A TRAP FOR WHOEVER RUNS THESE NEXT: two tests assert GLOBAL queue counts -
+  `TranscriptionJobRepositoryTest::testOneAdministratorMayQueueManyRecordings` and
+  `AudioToTextCest::aCompletedJobIsCountedInTheCompletedTotal`. Any job sitting in the
+  queue while they run will fail them. Drain the queue before trusting a suite result.
+
+
+23.13 LIVE VALIDATION - WHAT WAS ACTUALLY OBSERVED       [DEV]
+
+  Five test orders on store 1861, ingested through the real seam with transcribe=true
+  EXPLICITLY REQUESTED each time.
+
+    MIXED, every one of five      NOT_REQUESTED, started_at NULL, never claimed by the
+                                  live systemd worker, which ran throughout and claimed
+                                  the declared sides beside them
+    CALLER / CALLEE               QUEUED -> claimed -> COMPLETED with clean segments
+    combined projection           state COMPLETE, interleaved, 29 turns; visual position
+                                  and owner-local index diverging throughout
+
+  WHAT WAS NOT VALIDATED, and should be before this ships:
+    - the Update Audio and Add Audio dialogs in a real browser. No browser session was
+      available; the equivalent is covered against the served application by the Web
+      tests, but nobody has looked at the modal.
+    - production anything. [UNVERIFIED-PROD]
+
+  TWO ENVIRONMENTAL ARTEFACTS THAT ARE NOT CODE FAULTS, recorded so the next person does
+  not chase them:
+    - running an ingest script as `dell` leaves the job workspace `drwx------`, so the
+      www-data worker fails with "the queued audio is no longer on disk". Chmod 755/644
+      after ingesting, or ingest through the web tier.
+    - a 4-minute call under local Whisper takes ~150 s. Running the Web suite at the same
+      time starved one job past the 1200 s stale limit and the recovery swept it to
+      FAILED. That is contention, not the pipeline.
+
+
+23.14 KNOWN LIMITATIONS OF THIS CHANGE SET
+
+  1. SEGMENTATION QUALITY IS IMPROVED, NOT SOLVED. 60% of turns still begin mid-phrase
+     on the measured call. The remaining option is in 23.5.
+  2. THE THRESHOLDS ARE JUDGEMENTS, NOT MEASUREMENTS. `SOFT_MAX` in particular was chosen,
+     not derived. They are environment variables for exactly that reason.
+  3. THE STANDALONE `/review` PAGE IS NOT COMBINED. Deliberate - see 23.8.
+  4. THE STORE TABLE'S STATUS BADGE STILL READS "Ready for transcription" FOR A MIXED
+     RECORDING. `ConversationStatus::NOT_REQUESTED` has one label, and it is still correct
+     for a Caller or Callee downloaded without a transcript. Fixing it means
+     `fromChildren()` taking slots instead of bare statuses so it can see `source_role` -
+     a domain signature change with its own tests. NOT DONE.
+  5. NOTHING IS COMMITTED, PUSHED OR DEPLOYED.
 
 ======================================================================================
 END OF DOCUMENT
