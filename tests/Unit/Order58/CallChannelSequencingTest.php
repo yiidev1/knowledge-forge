@@ -350,6 +350,16 @@ final class RecordingChannelQueue implements CallImportRepositoryInterface
         return new CallImportHistoryPage([], 0, $page, $perPage);
     }
 
+    /**
+     * Empty: no batch finishes in these tests, which is what makes the order step's absence provable.
+     *
+     * @return list<array{storeSourceId: int, callTimeRaw: string}>
+     */
+    public function settledBatchCalls(DateTimeImmutable $since): array
+    {
+        return [];
+    }
+
     public function findItem(int $id): ?CallImportItem
     {
         return null;

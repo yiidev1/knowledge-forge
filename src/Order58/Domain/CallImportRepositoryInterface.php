@@ -193,5 +193,32 @@ interface CallImportRepositoryInterface
      */
     public function historyPage(int $page, int $perPage, ?CallImportMode $mode = null): CallImportHistoryPage;
 
+    /**
+     * The calls of every batch that **finished** since `$since`, for the order sync that follows them.
+     *
+     * ## Why "finished since", and not a flag
+     *
+     * A batch settles exactly once: the moment its last outstanding item leaves PENDING/FETCHING. That
+     * transition is a fact already in the table, so asking for it needs no new column and no marker to
+     * keep in step with reality. The importer holds a single lock for a whole run, so no two runs can
+     * see the same transition.
+     *
+     * The alternative — syncing the dates of whatever this pass happened to touch — would re-ask the
+     * Orders API once per *call*. A fifty-call selection drains over fifty `--once` ticks, so that is
+     * fifty identical requests for one day's orders. This asks once per selection.
+     *
+     * ## What it deliberately does not return
+     *
+     * Items with no `order_id`. A call that produced no order has no order to synchronise, and inventing
+     * a mapping for it is the one thing worse than skipping it.
+     *
+     * Settled includes FAILED, NOT_AVAILABLE and TOO_LARGE. A recording that could not be downloaded
+     * still belongs to an order worth having, and the two are deliberately independent.
+     *
+     * @return list<array{storeSourceId: int, callTimeRaw: string}> raw call times, for the caller to
+     *                                                             convert; this layer parses no dates
+     */
+    public function settledBatchCalls(DateTimeImmutable $since): array;
+
     public function findItem(int $id): ?CallImportItem;
 }

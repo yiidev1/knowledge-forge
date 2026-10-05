@@ -601,6 +601,53 @@ final readonly class DbCallImportRepository implements CallImportRepositoryInter
         return $history;
     }
 
+    public function settledBatchCalls(DateTimeImmutable $since): array
+    {
+        $cutoff = DbDateTime::format($since);
+
+        // One statement, and the HAVING is what makes it fire once. A batch qualifies only while it has
+        // nothing outstanding AND its most recent item moved inside this run's window — which is true
+        // for exactly the run that settled it. Raw SQL because the condition is an aggregate over a
+        // subquery, and spelling that through the builder would be longer and no clearer.
+        $rows = $this->connection->createCommand(
+            'SELECT i.store_source_id AS store_source_id, i.call_time_raw AS call_time_raw
+               FROM ' . self::IMPORTS . ' i
+              WHERE i.order_id IS NOT NULL
+                AND i.batch_id IN (
+                      SELECT b.batch_id FROM (
+                          SELECT batch_id,
+                                 SUM(status IN (:pending, :fetching)) AS outstanding,
+                                 MAX(updated_at) AS last_touched
+                            FROM ' . self::IMPORTS . '
+                        GROUP BY batch_id
+                      ) b
+                     WHERE b.outstanding = 0 AND b.last_touched >= :cutoff
+                  )',
+            [
+                ':pending' => Order58ImportStatus::Pending->value,
+                ':fetching' => Order58ImportStatus::Fetching->value,
+                ':cutoff' => $cutoff,
+            ],
+        )->queryAll();
+
+        $calls = [];
+
+        foreach ($rows as $row) {
+            $callTime = (string) ($row['call_time_raw'] ?? '');
+
+            if ($callTime === '') {
+                continue;
+            }
+
+            $calls[] = [
+                'storeSourceId' => (int) ($row['store_source_id'] ?? 0),
+                'callTimeRaw' => $callTime,
+            ];
+        }
+
+        return $calls;
+    }
+
     public function findItem(int $id): ?CallImportItem
     {
         /** @var array<string, mixed>|null $row */

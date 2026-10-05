@@ -31,6 +31,13 @@ use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use Psr\Log\NullLogger;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
+use App\Order58\Application\Orders\OrderMapper;
+use App\Order58\Application\Orders\OrderSyncService;
+use App\Order58\Client\Orders\OrderDataClientInterface;
+use App\Order58\Domain\Orders\Order58Order;
+use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
+use App\Order58\Domain\Orders\OrderListQuery;
+use PHPUnit\Framework\Assert;
 use Yiisoft\Yii\Console\ExitCode;
 
 use function array_key_first;
@@ -285,6 +292,7 @@ final class ImportRecordingsCommandTest extends Unit
         ?string $lockFile = null,
         bool $enabled = true,
         ?string $temporaryDirectory = null,
+        ?OrderSyncService $orderSync = null,
     ): array {
         $clock = new class implements ClockInterface {
             public function now(): DateTimeImmutable
@@ -313,6 +321,11 @@ final class ImportRecordingsCommandTest extends Unit
 
         $command = new ImportRecordingsCommand(
             $processor,
+            // The same repository the processor writes through, so a batch this run settles is the batch
+            // the order step then asks about — exactly as production shares one connection.
+            $repository,
+            $orderSync ?? neverCalledOrderSync(),
+            $clock,
             new ResourceAdmission($this->probe($availableMb, $load)),
             new ResourceBudget(self::MIN_MB, self::MAX_LOAD),
             new NullLogger(),
@@ -373,6 +386,53 @@ final class ImportRecordingsCommandTest extends Unit
  * distinction worth testing. So the pending rows are laid out as real calls: three channels each, in
  * the order the provider offers them.
  */
+/**
+ * A real {@see OrderSyncService} whose provider cannot be reached without failing the test.
+ *
+ * The class is final, so this builds the genuine thing and makes its one outbound dependency explode.
+ * That is the stronger guard anyway: it proves no order request is made, rather than that one particular
+ * method was not called.
+ *
+ * Every existing case in this file is about recording admission, locking and the one-call bound, and
+ * none of them settles a batch — so reaching the provider at all would mean the order step fired when
+ * nothing finished.
+ */
+function neverCalledOrderSync(): OrderSyncService
+{
+    return new OrderSyncService(
+        new class implements OrderDataClientInterface {
+            public function listOrders(int $accountId, string $dateFrom, string $dateTo): array
+            {
+                Assert::fail('The Orders API must not be reached when no call batch finished.');
+            }
+        },
+        new class implements Order58OrderRepositoryInterface {
+            public function hashesFor(int $accountId, array $sourceOrderIds): array
+            {
+                return [];
+            }
+
+            public function upsert(Order58Order $order, DateTimeImmutable $now): bool
+            {
+                return false;
+            }
+
+            public function page(OrderListQuery $query): array
+            {
+                return [];
+            }
+        },
+        new OrderMapper(),
+        new class implements ClockInterface {
+            public function now(): DateTimeImmutable
+            {
+                return new DateTimeImmutable('2026-10-05 12:00:00');
+            }
+        },
+        30,
+    );
+}
+
 final class SpyCallImportRepository implements CallImportRepositoryInterface
 {
     public int $claims = 0;
@@ -541,6 +601,16 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
     public function historyPage(int $page, int $perPage, ?CallImportMode $mode = null): CallImportHistoryPage
     {
         return new CallImportHistoryPage([], 0, $page, $perPage);
+    }
+
+    /**
+     * Empty: no batch finishes in these tests, which is what makes the order step's absence provable.
+     *
+     * @return list<array{storeSourceId: int, callTimeRaw: string}>
+     */
+    public function settledBatchCalls(DateTimeImmutable $since): array
+    {
+        return [];
     }
 
     public function findItem(int $id): ?CallImportItem

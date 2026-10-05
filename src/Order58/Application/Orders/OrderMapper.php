@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Order58\Application\Orders;
 
 use App\Order58\Domain\Orders\Order58Order;
+use JsonException;
 
 use function hash;
+use function in_array;
 use function is_array;
 use function is_numeric;
 use function is_scalar;
@@ -42,6 +44,17 @@ final class OrderMapper
     ];
 
     /**
+     * Keys removed from every stored payload, at every depth.
+     *
+     * `cvv` is the one that is prohibited rather than merely unwise. The others are kept out because a
+     * tool that never charges a card has no reason to hold one.
+     */
+    private const PAYMENT_SECRETS = ['cvv', 'card_num', 'exp_date', 'billing_zip', 'street1'];
+
+    /** Record fields that are themselves JSON-encoded strings, so the secrets sit one level down. */
+    private const NESTED_JSON = ['data', 'commit_data'];
+
+    /**
      * @param array<array-key, mixed> $raw
      *
      * @throws OrderNotMappable when the record carries no usable identity
@@ -65,7 +78,7 @@ final class OrderMapper
             $times[$column] = $this->timestamp($raw[$key] ?? null);
         }
 
-        $payloadJson = json_encode($raw, JSON_THROW_ON_ERROR);
+        $payloadJson = json_encode(self::withoutPaymentSecrets($raw), JSON_THROW_ON_ERROR);
 
         $order = [
             'accountId' => $accountId,
@@ -179,6 +192,99 @@ final class OrderMapper
         // A phone, not an arbitrary string: digits with an optional leading `+`, and short enough for the
         // column. Anything else is declined rather than truncated into something that looks real.
         return preg_match('/^\+?[0-9][0-9 .()-]{2,30}$/', $phone) === 1 ? $phone : null;
+    }
+
+    /**
+     * The record with its payment secrets removed, before anything stores it.
+     *
+     * ## Why this is not optional
+     *
+     * The provider sends the card verification value in clear text, inside `data.cc` and again at the
+     * top level of `data`, for every credit-card order. **A CVV must never be persisted after
+     * authorisation** — PCI DSS 3.2 prohibits it outright, with no encryption or compensating control
+     * that makes it permissible. The expiry and the card number travel beside it and have no business
+     * in a transcription tool's database either.
+     *
+     * Order58 is the system of record for payments. Nothing in Knowledge Forge reads these fields,
+     * charges anything, or refunds anything; keeping them created a second place for them to leak from,
+     * with its own backups and its own access surface, in exchange for nothing.
+     *
+     * ## Why removing them is safe
+     *
+     * `payload_json` is **write-only** in this application. The orders list selects named columns; the
+     * demo-link reader selects named columns; no service, template or command reads the blob back. It is
+     * kept so that a field nobody mapped is not lost — and a field nobody may legally store is not that.
+     *
+     * ## What it does to the content hash
+     *
+     * The hash is computed over the sanitised payload, so an order stored before this existed reports
+     * itself changed on its next sync and is rewritten — which replaces the stored secrets with a clean
+     * copy. That is a one-time update per order, on a day somebody syncs anyway, and it is the desirable
+     * direction. It is **not** a backfill: an order nobody syncs again keeps what it has, and clearing
+     * those rows is a separate piece of work.
+     *
+     * ## What is deliberately kept
+     *
+     * `payment_method` ("cash", "credit card") and the last-four fragment that lives inside the
+     * encrypted `card_num` blob are not kept by keeping the blob — the whole value goes. Nothing here
+     * tries to preserve a masked PAN, because nothing here displays one.
+     *
+     * @param array<array-key, mixed> $raw
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function withoutPaymentSecrets(array $raw): array
+    {
+        foreach (self::NESTED_JSON as $key) {
+            $value = $raw[$key] ?? null;
+
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+
+            // `data` and `commit_data` are JSON-encoded STRINGS inside the record, so the secrets are a
+            // level down and have to be decoded to be removed. A value that does not decode to an array
+            // is left exactly as it was rather than replaced with something this guessed at.
+            try {
+                $decoded = json_decode($value, true, 512, JSON_THROW_ON_ERROR);
+            } catch (JsonException) {
+                continue;
+            }
+
+            if (!is_array($decoded)) {
+                continue;
+            }
+
+            $raw[$key] = json_encode(self::stripSecrets($decoded), JSON_THROW_ON_ERROR);
+        }
+
+        return self::stripSecrets($raw);
+    }
+
+    /**
+     * Every occurrence, at every depth.
+     *
+     * Recursive because the same values appear in more than one place in one record — inside `cc`, and
+     * again as siblings of it — and a rule that removed only the ones seen in a sample would quietly
+     * keep whichever copy the next response added.
+     *
+     * @param array<array-key, mixed> $value
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function stripSecrets(array $value): array
+    {
+        $clean = [];
+
+        foreach ($value as $key => $item) {
+            if (is_string($key) && in_array($key, self::PAYMENT_SECRETS, true)) {
+                continue;
+            }
+
+            $clean[$key] = is_array($item) ? self::stripSecrets($item) : $item;
+        }
+
+        return $clean;
     }
 
     private function id(mixed $value): ?int

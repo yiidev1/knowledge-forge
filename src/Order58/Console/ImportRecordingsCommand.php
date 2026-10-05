@@ -4,7 +4,13 @@ declare(strict_types=1);
 
 namespace App\Order58\Console;
 
+use App\Order58\Application\Orders\CallOrderDates;
+use App\Order58\Application\Orders\OrderDateRange;
+use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Application\RecordingImportProcessor;
+use App\Order58\Domain\CallImportRepositoryInterface;
+use App\Shared\Domain\Clock\ClockInterface;
+use DateTimeImmutable;
 use App\Shared\Machine\ResourceAdmission;
 use App\Shared\Machine\ResourceBudget;
 use Psr\Log\LoggerInterface;
@@ -94,6 +100,20 @@ final class ImportRecordingsCommand extends Command
 
     public function __construct(
         private readonly RecordingImportProcessor $processor,
+        /**
+         * Read-only here: which batches this run finished, so their orders can be fetched once.
+         *
+         * The recording rows themselves are written by the processor above; nothing in the order path
+         * touches them.
+         */
+        private readonly CallImportRepositoryInterface $imports,
+        /**
+         * The same service the "Sync Order58 Orders" button runs, reused exactly as it stands —
+         * chunking, deadline, hash comparison, named lock and all. Duplicating any of that would be a
+         * second opinion about when an order has changed.
+         */
+        private readonly OrderSyncService $orderSync,
+        private readonly ClockInterface $clock,
         private readonly ResourceAdmission $admission,
         private readonly ResourceBudget $budget,
         private readonly LoggerInterface $logger,
@@ -158,6 +178,10 @@ final class ImportRecordingsCommand extends Command
         $once = (bool) $input->getOption('once');
 
         try {
+            // Fixed before any work, so a batch settled by this run is recognised by it rather than by
+            // the next one. Read once: the clock moving mid-run must not change which batches qualify.
+            $runStartedAt = $this->clock->now();
+
             $recovered = $this->processor->recoverStuck(self::STALE_AFTER_SECONDS);
 
             if ($recovered > 0) {
@@ -204,6 +228,9 @@ final class ImportRecordingsCommand extends Command
             }
 
             $io->writeln(sprintf('Processed %d recording(s).', $processed));
+
+            // After the recordings, never instead of them, and never inside the loop. See syncOrders().
+            $this->syncOrders($runStartedAt, $io);
         } catch (Throwable $e) {
             // The processor already handles a failure of one item. Reaching here means something outside
             // that — a database gone away — so the run ends rather than looping against it.
@@ -221,6 +248,125 @@ final class ImportRecordingsCommand extends Command
         }
 
         return ExitCode::OK;
+    }
+
+    /**
+     * Synchronise the Order58 orders of every call batch this run finished.
+     *
+     * ## Why here and not in the web request
+     *
+     * The Orders API is a POST to a third party with a configured timeout, and the response for a busy
+     * store is tens of orders to map and upsert. "Sync Recordings" writes rows and returns; putting an
+     * external call into it would reintroduce exactly the wait that every other part of this feature is
+     * arranged to avoid. Nothing here runs in a web request.
+     *
+     * ## Why once per batch, not once per call or once per run
+     *
+     * {@see CallImportRepositoryInterface::settledBatchCalls()} returns a batch's calls in the single
+     * run that settles it, so a fifty-call selection costs **one** request per business day rather than
+     * fifty. The dates are then deduplicated again here, because fifty calls on one evening are one
+     * day's orders.
+     *
+     * ## Why a failure here cannot cost a recording
+     *
+     * The recordings are already downloaded and their rows already written by the time this runs. An
+     * Orders API that is down, refuses, or answers something unreadable is logged and the run still
+     * reports success. The two are independent on purpose: an order that did not arrive can be fetched
+     * again from the Orders page, while a recording lost to an unrelated failure cannot.
+     *
+     * A date with no orders at all is one of those failures rather than an empty list — the provider
+     * answers without an `Orders` key and the client raises. It is logged at info rather than warning
+     * for that reason: on a quiet day it is the normal answer, and a warning that fires routinely is a
+     * warning nobody reads.
+     *
+     * Concurrency is the existing named lock inside {@see OrderSyncService}, which is also what stops
+     * this colliding with an administrator pressing "Sync Order58 Orders" for the same day.
+     */
+    private function syncOrders(DateTimeImmutable $runStartedAt, SymfonyStyle $io): void
+    {
+        try {
+            $calls = $this->imports->settledBatchCalls($runStartedAt);
+        } catch (Throwable $e) {
+            $this->logger->warning('Order58 order sync could not be scheduled after a recording run.', [
+                'reason' => 'order58_order_sync_lookup_failed',
+                'error_class' => $e::class,
+                'error_message' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        if ($calls === []) {
+            return;
+        }
+
+        // Grouped by store first: an account id is half of what the Orders API is asked, and two stores
+        // settling in one run are two different questions.
+        /** @var array<int, list<string>> $byStore */
+        $byStore = [];
+
+        foreach ($calls as $call) {
+            $byStore[$call['storeSourceId']][] = $call['callTimeRaw'];
+        }
+
+        foreach ($byStore as $storeSourceId => $callTimes) {
+            foreach (CallOrderDates::fromCallTimes($callTimes) as $date) {
+                $this->syncOneDate($storeSourceId, $date, $io);
+            }
+        }
+    }
+
+    /**
+     * One store, one business day, one call to the existing service — reused exactly as the manual
+     * button uses it, including its chunking, deadline, hash comparison and named lock.
+     */
+    private function syncOneDate(int $storeSourceId, string $date, SymfonyStyle $io): void
+    {
+        $ranges = OrderDateRange::create($date, $date);
+        $range = $ranges[0] ?? null;
+
+        if (!$range instanceof OrderDateRange) {
+            // Unreachable for a date this application derived, and refused rather than guessed at.
+            return;
+        }
+
+        try {
+            $summary = $this->orderSync->sync($storeSourceId, $range);
+        } catch (Throwable $e) {
+            // Never fatal to the run. The message carries no body and no header - see OrderDataFailed.
+            $this->logger->info('Order58 orders were not synchronised for a finished call batch.', [
+                'reason' => 'order58_order_sync_skipped',
+                'store_source_id' => $storeSourceId,
+                'business_date' => $date,
+                'error_class' => $e::class,
+                'error_message' => $e->getMessage(),
+            ]);
+
+            $io->writeln(sprintf('  orders %s %s: not synchronised', $storeSourceId, $date));
+
+            return;
+        }
+
+        // Counts only. No order id, no customer, no payload.
+        $this->logger->info('Order58 orders synchronised after a call batch finished.', [
+            'reason' => 'order58_order_sync_done',
+            'store_source_id' => $storeSourceId,
+            'business_date' => $date,
+            'received' => $summary->received,
+            'created' => $summary->created,
+            'updated' => $summary->updated,
+            'unchanged' => $summary->unchanged,
+        ]);
+
+        $io->writeln(sprintf(
+            '  orders %s %s: %d received, %d created, %d updated, %d unchanged',
+            $storeSourceId,
+            $date,
+            $summary->received,
+            $summary->created,
+            $summary->updated,
+            $summary->unchanged,
+        ));
     }
 
     /**

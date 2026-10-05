@@ -354,6 +354,107 @@ final class CallImportRepositoryTest extends Unit
 
     // ------------------------------------------------------------------ harness
 
+    /**
+     * A batch yields its calls in the one run that settles it, and never again.
+     *
+     * This is what makes the order sync cost one request per selection rather than one per call. Fifty
+     * selected calls drain over fifty `--once` ticks; if every tick asked "what did I just touch", the
+     * Orders API would be asked fifty times for the same day.
+     */
+    public function testABatchSurrendersItsCallsOnceItHasNothingOutstanding(): void
+    {
+        $batch = $this->batch();
+        $this->queue($batch, '22733319');
+        $this->queue($batch, '22733419');
+
+        $before = $this->now->modify('-1 minute');
+
+        // Still working: six channel rows, none of them settled.
+        self::assertSame([], $this->repository->settledBatchCalls($before));
+
+        $this->settleEveryItem($batch);
+
+        $calls = $this->repository->settledBatchCalls($before);
+
+        self::assertNotSame([], $calls, 'a finished batch must surrender its calls exactly once');
+
+        foreach ($calls as $call) {
+            self::assertSame(self::STORE, $call['storeSourceId']);
+            self::assertSame('2026-09-24 06:09:16', $call['callTimeRaw']);
+        }
+
+        // And the window is what stops it firing again: a later run asks from a later instant and the
+        // batch, whose rows have not moved since, no longer qualifies.
+        self::assertSame([], $this->repository->settledBatchCalls($this->now->modify('+1 minute')));
+    }
+
+    /** A call that produced no order has no order to synchronise, and is not offered as though it had. */
+    public function testACallWithNoOrderIdIsNotOffered(): void
+    {
+        $batch = $this->batch();
+
+        $this->repository->queueCall(
+            $batch,
+            self::STORE,
+            '22733519',
+            '2026-09-24 06:09:16',
+            '2026-09-24',
+            null,
+            RecordingChannel::all(),
+            $this->now,
+        );
+
+        $this->settleEveryItem($batch);
+
+        self::assertSame([], $this->repository->settledBatchCalls($this->now->modify('-1 minute')));
+    }
+
+    /** One unfinished channel is enough to hold the whole batch back. */
+    public function testABatchWithOneChannelStillRunningIsNotOffered(): void
+    {
+        $batch = $this->batch();
+        $this->queue($batch, '22733619');
+
+        $this->settleEveryItem($batch);
+        // Put one row back to PENDING, exactly as a retry would.
+        $this->connection->createCommand(
+            'UPDATE {{%order58_call_imports}} SET status = :s WHERE batch_id = :b LIMIT 1',
+            [':s' => Order58ImportStatus::Pending->value, ':b' => $batch],
+        )->execute();
+
+        self::assertSame([], $this->repository->settledBatchCalls($this->now->modify('-1 minute')));
+    }
+
+    /** Settled includes failure: a recording that could not be fetched still belongs to a real order. */
+    public function testAFailedBatchStillSurrendersItsCalls(): void
+    {
+        $batch = $this->batch();
+        $this->queue($batch, '22733719');
+
+        $this->connection->createCommand(
+            'UPDATE {{%order58_call_imports}} SET status = :s, updated_at = :u WHERE batch_id = :b',
+            [
+                ':s' => Order58ImportStatus::Failed->value,
+                ':u' => $this->now->format('Y-m-d H:i:s'),
+                ':b' => $batch,
+            ],
+        )->execute();
+
+        self::assertNotSame([], $this->repository->settledBatchCalls($this->now->modify('-1 minute')));
+    }
+
+    private function settleEveryItem(int $batchId): void
+    {
+        $this->connection->createCommand(
+            'UPDATE {{%order58_call_imports}} SET status = :s, updated_at = :u WHERE batch_id = :b',
+            [
+                ':s' => Order58ImportStatus::Imported->value,
+                ':u' => $this->now->format('Y-m-d H:i:s'),
+                ':b' => $batchId,
+            ],
+        )->execute();
+    }
+
     private function batch(
         int $store = self::STORE,
         string $provider = 'WHISPER',
