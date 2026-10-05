@@ -39,8 +39,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var int $total
  * @var int $page
  * @var int $pageCount
- * @var int $perPage
- * @var list<int> $pageSizes
+ * @var int $perPage orders per page; fixed by the Action
  * @var WorkerStatusView $worker
  * @var string $maxUploadLabel
  * @var string $maxDurationLabel
@@ -70,13 +69,7 @@ $storeUrl = $urlGenerator->generate(AudioToTextRoute::STORE, ['sourceId' => $sto
 // One endpoint for the whole page. The attribute that uses it is rendered only while something is
 // still being downloaded, so an idle page never asks.
 $arrivingUrl = $urlGenerator->generate(AudioToTextRoute::STORE_ARRIVING, ['sourceId' => $store->sourceId]);
-$pageUrl = static function (int $p) use ($storeUrl, $perPage): string {
-    // The size travels with every page link: without it, pressing Next would quietly put the reader
-    // back on the default size mid-list.
-    $query = array_filter(['page' => $p > 1 ? $p : null, 'per_page' => $perPage === 25 ? null : $perPage]);
-
-    return $query === [] ? $storeUrl : $storeUrl . '?' . http_build_query($query);
-};
+$pageUrl = static fn(int $p): string => $storeUrl . ($p > 1 ? '?page=' . $p : '');
 
 /**
  * @param list<string> $messages
@@ -926,33 +919,16 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
         <?php endif; ?>
 
         <?php
+        // The window this page is showing, not just the total — the question a pager raises. The size
+        // is fixed in the Action and handed here, so this sentence and the offsets cannot disagree.
         $first = $total === 0 ? 0 : (($page - 1) * $perPage) + 1;
 $last = min($page * $perPage, $total);
 ?>
-        <div class="a2t-list-footer">
-            <p class="util-muted">
-                <?php // What is on screen, not just the total — the question a pager raises.?>
-                Showing <?= $first ?>&ndash;<?= $last ?> of <?= $total ?>
-                order<?= $total === 1 ? '' : 's' ?> for this store, newest first.
-                Every recording of one order shares its row.
-            </p>
-
-            <?php // A GET form, so a chosen size is a readable, shareable address.?>
-            <form method="get" action="<?= Html::encode($storeUrl) ?>" class="a2t-page-size">
-                <label class="field__label" for="a2t-per-page">Per page</label>
-                <select class="field__control" id="a2t-per-page" name="per_page">
-                    <?php foreach ($pageSizes as $size): ?>
-                        <option value="<?= $size ?>"<?= $size === $perPage ? ' selected' : '' ?>><?= $size ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <?php
-// A real button rather than an `onchange` handler. The policy on this page is
-// `script-src 'self'` with no inline JavaScript, so an inline handler would be blocked by
-// the browser and caught by the test that asserts this page carries none.
-?>
-                <button class="btn btn--sm" type="submit">Apply</button>
-            </form>
-        </div>
+        <p class="util-muted">
+            Showing <?= $first ?>&ndash;<?= $last ?> of <?= $total ?>
+            order<?= $total === 1 ? '' : 's' ?> for this store, newest first.
+            Every recording of one order shares its row.
+        </p>
     <?php endif; ?>
 </div>
 

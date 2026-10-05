@@ -2604,6 +2604,15 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
     padding: .5rem .6rem;
 }
 
+/* ---- The conversions table: density -----------------------------------------------------------
+   Cells top-align by default (`.a2t-table th, td { vertical-align: top }`) because some carry stacked
+   blocks. Most carry one short value, and against a tall neighbour those floated to the ceiling with
+   the row's height stretched beneath them. Middle alignment is what makes a row read as one line of
+   information rather than a column of orphans. */
+.a2t-conversions td { padding: .55rem 1rem; vertical-align: middle; }
+/* Short values, one line each. */
+.a2t-conversions td.a2t-cell-tight { white-space: nowrap; }
+
 /* The status cell's trigger: a badge that happens to be a link, so a glance says "downloading" and a
    click says how far. The detail lives in a modal because the cell is a fixed-width column and the
    panel is seven lines — there is no arrangement in which both fit. */

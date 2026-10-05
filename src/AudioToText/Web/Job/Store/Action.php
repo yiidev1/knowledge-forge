@@ -35,7 +35,6 @@ use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 use function ceil;
-use function in_array;
 use function is_array;
 use function is_string;
 use function max;
@@ -74,17 +73,15 @@ use function trim;
 final readonly class Action
 {
     /** Conversations per page of the store's history. */
-    /** The default page size. One of {@see PAGE_SIZES}. */
-    private const PER_PAGE = 25;
-
     /**
-     * The sizes an operator may choose, as an allow-list.
+     * Orders per page. The single source of truth — the template is handed this value rather than
+     * repeating it.
      *
-     * Taken from the query string, so it is a value a visitor controls: an allow-list rather than a
-     * clamp, because `?per_page=100000` would otherwise be a one-line way to ask this page for every
-     * order a store has.
+     * Fixed, and deliberately not readable from the query string: a page size a visitor controls is a
+     * one-line way to ask this page for every order a store has, and this table renders an audio player
+     * and a details dialog per row.
      */
-    private const PAGE_SIZES = [10, 25, 50];
+    private const PER_PAGE = 15;
 
     public function __construct(
         private WebViewRenderer $viewRenderer,
@@ -217,14 +214,13 @@ final readonly class Action
         // Counted and paged as GROUPS: twenty rows means twenty orders, however many recordings they
         // hold between them. Paging conversations and grouping them afterwards would put half an order
         // on one page and the rest on the next.
-        $perPage = $this->requestedPerPage($request);
         $total = $this->groups->countFor($store->sourceId);
-        $pageCount = max(1, (int) ceil($total / $perPage));
+        $pageCount = max(1, (int) ceil($total / self::PER_PAGE));
         $page = min($this->requestedPage($request), $pageCount);
 
         $groups = $this->arriving->merge(
             $store->sourceId,
-            $this->groups->pageFor($store->sourceId, $perPage, ($page - 1) * $perPage),
+            $this->groups->pageFor($store->sourceId, self::PER_PAGE, ($page - 1) * self::PER_PAGE),
             $this->clock->now(),
         );
 
@@ -254,8 +250,7 @@ final readonly class Action
                 'total' => $total,
                 'page' => $page,
                 'pageCount' => $pageCount,
-                'perPage' => $perPage,
-                'pageSizes' => self::PAGE_SIZES,
+                'perPage' => self::PER_PAGE,
                 'worker' => $this->workerHealth->status(),
                 'maxUploadLabel' => $this->settings->transcription->maxUploadLabel(),
                 'maxDurationLabel' => $this->settings->transcription->maxDurationLabel(),
@@ -452,15 +447,6 @@ final readonly class Action
         $params = $request->getQueryParams();
 
         return is_string($params['page'] ?? null) ? max(1, (int) $params['page']) : 1;
-    }
-
-    /** The chosen page size, or the default. Anything not on the allow-list is simply the default. */
-    private function requestedPerPage(ServerRequestInterface $request): int
-    {
-        $raw = $request->getQueryParams()['per_page'] ?? null;
-        $size = is_string($raw) ? (int) $raw : 0;
-
-        return in_array($size, self::PAGE_SIZES, true) ? $size : self::PER_PAGE;
     }
 
     private function megabytes(int $bytes): string
