@@ -53,6 +53,10 @@ window.KFAudioStages = {
         var result = form.querySelector('[data-a2t-upload-result]');
         var button = form.querySelector('.a2t-upload-submit');
         var buttonLabel = button.textContent;
+        // The template's own wording, kept so an audio-only upload can borrow the link and the next
+        // upload gets it back. Without this, one mixed recording would leave every later conversion
+        // on this page offering to "View recording".
+        var resultLabel = result.textContent;
         var timer = null;
         var statusRequest = null;
         var stopped = false;
@@ -74,6 +78,8 @@ window.KFAudioStages = {
             percent.textContent = '0%';
             progress.value = 0;
             uploadStep.dataset.state = 'pending';
+            // Restored for the next upload, which may be a recording that does have a conversion.
+            conversionStep.hidden = false;
             conversionStep.dataset.state = 'pending';
             conversionProgress.value = 0;
             conversionPercent.textContent = 'Pending';
@@ -115,6 +121,7 @@ window.KFAudioStages = {
             });
             error.hidden = true;
             result.hidden = true;
+            result.textContent = resultLabel;
             progress.value = 0;
             percent.textContent = '0%';
             uploadStep.dataset.state = 'active';
@@ -148,6 +155,42 @@ window.KFAudioStages = {
                 showError(message);
                 error.tabIndex = -1;
                 error.focus();
+            }
+
+            /**
+             * The whole operation, finished, for a recording that is never transcribed.
+             *
+             * One step rather than two: the conversion row is hidden instead of being drawn complete,
+             * because it never happened and showing it finished would say it had. The recording is
+             * reachable from the link the card already carries.
+             */
+            function finishAudioOnly(destination) {
+                stopped = true;
+                uploadStep.dataset.state = 'complete';
+                progress.value = 100;
+                percent.textContent = '100%';
+                result.href = destination.href;
+                // Not "View conversion": there is no conversion, and the link goes to a recording.
+                result.textContent = 'View recording \u2197';
+                result.hidden = false;
+                error.hidden = true;
+
+                state('complete', 'Complete');
+
+                // AFTER state(), which unhides both steps for every value but 'error'. The conversion
+                // row is hidden rather than drawn complete, because it never happened — and a bar shown
+                // at 100% would say it had.
+                conversionStep.hidden = true;
+
+                status.textContent = 'Audio file uploaded successfully \u2014 audio only, no '
+                    + 'transcription is required for Mix / Common.';
+                button.textContent = 'Audio uploaded';
+
+                // Back to the table, where the new row is. The same thing a finished conversion does
+                // from this card, and for the same reason: the row is server-rendered.
+                if (form.hasAttribute('data-a2t-stay')) {
+                    timer = setTimeout(function () { window.location.reload(); }, 1200);
+                }
             }
 
             function trackConversion(statusUrl, destination, interval, doneUrl) {
@@ -209,6 +252,16 @@ window.KFAudioStages = {
                         })
                         .then(function (data) {
                             if (stopped || !data) {
+                                return;
+                            }
+                            // A recording nothing will transcribe, reached through a path that polled
+                            // anyway. Its status is a perfectly good answer and the server says plainly
+                            // that no transcript is expected — so this finishes rather than treating an
+                            // unfamiliar value as a fault. Before the allow-list below, which would
+                            // otherwise throw and report a successful upload as a connection failure.
+                            if (data.transcriptionExpected === false) {
+                                error.hidden = true;
+                                finishAudioOnly(destination);
                                 return;
                             }
                             if (!['QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED'].includes(data.status)) {
@@ -304,6 +357,20 @@ window.KFAudioStages = {
                 var jobPath = destination.pathname.match(/^(.*\/audio-to-text\/job\/[0-9a-f]{32})(?:\/review)?\/?$/);
                 if (destination.origin === window.location.origin && jobPath) {
                     var pendingJob = response.querySelector('[data-a2t-poll]');
+
+                    // Nothing is coming for this recording, and the server said so. A mixed file is
+                    // stored as the playable original of its call and converted to text never, so the
+                    // upload IS the whole operation — drawing a conversion step and waiting on it would
+                    // be waiting for something nobody started.
+                    //
+                    // Checked before the fallback below, which exists for the opposite case: a page
+                    // with no poller because the job already finished. Both pages omit the poll
+                    // attributes; only this one must not be followed by a poll.
+                    if (!pendingJob && response.querySelector('[data-a2t-audio-only]')) {
+                        finishAudioOnly(destination);
+                        return;
+                    }
+
                     var statusUrl = new URL(pendingJob ? pendingJob.dataset.a2tPoll : jobPath[1] + '/status', destination);
                     // Where a finished conversion opens: the correction page, named by the server in
                     // `data-a2t-done` so no host, deployment prefix or job token is assembled here.
@@ -2294,6 +2361,24 @@ window.KFAudioStages = {
     function processingViewModel(state, intent) {
         var status = state.status;
 
+        // A recording nothing will transcribe. Finished, and finished successfully: the file is stored
+        // and playable, and there is no stage for it to be partway through. Asked before everything
+        // below, all of which describes progress through a transcription — without it the fall-through
+        // reads NOT_REQUESTED as "Starting" and the dialog waits for a worker that will never claim it.
+        if (state.transcriptionExpected === false) {
+            return {
+                headline: intent.audioOnlyHeadline || 'Audio uploaded.',
+                badge: 'Completed',
+                percent: 100,
+                step: null,
+                detail: 'Audio only \u2014 this is the mixed recording of the call, so it is kept as '
+                    + 'the playable original and is not converted to text.',
+                finished: true,
+                audioOnly: true,
+                state: 'done'
+            };
+        }
+
         if (status === 'COMPLETED') {
             return {
                 headline: intent.doneHeadline || 'Finished.',
@@ -2869,6 +2954,8 @@ window.KFAudioStages = {
             var model = processingViewModel(state, {
                 headline: 'Updating audio…',
                 doneHeadline: 'Audio updated.',
+                // A mixed replacement is stored and done; nothing was processed, so nothing says it was.
+                audioOnlyHeadline: 'Audio updated.',
                 failedHeadline: 'The new recording could not be processed.'
             });
 
@@ -2877,7 +2964,10 @@ window.KFAudioStages = {
                 clearUpdateMemory();
             }
 
-            if (state.status === 'COMPLETED') {
+            // Stored and finished, whether that took a transcription or not. A replacement mixed
+            // recording is complete the moment it is on disk, so it arrives the same way a converted
+            // one does rather than sitting in a progress panel nothing will ever advance.
+            if (state.status === 'COMPLETED' || model.audioOnly) {
                 // Held for a moment before the reload, so the last thing the reader sees is the result
                 // rather than a page turning over under them.
                 renderProcessing(updateDialog, model, updateStarted);
@@ -3914,6 +4004,9 @@ window.KFAudioStages = {
         return processingViewModel(state, {
             headline: 'Processing transcription…',
             doneHeadline: 'Transcription finished.',
+            // Reached when a progress view is opened on a recording that is kept as audio. It is not a
+            // transcription that finished; it is a recording that never needed one.
+            audioOnlyHeadline: 'Audio only \u2014 no transcription for this recording.',
             failedHeadline: 'This recording could not be transcribed.'
         });
     }

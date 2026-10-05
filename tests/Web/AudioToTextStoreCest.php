@@ -975,6 +975,80 @@ final class AudioToTextStoreCest
     }
 
     /**
+     * A mixed upload's status says plainly that no transcript is coming, and its page offers no poller.
+     *
+     * The two facts the browser needs to stop waiting. Without the first, a poller that reaches this
+     * recording sees a status it does not recognise and reports a successful upload as a connection
+     * failure; without the second, the upload card invents a status URL and starts polling a recording
+     * nothing will ever claim.
+     */
+    public function aMixedRecordingReportsThatNoTranscriptIsExpected(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCommon($I, self::STORE_A);
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $publicId = (string) $child['public_id'];
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/status');
+        $I->seeResponseCodeIsSuccessful();
+
+        $status = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertIsArray($status);
+        Assert::assertSame('NOT_REQUESTED', $status['status']);
+        Assert::assertFalse(
+            $status['transcriptionExpected'],
+            'the server, not the browser, is what knows a mixed recording is never transcribed',
+        );
+
+        // And the page it landed on: no poller, and an explicit marker so the upload card can tell
+        // "nothing coming" from "already finished", which look identical otherwise.
+        $I->amOnPage('/audio-to-text/job/' . $publicId);
+        $I->dontSeeElement('[data-a2t-poll]');
+        $I->seeElement('[data-a2t-audio-only]');
+    }
+
+    /** A declared side says the opposite, and keeps its poller. */
+    public function aDeclaredSideReportsThatATranscriptIsExpected(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER');
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $publicId = (string) $child['public_id'];
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/status');
+        $status = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame('QUEUED', $status['status']);
+        Assert::assertTrue($status['transcriptionExpected']);
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId);
+        $I->seeElement('[data-a2t-poll]');
+        $I->dontSeeElement('[data-a2t-audio-only]');
+    }
+
+    /** A completed transcription still reports one as expected — it had one, and it finished. */
+    public function aCompletedTranscriptionStillReportsOneAsExpected(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER');
+
+        $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
+        $this->completeWithSeparation((string) $child['public_id']);
+
+        $I->amOnPage('/audio-to-text/job/' . $child['public_id'] . '/status');
+        $status = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
+
+        Assert::assertSame('COMPLETED', $status['status']);
+        Assert::assertTrue(
+            $status['transcriptionExpected'],
+            'this is about whether the recording has a transcript at all, not about progress',
+        );
+    }
+
+    /**
      * The Update Audio dialog offers transcription settings only to a recording that will be transcribed.
      *
      * The markup is rendered once with the page and filled per recording by the script, so what is
@@ -3185,9 +3259,18 @@ final class AudioToTextStoreCest
 
         /** @var array<string, mixed> $state */
         $state = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
-        // `eta` joins the three enum values: two second counts for the dialog's "usually takes about"
-        // line, or null where this recording gives nothing to estimate from. Never a countdown.
-        Assert::assertSame(['status', 'stage', 'speakerSeparation', 'eta'], array_keys($state));
+        // The whole contract, pinned: three enum values, one boolean and an estimate.
+        //
+        // `transcriptionExpected` says whether this recording has a transcript in its life at all —
+        // every other field here describes progress *through* one, and a mixed recording has none to
+        // progress through. The browser reads it to know whether to wait.
+        //
+        // `eta` is two second counts for the dialog's "usually takes about" line, or null where this
+        // recording gives nothing to estimate from. Never a countdown.
+        Assert::assertSame(
+            ['status', 'stage', 'transcriptionExpected', 'speakerSeparation', 'eta'],
+            array_keys($state),
+        );
         Assert::assertSame('QUEUED', $state['status'], 'Queued only. The web request converted nothing.');
     }
 

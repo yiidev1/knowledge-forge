@@ -434,16 +434,39 @@ final class AudioToTextCest
 
     // ---------------------------------------------------------------- output safety
 
-    public function theStatusEndpointReportsStatusStageAndSeparationOnly(WebTester $I): void
+    /**
+     * The polling endpoint publishes progress keys and never a word anybody said.
+     *
+     * The guarantee is about the **transcript**, not about the letters t-r-a-n-s-c-r-i-p-t: the
+     * response legitimately carries `transcriptionExpected`, a boolean saying whether this recording
+     * has a transcript in its life at all, which is what tells a poller whether to wait. So this
+     * asserts the absence of the content and of the key that would carry it, rather than of a substring
+     * — which an earlier version did, and which made adding an honest boolean look like a leak.
+     */
+    public function theStatusEndpointPublishesProgressAndNeverTheTranscript(WebTester $I): void
     {
         $this->signIn($I, self::ADMIN_A);
         $publicId = $this->upload($I);
+        $this->completeJob($publicId, 'Words nobody outside the detail page may read.');
 
         $I->amOnPage('/audio-to-text/job/' . $publicId . '/status');
         $I->seeResponseCodeIs(200);
-        $I->see('"status":"QUEUED"');
-        $I->see('"stage":"QUEUED"');
-        $I->dontSee('transcript');
+        $I->see('"status":"COMPLETED"');
+        $I->see('"transcriptionExpected":true');
+        $I->dontSee('"transcript"');
+        $I->dontSee('Words nobody outside the detail page may read.');
+    }
+
+    /** And a recording that is never transcribed says so, so a poller stops rather than waiting. */
+    public function theStatusEndpointSaysWhenNoTranscriptIsExpected(WebTester $I): void
+    {
+        $this->signIn($I, self::ADMIN_A);
+        $publicId = $this->uploadMixed($I);
+
+        $I->amOnPage('/audio-to-text/job/' . $publicId . '/status');
+        $I->seeResponseCodeIs(200);
+        $I->see('"status":"NOT_REQUESTED"');
+        $I->see('"transcriptionExpected":false');
     }
 
     public function aTranscriptContainingMarkupIsEscaped(WebTester $I): void

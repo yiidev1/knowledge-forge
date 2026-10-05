@@ -91,6 +91,16 @@ $separation = $job->speakerSeparationStatus;
         ?>
         data-a2t-done="<?= Html::encode($reviewUrl) ?>"
     <?php endif; ?>
+    <?php
+    // Nothing is coming for this recording, and that is the finished state rather than a missing one.
+    //
+    // The uploader reads it to tell two silences apart: a page with no poller because the job already
+    // finished, and a page with no poller because this recording is never transcribed. Both omit the
+    // attributes above; only one of them should make the upload card draw a conversion step and wait.
+?>
+    <?php if ($job->status === JobStatus::NOT_REQUESTED): ?>
+        data-a2t-audio-only
+    <?php endif; ?>
 >
     <div class="a2t-job__header">
         <span class="a2t-badge a2t-badge--<?= Html::encode(strtolower($job->status->value)) ?>" data-a2t-field="status">

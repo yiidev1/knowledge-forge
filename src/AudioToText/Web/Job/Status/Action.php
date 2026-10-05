@@ -51,6 +51,17 @@ final readonly class Action
         $body = json_encode([
             'status' => $job->status->value,
             'stage' => $job->stage?->value,
+            // Whether a transcript is part of this recording's life at all.
+            //
+            // The client needs this because every other field describes *progress through* a
+            // transcription, and a mixed recording has none to progress through: it is stored as the
+            // playable original of its call and converted to text never. Without it a poller has only
+            // the status to go on, reads NOT_REQUESTED as a value it does not recognise, and reports a
+            // successful upload as a connection failure — which is exactly what happened.
+            //
+            // Sent as its own field rather than left for the browser to infer from the status, so the
+            // rule is stated once, here, by the side that owns it.
+            'transcriptionExpected' => $job->status->transcriptionRequested(),
             'speakerSeparation' => $job->speakerSeparationStatus?->value,
             // Approximate, bounded, and never a countdown. Null where this recording cannot support an
             // honest estimate, which the screen words differently rather than filling in.

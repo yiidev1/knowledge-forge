@@ -235,6 +235,94 @@ final class CombinedTurnOwnershipInBrowserTest extends TestCase
     }
 
     /**
+     * An upload of a recording that is never transcribed finishes at the upload, and waits for nothing.
+     *
+     * The bug this pins was not cosmetic. `NOT_REQUESTED` was absent from the poller's allow-list, so a
+     * perfectly good answer threw, landed in the network-failure handler, and reported a successful
+     * upload as "Connection interrupted. Your recording remains uploaded; conversion may still be
+     * running." — a fabricated error for an operation that had already succeeded, followed by a poll
+     * that would never end.
+     *
+     * Two independent guards, because two paths reach it: the upload card never starts a poll when the
+     * server's page says there is nothing to poll, and the poller itself finishes rather than throwing
+     * if it is somehow already running.
+     */
+    public function testAnAudioOnlyUploadNeverStartsAConversionPoll(): void
+    {
+        $upload = self::dialog();
+
+        self::assertTrue(
+            str_contains($upload, "if (!pendingJob && response.querySelector('[data-a2t-audio-only]')) {"),
+            'the card must read the page it landed on before inventing a status url to poll',
+        );
+
+        $body = self::functionBody($upload, 'function finishAudioOnly(');
+
+        self::assertNotSame('', $body, 'an audio-only upload needs a terminal state of its own');
+        self::assertTrue(
+            str_contains($body, 'conversionStep.hidden = true;'),
+            'the conversion row must be withheld, not drawn complete for something that never ran',
+        );
+        self::assertTrue(
+            str_contains($body, 'stopped = true;'),
+            'nothing may keep polling after an audio-only upload',
+        );
+        self::assertFalse(
+            str_contains($body, 'conversionProgress.value = 100'),
+            'showing a finished conversion bar would say a conversion happened',
+        );
+    }
+
+    /** And the poller treats the server's own answer as success rather than as an unknown value. */
+    public function testThePollerTreatsNoTranscriptExpectedAsSuccess(): void
+    {
+        $body = self::functionBody(self::dialog(), 'function trackConversion(');
+
+        self::assertTrue(
+            str_contains($body, 'if (data.transcriptionExpected === false) {'),
+            'the poller must read the server field rather than guess from the status',
+        );
+
+        // Before the allow-list, or the unfamiliar status throws first and the fix never runs.
+        $guard = strpos($body, 'data.transcriptionExpected === false');
+        $allowList = strpos($body, "'QUEUED', 'PROCESSING', 'COMPLETED', 'FAILED'");
+
+        self::assertNotFalse($guard);
+        self::assertNotFalse($allowList);
+        self::assertLessThan(
+            $allowList,
+            $guard,
+            'the audio-only check has to come first, or the status it is about throws before it',
+        );
+    }
+
+    /**
+     * The dialogs' shared progress model reads the same field, so Manage and Update stop waiting too.
+     *
+     * Every other branch of that model describes progress through a transcription, so without this one
+     * a mixed replacement reads as "Starting" for ever.
+     */
+    public function testTheSharedProgressModelFinishesAnAudioOnlyRecording(): void
+    {
+        $body = self::functionBody(self::dialog(), 'function processingViewModel(');
+
+        self::assertTrue(str_contains($body, 'if (state.transcriptionExpected === false) {'));
+        self::assertTrue(str_contains($body, 'finished: true'));
+        self::assertTrue(str_contains($body, 'audioOnly: true'));
+    }
+
+    /** A mixed replacement arrives the same way a converted one does, rather than sitting in progress. */
+    public function testAnAudioOnlyReplacementArrivesWithoutWaiting(): void
+    {
+        $body = self::functionBody(self::dialog(), 'function watchReplacement(');
+
+        self::assertTrue(
+            str_contains($body, "if (state.status === 'COMPLETED' || model.audioOnly) {"),
+            'a stored replacement is finished whether or not anything was transcribed',
+        );
+    }
+
+    /**
      * The body of one function, from its opening brace to the matching close.
      *
      * Brace-counted rather than regex-matched: these functions contain both braces and quoted selector
