@@ -42,6 +42,9 @@ $this->setParameter('breadcrumbs', [
 $csrfField = (string) $csrf->hiddenInput();
 $pageUrl = $urlGenerator->generate('order58.call-recordings');
 $downloadUrl = $urlGenerator->generate('order58.call-recordings.download');
+// Generated from the route name, not written out: the same name the sidebar entry uses, so the two
+// cannot drift apart and the link stays correct under whatever base path a deployment is served from.
+$ordersUrl = $urlGenerator->generate('order58.orders');
 
 /**
  * One channel as a step: its mark, the provider's name for it, and where it has got to.
@@ -148,6 +151,7 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
     ?>
     <div class="page-header__actions">
         <a class="btn btn--secondary" href="<?= Html::encode($historyUrl) ?>">View Download History</a>
+        <a class="btn btn--secondary" href="<?= Html::encode($ordersUrl) ?>">Sync Order58 Orders</a>
     </div>
 </div>
 
