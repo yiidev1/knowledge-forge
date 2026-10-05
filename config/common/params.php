@@ -199,6 +199,7 @@ return [
     'app/audio-utterance' => [
         'gapMs' => Environment::int('AUDIO_UTTERANCE_GAP_MS'),
         'maxDurationMs' => Environment::int('AUDIO_UTTERANCE_MAX_MS'),
+        'softMaxDurationMs' => Environment::int('AUDIO_UTTERANCE_SOFT_MAX_MS'),
         'minDurationMs' => Environment::int('AUDIO_UTTERANCE_MIN_MS'),
     ],
 

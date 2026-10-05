@@ -159,6 +159,9 @@ final class Environment
         'AUDIO_UTTERANCE_GAP_MS' => ['type' => 'int', 'default' => 900, 'min' => 200, 'max' => 5000],
         // A safety net for a monologue with no qualifying pause anywhere in it.
         'AUDIO_UTTERANCE_MAX_MS' => ['type' => 'int', 'default' => 20000, 'min' => 2000, 'max' => 120000],
+        // Above this, a pause inside a sentence may end an utterance too — the fallback that keeps a
+        // speaker who never punctuates from being cut mid-word by the cap above instead.
+        'AUDIO_UTTERANCE_SOFT_MAX_MS' => ['type' => 'int', 'default' => 9000, 'min' => 1000, 'max' => 120000],
         // Below this a fragment is kept with the sentence it belongs to rather than standing alone.
         'AUDIO_UTTERANCE_MIN_MS' => ['type' => 'int', 'default' => 1200, 'min' => 0, 'max' => 10000],
 

@@ -277,6 +277,7 @@ return [
         '__construct()' => [
             'gapMs' => $params['app/audio-utterance']['gapMs'],
             'maxDurationMs' => $params['app/audio-utterance']['maxDurationMs'],
+            'softMaxDurationMs' => $params['app/audio-utterance']['softMaxDurationMs'],
             'minDurationMs' => $params['app/audio-utterance']['minDurationMs'],
         ],
     ],

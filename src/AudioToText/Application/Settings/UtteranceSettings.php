@@ -18,6 +18,14 @@ namespace App\AudioToText\Application\Settings;
  * real 241-second two-party call and found the gap distribution flat between 500 ms and 1500 ms — the
  * utterance count moved by about 15% across that whole range — so no single value is obviously correct
  * and the number has to be adjustable without a deploy.
+ *
+ * ## Why silence alone is not the rule
+ *
+ * A later measurement on live channels explained that flatness: these speakers pause *inside* a
+ * sentence about as often as they finish one, and the two kinds of pause are the same length. Cutting
+ * on silence alone gave 22 of 29 turns starting mid-phrase. So punctuation decides which qualifying
+ * pauses are worth cutting at, and {@see $softMaxDurationMs} stops that waiting forever on a speaker
+ * who never punctuates. See {@see \App\AudioToText\Application\Speaker\SingleSpeakerUtteranceSegmenter}.
  */
 final readonly class UtteranceSettings
 {
@@ -40,6 +48,21 @@ final readonly class UtteranceSettings
          * bubble, which is the very complaint this feature exists to fix.
          */
         public int $maxDurationMs,
+        /**
+         * How long an utterance may run before a pause inside a sentence is allowed to end it.
+         *
+         * The fallback threshold, and the one that makes the sentence-first rule safe for a speaker who
+         * barely punctuates. Below it, only a pause following sentence-ending punctuation is a boundary;
+         * above it, any qualifying pause will do.
+         *
+         * Measured on a real call, the Customer's eleven pauses were 0, 210, 970, 970, 980, 980, 1180,
+         * 1180, 1200, 1220 and 1270 ms, and exactly one of their twelve turns ended in terminal
+         * punctuation — so without this, that channel would wait for a sentence that never arrives and
+         * be cut by {@see $maxDurationMs} mid-word instead.
+         *
+         * Must sit below `maxDurationMs` to mean anything: above it, the safety cap always fires first.
+         */
+        public int $softMaxDurationMs,
         /**
          * The shortest utterance a gap may create.
          *

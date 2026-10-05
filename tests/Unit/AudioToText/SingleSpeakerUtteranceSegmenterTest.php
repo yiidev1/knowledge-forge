@@ -21,6 +21,8 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
 {
     private const GAP = 900;
     private const MAX = 20000;
+    /** Past this, a pause inside a sentence ends an utterance too. */
+    private const SOFT_MAX = 9000;
     private const MIN = 1200;
 
     public function testOneContinuousSentenceStaysOneUtterance(): void
@@ -76,10 +78,60 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
         $this->assertSame('Small. Small. Okay.', $utterances[0]->text);
     }
 
-    /** A gap with no punctuation still splits — silence is the signal, not grammar. */
-    public function testATimeGapWithoutPunctuationStillSplits(): void
+    /**
+     * A pause **inside a sentence** does not split a turn that is still short.
+     *
+     * The rule this replaced cut here, and on real channels that produced 22 of 29 turns starting
+     * mid-phrase — ", like super combo for two?" — which reads as a transcription fault rather than as
+     * the hesitation it was. These speakers pause inside a sentence about as often as they finish one,
+     * and at the same lengths, so the pause alone cannot tell the two apart.
+     */
+    public function testAPauseInsideASentenceDoesNotSplitAShortTurn(): void
     {
-        $this->assertCount(2, $this->segment([[0, 1500, ' vegetable fried rice'], [5000, 6500, ' no bean sprouts']]));
+        $utterances = $this->segment([
+            [0, 1500, ' vegetable fried rice'],
+            [5000, 6500, ' no bean sprouts'],
+        ]);
+
+        $this->assertCount(1, $utterances);
+        $this->assertSame('vegetable fried rice no bean sprouts', $utterances[0]->text);
+    }
+
+    /**
+     * Once the turn has run long, the same pause does end it.
+     *
+     * The fallback, and what keeps a speaker who never punctuates from waiting for a sentence that
+     * never comes and being cut mid-word by the safety cap instead. The boundary is still real silence;
+     * what changed is that the turn was already long enough to be worth breaking.
+     */
+    public function testAPauseInsideASentenceSplitsOnceTheTurnHasRunLong(): void
+    {
+        $utterances = $this->segment([
+            // Past SOFT_MAX (9 s) by the time the pause arrives, and still under MAX (20 s).
+            [0, 9500, ' vegetable fried rice with extra chilli and a side of'],
+            [10600, 12000, ' no bean sprouts'],
+        ]);
+
+        $this->assertCount(2, $utterances);
+        $this->assertSame('vegetable fried rice with extra chilli and a side of', $utterances[0]->text);
+    }
+
+    /**
+     * A pause after a finished sentence splits immediately, however short the turn.
+     *
+     * The ordinary boundary, and the one that reads well. It is checked before the length fallback, so
+     * a two-second exchange of complete sentences still arrives as two messages.
+     */
+    public function testAPauseAfterAFinishedSentenceSplitsStraightAway(): void
+    {
+        $utterances = $this->segment([
+            [0, 1500, ' Vegetable fried rice.'],
+            [2600, 4000, ' No bean sprouts.'],
+        ]);
+
+        $this->assertCount(2, $utterances);
+        $this->assertSame('Vegetable fried rice.', $utterances[0]->text);
+        $this->assertSame('No bean sprouts.', $utterances[1]->text);
     }
 
     /**
@@ -288,7 +340,12 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
     private function segment(array $tokens, SpeakerRole $role = SpeakerRole::CUSTOMER): array
     {
         $segmenter = new SingleSpeakerUtteranceSegmenter(
-            new UtteranceSettings(gapMs: self::GAP, maxDurationMs: self::MAX, minDurationMs: self::MIN),
+            new UtteranceSettings(
+                gapMs: self::GAP,
+                maxDurationMs: self::MAX,
+                softMaxDurationMs: self::SOFT_MAX,
+                minDurationMs: self::MIN,
+            ),
         );
 
         return $segmenter->segment(

@@ -107,8 +107,39 @@ final readonly class SingleSpeakerUtteranceSegmenter
     /**
      * Whether the boundary between two consecutive tokens ends the utterance being built.
      *
-     * Two independent reasons, and the order matters: the safety cap is checked first so a monologue
-     * with no pauses in it is still broken up.
+     * ## Three reasons, in this order
+     *
+     * 1. **The safety cap.** A monologue with no pause anywhere in it is still broken up, so nothing
+     *    can produce a single bubble spanning a whole call.
+     * 2. **A pause where a sentence just finished.** The normal boundary, and the one that reads well.
+     * 3. **A pause inside a sentence, once the turn has already run long.** The fallback.
+     *
+     * ## Why a pause alone is not enough
+     *
+     * Measured on a real call: the Customer's eleven pauses were 0, 210, 970, 970, 980, 980, 1180,
+     * 1180, 1200, 1220 and 1270 ms, and only **one** of their twelve turns ended in terminal
+     * punctuation. These speakers hesitate inside a sentence about as often as they finish one, and the
+     * two kinds of pause are the same length — so no threshold separates them. Cutting on silence alone
+     * produced turns starting ", like super combo for two?" for 22 of 29 turns, which a reader takes for
+     * a transcription fault rather than a pause.
+     *
+     * Raising the threshold does not help and makes it worse: at 1500 ms that Customer channel has no
+     * qualifying pause at all and collapses back into the single bubble this class exists to remove.
+     *
+     * ## Why punctuation alone is not enough either
+     *
+     * It is still never a trigger. A sentence ending with no pause after it is a speaker carrying
+     * straight on, and cutting there would break the flow of the delivery — the same measurement found
+     * several sentence endings with no measurable pause at all. Punctuation only decides **which** of
+     * the pauses that already qualify are worth cutting at.
+     *
+     * ## The fallback, and why it has its own threshold
+     *
+     * Some speakers barely punctuate. Waiting for a sentence that never comes would hand them the safety
+     * cap's arbitrary mid-word cut instead. So once a turn has run past `softMaxDurationMs` — long
+     * enough to be worth breaking, short enough to still be reading well — any qualifying pause ends
+     * it. That is a cut at real silence, chosen because the turn was already long, which is a better
+     * reason than "this pause happened to be 970 ms".
      *
      * @param list<TranscriptToken> $current
      */
@@ -121,7 +152,15 @@ final readonly class SingleSpeakerUtteranceSegmenter
         }
 
         // Overlapping timings make the gap negative. That is not silence, so it is not a boundary.
-        return $token->startMs - $previous->endMs >= $this->settings->gapMs;
+        if ($token->startMs - $previous->endMs < $this->settings->gapMs) {
+            return false;
+        }
+
+        if ($this->endsSentence($current)) {
+            return true;
+        }
+
+        return $previous->endMs - $startedAt >= $this->settings->softMaxDurationMs;
     }
 
     /**
