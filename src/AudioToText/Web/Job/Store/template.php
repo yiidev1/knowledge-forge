@@ -634,7 +634,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>Order ID</th>
+                        <th>Order No#</th>
                         <?php // From the enum, not typed out. These three headers and the label inside?>
                         <?php // every dialog below name the same three things, and a header carrying its?>
                         <?php // own copy is the one that gets missed when a client renames them.?>

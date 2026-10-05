@@ -899,7 +899,7 @@ final class AudioToTextStoreCest
         Assert::assertSame('QUEUED', $children[0]['status']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->see('Order ID');
+        $I->see('Order No#');
         $I->see('#16513791');
         $this->seeRecordingInColumn($I, (string) $example[0], canAdd: true);
     }
@@ -1614,7 +1614,8 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
-        $cell = '.a2t-orders tbody tr:first-child td:nth-child(6)';
+        // Column 7, not 6: the Demo URL column sits between Status and Text to Audio.
+        $cell = '.a2t-orders tbody tr:first-child td:nth-child(7)';
         $I->seeElement($cell . ' .a2t-tts-list');
         // Direct children of the grid, not wrapped in a row: the grid is what aligns the columns.
         $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__label');
