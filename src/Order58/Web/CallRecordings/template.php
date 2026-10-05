@@ -145,7 +145,7 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
     <?php
     // Up here rather than beside the table, because it leaves this page rather than changing it — the
     // same placement the calls page uses for its own history link.
-?>
+    ?>
     <div class="page-header__actions">
         <a class="btn btn--secondary" href="<?= Html::encode($historyUrl) ?>">View Download History</a>
     </div>
@@ -164,9 +164,9 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
     <h2 class="card__title">Find a store's calls</h2>
 
     <?php
-// A GET form: choosing a store and loading its calls is a readable, repeatable address, and it is
-// what keeps the provider from being contacted by a bare page load. `load=1` is the explicit ask.
-?>
+    // A GET form: choosing a store and loading its calls is a readable, repeatable address, and it is
+    // what keeps the provider from being contacted by a bare page load. `load=1` is the explicit ask.
+    ?>
     <form method="get" action="<?= Html::encode($pageUrl) ?>" class="store-picker" role="group">
         <input type="hidden" name="load" value="1">
         <?php if ($source !== ''): ?>
@@ -183,9 +183,9 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
             <?php endforeach; ?>
         </select>
         <?php
-    // Defaults to today and never offers a later day: the provider cannot have recorded a call that
-    // has not happened.
-?>
+        // Defaults to today and never offers a later day: the provider cannot have recorded a call that
+        // has not happened.
+        ?>
         <label class="field__label store-picker__label" for="o58r-date">Date</label>
         <input class="field__control store-picker__date" type="date" id="o58r-date" name="date"
             value="<?= Html::encode($businessDate) ?>" max="<?= Html::encode($today) ?>">
@@ -205,7 +205,7 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
 
         <?php if ($usingFixtures): ?>
             <?php // Never left implicit: a page showing invented calls must say so in plain words.
-    ?>
+            ?>
             <div class="alert alert--warning">
                 <strong>Local fixtures.</strong> These calls are generated in this repository, not
                 fetched from the recording service. Development and test only.
@@ -238,10 +238,10 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
                 // visits are to look at a day rather than to download one.
                 $anyActive = false;
 
-foreach ($statuses as $acquisition) {
-    $anyActive = $anyActive || $acquisition->isActive();
-}
-?>
+                foreach ($statuses as $acquisition) {
+                    $anyActive = $anyActive || $acquisition->isActive();
+                }
+                ?>
                 <div class="table-wrap o58-wide" data-o58-calls
                     data-o58-status="<?= Html::encode($statusUrl) ?>"
                     data-o58-store="<?= Html::encode((string) $selectedStore) ?>"
@@ -257,10 +257,10 @@ foreach ($statuses as $acquisition) {
                                 </th>
                                 <th class="o58-table__id">Call session ID</th>
                                 <?php
-                        // The provider's own string, printed exactly as sent. No zone label: it
-                        // carries none, and appending one would be inventing a claim about a
-                        // timestamp this application did not generate.
-?>
+                                // The provider's own string, printed exactly as sent. No zone label: it
+                                // carries none, and appending one would be inventing a claim about a
+                                // timestamp this application did not generate.
+                                ?>
                                 <th class="o58-table__time">Call time</th>
                                 <th class="o58-table__order">Order ID</th>
                                 <th>Recordings</th>
@@ -282,8 +282,8 @@ foreach ($statuses as $acquisition) {
                                     <td><?= Html::encode($call->callTime) ?></td>
                                     <td>
                                         <?= $call->orderId === ''
-                ? '<span class="util-muted">—</span>'
-                : Html::encode($call->orderId) ?>
+                                            ? '<span class="util-muted">—</span>'
+                                            : Html::encode($call->orderId) ?>
                                     </td>
                                     <td data-o58-call="<?= Html::encode($call->callSessionId) ?>">
                                         <?= $recordingsCell($statuses[$call->callSessionId] ?? null) ?>
@@ -301,7 +301,7 @@ foreach ($statuses as $acquisition) {
                 // a selection does not arrive all at once. One recording is fetched at a time, on
                 // purpose — downloading sixty files in parallel is how a server runs out of memory and
                 // a third party starts answering 429.
-?>
+                ?>
                 <p class="field__hint">
                     Recordings are downloaded one at a time, so a large selection arrives over several
                     minutes. You can leave this page — the download continues on the server.
@@ -309,7 +309,7 @@ foreach ($statuses as $acquisition) {
 
                 <div class="form-actions">
                     <button class="btn btn--primary" type="submit" <?= $importEnabled ? '' : 'disabled' ?>>
-                        Download selected
+                        Sync Recordings
                     </button>
                 </div>
             </form>
