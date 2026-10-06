@@ -45,7 +45,7 @@ Unit=knowledge-forge-order58-import.service
 #   knowledge-forge-audio-tts-worker   OnBootSec=4min
 #   this unit                          OnBootSec=6min
 OnBootSec=6min
-OnUnitActiveSec=2min
+OnUnitActiveSec=1min
 
 # A 2-minute cadence does not need second-level precision, and relaxing it lets systemd batch wakeups.
 AccuracySec=30s
