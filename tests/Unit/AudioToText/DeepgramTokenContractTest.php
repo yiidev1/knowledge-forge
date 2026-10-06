@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\AudioToText;
 
+use App\AudioToText\Application\Settings\UtteranceSettings;
+use App\AudioToText\Application\Speaker\SingleSpeakerUtteranceSegmenter;
 use App\AudioToText\Application\Speaker\SpeakerTranscriptAligner;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\Speaker\SpeakerSegment;
+use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\Speaker\TranscriptToken;
 use App\AudioToText\Domain\Transcription\DeepgramKeyterms;
+use App\AudioToText\Domain\SpeakerRole;
 use App\AudioToText\Domain\Transcription\TranscriptionRequest;
 use App\AudioToText\Infrastructure\Transcription\DeepgramEngine;
 use App\Tests\Support\AudioToTextSettingsFactory;
@@ -174,6 +178,55 @@ final class DeepgramTokenContractTest extends TestCase
      *
      * @return list<\App\AudioToText\Domain\Speaker\SpeakerUtterance>
      */
+    // ------------------------------------------------- the Phase 2A/2B shared seam, from Deepgram's side
+
+    /**
+     * Deepgram never claims a provider utterance boundary, and so never gains one by sharing the seam.
+     *
+     * `endsProviderUtterance` exists because whisper.cpp emits sentence-aligned segments and abuts them
+     * at exactly 0 ms, so the silence a turn boundary would be found at is not reported. Deepgram has no
+     * segment concept and gives real per-word gaps, so it leaves the flag at its default and the gap rule
+     * continues to do the work. {@see TranscriptToken} defaults it precisely so this stays true without
+     * `DeepgramEngine` knowing the field exists.
+     */
+    public function testDeepgramNeverMarksAProviderUtteranceBoundary(): void
+    {
+        $tokens = $this->recognise()->tokens;
+
+        self::assertNotSame([], $tokens);
+
+        foreach ($tokens as $token) {
+            self::assertFalse(
+                $token->endsProviderUtterance,
+                'A Deepgram token claimed a provider boundary it cannot know about.',
+            );
+        }
+    }
+
+    /**
+     * Real Deepgram tokens segment identically whether or not the cross-channel parameter is passed.
+     *
+     * The parameter is defaulted, so this would be true by construction — which is the point. It is
+     * asserted on the engine's own output rather than on a fixture so that a future change to the token
+     * stream cannot quietly make Deepgram depend on it.
+     */
+    public function testDeepgramSegmentationIsUnchangedByTheCrossChannelSeam(): void
+    {
+        $segmenter = new SingleSpeakerUtteranceSegmenter(
+            new UtteranceSettings(gapMs: 900, maxDurationMs: 20000, softMaxDurationMs: 9000, minDurationMs: 1200),
+        );
+        $tokens = $this->recognise()->tokens;
+        $shape = static fn(array $utterances): array => array_map(
+            static fn(SpeakerUtterance $u): array => $u->toArray(),
+            $utterances,
+        );
+
+        self::assertSame(
+            $shape($segmenter->segment($tokens, SpeakerRole::CUSTOMER)),
+            $shape($segmenter->segment($tokens, SpeakerRole::CUSTOMER, null)),
+        );
+    }
+
     private function align(array $segments): array
     {
         $result = $this->recognise();

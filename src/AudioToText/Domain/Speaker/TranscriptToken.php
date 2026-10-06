@@ -44,6 +44,39 @@ final readonly class TranscriptToken
         public int $startMs,
         public int $endMs,
         public string $text,
+        /**
+         * Whether this token is the LAST of a provider's own utterance.
+         *
+         * ## What it is
+         *
+         * Some engines segment before we do. whisper.cpp returns `transcription[]`, and each entry is a
+         * sentence it decided was one unit — "Hi, yes, I'd like to place an order." — which is exactly
+         * the boundary a reader wants a message bubble to end on. The engine did that work; this flag is
+         * how it survives normalisation instead of being flattened away.
+         *
+         * ## Why it is named for the END and not the start
+         *
+         * A boundary lives *between* two tokens, so a flag on one of them has to say which side it
+         * means. "This token closes a provider utterance" has exactly one reading, and it is the one the
+         * segmenter needs: it looks at the PREVIOUS token to decide whether the group ends here. A field
+         * meaning "a boundary follows" or "a boundary precedes" would be true of two different tokens
+         * and invite the off-by-one.
+         *
+         * ## What it is not
+         *
+         * **Not text, and it can never become text.** Whisper's own in-band markers (`[_BEG_]`,
+         * `[_TT_390]`) once leaked into stored transcripts, the UI, the spoken audio and the digest.
+         * Structure is carried here, beside the text, so there is nothing to leak and nothing to strip.
+         *
+         * **Not a claim about silence.** Whisper's segments tile the timeline — consecutive segments
+         * routinely abut at exactly 0 ms. A boundary here says "the engine ended an utterance", never
+         * "the speaker paused", and the two must not be conflated: measured on a real 162-second call,
+         * all 15 segment-to-segment gaps were 0 ms while the utterances themselves were correct.
+         *
+         * Defaulted false, so every existing construction is unchanged and an engine that has no notion
+         * of utterances — Deepgram returns bare words — simply never sets it.
+         */
+        public bool $endsProviderUtterance = false,
     ) {}
 
     public function durationMs(): int

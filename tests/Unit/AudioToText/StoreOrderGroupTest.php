@@ -354,6 +354,153 @@ final class StoreOrderGroupTest extends Unit
     /**
      * @param list<StoreRecordingSlot> $older
      */
+    // ---------------------------------------------------------------------------------------------
+    // The status column. A mixed recording is audio-only by design, so it is not work to wait on.
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * The reported bug: a finished deterministic call read "Transcribing" forever.
+     *
+     * The mixed recording is NOT_REQUESTED by design and never leaves that state, and
+     * {@see ConversationStatus::fromChildren()} counts NOT_REQUESTED as neither terminal nor running —
+     * so the group never reached "every child finished" and fell through to PROCESSING.
+     */
+    public function testADeterministicCallIsFinishedWhenBothSidesAreEvenThoughTheMixIsNotRequested(): void
+    {
+        $group = $this->call(JobStatus::COMPLETED, JobStatus::COMPLETED);
+
+        self::assertSame(ConversationStatus::COMPLETED, $group->aggregateStatus());
+        self::assertNotSame('Transcribing', $group->aggregateStatus()->label());
+    }
+
+    /** One side still running is the only thing that makes the call still running. */
+    public function testACallIsStillTranscribingWhileTheCustomerSideIs(): void
+    {
+        self::assertSame(
+            ConversationStatus::PROCESSING,
+            $this->call(JobStatus::PROCESSING, JobStatus::COMPLETED)->aggregateStatus(),
+        );
+    }
+
+    public function testACallIsStillTranscribingWhileTheAgentSideIs(): void
+    {
+        self::assertSame(
+            ConversationStatus::PROCESSING,
+            $this->call(JobStatus::COMPLETED, JobStatus::PROCESSING)->aggregateStatus(),
+        );
+    }
+
+    /** Failure semantics are the existing ones and are not touched by setting the mix aside. */
+    public function testAFailedSideKeepsItsExistingFailureSemantics(): void
+    {
+        self::assertSame(
+            ConversationStatus::PARTIALLY_COMPLETED,
+            $this->call(JobStatus::COMPLETED, JobStatus::FAILED)->aggregateStatus(),
+        );
+        self::assertSame(
+            ConversationStatus::FAILED,
+            $this->call(JobStatus::FAILED, JobStatus::FAILED)->aggregateStatus(),
+        );
+    }
+
+    /** The mix alone never moves the verdict, whatever the two sides are doing. */
+    public function testTheMixedRecordingNeverDecidesTheStatus(): void
+    {
+        foreach ([JobStatus::COMPLETED, JobStatus::PROCESSING, JobStatus::FAILED, JobStatus::QUEUED] as $both) {
+            $withMix = $this->call($both, $both);
+            $withoutMix = new StoreOrderGroup(
+                GroupKey::forOrder('16758551'),
+                '16758551',
+                new DateTimeImmutable('2026-10-06 01:32:00'),
+                caller: $this->slot(RecordingType::Caller, SourceRole::Customer, $both),
+                callee: $this->slot(RecordingType::Callee, SourceRole::Agent, $both),
+            );
+
+            self::assertSame(
+                $withoutMix->aggregateStatus(),
+                $withMix->aggregateStatus(),
+                'An audio-only mix changed the verdict for ' . $both->value . '.',
+            );
+        }
+    }
+
+    /**
+     * A side nobody has asked for yet is still outstanding, and still counts.
+     *
+     * This is the download-without-transcribing case: NOT_REQUESTED on a Customer or Agent recording
+     * means "waiting for somebody to ask", which {@see StoreRecordingSlot::isReadyForTranscription()}
+     * names, and it must not be set aside the way an audio-only mix is.
+     */
+    public function testASideNobodyHasAskedForIsNotTreatedAsAudioOnly(): void
+    {
+        self::assertSame(
+            ConversationStatus::NOT_REQUESTED,
+            $this->call(JobStatus::NOT_REQUESTED, JobStatus::NOT_REQUESTED)->aggregateStatus(),
+            'Nothing has been asked for, so the call is ready for transcription.',
+        );
+    }
+
+    /** A mixed recording that really was transcribed still counts — only NOT_REQUESTED is set aside. */
+    public function testATranscribedMixedRecordingStillCounts(): void
+    {
+        $group = new StoreOrderGroup(
+            GroupKey::forConversation(str_repeat('c', 32)),
+            null,
+            new DateTimeImmutable('2026-09-23 10:00:00'),
+            mixed: $this->slot(RecordingType::Mixed, SourceRole::Common, JobStatus::PROCESSING),
+        );
+
+        self::assertSame(ConversationStatus::PROCESSING, $group->aggregateStatus());
+    }
+
+    /** A mixed-only upload has nothing else to go on, and reports exactly what it always did. */
+    public function testAMixedOnlyUploadStillReportsItsOwnState(): void
+    {
+        foreach ([JobStatus::NOT_REQUESTED, JobStatus::COMPLETED, JobStatus::FAILED] as $status) {
+            $group = new StoreOrderGroup(
+                GroupKey::forOrder('16758551'),
+                '16758551',
+                new DateTimeImmutable('2026-10-06 01:32:00'),
+                mixed: $this->slot(RecordingType::Mixed, SourceRole::Common, $status),
+            );
+
+            self::assertSame(
+                ConversationStatus::fromChildren([$status]),
+                $group->aggregateStatus(),
+                'A mixed-only upload must report unchanged for ' . $status->value . '.',
+            );
+        }
+    }
+
+    /** A legacy Customer + Agent pair carries no mixed recording and is unaffected. */
+    public function testALegacyPairIsUnaffected(): void
+    {
+        $group = new StoreOrderGroup(
+            GroupKey::forConversation(str_repeat('c', 32)),
+            null,
+            new DateTimeImmutable('2026-09-23 10:00:00'),
+            legacySeparate: [
+                $this->slot(null, SourceRole::Customer, JobStatus::COMPLETED),
+                $this->slot(null, SourceRole::Agent, JobStatus::PROCESSING),
+            ],
+        );
+
+        self::assertSame(ConversationStatus::PROCESSING, $group->aggregateStatus());
+    }
+
+    /** The three-channel shape the Order58 importer produces: mix audio-only, two sides transcribed. */
+    private function call(JobStatus $customer, JobStatus $agent): StoreOrderGroup
+    {
+        return new StoreOrderGroup(
+            GroupKey::forOrder('16758551'),
+            '16758551',
+            new DateTimeImmutable('2026-10-06 01:32:00'),
+            mixed: $this->slot(RecordingType::Mixed, SourceRole::Common, JobStatus::NOT_REQUESTED),
+            caller: $this->slot(RecordingType::Caller, SourceRole::Customer, $customer),
+            callee: $this->slot(RecordingType::Callee, SourceRole::Agent, $agent),
+        );
+    }
+
     private function slot(
         ?RecordingType $type,
         SourceRole $role = SourceRole::Common,

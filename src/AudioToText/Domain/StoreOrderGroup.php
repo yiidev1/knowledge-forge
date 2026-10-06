@@ -8,7 +8,9 @@ use App\Shared\Audio\RecordingAcquisition;
 use App\Shared\Audio\RecordingAcquisitionState;
 use DateTimeImmutable;
 
+use function array_filter;
 use function array_map;
+use function array_values;
 use function count;
 
 /**
@@ -202,9 +204,32 @@ final readonly class StoreOrderGroup
      */
     public function aggregateStatus(): ConversationStatus
     {
+        $primaries = $this->primaries();
+
+        // An audio-only recording is not work this column is waiting on.
+        //
+        // {@see ConversationStatus::fromChildren()} counts NOT_REQUESTED as neither terminal nor
+        // running, so a child in that state leaves the group short of "every child finished" and the
+        // method falls through to PROCESSING. For a deterministic call that reads **"Transcribing"
+        // forever**: the mixed recording is NOT_REQUESTED by design and never leaves it, so a call whose
+        // Customer and Agent are both complete never reports as finished.
+        //
+        // {@see StoreRecordingSlot::isAudioOnly()} is the existing answer to "is this recording kept for
+        // its audio, with no transcript of its own and none coming" — status plus declared role, the
+        // same pair the policy uses. Only that combination is set aside, so a mixed recording that was
+        // genuinely transcribed still counts, and a Customer or Agent side sitting at NOT_REQUESTED is
+        // still outstanding work somebody can ask for ({@see StoreRecordingSlot::isReadyForTranscription()}).
+        $deciding = array_values(array_filter(
+            $primaries,
+            static fn(StoreRecordingSlot $slot): bool => !$slot->isAudioOnly(),
+        ));
+
+        // An order that is *only* audio-only recordings has nothing else to go on, and its own state is
+        // the honest answer. Falling back to the full list keeps a mixed-only upload reporting exactly
+        // what it reported before this existed.
         return ConversationStatus::fromChildren(array_map(
             static fn(StoreRecordingSlot $slot): JobStatus => $slot->status,
-            $this->primaries(),
+            $deciding === [] ? $primaries : $deciding,
         ));
     }
 

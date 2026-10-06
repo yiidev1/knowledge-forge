@@ -6,6 +6,8 @@ namespace App\Tests\Unit\AudioToText;
 
 use App\AudioToText\Application\Settings\UtteranceSettings;
 use App\AudioToText\Application\Speaker\SingleSpeakerUtteranceSegmenter;
+use App\AudioToText\Domain\Speaker\CrossChannelEvidence;
+use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\Speaker\TranscriptToken;
 use App\AudioToText\Domain\SpeakerRole;
 use Codeception\Test\Unit;
@@ -289,6 +291,134 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
     }
 
     /**
+     * A provider boundary ends a turn even though the tokens abut at 0 ms.
+     *
+     * **The headline case.** whisper.cpp tiles the timeline: every one of the 15 segment-to-segment
+     * gaps on the measured 162-second call was exactly 0 ms. The gap rule can therefore never find
+     * these boundaries, and before this the safety nets did the cutting — 4 of 11 turns came from the
+     * hard cap and 8 of 11 began mid-phrase.
+     */
+    public function testAProviderBoundarySplitsEvenWithNoGapAtAll(): void
+    {
+        $utterances = $this->segment([
+            [0, 4000, ' Hi, yes, I\'d like to place an order.', true],
+            [4000, 8000, ' No, to delivery, you said 52 Hillside Avenue.'],
+        ]);
+
+        self::assertCount(2, $utterances);
+        self::assertSame('Hi, yes, I\'d like to place an order.', $utterances[0]->text);
+        self::assertSame('No, to delivery, you said 52 Hillside Avenue.', $utterances[1]->text);
+    }
+
+    /** And it splits below the gap threshold too — the boundary is structure, not silence. */
+    public function testAProviderBoundaryOutranksTheGapThreshold(): void
+    {
+        // 100 ms apart: an order of magnitude under AUDIO_UTTERANCE_GAP_MS.
+        $utterances = $this->segment([
+            [0, 1500, ' Two orders of barbecue chicken.', true],
+            [1600, 3000, ' With french fries.'],
+        ]);
+
+        self::assertCount(2, $utterances);
+    }
+
+    /**
+     * A one-word provider utterance stands alone, however short.
+     *
+     * "Yes." runs 21400-22400 ms on the real call — a complete reply, and well under the 1200 ms
+     * minimum. Folding it forward would merge an answer into the next question, and the engine had
+     * already said they were two things.
+     */
+    public function testAShortProviderUtteranceIsNotFoldedIntoTheNext(): void
+    {
+        $utterances = $this->segment([
+            [0, 2000, ' Two orders of barbecue chicken with french fries', true],
+            [2100, 3100, ' Yes.', true],
+            [3100, 7000, ' One with barbecue sauce all over everything.'],
+        ]);
+
+        self::assertCount(3, $utterances);
+        self::assertSame('Yes.', $utterances[1]->text);
+    }
+
+    /**
+     * The fold-back still protects a genuine fragment — one the provider did NOT end an utterance on.
+     *
+     * Without this the exemption would be a blanket "never fold", and the breath-mid-sentence case
+     * this class was built for would come back.
+     */
+    public function testAFragmentWithNoProviderBoundaryIsStillFoldedBack(): void
+    {
+        $utterances = $this->segment([
+            [0, 1500, ' A beef should be about with $2'],
+            [2600, 3100, ' each.'],
+        ]);
+
+        self::assertCount(1, $utterances);
+    }
+
+    /** A provider segment that runs long is still cut by the safety net inside itself. */
+    public function testALongProviderSegmentIsStillSplitInternally(): void
+    {
+        $utterances = $this->segment([
+            [0, 10000, ' One with barbecue sauce all over everything and then some more words'],
+            [11000, 19000, ' and the other one is barbecue sauce and ketchup on french fries', true],
+        ]);
+
+        // The soft max fires inside the provider segment; the boundary then closes the second part.
+        self::assertCount(2, $utterances);
+    }
+
+    /** Text is conserved exactly: nothing lost, nothing duplicated, whatever the boundaries. */
+    public function testProviderBoundariesConserveEveryWord(): void
+    {
+        $tokens = [
+            [0, 2000, ' Hi, yes, I\'d like to place an order.', true],
+            [2000, 4000, ' No, to delivery.', true],
+            [4000, 5000, ' Yes.', true],
+        ];
+
+        $joined = '';
+        foreach ($this->segment($tokens) as $utterance) {
+            $joined .= ($joined === '' ? '' : ' ') . $utterance->text;
+        }
+
+        self::assertSame('Hi, yes, I\'d like to place an order. No, to delivery. Yes.', $joined);
+    }
+
+    /** Timestamps come through untouched — no boundary rule may invent or shift one. */
+    public function testProviderBoundariesPreserveExactTimestamps(): void
+    {
+        $utterances = $this->segment([
+            [1234, 5678, ' First utterance.', true],
+            [5678, 9012, ' Second utterance.', true],
+        ]);
+
+        self::assertSame([1234, 5678], [$utterances[0]->startMs, $utterances[0]->endMs]);
+        self::assertSame([5678, 9012], [$utterances[1]->startMs, $utterances[1]->endMs]);
+    }
+
+    /**
+     * A control marker carrying the boundary does not take it down with it.
+     *
+     * whisper puts `[_TT_nnn]` at the end of a segment, so the token the boundary sits on is often
+     * exactly the one that gets stripped. The flag has to survive the rebuild or the structure is lost
+     * for precisely the segments that needed cleaning.
+     */
+    public function testABoundaryOnAStrippedMarkerIsNotLost(): void
+    {
+        $utterances = $this->segment([
+            [0, 2000, ' Two orders of barbecue chicken.'],
+            [2000, 2000, '[_TT_200]', true],
+            [2050, 4000, ' With french fries.'],
+        ]);
+
+        self::assertCount(2, $utterances);
+        self::assertSame('Two orders of barbecue chicken.', $utterances[0]->text);
+        self::assertStringNotContainsString('[_', $utterances[1]->text);
+    }
+
+    /**
      * @param list<array{0: int, 1: int, 2: string}> $tokens
      * @return list<\App\AudioToText\Domain\Speaker\SpeakerUtterance>
      */
@@ -337,8 +467,245 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
         self::assertSame('Hello there.', $utterances[0]->text);
     }
 
-    private function segment(array $tokens, SpeakerRole $role = SpeakerRole::CUSTOMER): array
+    // ---------------------------------------------------------------------------------------------
+    // Phase 2B — cross-channel refinement. The sibling confirms; our own punctuation positions the cut.
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Rule B, on the real measured case from call 22613839.
+     *
+     * Whisper gave the Agent one segment for `"BBQ chicken wings? Anything else?"` — two questions asked
+     * either side of the Customer answering. The gap rule cannot find the boundary because whisper
+     * stretched `"?"` to 1700 ms instead of reporting the silence.
+     */
+    public function testTheGluedDoubleQuestionIsSeparatedWhenTheCustomerAnsweredBetweenThem(): void
     {
+        $tokens = [
+            [21310, 22660, ' BBQ'], [23100, 24930, ' chicken'], [28140, 28760, ' wings'],
+            [29300, 31000, '?'], [31640, 32570, ' Anything'], [33660, 34990, ' else'], [35390, 36000, '?', true],
+        ];
+
+        // Phase 2A reproduces the defect exactly as it appears on the real call: the soft cap cuts after
+        // "Anything", gluing the first question to the start of the second and orphaning its ending.
+        $before = $this->segment($tokens, SpeakerRole::AGENT);
+        $this->assertSame('BBQ chicken wings? Anything', $before[0]->text);
+        $this->assertSame('else?', $before[1]->text);
+
+        // The Customer answered twice, finishing at 29360 — between our "?" and our "Anything".
+        $after = $this->segment($tokens, SpeakerRole::AGENT, $this->evidence([[21400, 22400], [22400, 29360]]));
+
+        $this->assertCount(2, $after);
+        $this->assertSame('BBQ chicken wings?', $after[0]->text);
+        $this->assertSame('Anything else?', $after[1]->text);
+    }
+
+    /**
+     * Rule A, on the real measured case from call 22414839: our sentence ends, they take the floor, we
+     * carry on. Rule B cannot reach this one — the Agent's turn *ended* at 94000, by which point the
+     * Customer had already resumed, and both positions it pointed at were inside a word.
+     */
+    public function testOurSentenceEndSplitsWhenTheOtherPartyThenTookTheFloor(): void
+    {
+        $tokens = [
+            [86000, 86850, ' Okay'], [86850, 87190, ','], [87580, 87950, ' that'], [88120, 88510, "'s"],
+            [88550, 89130, ' fine'], [89500, 90020, '.'],
+            [90020, 90650, ' Can'], [90650, 90860, ' I'], [90860, 91180, ' order'], [91420, 92000, ' rangoon?', true],
+        ];
+
+        $this->assertCount(1, $this->segment($tokens), 'Phase 2A glues both sentences together.');
+
+        // The Agent replied at 92070 — 2050 ms after our sentence ended at 90020.
+        $after = $this->segment($tokens, SpeakerRole::CUSTOMER, $this->evidence([[92070, 94000], [95570, 99000]]));
+
+        $this->assertCount(2, $after);
+        $this->assertSame("Okay, that's fine.", $after[0]->text);
+        $this->assertSame('Can I order rangoon?', $after[1]->text);
+        $this->assertSame(90020, $after[1]->startMs, 'The cut lands on our own token boundary.');
+    }
+
+    /** The regression that made the first version of this unsafe: a price is not two sentences. */
+    public function testAPriceIsNeverSplitAtItsDecimalPoint(): void
+    {
+        // Tokenised exactly as whisper produced it on call 22414839.
+        $tokens = [
+            [61970, 62190, ' be'], [62190, 62300, ' $'], [62300, 62960, '21'], [62960, 63290, '.'],
+            [63290, 64000, '73'], [65320, 67080, '.', true],
+        ];
+
+        // The Customer's turn ended at 63000 — inside the price, which is what made this fire.
+        $after = $this->segment($tokens, SpeakerRole::AGENT, $this->evidence([[53000, 63000], [68000, 70000]]));
+
+        $this->assertCount(1, $after);
+        $this->assertSame('be $21.73.', $after[0]->text);
+    }
+
+    /** The same guard, on a time rather than a price, and on a bare decimal. */
+    public function testATimeAndABareDecimalAreNeverSplitEither(): void
+    {
+        foreach ([[' 7', '.', '30'], [' 0', '.', '75']] as [$head, $dot, $tail]) {
+            $after = $this->segment(
+                [[1000, 1500, ' at'], [1500, 2000, $head], [2000, 2500, $dot], [2500, 3000, $tail, true]],
+                SpeakerRole::AGENT,
+                $this->evidence([[500, 2200], [4000, 5000]]),
+            );
+
+            $this->assertCount(1, $after, 'A numeric continuation must never be cut.');
+        }
+    }
+
+    /** A sentence end after a price still cuts: the digit guard needs a digit on *both* sides. */
+    public function testASentenceEndingInAPriceStillSplitsWhenAWordFollows(): void
+    {
+        $tokens = [
+            [1000, 1500, ' Total'], [1500, 2000, ' $'], [2000, 2400, '21'], [2400, 2600, '.'],
+            [2600, 3000, '73'], [3000, 3200, '.'],
+            [3300, 4000, ' Anything'], [4000, 4600, ' else?', true],
+        ];
+
+        $after = $this->segment($tokens, SpeakerRole::AGENT, $this->evidence([[500, 3250], [5000, 6000]]));
+
+        $this->assertCount(2, $after);
+        $this->assertSame('Total $21.73.', $after[0]->text);
+        $this->assertSame('Anything else?', $after[1]->text);
+    }
+
+    /** No sibling, no change — byte for byte, which is what makes this refinement optional. */
+    public function testWithoutEvidenceTheResultIsIdenticalToPhase2A(): void
+    {
+        $tokens = [
+            [0, 900, ' Hi,'], [900, 1800, ' how'], [1800, 2600, ' are'], [2600, 3400, ' you?'],
+            [3500, 4200, ' Fine'], [4200, 5000, ' thanks.', true],
+        ];
+
+        $this->assertSame(
+            array_map(static fn(SpeakerUtterance $u): array => $u->toArray(), $this->segment($tokens)),
+            array_map(static fn(SpeakerUtterance $u): array => $u->toArray(), $this->segment($tokens, SpeakerRole::CUSTOMER, null)),
+        );
+    }
+
+    /**
+     * The rule rejected in the measurements: the other party's turn end alone must never cut.
+     *
+     * Ungated, this took one call from 38 turns to 57 and mid-phrase openings from 24% to 47%. The
+     * guard is that our own text must end like a sentence, so a handover mid-phrase changes nothing.
+     */
+    public function testAHandoverMidPhraseIsIgnored(): void
+    {
+        $tokens = [
+            [0, 500, ' one'], [500, 1000, ' order'], [1000, 1500, ' of'], [1500, 2000, ' crab'],
+            [2200, 2600, ' rang'], [2600, 3000, 'oon', true],
+        ];
+
+        // Their turn ends at 2100, squarely between two of our words — and mid-word, semantically.
+        $this->assertCount(1, $this->segment($tokens, SpeakerRole::CUSTOMER, $this->evidence([[0, 2100], [4000, 5000]])));
+    }
+
+    /** Genuine simultaneous speech is not a handover: they started before we finished our sentence. */
+    public function testOverlappingSpeechIsPreserved(): void
+    {
+        $tokens = [
+            [10000, 10800, ' Yes'], [10800, 11600, ' that'], [11600, 12400, " 's"], [12400, 13000, ' right.'],
+            [13100, 13900, ' And'], [13900, 14600, ' delivery.', true],
+        ];
+
+        // They were already talking from 5000 and stopped at 9000 — before our sentence ended at 13000,
+        // and nothing starts within 3 s after it. Neither rule applies.
+        $this->assertCount(1, $this->segment($tokens, SpeakerRole::CUSTOMER, $this->evidence([[5000, 9000], [20000, 21000]])));
+    }
+
+    /** Beyond the measured window a later turn is a new topic, not an answer to this sentence. */
+    public function testTheOtherPartyTakingTheFloorLongAfterwardsDoesNotSplit(): void
+    {
+        $tokens = [
+            [0, 900, ' Delivery'], [900, 1800, ' please.'], [2000, 2900, ' Thanks'], [2900, 3600, ' again.', true],
+        ];
+
+        // 5 s after our sentence ended at 1800 — outside FLOOR_WINDOW_MS.
+        $this->assertCount(1, $this->segment($tokens, SpeakerRole::CUSTOMER, $this->evidence([[6800, 8000], [9000, 9500]])));
+    }
+
+    /** A cut may only ever fall where this channel already had a token boundary. */
+    public function testEveryBoundaryLandsOnAnOwnTokenBoundary(): void
+    {
+        $tokens = [
+            [21310, 22660, ' BBQ'], [23100, 24930, ' chicken'], [28140, 28760, ' wings'],
+            [29300, 31000, '?'], [31640, 32570, ' Anything'], [33660, 34990, ' else'], [35390, 36000, '?', true],
+        ];
+        $starts = array_map(static fn(array $t): int => $t[0], $tokens);
+        $ends = array_map(static fn(array $t): int => $t[1], $tokens);
+
+        foreach ($this->segment($tokens, SpeakerRole::AGENT, $this->evidence([[21400, 22400], [22400, 29360]])) as $utterance) {
+            $this->assertContains($utterance->startMs, $starts, 'A turn began inside a token.');
+            $this->assertContains($utterance->endMs, $ends, 'A turn ended inside a token.');
+        }
+    }
+
+    /** Refinement regroups words; it never adds, drops or repeats one. */
+    public function testNoWordIsLostOrDuplicatedByCrossChannelRefinement(): void
+    {
+        $tokens = [
+            [21310, 22660, ' BBQ'], [23100, 24930, ' chicken'], [28140, 28760, ' wings'],
+            [29300, 31000, '?'], [31640, 32570, ' Anything'], [33660, 34990, ' else'], [35390, 36000, '?', true],
+        ];
+        $join = static fn(array $u): string => preg_replace(
+            '/\s+/u',
+            ' ',
+            trim(implode(' ', array_map(static fn(SpeakerUtterance $x): string => $x->text, $u))),
+        );
+
+        $this->assertSame(
+            $join($this->segment($tokens, SpeakerRole::AGENT)),
+            $join($this->segment($tokens, SpeakerRole::AGENT, $this->evidence([[21400, 22400], [22400, 29360]]))),
+        );
+    }
+
+    /** A short turn created by a cross-channel cut must not be folded straight back in. */
+    public function testAShortRefinedTurnSurvivesTheMinimumDurationFold(): void
+    {
+        $tokens = [
+            [0, 900, ' Delivery'], [900, 1800, ' please.'],
+            [2000, 2400, ' Yes.'], [6000, 7500, ' Thanks.', true],
+        ];
+
+        $after = $this->segment($tokens, SpeakerRole::CUSTOMER, $this->evidence([[2500, 4000], [8000, 9000]]));
+
+        $this->assertSame('Delivery please.', $after[0]->text);
+        $this->assertSame('Yes.', $after[1]->text, 'A 400 ms turn below MIN stayed whole.');
+    }
+
+    /** A sibling with no usable clock is no evidence at all, and the result is Phase 2A. */
+    public function testASiblingWithOneInstantForEveryTurnIsRejected(): void
+    {
+        $this->assertNull($this->evidence([[0, 5000], [0, 9000]]), 'All turns at one start is not a clock.');
+        $this->assertNull($this->evidence([[4000, 5000], [1000, 2000]]), 'Turns running backwards are not a clock.');
+        $this->assertNull($this->evidence([[5000, 1000], [6000, 9000]]), 'A turn ending before it starts is not a clock.');
+        $this->assertNull($this->evidence([[0, 5000]]), 'One turn cannot say when a conversation changed hands.');
+    }
+
+    /** Deterministic roles are carried through untouched — refinement never reassigns a speaker. */
+    public function testRefinementNeverChangesTheDeclaredRole(): void
+    {
+        $tokens = [
+            [21310, 22660, ' BBQ'], [23100, 24930, ' chicken'], [28140, 28760, ' wings'],
+            [29300, 31000, '?'], [31640, 32570, ' Anything'], [33660, 34990, ' else'], [35390, 36000, '?', true],
+        ];
+        $evidence = $this->evidence([[21400, 22400], [22400, 29360]]);
+
+        foreach ($this->segment($tokens, SpeakerRole::AGENT, $evidence) as $utterance) {
+            $this->assertSame(SpeakerRole::AGENT, $utterance->role);
+            $this->assertSame(SingleSpeakerUtteranceSegmenter::CHANNEL_SPEAKER, $utterance->speaker);
+        }
+
+        foreach ($this->segment($tokens, SpeakerRole::CUSTOMER, $evidence) as $utterance) {
+            $this->assertSame(SpeakerRole::CUSTOMER, $utterance->role);
+        }
+    }
+
+    private function segment(
+        array $tokens,
+        SpeakerRole $role = SpeakerRole::CUSTOMER,
+        ?CrossChannelEvidence $evidence = null,
+    ): array {
         $segmenter = new SingleSpeakerUtteranceSegmenter(
             new UtteranceSettings(
                 gapMs: self::GAP,
@@ -349,8 +716,41 @@ final class SingleSpeakerUtteranceSegmenterTest extends Unit
         );
 
         return $segmenter->segment(
-            array_map(static fn(array $t): TranscriptToken => new TranscriptToken($t[0], $t[1], $t[2]), $tokens),
+            array_map(
+                static fn(array $t): TranscriptToken => new TranscriptToken(
+                    $t[0],
+                    $t[1],
+                    $t[2],
+                    // Optional fourth element: whether whisper ended an utterance on this token.
+                    (bool) ($t[3] ?? false),
+                ),
+                $tokens,
+            ),
             $role,
+            $evidence,
         );
+    }
+
+    /**
+     * The opposite channel as the worker would have it: its stored turns, read back.
+     *
+     * Built through the real {@see CrossChannelEvidence::fromSiblingTurns()} from real
+     * {@see SpeakerUtterance} values, so the timeline guard these tests rely on is the shipped one.
+     *
+     * @param list<array{int, int}> $spans the sibling's turn start/end pairs
+     */
+    private function evidence(array $spans): ?CrossChannelEvidence
+    {
+        return CrossChannelEvidence::fromSiblingTurns(array_map(
+            static fn(array $s): SpeakerUtterance => new SpeakerUtterance(
+                $s[0],
+                $s[1],
+                SingleSpeakerUtteranceSegmenter::CHANNEL_SPEAKER,
+                SpeakerRole::AGENT,
+                'sibling turn',
+                1.0,
+            ),
+            $spans,
+        ));
     }
 }

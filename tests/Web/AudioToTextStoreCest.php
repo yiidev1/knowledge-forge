@@ -3767,6 +3767,51 @@ final class AudioToTextStoreCest
         $I->seeCurrentUrlEquals('/');
     }
 
+    /**
+     * A finished deterministic call reports finished, although its mixed recording never is.
+     *
+     * The reported bug, from a real store: Customer and Agent both complete, their transcripts readable
+     * in the Details dialog, and the order row still badged "Transcribing" — because the mixed
+     * recording sits at NOT_REQUESTED by design and the aggregate counted that as unfinished work.
+     *
+     * Asserted on the badge itself rather than on the page text: "Transcribing" also appears in the
+     * progress-step strip, so a bare `dontSee` would pass or fail for the wrong reason.
+     */
+    public function aFinishedDeterministicCallIsNotBadgedAsStillTranscribing(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        // Only the two sides are transcribed. The mixed recording is left exactly as the upload left
+        // it — NOT_REQUESTED — which is the state this test exists to prove is not "unfinished".
+        $mixed = null;
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                if ($job['source_role'] === 'COMMON') {
+                    $mixed = $job;
+
+                    continue;
+                }
+
+                $this->completeWithSeparation((string) $job['public_id']);
+            }
+        }
+
+        Assert::assertNotNull($mixed, 'The mixed upload produced no child.');
+        Assert::assertSame('NOT_REQUESTED', $mixed['status'], 'The mixed recording is audio-only.');
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Completed', '.a2t-orders .a2t-badge');
+        $I->dontSee('Transcribing', '.a2t-orders .a2t-badge');
+        $I->seeElement('.a2t-orders .a2t-badge--completed');
+        $I->dontSeeElement('.a2t-orders .a2t-badge--processing');
+    }
+
     // ------------------------------------------------------- getting back to a running transcription
 
     /**

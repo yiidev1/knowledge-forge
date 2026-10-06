@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Console;
 
+use App\AudioToText\Application\Speaker\CrossChannelEvidenceReader;
 use App\AudioToText\Application\Speaker\SingleSpeakerUtteranceSegmenter;
+use App\AudioToText\Domain\Speaker\CrossChannelEvidence;
 use App\AudioToText\Domain\Speaker\SpeakerUtterance;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\Speaker\TranscriptToken;
@@ -103,6 +105,7 @@ final class AudioTranscriptionWorkerCommand extends Command
         private readonly AudioTranscriber $transcriber,
         private readonly SpeakerSeparationService $separation,
         private readonly SingleSpeakerUtteranceSegmenter $segmenter,
+        private readonly CrossChannelEvidenceReader $crossChannel,
         private readonly WorkerAdmissionGuard $admission,
         private readonly ForeignLockGuard $foreignLocks,
         private readonly AudioToTextSettings $settings,
@@ -358,7 +361,7 @@ final class AudioTranscriptionWorkerCommand extends Command
                     $job->id,
                     $job->sourceRole,
                     $retained,
-                    $this->channelSegments($channelTokens, $job->sourceRole),
+                    $this->channelSegments($channelTokens, $job->sourceRole, $this->crossChannelEvidence($job)),
                 );
             } else {
                 // Defensive: separate() never throws, but if the callback somehow did not run there is
@@ -474,15 +477,18 @@ final class AudioTranscriptionWorkerCommand extends Command
      *
      * @param list<TranscriptToken> $tokens
      */
-    private function channelSegments(array $tokens, SourceRole $role): ?string
-    {
+    private function channelSegments(
+        array $tokens,
+        SourceRole $role,
+        ?CrossChannelEvidence $evidence,
+    ): ?string {
         $speakerRole = $role->speakerRole();
 
         if ($speakerRole === null || $tokens === []) {
             return null;
         }
 
-        $utterances = $this->segmenter->segment($tokens, $speakerRole);
+        $utterances = $this->segmenter->segment($tokens, $speakerRole, $evidence);
 
         if ($utterances === []) {
             return null;
@@ -492,6 +498,31 @@ final class AudioTranscriptionWorkerCommand extends Command
             array_map(static fn(SpeakerUtterance $u): array => $u->toArray(), $utterances),
             JSON_THROW_ON_ERROR,
         );
+    }
+
+    /**
+     * The opposite channel of this same call, when one is already transcribed and provably the sibling.
+     *
+     * **Wrapped, and that is the point.** `process()` is documented as "every path out of here must end
+     * terminal", and it ends with a blanket `catch (Throwable)` that marks the job FAILED. This runs on
+     * the success path, after the audio was read and the transcript produced, so an unwrapped database
+     * error here would throw away a transcript that had already been paid for and mark a working job
+     * failed — to save a refinement that is optional by design. Losing the refinement is the correct
+     * outcome, and the single-channel result it falls back to is the one shipped before this existed.
+     */
+    private function crossChannelEvidence(TranscriptionJob $job): ?CrossChannelEvidence
+    {
+        try {
+            return $this->crossChannel->for($job);
+        } catch (Throwable $e) {
+            $this->logger->warning('Cross-channel evidence unavailable; segmenting this channel alone.', [
+                'reason' => 'cross_channel_lookup_failed',
+                'job_id' => $job->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     /**

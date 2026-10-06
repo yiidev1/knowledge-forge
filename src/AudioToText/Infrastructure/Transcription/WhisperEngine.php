@@ -18,6 +18,8 @@ use JsonException;
 use function dirname;
 use function file_get_contents;
 use function implode;
+use function array_pop;
+use function count;
 use function is_array;
 use function is_int;
 use function is_string;
@@ -181,10 +183,13 @@ final readonly class WhisperEngine implements TranscriptionEngineInterface
         }
 
         $tokens = [];
+
         foreach ($segments as $segment) {
             if (!is_array($segment) || !is_array($segment['tokens'] ?? null)) {
                 continue;
             }
+
+            $firstOfSegment = count($tokens);
 
             foreach ($segment['tokens'] as $token) {
                 if (!is_array($token)) {
@@ -206,6 +211,27 @@ final readonly class WhisperEngine implements TranscriptionEngineInterface
                 }
 
                 $tokens[] = new TranscriptToken($from, $to, TranscriptText::toValidUtf8($text));
+            }
+
+            // The segment's last token carries the boundary. Marked AFTER the loop rather than by
+            // counting ahead, because a token can be skipped above for a malformed offset — so "the
+            // last one we actually kept" is the only definition that cannot drift from what was stored.
+            //
+            // A segment that contributed nothing marks nothing: `$firstOfSegment` still equals the
+            // count, and `$last` stays below it.
+            if (count($tokens) > $firstOfSegment) {
+                // Popped and pushed rather than assigned by index: writing into a list breaks the
+                // analyser's narrowing of it, and a `list<>` is what every consumer is typed against.
+                // The count check above is what makes the annotation true.
+                /** @var TranscriptToken $last */
+                $last = array_pop($tokens);
+
+                $tokens[] = new TranscriptToken(
+                    $last->startMs,
+                    $last->endMs,
+                    $last->text,
+                    true,
+                );
             }
         }
 
