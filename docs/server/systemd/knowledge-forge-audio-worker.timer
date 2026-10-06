@@ -1,10 +1,11 @@
-# Fires the Audio-to-Text worker every 2 minutes.
+# Fires the Audio-to-Text worker every 10 seconds.
 #
 # EXAMPLE ONLY — NOT INSTALLED. See docs/AUDIO_TO_TEXT.md.
 #
 # ------------------------------------------------------------------------------
 # TO CHANGE THE SCHEDULE, EDIT OnUnitActiveSec BELOW AND NOTHING ELSE.
-#   OnUnitActiveSec=30s     every 30 seconds  (current)
+#   OnUnitActiveSec=10s     every 10 seconds  (current)
+#   OnUnitActiveSec=30s     every 30 seconds
 #   OnUnitActiveSec=2min    every 2 minutes
 #   OnUnitActiveSec=5min    every 5 minutes
 # Then: sudo systemctl daemon-reload && sudo systemctl restart knowledge-forge-audio-worker.timer
@@ -12,50 +13,59 @@
 # ------------------------------------------------------------------------------
 #
 # Why a timer plus a Type=oneshot service needs no outer lock file of its own: systemd will not start
-# a second run of a unit that is still active. A transcription takes roughly 90 seconds and can
-# occasionally outlast the 2-minute interval, and when it does the next tick is simply skipped rather
-# than queued behind it or run in parallel.
+# a second run of a unit that is still active. A transcription takes anywhere from 4 seconds (Deepgram)
+# to 400 (whisper on a long recording), so at this interval most ticks land while a job is running and
+# are simply skipped rather than queued behind it or run in parallel.
 #
 # `OnUnitActiveSec` measures from the last *activation*, so the effective cadence is
-# max(2 minutes, however long the job took) — which is the behaviour wanted for a queue drained one
+# max(10 seconds, however long the job took) — which is the behaviour wanted for a queue drained one
 # item at a time. The application's own flock on runtime/audio-to-text/worker.lock remains the
 # authority on single-worker operation however the worker is started, including by hand.
 
 [Unit]
-Description=Run the Knowledge Forge Audio-to-Text worker every 2 minutes
+Description=Run the Knowledge Forge Audio-to-Text worker every 10 seconds
 Documentation=file:///var/www/html/knowledge-forge/docs/AUDIO_TO_TEXT.md
 
 [Timer]
 Unit=knowledge-forge-audio-worker.service
 
-# First tick shortly after boot, then every 2 minutes from the previous activation.
+# First tick shortly after boot, then every 10 seconds from the previous activation.
 OnBootSec=2min
-# 30 seconds rather than 2 minutes, so a recording somebody just uploaded starts converting while they
-# are still looking at the page instead of up to two minutes later.
+# 10 seconds, because the interval — not the work — was the wait.
 #
-# THIS IS SAFE BECAUSE OF Type=oneshot, NOT BECAUSE THE WORK IS SHORT. A transcription takes 90-400
-# seconds, far longer than the interval, and systemd will not start a second run of a unit that is still
-# active — so the ticks that land during a job are simply skipped, and the effective cadence stays
-# max(30s, however long the job took). The tick that matters is the one on an EMPTY queue, which exits
-# in about 0.1 s and 45 MB without starting ffmpeg or whisper. Four times as many of those is a few
-# seconds of CPU an hour.
+# Measured on this machine against Deepgram: a 63-second recording spent 4 seconds being transcribed
+# and 66 to 199 seconds waiting for a tick, so the schedule was 89-98% of the time an administrator
+# actually experienced. The second side of a call is always a tick behind the first, because the worker
+# takes one job per run, so a two-channel call cost two full intervals before anybody saw a transcript.
+#
+# THIS IS SAFE BECAUSE OF Type=oneshot, NOT BECAUSE THE WORK IS SHORT. The work is *longer* than the
+# interval, which is the point: systemd will not start a second run of a unit that is still active, so
+# the ticks that land during a job are skipped and the effective cadence stays max(10s, job duration).
+# Shortening the interval cannot produce two transcriptions at once; it only shortens the gap between
+# one finishing and the next starting.
+#
+# The tick that matters for load is the one on an EMPTY queue. Measured: 0.09 s wall and 46 MB RSS,
+# exiting before ffmpeg, whisper or Deepgram is touched. At this cadence that is 360 ticks an hour,
+# about 32 seconds of one core — under 1%.
 #
 # The application's flock on runtime/audio-to-text/worker.lock remains the authority regardless, so even
 # a misconfigured scheduler cannot produce two workers.
-OnUnitActiveSec=30s
+OnUnitActiveSec=10s
 
+# 1s rather than 5s: the accuracy window is systemd's licence to batch a wakeup late, and at a 10-second
+# period a 5-second window is half the interval. It has to stay small next to the interval or the
+# cadence it produces is not the one written above.
+AccuracySec=1s
 
-# 5s rather than 10s: the accuracy window should stay small next to the interval, or systemd's batching
-# can defer a 30-second tick by a third of its own period.
-AccuracySec=5s
-
-# This machine also runs telecom-billing's audio cron on the exact minute. Jittering means the two do
-# not routinely start whisper in the same second — a courtesy on top of the real coordination, which
-# is AUDIO_WORKER_FOREIGN_LOCKS.
+# This machine also runs telecom-billing's audio cron on the exact minute, and this used to carry a few
+# seconds of jitter so the two did not routinely start whisper in the same second.
 #
-# Scaled down with the interval. 15s of jitter on a 30-second period is half the period, which would
-# make the real cadence 30–45s and undo much of the point of shortening it.
-RandomizedDelaySec=5s
+# Zero now, because at six ticks a minute the jitter no longer buys that: whatever the offset, one of
+# those ticks lands on the minute boundary anyway, so the collision it was avoiding happens regardless.
+# What it would still cost is up to half the interval added to every wait, which is the delay this
+# change exists to remove. The real coordination was always AUDIO_WORKER_FOREIGN_LOCKS, which defers a
+# tick that would otherwise run whisper beside another project's, and that is untouched.
+RandomizedDelaySec=0
 
 # Missed ticks are not made up after downtime. Queued jobs are still there and the next ordinary tick
 # collects them, so replaying a backlog of timer events would only bunch up work for no benefit.
