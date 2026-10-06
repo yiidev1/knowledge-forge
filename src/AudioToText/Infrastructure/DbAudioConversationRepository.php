@@ -203,7 +203,36 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
     }
 
     /**
-     * Caller and callee job ids grouped by side, for whichever grouping column the caller named.
+     * The **current** caller and callee job, one per side, for whichever grouping column was named.
+     *
+     * ## Why one and not all of them
+     *
+     * Replacing a recording does not overwrite it: Update Audio writes a NEW conversation and a new job
+     * for that side and leaves the old one standing, which is what makes a version history and a revert
+     * possible at all. So a side that has been replaced once has two rows, and a caller asking "which
+     * recording is the Customer side of this call" was being handed both.
+     *
+     * It had nowhere to go with that. {@see \App\AudioToText\Application\Combined\CombinedConversationReader}
+     * refused the whole call as {@see \App\AudioToText\Domain\Speaker\CombinedConversationState::AmbiguousChildren}
+     * — "more than one recording of the same side, and nothing here records which is authoritative" —
+     * so a perfectly ordinary replacement took the combined conversation away until somebody deleted a
+     * recording. Nothing was wrong with the data; the question was being asked of the wrong layer.
+     *
+     * ## Current means newest *finished*, not newest uploaded
+     *
+     * The same rule {@see \App\AudioToText\Infrastructure\DbStoreOrderGroupRepository::primary()} has
+     * always applied on the store page, stated once more here because this is the other place that has
+     * to answer it. A replacement that is still transcribing must not become the current recording the
+     * moment it is queued — the one it replaces is still the one with words in it — so a version becomes
+     * current by **completing**. Until then the previous recording is still the call's Customer side.
+     *
+     * Ordered by conversation id DESC so "newest" is the id the database issued, not a timestamp: two
+     * uploads within one second compare equal on time, and a worker that finishes late cannot win a side
+     * it was not given. With nothing finished, the newest row stands in, so a first upload still
+     * processing is reported rather than the side looking absent.
+     *
+     * The return shape is unchanged — a list per side — so a caller that still wants to guard against
+     * two keeps working. It is simply never given two now.
      *
      * @param array<string, mixed> $scope
      *
@@ -213,7 +242,11 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
     {
         /** @var list<array<string, mixed>> $rows */
         $rows = (new Query($this->connection))
-            ->select(['id' => 'j.id', 'recording_type' => 'c.recording_type'])
+            ->select([
+                'id' => 'j.id',
+                'recording_type' => 'c.recording_type',
+                'status' => 'j.status',
+            ])
             ->from(['c' => self::TABLE])
             ->innerJoin(['j' => self::JOBS], 'j.conversation_id = c.id')
             ->where($scope)
@@ -222,10 +255,13 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 // untyped row predates recording types, so neither can be one side of a call.
                 'c.recording_type' => [RecordingType::Caller->value, RecordingType::Callee->value],
             ])
-            ->orderBy(['j.id' => SORT_ASC])
+            // Newest version of each side first, so the first row of a side is the fallback and the
+            // first COMPLETED one is the answer.
+            ->orderBy(['c.id' => SORT_DESC, 'j.id' => SORT_DESC])
             ->all();
 
-        $grouped = [];
+        $newest = [];
+        $current = [];
 
         foreach ($rows as $row) {
             $type = $row['recording_type'];
@@ -234,7 +270,17 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 continue;
             }
 
-            $grouped[$type][] = (int) $row['id'];
+            $newest[$type] ??= (int) $row['id'];
+
+            if (!isset($current[$type]) && $row['status'] === JobStatus::COMPLETED->value) {
+                $current[$type] = (int) $row['id'];
+            }
+        }
+
+        $grouped = [];
+
+        foreach ($newest as $type => $fallback) {
+            $grouped[$type] = [$current[$type] ?? $fallback];
         }
 
         return $grouped;

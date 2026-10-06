@@ -104,6 +104,162 @@ final class AudioConversationTest extends Unit
     }
 
     /** A mixed recording of one call, enqueued the way the importer would. */
+    // ---------------------------------------------------------------------------------------------
+    // Which recording is a side of this call, once that side has been replaced
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * Replacing one side leaves exactly one current recording for it, and the other side alone.
+     *
+     * The bug this pins: Update Audio writes a NEW conversation and job for the side and leaves the old
+     * one standing, which is what makes a version history possible. Asked which recording was the
+     * Customer side, this returned both — and the combined reader, having no basis to choose, refused
+     * the whole call as AmbiguousChildren. An ordinary replacement took the conversation away.
+     */
+    public function testReplacingOneSideLeavesOneCurrentRecordingForIt(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $firstCaller = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $callee = $this->channelFor($session, RecordingType::Callee, SourceRole::Agent);
+
+        $this->complete($this->jobIdOf($firstCaller));
+        $this->complete($this->jobIdOf($callee));
+
+        $ids = $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session);
+        self::assertSame([$this->jobIdOf($firstCaller)], $ids[RecordingType::Caller->value]);
+        self::assertSame([$this->jobIdOf($callee)], $ids[RecordingType::Callee->value]);
+
+        // The replacement, finished. It is the Customer side from now on.
+        $replacement = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $this->complete($this->jobIdOf($replacement));
+
+        $ids = $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session);
+
+        self::assertCount(1, $ids[RecordingType::Caller->value], 'One Customer side, not two.');
+        self::assertSame([$this->jobIdOf($replacement)], $ids[RecordingType::Caller->value]);
+        self::assertSame(
+            [$this->jobIdOf($callee)],
+            $ids[RecordingType::Callee->value],
+            'Replacing the Customer side left the Agent side exactly as it was.',
+        );
+    }
+
+    /** And the same the other way round, because neither side is special. */
+    public function testReplacingTheAgentSideLeavesTheCustomerSideAlone(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $caller = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $this->complete($this->jobIdOf($caller));
+        $this->complete($this->jobIdOf($this->channelFor($session, RecordingType::Callee, SourceRole::Agent)));
+
+        $replacement = $this->channelFor($session, RecordingType::Callee, SourceRole::Agent);
+        $this->complete($this->jobIdOf($replacement));
+
+        $ids = $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session);
+
+        self::assertSame([$this->jobIdOf($replacement)], $ids[RecordingType::Callee->value]);
+        self::assertSame([$this->jobIdOf($caller)], $ids[RecordingType::Caller->value]);
+    }
+
+    /**
+     * A replacement becomes the current recording by **finishing**, not by being queued.
+     *
+     * The same rule the store page's own version fold applies. While a replacement is still
+     * transcribing the recording it replaces is the one with words in it, so that is still the call's
+     * Customer side — otherwise asking for a transcript would take the existing one away for as long as
+     * the worker took.
+     */
+    public function testAReplacementStillTranscribingIsNotYetTheCurrentRecording(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $original = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $this->complete($this->jobIdOf($original));
+
+        // Queued, not finished.
+        $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+
+        self::assertSame(
+            [$this->jobIdOf($original)],
+            $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session)[RecordingType::Caller->value],
+            'The finished recording holds the side until the replacement finishes.',
+        );
+    }
+
+    /** Replaced twice is still one side. The newest finished one wins, not the first or all of them. */
+    public function testReplacingTwiceStillLeavesOneCurrentRecording(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $this->complete($this->jobIdOf($this->channelFor($session, RecordingType::Caller, SourceRole::Customer)));
+        $this->complete($this->jobIdOf($this->channelFor($session, RecordingType::Caller, SourceRole::Customer)));
+        $third = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $this->complete($this->jobIdOf($third));
+
+        self::assertSame(
+            [$this->jobIdOf($third)],
+            $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session)[RecordingType::Caller->value],
+        );
+    }
+
+    /** With nothing finished, the newest stands in rather than the side looking absent. */
+    public function testWithNothingFinishedTheNewestRecordingStandsIn(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $newest = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+
+        self::assertSame(
+            [$this->jobIdOf($newest)],
+            $this->conversations->channelJobIdsForCallSession($this->storeSourceId, $session)[RecordingType::Caller->value],
+        );
+    }
+
+    /** Every version is still stored; only the answer to "which is the side" is one. */
+    public function testTheReplacedRecordingIsStillThere(): void
+    {
+        $session = 'session' . random_int(100000, 999999);
+        $original = $this->channelFor($session, RecordingType::Caller, SourceRole::Customer);
+        $this->complete($this->jobIdOf($original));
+        $this->complete($this->jobIdOf($this->channelFor($session, RecordingType::Caller, SourceRole::Customer)));
+
+        self::assertSame(
+            2,
+            (int) $this->connection->createCommand(
+                'SELECT COUNT(*) FROM {{%audio_conversations}} WHERE call_session_id = :s AND recording_type = :t',
+                ['s' => $session, 't' => RecordingType::Caller->value],
+            )->queryScalar(),
+            'Replacement keeps the recording it replaced — that is what the version history is made of.',
+        );
+    }
+
+    /** One channel of a call, as the importer writes it. */
+    private function channelFor(string $session, RecordingType $type, SourceRole $role): string
+    {
+        return $this->queue()->enqueueConversation(
+            ConversationMode::Common,
+            $this->storeSourceId,
+            [$role->value => $this->wavUpload('channel.wav')],
+            $this->adminId,
+            TranscriptionProvider::Whisper,
+            false,
+            $type,
+            null,
+            $session,
+            null,
+            true,
+            $role,
+        );
+    }
+
+    /** Stand in for the worker finishing one recording. */
+    private function complete(int $jobId): void
+    {
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            ['status' => JobStatus::COMPLETED->value],
+            ['id' => $jobId],
+        )->execute();
+    }
+
     private function mixedFor(string $session): string
     {
         return $this->queue()->enqueueConversation(
