@@ -301,7 +301,19 @@ $transcriptionSteps = static fn(): array => [
     $progressStep('05', 'SAVING', 'Saving', 'Writing the finished transcript'),
 ];
 
-$slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = false) use (
+$slotCellInner = static function (
+    StoreRecordingSlot $slot,
+    bool $isCurrent = false,
+    /**
+     * Whether this line draws its own play control.
+     *
+     * False in the conversation cell, where the three channels of one call share a single play button:
+     * they are three recordings of the same conversation and their durations are the same number, so
+     * three copies of it was the clutter the column was consolidated to remove. Every other control the
+     * slot carries is unaffected — this suppresses one button, not a state.
+     */
+    bool $withPlay = true,
+) use (
     $clock,
     $originalUrl,
     $fragmentUrl,
@@ -310,7 +322,7 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
 ): string {
     $html = '<div class="a2t-slot">';
 
-    if ($slot->hasOriginalAudio) {
+    if ($slot->hasOriginalAudio && $withPlay) {
         $html .= '<button class="a2t-play" type="button"'
             . ' data-a2t-play="' . Html::encode($originalUrl($slot->jobPublicId)) . '"'
             . ' aria-label="' . Html::encode('Play ' . $slot->label() . ' recording') . '">'
@@ -358,16 +370,56 @@ $slotCellInner = static function (StoreRecordingSlot $slot, bool $isCurrent = fa
     return $html . '</div>';
 };
 
+/**
+ * A channel that has something to read, stated rather than offered.
+ *
+ * Two parts, and the invisible one is the point. The dialog's tab strip is built in the browser by
+ * scanning the row for `data-a2t-current-channel` and reading each channel's endpoint, full-editor url
+ * and name off it — those four attributes used to ride on the Details button, and with the button gone
+ * they ride on an empty hidden span instead. Data for the script, nothing for the reader, and no change
+ * to the script that reads it.
+ *
+ * The visible part is not a control: no button, no link styling, nothing to press. Pressing it would
+ * only reach the dialog the link above it already opens.
+ */
+$channelIndicator = static function (StoreRecordingSlot $slot) use ($fragmentUrl, $fullReviewUrl): string {
+    return '<span hidden'
+        . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
+        . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
+        . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
+        . ' data-a2t-details-label="' . Html::encode($slot->label()) . '"></span>'
+        // `aria-hidden` on the tick: a reader using a screen reader is told the channel's name, which is
+        // the information. Read aloud, the glyph would be pronounced as a word.
+        . '<span class="a2t-channel-have">' . Html::encode($slot->label())
+        . '<span class="a2t-channel-have__tick" aria-hidden="true">&#10003;</span></span>';
+};
+
 $slotCell = static function (
     ?StoreRecordingSlot $slot,
     ?RecordingType $emptyType = null,
     ?StoreOrderGroup $group = null,
+    bool $withPlay = true,
+    /**
+     * Whether a recording that can be opened says so instead of offering to open it.
+     *
+     * True in the conversation cell. There is one way into a conversation — the link above these
+     * channels — and a Details button beside each of them was a second route to the same dialog, three
+     * times over, which rebuilt the three columns this cell replaced. So the channel states that it has
+     * something and stays a statement; the dialog's tabs are how one channel is reached.
+     *
+     * It changes **only** the two states that used to draw that button. A channel waiting to be
+     * transcribed keeps Transcribe audio, one being transcribed keeps its progress link, a replaced
+     * recording keeps the fold holding its older versions, and an empty one keeps "+ Add audio" — each
+     * the only way to reach what it does.
+     */
+    bool $asIndicator = false,
 ) use (
     $clock,
     $originalUrl,
     $fragmentUrl,
     $fullReviewUrl,
     $slotCellInner,
+    $channelIndicator,
     $appTimeZone,
     $groupUrl,
     $statusUrl,
@@ -418,14 +470,14 @@ $slotCell = static function (
 
     $html = '<div class="a2t-slot">';
 
-    if ($slot->hasOriginalAudio) {
+    if ($slot->hasOriginalAudio && $withPlay) {
         $html .= '<button class="a2t-play" type="button"'
             . ' data-a2t-play="' . Html::encode($originalUrl($slot->jobPublicId)) . '"'
             . ' aria-label="' . Html::encode('Play ' . $slot->label() . ' recording') . '">'
             . '<span class="a2t-play__icon" aria-hidden="true"></span>'
             . '<span class="a2t-play__time">' . Html::encode($clock($slot->durationSeconds)) . '</span>'
             . '</button>';
-    } else {
+    } elseif (!$slot->hasOriginalAudio) {
         // Retention took the file, or it was never kept. The transcript is still there, so the row
         // stays useful — it just cannot be listened to.
         $html .= '<span class="a2t-slot__gone" title="This recording is no longer stored on the server">'
@@ -440,7 +492,7 @@ $slotCell = static function (
         // so the order dialog builds one tab per channel rather than one per upload. It sorts on the
         // value, which is what stops a legacy Customer + Agent pair — whose halves share ONE cell and
         // are rendered in the order their jobs were inserted — from being ordered by that accident.
-        $html .= '<button class="a2t-slot__link" type="button"'
+        $html .= $asIndicator ? $channelIndicator($slot) : '<button class="a2t-slot__link" type="button"'
             . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
             . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
             . ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
@@ -464,7 +516,9 @@ $slotCell = static function (
         // still opens, because there is something to show — the conversation assembled from this call's
         // Customer and Agent recordings, or, when it has none, the audio and a sentence saying so.
         // Offering "Transcribe audio" here would offer something the endpoint refuses.
-        $html .= '<span class="a2t-slot__note">Audio only</span>'
+        // The "Audio only" note goes with the button here: it describes the recording, and the dialog
+        // this channel belongs to already says so in a sentence of its own.
+        $html .= $asIndicator ? $channelIndicator($slot) : '<span class="a2t-slot__note">Audio only</span>'
             . '<button class="a2t-slot__link" type="button"'
             . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
             . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
@@ -522,6 +576,151 @@ $slotCell = static function (
     }
 
     return $html . '</div>';
+};
+
+/**
+ * One channel of a call, as the table shows it.
+ *
+ * ## Why a recording that can be opened shows no link
+ *
+ * There is one way into a conversation and it is "View conversation", which opens the dialog on the
+ * right tab. A Details link beside each channel was a second way to the same place, and three of them
+ * rebuilt the three columns this cell replaced — the clutter, inside one box.
+ *
+ * So a channel that has something to read is a **statement, not a control**: its name and a tick. It is
+ * not a button, carries no link styling and does nothing when clicked, because offering an action that
+ * duplicates the one above it is what made the row hard to read.
+ *
+ * ## The hidden carrier, and why it is not an oversight
+ *
+ * The dialog's tab strip is built in the browser by scanning this row for `data-a2t-current-channel`
+ * and reading each channel's endpoint, full-editor url and name off it. Those four attributes used to
+ * ride on the Details button. With the button gone they need somewhere to live, so they ride on an
+ * empty hidden span instead — data for the script, nothing for the reader, and no change to the script
+ * that reads it.
+ *
+ * ## What is still a control
+ *
+ * Everything that is not a duplicate. A channel waiting to be transcribed keeps Transcribe audio, one
+ * being transcribed keeps its progress link, and a channel that was never uploaded keeps "+ Add audio" —
+ * each the only way to reach what it does, and none of them a second route to the dialog.
+ */
+$channelLine = static function (
+    ?StoreRecordingSlot $slot,
+    ?RecordingType $type,
+    ?StoreOrderGroup $group,
+) use ($slotCell): string {
+    // "Readable" is exactly the two states that used to draw a Details button, and the only ones that
+    // become an indicator. The name is drawn here only for the others: an indicator carries its own, and
+    // printing it twice was the first thing that made this cell look like three columns again.
+    $readable = $slot !== null && ($slot->isReviewable() || $slot->isAudioOnly());
+
+    return ($readable ? '' : '<span class="a2t-conversation__name">'
+            . Html::encode($type === null ? ($slot?->label() ?? '') : $type->label())
+            . '</span>')
+        // Still the one renderer. A replaced recording keeps the fold holding its older versions, an
+        // empty channel keeps "+ Add audio", and a running one keeps its progress link — none of which
+        // this cell could have reproduced without owning a second copy of the same state machine.
+        . $slotCell($slot, $type, $group, false, $readable);
+};
+
+/**
+ * One call's recordings as a single cell.
+ *
+ * ## Why three columns became one
+ *
+ * The table used to carry a Mix / Common, a Customer and an Agent column, each with its own play
+ * control, duration and Details button. Three identical durations and three near-identical buttons read
+ * as three different things to do, when they are three recordings of **one conversation** and the thing
+ * to do with them is the same: open it. The unified dialog that does so already existed behind the order
+ * number — this gives it a name and puts it where the recordings were.
+ *
+ * ## What is kept, and why the per-channel controls are still here
+ *
+ * Every control {@see $slotCell} draws is still drawn, with the same data attributes: the dialog's tab
+ * strip is built in the browser by scanning this row for `data-a2t-current-channel`, and the Transcribe,
+ * watch-progress, Add audio and version-history controls are each the only way to reach what they do. So
+ * the channels are compacted, never dropped — what is suppressed is one duplicated play button per
+ * channel, because all three report the same number.
+ *
+ * Clicking a channel still opens that channel. The dialog lands on its tab, which is the behaviour the
+ * three Details buttons had, so nothing a reader could do before has moved.
+ */
+$conversationCell = static function (StoreOrderGroup $group) use (
+    $clock,
+    $originalUrl,
+    $channelLine
+): string {
+    // The first line: what there is to listen to, and the one way in. Wrapped together so they stay on
+    // one line and the channels below read as a caption to them.
+    $html = '<div class="a2t-conversation"><div class="a2t-conversation__lead">';
+
+    // One play control for the call, from whichever recording of it can still be played. They are the
+    // same call and the same length; which file backs the button is not a distinction worth drawing.
+    $playable = null;
+
+    foreach ($group->primaries() as $slot) {
+        if ($slot->hasOriginalAudio) {
+            $playable = $slot;
+
+            break;
+        }
+    }
+
+    if ($playable !== null) {
+        $html .= '<button class="a2t-play" type="button"'
+            . ' data-a2t-play="' . Html::encode($originalUrl($playable->jobPublicId)) . '"'
+            . ' aria-label="' . Html::encode('Play the recording of this call') . '">'
+            . '<span class="a2t-play__icon" aria-hidden="true"></span>'
+            . '<span class="a2t-play__time">' . Html::encode($clock($playable->durationSeconds)) . '</span>'
+            . '</button>';
+    }
+
+    // The named way in. It carries `data-a2t-order-open` because that is the attribute the dialog's
+    // existing opener reads — the order number keeps working and this is the same door, not a second one.
+    if ($group->orderId !== null && $group->hasReviewableRecording()) {
+        $html .= '<button class="a2t-slot__link a2t-slot__link--open" type="button"'
+            . ' data-a2t-order-open="' . Html::encode($group->orderId) . '">View conversation</button>';
+    }
+
+    $html .= '</div><div class="a2t-conversation__channels">';
+
+    if ($group->isLegacySeparate()) {
+        // A pair uploaded before recording types existed: its halves are Customer and Agent, named by
+        // the role the administrator supplied rather than by a channel this application never knew.
+        // Kept inside `a2t-legacy` so the caption and its two halves stay one thing on the page.
+        $html .= '<span class="a2t-legacy">'
+            . '<span class="a2t-legacy__tag">Customer + Agent</span>';
+
+        foreach ($group->legacySeparate as $half) {
+            // Named by the half's own `source_role`, because a legacy pair has no recording type to be
+            // named by — the same distinction the caption above draws.
+            $html .= '<span class="a2t-conversation__channel"'
+                . ' data-a2t-channel="' . Html::encode($half->sourceRole->value) . '">'
+                . $channelLine($half, null, null)
+                . '</span>';
+        }
+
+        $html .= '</span>';
+    } else {
+        foreach (
+            [
+                [$group->mixed, RecordingType::Mixed],
+                [$group->caller, RecordingType::Caller],
+                [$group->callee, RecordingType::Callee],
+            ] as [$slot, $type]
+        ) {
+            // The channel this line is about, as the enum spells it. A reader sees the label; this is
+            // what lets anything else — a test, a style, a script — address one channel now that the
+            // three of them share a cell and can no longer be told apart by which column they sit in.
+            $html .= '<span class="a2t-conversation__channel"'
+                . ' data-a2t-channel="' . Html::encode($type->value) . '">'
+                . $channelLine($slot, $type, $group)
+                . '</span>';
+        }
+    }
+
+    return $html . '</div></div>';
 };
 
 /**
@@ -636,14 +835,12 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             <?php endif; ?>>
             <table class="table a2t-table a2t-orders a2t-conversions">
                 <?php
-                        // Sized to content, with the three recording columns sharing the slack: a filename no
+                        // Sized to content, with the one recording column taking the slack: a filename no
                         // longer appears here, so nothing in this table has an unbounded length.
 ?>
                 <colgroup>
                     <col class="a2t-col-order">
-                    <col class="a2t-col-slot">
-                    <col class="a2t-col-slot">
-                    <col class="a2t-col-slot">
+                    <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
                     <col class="a2t-col-demo">
                     <col class="a2t-col-tts">
@@ -652,12 +849,10 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                 <thead>
                     <tr>
                         <th>Order No#</th>
-                        <?php // From the enum, not typed out. These three headers and the label inside?>
-                        <?php // every dialog below name the same three things, and a header carrying its?>
-                        <?php // own copy is the one that gets missed when a client renames them.?>
-                        <th><?= Html::encode(RecordingType::Mixed->label()) ?></th>
-                        <th><?= Html::encode(RecordingType::Caller->label()) ?></th>
-                        <th><?= Html::encode(RecordingType::Callee->label()) ?></th>
+                        <?php // One column, because an order is one conversation. The channels it was?>
+                        <?php // recorded on are named inside the cell, from the enum rather than typed?>
+                        <?php // out here, and the dialog it opens gives each of them a tab.?>
+                        <th>Recording / Conversation</th>
                         <th>Status</th>
                         <th>Demo URL</th>
                         <th>Text to Audio</th>
@@ -709,31 +904,8 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                             </span>
                         </td>
                         <td>
-                            <?php if ($group->isLegacySeparate()): ?>
-                                <?php
-                                // A pair uploaded before recording types existed. Its halves are
-                                // Customer and Agent — roles the administrator supplied — and this
-                                // application has never known which of them called whom, so each is
-                                // described by its own `source_role` and never by a recording type.
-                                //
-                                // Those two words are now also what CALLER and CALLEE display as, so a
-                                // legacy half and a caller recording read alike here while meaning
-                                // different things: who works for the restaurant, against who dialled.
-                                // The collision is in the wording only — see RecordingTypeLabels — and
-                                // nothing on this page converts one into the other.
-                                ?>
-                                <div class="a2t-legacy">
-                                    <span class="a2t-legacy__tag">Customer + Agent</span>
-                                    <?php foreach ($group->legacySeparate as $half): ?>
-                                        <?= $slotCell($half) ?>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php else: ?>
-                                <?= $slotCell($group->mixed, RecordingType::Mixed, $group) ?>
-                            <?php endif; ?>
+                            <?= $conversationCell($group) ?>
                         </td>
-                        <td><?= $slotCell($group->caller, RecordingType::Caller, $group) ?></td>
-                        <td><?= $slotCell($group->callee, RecordingType::Callee, $group) ?></td>
                         <td>
                             <?php
                             // A row whose audio is still arriving says so, instead of reporting a

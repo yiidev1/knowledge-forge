@@ -161,7 +161,8 @@
    bare `.a2t-table col.a2t-col-status` here would resize a table on another page. */
 .a2t-orders { table-layout: fixed; min-width: 72rem; }
 .a2t-orders col.a2t-col-order { width: 11rem; }
-.a2t-orders col.a2t-col-slot { width: auto; min-width: 8rem; }
+/* One column now, where three channel columns used to sit, so it takes the slack they shared. */
+.a2t-orders col.a2t-col-conversation { width: auto; min-width: 16rem; }
 .a2t-orders col.a2t-col-status { width: 9rem; }
 /* Wide enough for the longest label and the longest state side by side on one line — "Common / Mixed"
    next to "Not generated" is the pair that sets it. Narrower and the cell wrapped mid-phrase, which
@@ -283,9 +284,40 @@ tr:hover .a2t-slot__add,
 .a2t-play[data-playing] { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
 .a2t-play--sm { padding: .2rem .4rem; }
 
+/* One call's recordings as one cell: what to do with the call on the first line, what it is made of on
+   the second. Two rows rather than one column per channel — three recordings of one conversation are
+   one thing to open, and the three columns this replaced said otherwise three times. */
+.a2t-conversation { display: flex; flex-direction: column; align-items: flex-start; gap: .3rem; }
+/* The first line. `baseline` so the duration and the link sit on the same line of text. */
+.a2t-conversation__lead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; }
+.a2t-conversation__channels { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .7rem; }
+.a2t-conversation__channel { display: flex; align-items: baseline; gap: .35rem; }
+.a2t-conversation__name {
+    color: var(--text-faint);
+    font-size: .7rem;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+}
+/* A channel that has something to read: a statement, not a control. Deliberately nothing a cursor or a
+   colour would offer to click — the one action in this cell is the link above it. */
+.a2t-channel-have {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .25rem;
+    color: var(--text-faint);
+    font-size: .72rem;
+    white-space: nowrap;
+}
+.a2t-channel-have__tick { color: var(--ok, #4ade80); font-size: .78rem; line-height: 1; }
+/* A channel that still owns a control keeps it on the same line as its name, rather than stacking as a
+   slot does when it has a whole cell to itself. */
+.a2t-conversation__channel .a2t-slot { flex-direction: row; align-items: baseline; gap: .35rem; }
+/* The one way in, weighted so it reads as the action of the row. */
+.a2t-slot__link--open { font-weight: 600; }
+
 /* The legacy Customer + Agent pair, kept whole in the Mix column with its own caption rather than
    relabelled Caller and Callee — this application has never known which side called. */
-.a2t-legacy { display: flex; flex-direction: column; gap: .35rem; }
+.a2t-legacy { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .9rem; }
 .a2t-legacy__tag {
     align-self: flex-start;
     padding: .1rem .45rem;

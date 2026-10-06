@@ -1270,12 +1270,12 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
-        // Column numbers from self::TYPE_COLUMN: MIXED 2, CALLER 3, CALLEE 4.
+        // The three channels share one cell now, so each is addressed by its own marker.
         $row = '.a2t-orders tbody tr:first-child';
-        $I->seeElement($row . ' td:nth-child(2) .a2t-slot__add[data-a2t-manage-focus="MIXED"]');
-        $I->seeElement($row . ' td:nth-child(4) .a2t-slot__add[data-a2t-manage-focus="CALLEE"]');
-        // The occupied column offers no such thing.
-        $I->dontSeeElement($row . ' td:nth-child(3) .a2t-slot__add');
+        $I->seeElement($row . ' [data-a2t-channel="MIXED"] .a2t-slot__add[data-a2t-manage-focus="MIXED"]');
+        $I->seeElement($row . ' [data-a2t-channel="CALLEE"] .a2t-slot__add[data-a2t-manage-focus="CALLEE"]');
+        // The occupied channel offers no such thing.
+        $I->dontSeeElement($row . ' [data-a2t-channel="CALLER"] .a2t-slot__add');
     }
 
     /** It points at the recordings fragment, which is what the dialog already fetches. */
@@ -1425,10 +1425,17 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Customer + Agent');
-        // Not relabelled into the new vocabulary: Caller and Callee are empty for this row, because
-        // nothing here ever established which of the two placed the call.
-        $I->seeElement('.a2t-orders tbody tr:first-child td:nth-child(3) .util-muted');
-        $I->seeElement('.a2t-orders tbody tr:first-child td:nth-child(4) .util-muted');
+
+        // Not relabelled into the new vocabulary. Its two halves are named by the role the administrator
+        // supplied, and the row carries no Caller or Callee channel at all — nothing here ever
+        // established which of the two placed the call, and the cell does not imply otherwise.
+        Assert::assertSame(
+            ['CUSTOMER', 'AGENT'],
+            $I->grabMultiple(self::CONVERSATION_CELL . ' [data-a2t-channel]', 'data-a2t-channel'),
+        );
+        $I->dontSeeElement(self::CONVERSATION_CELL . ' [data-a2t-channel="CALLER"]');
+        $I->dontSeeElement(self::CONVERSATION_CELL . ' [data-a2t-channel="CALLEE"]');
+        $I->dontSeeElement(self::CONVERSATION_CELL . ' [data-a2t-channel="MIXED"]');
     }
 
     /**
@@ -1913,7 +1920,7 @@ final class AudioToTextStoreCest
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
         // Column 7, not 6: the Demo URL column sits between Status and Text to Audio.
-        $cell = '.a2t-orders tbody tr:first-child td:nth-child(7)';
+        $cell = '.a2t-orders tbody tr:first-child td:nth-child(5)';
         $I->seeElement($cell . ' .a2t-tts-list');
         // Direct children of the grid, not wrapped in a row: the grid is what aligns the columns.
         $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__label');
@@ -2896,24 +2903,161 @@ final class AudioToTextStoreCest
     // ------------------------------------------------------ what a recording type is called on screen
 
     /**
-     * The table's three columns are headed in the client's vocabulary, from the one place it lives.
+     * The channels are named in the client's vocabulary, from the one place it lives.
      *
-     * The words are read from the shared map rather than written here, so a later rename is one edit and
-     * this test follows it. What is asserted outright is the pair that changed: the columns no longer say
-     * Caller and Callee.
+     * They used to be three column headings and are now three names inside one cell, so this follows
+     * them there. The words are still read from the shared map rather than written here, so a later
+     * rename is one edit and this test follows it. What is asserted outright is the pair that changed:
+     * nothing on this page says Caller or Callee.
      */
-    public function theTableColumnsAreHeadedInTheClientsVocabulary(WebTester $I): void
+    public function theChannelsAreNamedInTheClientsVocabulary(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
         foreach (RecordingTypeLabels::all() as $label) {
-            $I->see($label, '.a2t-orders thead th');
+            $I->see($label, self::CONVERSATION_CELL);
         }
 
-        $I->dontSee('Caller', '.a2t-orders thead th');
-        $I->dontSee('Callee', '.a2t-orders thead th');
+        $I->dontSee('Caller', '.a2t-orders');
+        $I->dontSee('Callee', '.a2t-orders');
+    }
+
+    /**
+     * One column for a call's recordings, not one per channel.
+     *
+     * The redesign's own assertion. Three columns each carrying a duration and a Details button read as
+     * three things to do with three recordings, when they are one conversation recorded three ways — so
+     * the heading is singular and the channels moved inside the cell it names.
+     */
+    public function theTableCarriesOneConversationColumn(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->uploadCard($I, self::STORE_A, 'CALLER', '16513791');
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('Recording / Conversation', '.a2t-orders thead th');
+
+        Assert::assertSame(
+            ['Order No#', 'Recording / Conversation', 'Status', 'Demo URL', 'Text to Audio', 'Actions'],
+            array_map('trim', $I->grabMultiple('.a2t-orders thead th')),
+            'The three channel columns are one.',
+        );
+    }
+
+    /**
+     * One way in, and it is the dialog that already shows every channel of the call.
+     *
+     * `data-a2t-order-open` is the attribute the existing opener reads, so the named button and the
+     * order number are the same door rather than two. The per-channel controls stay in the markup
+     * because the dialog's tab strip is built by scanning the row for them.
+     */
+    public function theConversationCellOffersOneWayIn(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->completeWithSeparation((string) $job['public_id']);
+            }
+        }
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->see('View conversation', self::CONVERSATION_CELL);
+        $I->seeElement(self::CONVERSATION_CELL . ' [data-a2t-order-open="16513791"]');
+
+        // All three channels are still addressable, which is what the dialog's tabs are built from.
+        Assert::assertSame(
+            ['MIXED', 'CALLER', 'CALLEE'],
+            $I->grabMultiple(self::CONVERSATION_CELL . ' [data-a2t-channel]', 'data-a2t-channel'),
+        );
+        Assert::assertCount(
+            3,
+            $I->grabMultiple(self::CONVERSATION_CELL . ' [data-a2t-current-channel]', 'data-a2t-details'),
+            'Every channel still carries the marker the tab strip is built from.',
+        );
+    }
+
+    /**
+     * One action in the cell, and the channels are statements beside it.
+     *
+     * The redesign's second pass. Three Details links next to three channel names rebuilt the three
+     * columns inside one box: the reader was offered the same destination four times and had to work out
+     * that they were the same. The dialog's tabs are how a particular channel is reached.
+     */
+    public function theConversationCellOffersNoPerChannelDetailsLinks(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->completeWithSeparation((string) $job['public_id']);
+            }
+        }
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        $I->dontSee('Details', self::CONVERSATION_CELL);
+        $I->dontSee('Audio only', self::CONVERSATION_CELL);
+
+        // Two controls in the whole cell: play the call, and open it. Asserted by class rather than by
+        // counting, so a third one could not slip in under a name this test did not think of.
+        Assert::assertSame(
+            ['a2t-play', 'a2t-slot__link a2t-slot__link--open'],
+            $I->grabMultiple(self::CONVERSATION_CELL . ' button', 'class'),
+            'The cell offers playing the call and opening it, and nothing else.',
+        );
+
+        // Each channel states that it has something, and states it without being a control.
+        Assert::assertCount(
+            3,
+            $I->grabMultiple(self::CONVERSATION_CELL . ' .a2t-channel-have', 'class'),
+        );
+        $I->dontSeeElement(self::CONVERSATION_CELL . ' .a2t-channel-have button');
+        $I->dontSeeElement(self::CONVERSATION_CELL . ' .a2t-channel-have a');
+
+        // And the data the tab strip is built from is still in the row, carried by something the reader
+        // never sees rather than by a link they would have had to ignore.
+        $I->seeElement(self::CONVERSATION_CELL . ' [hidden][data-a2t-current-channel]');
+    }
+
+    /**
+     * One play control for the call, not one per channel.
+     *
+     * The three recordings are the same conversation and report the same duration, so three copies of
+     * that number was the clutter this column was consolidated to remove.
+     */
+    public function theConversationCellPlaysTheCallOnce(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        foreach (['MIXED', 'CALLER', 'CALLEE'] as $type) {
+            $this->uploadCard($I, self::STORE_A, $type, '16513791');
+        }
+
+        foreach ($this->conversationsFor(self::STORE_A) as $conversation) {
+            foreach ($this->childrenOf((int) $conversation['id']) as $job) {
+                $this->completeWithSeparation((string) $job['public_id']);
+            }
+        }
+
+        $I->amOnPage($this->storeUrl(self::STORE_A));
+
+        Assert::assertCount(
+            1,
+            $I->grabMultiple(self::CONVERSATION_CELL . ' .a2t-play', 'data-a2t-play'),
+            'One call, one play control.',
+        );
     }
 
     /**
@@ -4319,7 +4463,17 @@ final class AudioToTextStoreCest
     }
 
     /** Which column of the grouped table a recording of each type lands in. */
-    private const TYPE_COLUMN = ['MIXED' => 2, 'CALLER' => 3, 'CALLEE' => 4];
+    /**
+     * The three channels of a call, which now share one cell rather than owning a column each.
+     *
+     * Addressed by `data-a2t-channel` instead of by `td:nth-child()`. Position stopped meaning anything
+     * when the columns were folded together, and a positional selector would have gone on passing while
+     * asserting about whichever channel happened to be drawn there.
+     */
+    private const CHANNELS = ['MIXED', 'CALLER', 'CALLEE'];
+
+    /** The cell holding all of a call's recordings. */
+    private const CONVERSATION_CELL = '.a2t-orders tbody tr:first-child td:nth-child(2)';
 
     private function uploadCommon(WebTester $I, int $sourceId): void
     {
@@ -4362,8 +4516,8 @@ final class AudioToTextStoreCest
     {
         $row = '.a2t-orders tbody tr:first-child';
 
-        foreach (self::TYPE_COLUMN as $candidate => $column) {
-            $cell = $row . ' td:nth-child(' . $column . ')';
+        foreach (self::CHANNELS as $candidate) {
+            $cell = $row . ' [data-a2t-channel="' . $candidate . '"]';
 
             if ($candidate === $type) {
                 // Queued, so there is no audio to play yet — but the cell is occupied and says so.
