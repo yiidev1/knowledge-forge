@@ -394,6 +394,45 @@ tr:hover .a2t-slot__add,
 .a2t-listen audio { height: 32px; width: 15rem; min-width: 11rem; max-width: 100%; }
 .a2t-listen__note { font-size: .73rem; color: var(--text-faint); line-height: 1.3; }
 .a2t-listen__state { font-size: .73rem; color: var(--text-muted); white-space: nowrap; }
+
+/* The Text-to-Audio control, in the AI audio row beside the state it governs rather than in the dialog
+   header. It follows the state or the player inline — `margin-left: auto` pushed it to the far edge of
+   a grid column sized to its content, which made it wrap onto a line of its own and take the row's
+   height with it, leaving the AI audio cell sitting lower than Original and System. */
+.a2t-listen__action { white-space: nowrap; }
+
+/* An indeterminate bar: a rendition reports QUEUED and GENERATING and no percentage, so there is no
+   value to fill to. The sliver travels to say "working" without claiming to know how far along. */
+.a2t-progressbar {
+    position: relative;
+    display: block;
+    /* Narrow and allowed to shrink: this sits in a grid column sized to its contents, between Original
+       and System, and a wide bar would push both of them around while it ran. */
+    flex: 0 1 5.5rem;
+    height: 4px;
+    min-width: 3rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-3, rgba(255, 255, 255, .08));
+}
+.a2t-progressbar__fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 40%;
+    border-radius: inherit;
+    background: var(--accent, #6366f1);
+    animation: a2t-progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes a2t-progress-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+/* Someone who has asked for less motion still needs to see that something is happening; a steady band
+   at rest says it without travelling across the row. */
+@media (prefers-reduced-motion: reduce) {
+    .a2t-progressbar__fill { animation: none; left: 0; width: 100%; opacity: .55; }
+}
 /* The dot is decoration and lives in CSS, so the element's text stays the single word a screen
    reader announces — and the word is what carries the meaning, not the colour. */
 .a2t-listen__status::before {

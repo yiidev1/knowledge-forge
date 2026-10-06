@@ -64,6 +64,19 @@ final class DetailsHeaderActionsTest extends TestCase
     }
 
     /** The painter's own body, so a match cannot come from somewhere else in a 2,000-line file. */
+    /** The body of the AI audio row, which is where the generate control lives. */
+    private static function listenControls(): string
+    {
+        $script = self::script();
+        $start = strpos($script, 'function generatedControls(');
+        self::assertNotFalse($start, 'The AI audio controls renderer has moved.');
+
+        $end = strpos($script, "\n    }\n", $start);
+        self::assertNotFalse($end);
+
+        return substr($script, $start, $end - $start);
+    }
+
     private static function painter(): string
     {
         $script = self::script();
@@ -137,42 +150,125 @@ final class DetailsHeaderActionsTest extends TestCase
      */
     public function testTheGenerateControlIsDrawnOnOfferedAndDisabledOnCanGenerate(): void
     {
-        $painter = self::painter();
+        $controls = self::listenControls();
 
         self::assertMatchesRegularExpression(
-            '/if\s*\(\s*generated\s*&&\s*generated\.offered\s*\)/',
-            $painter,
-            'Whether the control exists is `offered`.',
+            '/if\s*\(\s*generated\.offered\s*(?:&&[^)]*)?\)/',
+            $controls,
+            'Whether the control exists is `offered` — never `canGenerate`.',
         );
 
         self::assertStringContainsString(
             'disabled = !generated.canGenerate',
-            $painter,
+            $controls,
             'Whether it may be pressed is `canGenerate`, expressed as disabled rather than as absent.',
         );
 
         self::assertFalse(
-            (bool) preg_match('/if\s*\(\s*generated\s*&&\s*generated\.canGenerate\s*\)/', $painter),
+            (bool) preg_match('/if\s*\(\s*generated\.canGenerate\s*\)/', $controls),
             'Drawing on canGenerate is the bug; it must not come back.',
         );
     }
 
-    /** Both controls go into the header container, and nothing is appended to the panel below. */
-    public function testBothControlsArePaintedIntoTheHeaderContainer(): void
+    /**
+     * The header keeps the actions on the recording; generation sits with the audio it generates.
+     *
+     * It used to be both, on the reasoning that both reach outside the page. That grouped them by what
+     * they cost rather than by what they change: a generation reports its state, its progress and its
+     * player in the AI audio row, so a control in the header meant watching one corner of the dialog
+     * while the answer arrived in another.
+     */
+    public function testGenerationSitsWithTheAudioAndNotInTheHeader(): void
     {
         $painter = self::painter();
+        $controls = self::listenControls();
 
-        self::assertStringContainsString('data-a2t-update-open', $painter);
-        self::assertStringContainsString('data-a2t-tts-confirm', $painter);
-        self::assertSame(
-            2,
-            preg_match_all('/reviewActions\.appendChild\(/', $painter),
-            'Both controls are appended to the header container.',
-        );
+        self::assertStringContainsString('data-a2t-update-open', $painter, 'Update Audio stays in the header.');
         self::assertStringNotContainsString(
-            'listen.appendChild',
+            'data-a2t-tts-confirm',
             $painter,
-            'Nothing is added to the player panel any more.',
+            'The generate control is no longer drawn in the header.',
+        );
+        self::assertSame(
+            1,
+            preg_match_all('/reviewActions\.appendChild\(/', $painter),
+            'One control is appended to the header container.',
+        );
+
+        self::assertStringContainsString('data-a2t-tts-confirm', $controls, 'It is drawn in the AI audio row.');
+        self::assertStringContainsString(
+            'a2t-listen__action',
+            $controls,
+            'And carries the class that places it at the end of that row.',
+        );
+    }
+
+    /**
+     * Working is shown where the work is, with a bar that claims no percentage.
+     *
+     * A rendition reports QUEUED and GENERATING and nothing else, so a number would be invented. The
+     * missing `aria-valuenow` is the assertion that matters: min and max without a value is how a
+     * progressbar says it is indeterminate, and adding one would announce a percentage nobody knows.
+     */
+    public function testAGenerationInFlightShowsAnIndeterminateBarInTheAudioRow(): void
+    {
+        $controls = self::listenControls();
+
+        self::assertMatchesRegularExpression('/if\s*\(\s*generated\.inFlight\s*\)/', $controls);
+        self::assertStringContainsString("el('span', 'a2t-progressbar')", $controls);
+        self::assertStringContainsString("setAttribute('role', 'progressbar')", $controls);
+        self::assertStringNotContainsString('aria-valuenow', $controls, 'There is no percentage to report.');
+    }
+
+    /**
+     * While a worker has it there is a bar and a word, and nothing to press.
+     *
+     * A disabled button carrying the same words as the status text beside it was one fact twice, and
+     * the widest thing in a grid column sized to its contents — it wrapped onto its own line and took
+     * the row's height with it, so the AI audio cell sat lower than Original and System.
+     */
+    public function testTheActionIsHiddenWhileAGenerationIsRunning(): void
+    {
+        $controls = self::listenControls();
+
+        self::assertMatchesRegularExpression(
+            '/if\s*\(\s*generated\.offered\s*&&\s*!generated\.inFlight\s*\)/',
+            $controls,
+            'The control is withheld for exactly as long as a worker has the rendition.',
+        );
+        self::assertMatchesRegularExpression(
+            '/if\s*\(\s*generated\.inFlight\s*\)\s*\{\s*controls\.push\(\s*el\(\s*\'span\', \'a2t-listen__state\', generated\.actionLabel/',
+            $controls,
+            'The status beside the bar is "Starting…" / "Generating…", not the state it was asked in.',
+        );
+    }
+
+    /**
+     * An accepted generation returns the operator to the conversation, not to a panel about it.
+     *
+     * The confirmation is kept — generation spends money and the dialog says so — but once the request
+     * is accepted it closes. The work is then reported where it happens: the AI audio row's state, its
+     * bar, and its player when it lands. A panel that replaced the confirmation said the same thing in
+     * a second place and hid the transcript the operator had opened.
+     */
+    public function testAnAcceptedGenerationClosesTheConfirmationRatherThanShowingAPanel(): void
+    {
+        $script = self::script();
+
+        self::assertSame(
+            1,
+            substr_count($script, 'function showTtsProcessing('),
+            'The panel renderer is expected to still be defined.',
+        );
+        self::assertSame(
+            0,
+            preg_match_all('/(?<!function )showTtsProcessing\(\)/', $script),
+            'Nothing switches the confirmation into a progress panel any more.',
+        );
+        self::assertStringContainsString(
+            'closeDialog(ttsConfirmDialog)',
+            $script,
+            'An accepted request closes the confirmation and leaves the conversation showing.',
         );
     }
 

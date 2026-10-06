@@ -115,7 +115,10 @@ final readonly class AiAudioRow
             // it is a column of facts rather than an answer to a press.
             AiAudioState::Queued => 'Starting…',
             AiAudioState::Generating => 'Generating…',
-            default => $this->buttonLabel() . ' AI Audio',
+            // "Text to Audio", the words the store table's own control uses. The feature was called two
+            // things on one screen — "Generate Text to Audio" in the row, "Generate AI Audio" in the
+            // dialog the row opens — and a reader had to work out they were the same button.
+            default => $this->buttonLabel() . ' Text to Audio',
         };
     }
 

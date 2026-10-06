@@ -3584,14 +3584,14 @@ final class AudioToTextStoreCest
         return [
             // No rendition row at all.
             ['status' => null, 'file' => false, 'current' => true, 'state' => 'NotGenerated',
-                'enabled' => true, 'inFlight' => false, 'label' => 'Generate AI Audio'],
+                'enabled' => true, 'inFlight' => false, 'label' => 'Generate Text to Audio'],
 
             ['status' => 'READY', 'file' => true, 'current' => true, 'state' => 'Ready',
-                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate Text to Audio'],
 
             // A finished file made from a transcript that has since changed.
             ['status' => 'READY', 'file' => true, 'current' => false, 'state' => 'Stale',
-                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate Text to Audio'],
 
             // The two a worker holds. Drawn, named, and NOT pressable — this is the whole fix.
             ['status' => 'QUEUED', 'file' => false, 'current' => true, 'state' => 'Queued',
@@ -3601,11 +3601,11 @@ final class AudioToTextStoreCest
 
             // Failed with nothing behind it is a first attempt: there is nothing to RE-generate.
             ['status' => 'FAILED', 'file' => false, 'current' => true, 'state' => 'Failed',
-                'enabled' => true, 'inFlight' => false, 'label' => 'Generate AI Audio'],
+                'enabled' => true, 'inFlight' => false, 'label' => 'Generate Text to Audio'],
 
             // Failed after a regeneration keeps the file it was replacing, so it is a Regenerate.
             ['status' => 'FAILED', 'file' => true, 'current' => true, 'state' => 'Failed',
-                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate AI Audio'],
+                'enabled' => true, 'inFlight' => false, 'label' => 'Regenerate Text to Audio'],
         ];
     }
 

@@ -2192,7 +2192,10 @@ window.KFAudioStages = {
 
     /** Run something against the header's generate control, when there is one drawn. */
     function headerAction(change) {
-        var control = reviewActions && reviewActions.querySelector('[data-a2t-tts-confirm]');
+        // The Text-to-Audio control moved out of the header and into the AI audio row, so this looks
+        // for it in the dialog rather than in the header strip. The name is kept: every caller means
+        // "the control this dialog shows for generation", and that is still exactly one control.
+        var control = reviewDialog && reviewDialog.querySelector('[data-a2t-tts-confirm]');
 
         if (control) {
             change(control);
@@ -2237,17 +2240,8 @@ window.KFAudioStages = {
             reviewActions.appendChild(update);
         }
 
-        var generated = data.audio && data.audio.generated;
-
-        if (generated && generated.offered) {
-            // `actionLabel` is the whole sentence for the state the server found this in — "Generate AI
-            // Audio", "Regenerate AI Audio", "Queued…", "Generating…". Nothing is assembled here.
-            var tts = el('button', 'btn btn--sm btn--primary', generated.actionLabel);
-            tts.type = 'button';
-            tts.disabled = !generated.canGenerate;
-            tts.setAttribute('data-a2t-tts-confirm', '');
-            reviewActions.appendChild(tts);
-        }
+        // The Text-to-Audio control is no longer drawn here. See {@see generatedControls} for where it
+        // went and why: it belongs beside the state, the progress and the player it governs.
     }
 
     /**
@@ -2267,20 +2261,61 @@ window.KFAudioStages = {
             controls.push(player(generated.playUrl));
         }
 
-        // The state in the server's own words — "Stale", "Queued", "Generating", "Failed". Skipped
-        // for a recording that simply has no audio yet: the button beside it already says "Generate",
-        // and "Not generated / Generate AI audio" is the same sentence twice in a toolbar built to
-        // save room. Every other state says something the button does not.
-        if ((!generated.playable || generated.state !== 'Ready') && generated.state !== 'NotGenerated') {
+        // The state in the server's own words — "Stale", "Different voice", "Failed". While a worker
+        // has it, `actionLabel` is used instead: that is the pair "Starting…" / "Generating…", which
+        // says what is happening rather than what was asked for ("Requested").
+        //
+        // Skipped for a recording that simply has no audio yet: the button beside it already says
+        // "Generate", and "Not generated / Generate Text to Audio" is the same sentence twice in a
+        // toolbar built to save room. Every other state says something the button does not.
+        if (generated.inFlight) {
+            controls.push(el('span', 'a2t-listen__state', generated.actionLabel));
+        } else if ((!generated.playable || generated.state !== 'Ready') && generated.state !== 'NotGenerated') {
             controls.push(el('span', 'a2t-listen__state', generated.label));
         }
 
-        // The button that asks for generation is NOT here. It lives in the actions row below the
-        // players, with Update Audio, because both of those reach outside this page — one spends money,
-        // the other replaces a file — and the three groups above only play what already exists. Two
-        // buttons doing the same thing in one dialog is the alternative, and it was the first thing
-        // written here.
-        // "A generation is already under way." is skipped: the header control says "Queued…" or
+        // Working, with no estimate to give. A rendition reports QUEUED and GENERATING and nothing
+        // else — there is no percentage in the schema, the worker or the payload — so a number here
+        // would be invented. An animated bar says "working, duration unknown", which is the truth, and
+        // the state label above it already names which of the two it is in.
+        if (generated.inFlight) {
+            var bar = el('span', 'a2t-progressbar');
+            bar.setAttribute('role', 'progressbar');
+            // Min and max with no current-value attribute, deliberately: that pair alone is how a
+            // progressbar says it is indeterminate. Give it a position and a screen reader announces a
+            // percentage nobody knows — there is none to know.
+            bar.setAttribute('aria-valuemin', '0');
+            bar.setAttribute('aria-valuemax', '100');
+            bar.setAttribute('aria-label', generated.label);
+            bar.appendChild(el('span', 'a2t-progressbar__fill'));
+            controls.push(bar);
+        }
+
+        // The button that asks for generation lives HERE, beside the thing it acts on.
+        //
+        // It used to sit in the dialog header with Update Audio and Open full editor, on the reasoning
+        // that all three reach outside the page. That grouped it by what it costs rather than by what
+        // it changes: a generation takes minutes, and its state, its progress and its player all appear
+        // in this row, so the operator watched a button in one corner while the answer arrived in
+        // another. One place for one thing.
+        //
+        // `actionLabel` is the whole sentence for the state the server found this in — "Generate Text
+        // to Audio", "Regenerate Text to Audio", "Starting…", "Generating…" — so a disabled button
+        // still says what is happening rather than going quiet.
+        // Nothing to press while a worker has it. A disabled button carrying the same words as the
+        // status text beside it was a second copy of one fact, and the widest thing in a narrow grid
+        // column — it wrapped onto its own line and took the row's height with it, which is what made
+        // the AI audio cell sit lower than Original and System. The status text and the bar say it now,
+        // and the button comes back the moment the generation is over.
+        if (generated.offered && !generated.inFlight) {
+            var tts = el('button', 'btn btn--sm btn--primary a2t-listen__action', generated.actionLabel);
+            tts.type = 'button';
+            tts.disabled = !generated.canGenerate;
+            tts.setAttribute('data-a2t-tts-confirm', '');
+            controls.push(tts);
+        }
+
+        // "A generation is already under way." is skipped: the control above says "Starting…" or
         // "Generating…" in the same breath, and a dialog that reports one state twice in two places
         // invites the reader to look for the difference between them. Every other reason — no provider,
         // nothing said on this side — has no control saying it, so it is shown.
@@ -3112,7 +3147,7 @@ window.KFAudioStages = {
         var current = generated.alreadyCurrent === true;
         var replace = lastFragment && lastFragment.replace;
 
-        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-title]', generated.buttonLabel + ' AI Audio');
+        fillIn(ttsConfirmDialog, '[data-a2t-tts-confirm-title]', generated.buttonLabel + ' Text to Audio');
         fillIn(
             ttsConfirmDialog,
             '[data-a2t-tts-confirm-recording]',
@@ -3137,11 +3172,11 @@ window.KFAudioStages = {
         openDialog(ttsConfirmDialog);
 
         // Already running — because the operator pressed it, closed the dialog and came back, or
-        // because a worker had it before they arrived. `inFlight` is the server's answer either way, so
-        // the panel is shown without a request having been made from here.
+        // because a worker had it before they arrived. The conversation's own AI audio row carries the
+        // state and the bar now, so there is nothing for a second panel to add; only the clock this
+        // dialog keeps is restored, for the elapsed count if it is opened again.
         if (generated.inFlight) {
             ttsStarted = recallTtsStart(generated.outputType);
-            showTtsProcessing();
         }
     }
 
@@ -3208,7 +3243,11 @@ window.KFAudioStages = {
                 }
 
                 quiet(ttsConfirmStatus);
-                showTtsProcessing();
+                // Back to the conversation, which is where the generation is now reported: its state,
+                // its bar and, when it lands, its player. Keeping this dialog open to say the same
+                // thing in a panel of its own was the second place to look that this removes — and it
+                // hid the transcript the operator came to read.
+                closeDialog(ttsConfirmDialog);
             });
         });
     }
@@ -3235,7 +3274,7 @@ window.KFAudioStages = {
                     }
 
                     quiet(ttsConfirmStatus);
-                    showTtsProcessing();
+                    closeDialog(ttsConfirmDialog);
                 });
             });
         }
@@ -3332,8 +3371,10 @@ window.KFAudioStages = {
 
     /** Put the header control back to whatever the last read from the server said it was. */
     function restoreHeaderAction() {
-        if (lastFragment !== null) {
-            paintRecordingActions(lastFragment);
+        // Repaints the listen row, which is where the control lives now. `paintRecordingActions` would
+        // redraw a strip that no longer holds it and leave the guessed label standing.
+        if (lastAudio !== null) {
+            paintListen(lastFragment);
         }
     }
 
