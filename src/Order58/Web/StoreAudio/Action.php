@@ -43,7 +43,13 @@ use function trim;
  * recordings should be sent, so its card is shown disabled — and the store page refuses the upload
  * server-side, because a disabled button is a hint, not a rule.
  */
-final readonly class Action
+/**
+ * Not `final`: {@see OrderTestingAction} extends it so the Order Testing surface gets the same picker —
+ * the same search, the same filters, the same cards and the same counts — under its own template, whose
+ * cards link on to its own store page. The data this assembles is identical either way, which is the
+ * reason the second surface inherits it rather than describing a store directory of its own.
+ */
+readonly class Action
 {
     private const PER_PAGE = 36;
 
@@ -63,6 +69,7 @@ final readonly class Action
         );
         $audio = StoreAudioFilter::fromRequest(
             is_string($params['audio'] ?? null) ? (string) $params['audio'] : null,
+            $this->defaultAudioFilter(),
         );
         $letter = AlphabetIndex::normalize(is_string($params['letter'] ?? null) ? (string) $params['letter'] : null);
         $page = is_string($params['page'] ?? null) ? max(1, (int) $params['page']) : 1;
@@ -100,11 +107,15 @@ final readonly class Action
 
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
-            ->render(__DIR__ . '/template', [
+            ->render($this->templatePath(), [
                 'result' => $result,
                 'search' => $search,
                 'sourceStatus' => $sourceStatus,
                 'audio' => $audio,
+                // Handed to the template so the URL builder omits exactly the value the parser above
+                // puts back. Two surfaces land differently and a second constant in the view would be a
+                // second rule; see defaultAudioFilter().
+                'audioDefault' => $this->defaultAudioFilter(),
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
                 // One query for the whole page, not one per card.
@@ -123,5 +134,29 @@ final readonly class Action
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
             ]);
+    }
+
+    /** The template this surface renders. Everything above it is the same question on both. */
+    protected function templatePath(): string
+    {
+        return __DIR__ . '/template';
+    }
+
+    /**
+     * Where a request that names no `audio=` lands.
+     *
+     * **Neutral here, and deliberately so.** Opening this page on Uploaded audio was tried once and
+     * reverted: every filter link omits a parameter that already equals its default, so "All stores"
+     * generated a bare URL that the page read straight back as Uploaded audio and the click appeared
+     * to do nothing. The menu entry carries `?audio=with` instead, which establishes the landing state
+     * once and leaves every click after it the user's.
+     *
+     * A surface that overrides this must therefore hand the same value to its template, which the
+     * caller above does — the omit rule and the parse rule are then the same fact, and the click that
+     * broke last time cannot break again. {@see OrderTestingAction}, which lands on Uploaded audio.
+     */
+    protected function defaultAudioFilter(): StoreAudioFilter
+    {
+        return StoreAudioFilter::All;
     }
 }

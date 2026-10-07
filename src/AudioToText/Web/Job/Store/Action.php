@@ -71,7 +71,14 @@ use function trim;
  * itself stays readable — its history has to remain reachable, and the global conversions list links
  * straight to it — so what is withheld is the upload, not the record.
  */
-final readonly class Action
+/**
+ * Not `final`: {@see \App\AudioToText\Web\OrderTesting\StoreAction} extends it so a second
+ * administrative surface can show the same recordings under its own template and its own URLs. Three
+ * seams are overridable — the template, where a missing store goes, and where an upload lands — and
+ * each defaults to exactly what this page has always done, so the audio page is unchanged by their
+ * existence.
+ */
+readonly class Action
 {
     /** Conversations per page of the store's history. */
     /**
@@ -103,7 +110,9 @@ final readonly class Action
          */
         private UploadOptions $uploadOptions,
         private CurrentAdmin $currentAdmin,
-        private Redirect $redirect,
+        // `protected` for the one subclass below: the Order Testing surface overrides where a missing
+        // store and an accepted upload go, and both are redirects. Nothing else about it changes.
+        protected Redirect $redirect,
         private AppTimeZone $appTimeZone,
         /**
          * The store's history, read as orders rather than as uploads.
@@ -125,7 +134,7 @@ final readonly class Action
         if ($store === null) {
             // Back to the picker rather than a 404 page: an id that no longer resolves is almost
             // always a stale bookmark, and the list is where the administrator wanted to be anyway.
-            return $this->redirect->toRoute('order58.store-audio');
+            return $this->storeMissing();
         }
 
         $mode = ConversationMode::Common;
@@ -222,10 +231,7 @@ final readonly class Action
                     // To the conversion, not back to this page. For a common upload that redirects on
                     // to the job page an administrator already knows — where they can watch it
                     // process — and for a pair it is the one screen that shows both recordings.
-                    return $this->redirect->afterPost(
-                        AudioToTextRoute::CONVERSION,
-                        ['publicId' => $conversationId],
-                    );
+                    return $this->afterUpload($conversationId, $store->sourceId);
                 } catch (AudioTranscriptionException $e) {
                     // getMessage() is the uploader-facing half. technicalDetail() stays out of the
                     // browser and goes to the log, which the queue and the worker write.
@@ -249,7 +255,7 @@ final readonly class Action
 
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
-            ->render(__DIR__ . '/template', [
+            ->render($this->templatePath(), [
                 'store' => $store,
                 'mode' => $mode,
                 // What was typed, so a refused submission does not silently discard it.
@@ -319,6 +325,35 @@ final readonly class Action
      * With nothing usable at all the global default is kept, the form cannot be submitted, and the
      * template explains why — which is more honest than preselecting an arbitrary broken option.
      */
+    /**
+     * Where a store id that no longer resolves sends the reader.
+     *
+     * Back to the picker rather than a 404: an id that does not resolve is almost always a stale
+     * bookmark, and the list is where they wanted to be anyway. Which list depends on the surface.
+     */
+    protected function storeMissing(): ResponseInterface
+    {
+        return $this->redirect->toRoute('order58.store-audio');
+    }
+
+    /**
+     * Where an accepted upload lands.
+     *
+     * To the conversion, not back to this page: for a common upload that redirects on to the job page an
+     * administrator already knows — where they can watch it process — and for a pair it is the one
+     * screen that shows both recordings.
+     */
+    protected function afterUpload(string $conversationId, int $sourceId): ResponseInterface
+    {
+        return $this->redirect->afterPost(AudioToTextRoute::CONVERSION, ['publicId' => $conversationId]);
+    }
+
+    /** The template this surface renders. */
+    protected function templatePath(): string
+    {
+        return __DIR__ . '/template';
+    }
+
     private function preselected(TranscriptionProvider $globalDefault): TranscriptionProvider
     {
         return $this->uploadOptions->preselected($globalDefault);

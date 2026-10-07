@@ -40,7 +40,13 @@ use function sprintf;
  * a settings form can discover, and pretending otherwise would put a network round trip behind a
  * button press.
  */
-final readonly class DefaultProviderAction
+/**
+ * Not `final`: {@see OrderTestingDefaultProviderAction} extends it so the same setting can be saved from
+ * the Order Testing picker and return there. The setting is one global row either way — only where the
+ * operator lands afterwards differs, and sending them to a page they were not on is the one thing a
+ * shared POST must not do.
+ */
+readonly class DefaultProviderAction
 {
     public function __construct(
         private AudioToTextSettingsRepositoryInterface $settingsRepository,
@@ -60,7 +66,7 @@ final readonly class DefaultProviderAction
         if ($provider === null) {
             $this->flash->error('That is not a transcription provider this server knows about. Nothing was changed.');
 
-            return $this->redirect->afterPost('order58.store-audio');
+            return $this->redirect->afterPost($this->returnTo());
         }
 
         if (!$this->settings->providerIsUsable($provider)) {
@@ -72,7 +78,7 @@ final readonly class DefaultProviderAction
                 implode(' ', $problems),
             ));
 
-            return $this->redirect->afterPost('order58.store-audio');
+            return $this->redirect->afterPost($this->returnTo());
         }
 
         $this->settingsRepository->saveDefaultProvider($provider, $this->currentAdmin->get()->id());
@@ -82,6 +88,12 @@ final readonly class DefaultProviderAction
             $provider->label(),
         ));
 
-        return $this->redirect->afterPost('order58.store-audio');
+        return $this->redirect->afterPost($this->returnTo());
+    }
+
+    /** The picker this setting was saved from, which is where the operator goes back to. */
+    protected function returnTo(): string
+    {
+        return 'order58.store-audio';
     }
 }

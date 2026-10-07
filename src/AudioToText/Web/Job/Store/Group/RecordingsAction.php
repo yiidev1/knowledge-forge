@@ -55,7 +55,12 @@ use const JSON_THROW_ON_ERROR;
  * one, and the two would sit as unrelated rows. Rather than infer a relationship that is not recorded,
  * this says plainly that the order is what makes a replacement possible, and the dialog repeats it.
  */
-final readonly class RecordingsAction
+/**
+ * Not `final`: {@see \App\AudioToText\Web\OrderTesting\RecordingsAction} extends it to change one
+ * thing — which surface the replacement posts back to. Everything else about Manage Audio is identical
+ * on both pages and is deliberately not duplicated.
+ */
+readonly class RecordingsAction
 {
     public function __construct(
         private StoreGroupFinder $finder,
@@ -97,7 +102,7 @@ final readonly class RecordingsAction
             'aiAudioConfigured' => $this->uploadOptions->aiAudioIsUsable(),
             'reason' => $this->refusal($group),
             'action' => $this->urlGenerator->generate(
-                AudioToTextRoute::STORE_GROUP_REPLACE,
+                $this->replaceRoute(),
                 ['sourceId' => $sourceId, 'groupKey' => $groupKey],
             ),
             'slots' => $this->slots($group, $replaceable),
@@ -279,6 +284,19 @@ final readonly class RecordingsAction
     /**
      * @param array<string, mixed> $payload
      */
+    /**
+     * The route a replacement is posted to.
+     *
+     * A seam, not a setting: the dialog this answers is opened from a store page, and the upload it
+     * offers has to come back to the page the operator is looking at. Overridden by the Order Testing
+     * surface so its Manage Audio stays inside Order Testing rather than returning the operator to the
+     * Audio-to-Text page they never opened.
+     */
+    protected function replaceRoute(): string
+    {
+        return AudioToTextRoute::STORE_GROUP_REPLACE;
+    }
+
     private function json(array $payload): ResponseInterface
     {
         $response = $this->responseFactory

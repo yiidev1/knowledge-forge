@@ -12,6 +12,8 @@ use App\Agent\Web\Sources as AgentSources;
 use App\Ai\Web\Usage;
 use App\AudioToText\Web as AudioToText;
 use App\AudioToText\Web\AudioToTextRoute;
+use App\AudioToText\Web\OrderTesting;
+use App\AudioToText\Web\OrderTesting\OrderTestingRoute;
 use App\Auth\Web\Login;
 use App\Auth\Web\Logout;
 use App\Auth\Web\Middleware\RequireAdminMiddleware;
@@ -429,6 +431,72 @@ return [
             Route::get('/audio-to-text')
                 ->action(AudioToText\Action::class)
                 ->name(AudioToTextRoute::PAGE),
+
+            // ---------------------------------------------------------------------------------------
+            // Order Testing: a second administrative surface over the same recordings.
+            //
+            // Its own routes, actions and template, so its columns, wording and workflow can change
+            // without touching the page above. What it does NOT duplicate is the audio itself — the
+            // conversations, jobs, transcripts, renditions, workers and storage are the ones the
+            // Audio-to-Text module already owns, read through the same services.
+            //
+            // The split below is the one that matters. STORE-scoped and GROUP-scoped addresses are
+            // Order Testing's own, because a transcript opened or a replacement posted from this page
+            // has to come back to this page. JOB-scoped addresses — status, original file, AI audio,
+            // generation, the whole review surface — are deliberately NOT repeated: they are addressed
+            // by a job's public id, several of them serve files, and a second copy would be a second
+            // thing to keep correct.
+            // ---------------------------------------------------------------------------------------
+            // The store picker, inherited whole from the audio one: the same search, source filters,
+            // alphabet index, cards and per-channel counts, over the same store directory. Only its
+            // template differs, and only so its cards link on to the store page below.
+            Route::get('/order-testing')
+                ->action(Order58StoreAudio\OrderTestingAction::class)
+                ->name(OrderTestingRoute::PAGE),
+            // The one global transcription setting, saved from this surface's own picker so that saving
+            // returns the operator here. The setting itself is shared; only the redirect differs.
+            Route::post('/order-testing/settings/default-provider')
+                ->action(AudioToText\Settings\OrderTestingDefaultProviderAction::class)
+                ->name('order-testing.settings.default-provider'),
+            // Same shape as the audio store page: GET renders, POST uploads. The store id lives in the
+            // URL for the same reason it does there — a posted store id would let one store's page
+            // write a conversation onto another store's history.
+            Route::methods([Method::GET, Method::POST], '/order-testing/store/{sourceId:\d+}')
+                ->action(OrderTesting\StoreAction::class)
+                ->name(OrderTestingRoute::STORE),
+            // The audio page's own action, mounted here too: it reads what is still downloading for a
+            // store and generates no URLs, so there is nothing in it that could send a reader to the
+            // other surface.
+            Route::get('/order-testing/store/{sourceId:\d+}/arriving')
+                ->action(AudioToText\Job\Store\ArrivingAction::class)
+                ->name(OrderTestingRoute::STORE_ARRIVING),
+            // Group-scoped reads, reused unchanged: neither generates a store- or group-scoped URL, so
+            // both answer identically whichever surface asked.
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/transcripts',
+            )
+                ->action(AudioToText\Job\Store\Group\TranscriptsAction::class)
+                ->name(OrderTestingRoute::STORE_GROUP_TRANSCRIPTS),
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/tts-options',
+            )
+                ->action(AudioToText\Job\Store\Group\TtsOptionsAction::class)
+                ->name(OrderTestingRoute::STORE_GROUP_TTS_OPTIONS),
+            // Manage Audio is the one that could not be reused as it stands: it tells the dialog where
+            // to post a replacement, and that has to be the address below rather than the audio page's.
+            // The subclass overrides that one route and inherits everything else.
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/recordings',
+            )
+                ->action(OrderTesting\RecordingsAction::class)
+                ->name(OrderTestingRoute::STORE_GROUP_RECORDINGS),
+            // The replacement upload itself answers JSON and generates no page URL, so the audio page's
+            // action serves both surfaces.
+            Route::post(
+                '/order-testing/store/{sourceId:\d+}/group/{groupKey:(?:order|conversation):[0-9a-f]{1,32}}/replace',
+            )
+                ->action(AudioToText\Job\Store\Group\ReplaceAction::class)
+                ->name(OrderTestingRoute::STORE_GROUP_REPLACE),
             // One store's audio: the upload form and that store's own history. The store id lives in
             // the URL because that is the only place it may come from — a posted store id would let
             // one store's page write a conversation onto another store's history.

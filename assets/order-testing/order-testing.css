@@ -1,0 +1,9 @@
+/* Order Testing — its own surface over the same recordings.
+
+   Empty by design, for now. Both Order Testing pages are rendered by templates copied from the audio
+   ones and use the admin stylesheet's existing `a2t-` classes, so they look the same on day one, which
+   is what was asked for. This file is where a style that belongs to this surface and not the other one
+   goes, under an `ot-` prefix so an unprefixed rule can never reach another page.
+
+   The alternative — adding Order Testing rules to the shared `a2t-` block — would mean the two surfaces
+   could not be restyled apart, which is the whole reason the boundary exists. */

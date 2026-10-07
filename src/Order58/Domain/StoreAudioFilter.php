@@ -16,9 +16,18 @@ enum StoreAudioFilter: string
     case All = 'all';
     case WithAudio = 'with';
 
-    public static function fromRequest(?string $value): self
+    /**
+     * Parse the `audio=` query parameter, falling back to the surface's own landing state.
+     *
+     * The fallback is a parameter rather than a constant because the two pickers land differently: the
+     * audio page is neutral (every store) and Order Testing opens on the stores that actually hold
+     * recordings. Both read the same words off the wire; only what "unspecified" means differs, and
+     * each caller says which it is. An unrecognised value is treated as unspecified rather than as
+     * `All`, so a typo lands an operator on the page they would have got with no parameter at all.
+     */
+    public static function fromRequest(?string $value, self $default = self::All): self
     {
-        return self::tryFrom($value ?? '') ?? self::All;
+        return self::tryFrom($value ?? '') ?? $default;
     }
 
     public function label(): string

@@ -32,18 +32,24 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $settingsOpen render the settings dialog already open (the no-JavaScript path)
  */
 
-$this->setTitle('Store audio');
+$this->setTitle('Order Testing');
+// Its own trail. The audio picker's returns through Order58 Data Management; this page is reached from
+// the Order Testing entry in the menu and belongs under that name.
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order58 Data Management', 'route' => 'order58.index'],
-    ['label' => 'Store audio'],
+    ['label' => 'Order Testing'],
 ]);
 
-$base = $urlGenerator->generate('order58.store-audio');
+// Every filter, the search and the pager post back to this page, not to the audio picker. One line, and
+// the reason the two surfaces cannot send each other's traffic.
+$base = $urlGenerator->generate('order-testing');
 $csrfField = (string) $csrf->hiddenInput();
 
 // A route name, like every other link out of this page: this module may not name the one that owns the
 // setting, and a name is not a namespace.
-$providerUrl = $urlGenerator->generate('audio-to-text.settings.default-provider');
+// The same global setting, submitted through this surface's own address so that saving it returns the
+// operator here rather than to the audio picker. The setting itself is one row and is shared; only where
+// the redirect lands differs.
+$providerUrl = $urlGenerator->generate('order-testing.settings.default-provider');
 
 /**
  * @param array<string, string|int> $overrides
@@ -91,8 +97,8 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
 ?>
 <div class="page-header">
     <div>
-        <h1 class="page-header__title">Store audio</h1>
-        <p class="page-header__subtitle">Pick a store to upload call recordings for. Every conversion belongs to the store you choose here.</p>
+        <h1 class="page-header__title">Order Testing</h1>
+        <p class="page-header__subtitle">Pick a store to test orders against. Every conversion belongs to the store you choose here.</p>
     </div>
     <?php
     // A route name again, for the same reason the cards use one: this page may not name the module it
@@ -240,7 +246,7 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
 // other's namespace — ModuleIsolationTest matches both literally — so the link is built
 // from a string the router resolves. Store chat has linked out the same way since it was
 // written.
-$audioUrl = $urlGenerator->generate('audio-to-text.store', ['sourceId' => $store->sourceId]);
+$audioUrl = $urlGenerator->generate('order-testing.store', ['sourceId' => $store->sourceId]);
             $location = $store->locationLine();
             // Absent key and zero mean the same thing, which is why the reader omits empty stores.
             $breakdown = $audioCounts[$store->sourceId] ?? StoreAudioBreakdown::none();

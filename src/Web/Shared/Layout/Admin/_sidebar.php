@@ -57,6 +57,25 @@ $items = [
         'query' => ['audio' => StoreAudioFilter::WithAudio->value],
         'match' => ['order58.store-audio', 'audio-to-text'],
     ],
+    // Directly under Audio to Text, because it is the same recordings seen a different way: that page is
+    // about converting audio, this one about working through the orders it belongs to. A separate entry
+    // rather than a tab inside the other, so the two surfaces can diverge without the menu implying one
+    // is a mode of the other. The match covers the whole namespace, so the entry stays lit on the store
+    // page and its group endpoints as well as the landing list.
+    [
+        'label' => 'Order Testing',
+        'icon' => '🧪',
+        // The route name as a literal, like every other entry here. This file is outside
+        // `src/AudioToText/`, and ModuleIsolationTest forbids any file there from naming that module —
+        // importing the constant would fail it.
+        //
+        // No `query` here, unlike the entry above: this page lands on Uploaded audio by itself, because
+        // a store with nothing uploaded is not a place to test an order from. It can afford the default
+        // the audio picker could not — its "All stores" chip emits an explicit `?audio=all`, so the
+        // click that broke there widens the list here instead of appearing to do nothing.
+        'route' => 'order-testing',
+        'match' => ['order-testing'],
+    ],
     // Its own entry rather than a link inside Audio to Text: the page is about Order58 calls, and the
     // prefix covers its two POST routes so they stay highlighted after a redirect.
     // ['label' => 'Order58 calls', 'icon' => '📞', 'route' => 'order58.calls', 'match' => ['order58.calls']],
