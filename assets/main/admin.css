@@ -200,6 +200,11 @@ p { margin: 0 0 1rem; }
    screen instead of squeezing their labels onto two lines each. */
 .page-header__actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 
+/* An action that does work rather than navigating is a form, and a form must sit in that row like
+   any other button. The margin is the only thing standing in the way: the flex container already
+   places it. Line 1170 and the review status bar zero it the same way for the same reason. */
+.page-header__actions form { margin: 0; }
+
 /* ---- Cards & grid --------------------------------------------------------- */
 
 .card {

@@ -40,9 +40,9 @@ use function PHPUnit\Framework\assertTrue;
  *
  * Three things that would be invisible if they broke:
  *
- * 1. **Rescanning must be free.** The importer is meant to run every minute. If a second scan of an
- *    unchanged directory wrote rows, the demo-order table would grow without bound and every count on
- *    the store page would climb on its own.
+ * 1. **Rescanning must be free.** An administrator presses "Sync demo orders" whenever they want to,
+ *    including twice in a row. If a second scan of an unchanged directory wrote rows, the demo-order
+ *    table would grow with every press and every count on the store page would climb on its own.
  * 2. **Attribution is written once.** A rescan that re-credited would move one operator's work onto
  *    whoever clicked most recently, and nothing on the page would look wrong.
  * 3. **One source order, many demo orders.** Production proved the shape. A unique key on the wrong

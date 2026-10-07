@@ -504,6 +504,11 @@ return [
             // POST, not a link: clicking Demo URL writes who is testing before the browser leaves for
             // Order58, and who that is can only be known here. A GET that wrote a row would also be
             // triggerable by any page that could make this browser issue a request.
+            // Takes no input but the CSRF token: there is nothing to pass, which is also why it can
+            // call the importer service directly instead of building a shell command.
+            Route::post('/order-testing/sync-demo-orders')
+                ->action(OrderTestingModule\Sync\Action::class)
+                ->name(OrderTestingRoute::SYNC_DEMO_ORDERS),
             Route::post('/order-testing/store/{sourceId:\d+}/demo-url')
                 ->action(OrderTestingModule\DemoUrl\Action::class)
                 ->name(OrderTestingRoute::DEMO_URL),

@@ -53,7 +53,8 @@ final readonly class DemoOrderImporter
     ) {}
 
     /**
-     * @param int|null $limit stop after this many files, so one pass of a scheduled run is bounded
+     * @param int|null $limit stop after this many files, so one pass stays bounded on a directory
+     *                        that has accumulated more than somebody wants to wait for
      */
     public function import(?int $limit = null): ImportReport
     {

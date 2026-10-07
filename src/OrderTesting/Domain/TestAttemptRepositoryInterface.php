@@ -52,8 +52,9 @@ interface TestAttemptRepositoryInterface
     /**
      * Close every attempt whose window has passed.
      *
-     * Returns the number closed. Lazy rather than scheduled on its own: the importer runs often, and an
-     * expiry nobody is waiting on does not need its own timer.
+     * Returns the number closed. Swept by the importer rather than by anything of its own: an attempt
+     * only matters when a demo order arrives or when somebody tries to start a new one, and both of
+     * those already run this. Nothing in this feature runs on a clock.
      */
     public function expireOverdue(DateTimeImmutable $now): int;
 

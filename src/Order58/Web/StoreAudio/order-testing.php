@@ -115,6 +115,23 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
         // "Transcription settings" rather than "Settings" or "Audio settings": it governs
         // speech-to-text specifically, and nothing else on this page is configurable.
 ?>
+        <?php
+        // A POST, because it does work. Nothing imports demo orders automatically yet, so without
+        // this the only way to see one is a shell command an administrator testing the workflow does
+        // not have. It calls the same importer service the console command calls, under the same
+        // lock — never a shelled-out `yii`.
+        //
+        // `data-busy-label` is the generic double-submit guard in admin.js: it disables the button
+        // and relabels it while the browser waits. The real protection is the lock on the server,
+        // which also holds across two tabs and across a future scheduled run; this only stops the
+        // page looking idle during a sync.
+?>
+        <form method="post"
+              action="<?= Html::encode($urlGenerator->generate('order-testing.sync-demo-orders')) ?>">
+            <?= $csrfField ?>
+            <button class="btn btn--secondary" type="submit"
+                    data-busy-label="Syncing…">Sync demo orders</button>
+        </form>
         <a class="btn btn--secondary" href="<?= Html::encode($settingsUrl) ?>"
            data-a2t-settings-open>Transcription settings</a>
         <a class="btn" href="<?= Html::encode($urlGenerator->generate('audio-to-text.jobs')) ?>">All conversions</a>

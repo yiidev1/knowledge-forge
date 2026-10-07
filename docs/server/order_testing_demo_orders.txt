@@ -53,41 +53,44 @@ The web user must be able to READ the directory and the files in it. It never ne
 nothing in this application creates, renames, moves, truncates or deletes a demo order file.
 
 
-Running it
-----------
+How it is run
+-------------
+MANUALLY. There is no cron entry, no systemd timer, no PM2 process and no worker for this feature,
+and that is a decision rather than unfinished work.
+
+The production flow is:
+
+  Order58 creates a demo order
+    -> the existing Python listener writes the JSON into /data/orders/demo_mix_orders
+    -> the administrator returns to Knowledge Forge
+    -> the administrator presses "Sync demo orders" on /order-testing
+    -> any new demo JSON files are imported
+    -> the Demo Orders column and View (N) update
+
+The button is admin-only, POSTs with a CSRF token, and calls the import service directly — it never
+shells out to the command below. If there is nothing new it says "Demo orders are already up to
+date."; if an import is already in progress it says "Demo order sync is already running."
+
+The same work from a shell, for server-side and debugging use:
+
   php yii kf:order-testing:import-demo-orders               import everything new
   php yii kf:order-testing:import-demo-orders --dry-run     report the directory, import nothing
   php yii kf:order-testing:import-demo-orders --limit=50    bound one pass
 
 Exit codes:
   0  normal, INCLUDING "the directory does not exist" — that is the expected state of a machine that
-     has never produced a demo order, and failing every minute over it would train operators to
-     ignore the alert.
+     has never produced a demo order.
   65 (CONFIG) the directory is, or is inside, the live order directory. The only configuration error
      this command treats as a failure, because it is the one that must never be left in place.
 
-A run holds `flock` on `runtime/order-testing-import.lock`, non-blocking: a run that overlaps a slow
-predecessor exits instead of scanning the same files twice. The lock file is ITS OWN — sharing one
-with another command is how every run of both ends up skipping, which this project has done before.
+Both routes go through the same service and take the same lock, so the button and the command cannot
+import the same directory at once. The lock is `runtime/order-testing-import.lock`, held
+non-blocking: whoever is second is told so immediately rather than queueing. It is that feature's own
+file and must never be shared with another command's — sharing a lock is how every run of both ends
+up skipping, which this project has done before.
 
-
-Recommended production schedule
--------------------------------
-Every minute. The import is small local reads plus, almost always, zero writes: a document whose
-content hash is unchanged is not written at all, so a directory of old files costs one stat and one
-read each and nothing in the database.
-
-Follow the existing cron convention in `docs/server/cron/`, with a DEDICATED lock file for the cron
-wrapper — not the application's own `runtime/order-testing-import.lock`, or every run skips:
-
-  * * * * * /usr/bin/flock -n /var/lock/kf-order-testing-import.lock \
-      /usr/bin/php /var/www/knowledge-forge/yii kf:order-testing:import-demo-orders \
-      >> /var/log/knowledge-forge/order-testing-import.log 2>&1
-
-Do NOT add it as a drainer inside `kf:worker:run`. That worker also processes documents and Order58
-sync, and how quickly a trainee sees their order would start depending on how long those take.
-
-This task did not change production cron, PM2 or the Python listener. Nothing above has been applied.
+If automatic ingestion is ever wanted, the change is a scheduled call to the same service; nothing
+about the storage, the importer or the page would need to change. It is deliberately not set up now.
 
 
 What is stored, and what is not

@@ -74,4 +74,12 @@ final class OrderTestingRoute
 
     /** One demo order beside the source order it was recreated from. */
     public const DEMO_COMPARE = 'order-testing.demo-compare';
+
+    /**
+     * Run the demo-order import now, from the picker.
+     *
+     * Manual because nothing schedules it yet. When something does, it will call the same service
+     * under the same lock, so this button neither competes with it nor becomes redundant.
+     */
+    public const SYNC_DEMO_ORDERS = 'order-testing.sync-demo-orders';
 }

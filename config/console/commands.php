@@ -34,10 +34,12 @@ return [
     // worker is: it downloads megabytes over a third-party network and then waits on the audio
     // pipeline, and running that in the shared worker would stall documents and sync behind it.
     'kf:order58:import-recordings' => App\Order58\Console\ImportRecordingsCommand::class,
-    // Order Testing's demo-order mirror. Its own command rather than a drainer inside kf:worker:run
-    // for the opposite reason to the audio workers': it is so cheap that it should run OFTEN, and
-    // inside the shared worker how quickly a trainee sees their order would depend on how long
-    // document processing happened to be taking.
+    // Order Testing's demo-order mirror, for a shell: the administrator's route to the same work is
+    // the "Sync demo orders" button on /order-testing, and both call one service under one lock.
+    //
+    // NOT scheduled, and deliberately so — demo-order import is manual by decision, not by omission.
+    // Nothing in this project runs it on a timer, and this command exists for server-side and
+    // debugging use rather than as something for a scheduler to call.
     'kf:order-testing:import-demo-orders' => App\OrderTesting\Console\ImportDemoOrdersCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
     'kf:rules:repair-lifecycle' => App\Rules\Console\RepairRuleLifecycleCommand::class,

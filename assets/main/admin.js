@@ -66,6 +66,23 @@
             return;
         }
 
+        // A generic busy state for any form whose submit button says what to call it while waiting.
+        // Opt-in by attribute, so no existing form changes behaviour.
+        //
+        // It does NOT cancel the submit: the browser posts and navigates as usual (PRG). Disabling
+        // the button after the event has been dispatched is what keeps the submission itself intact
+        // while stopping a second click from starting a second one. The server still has to be
+        // correct about concurrency — this is a courtesy, not a guarantee, because it cannot see
+        // another tab.
+        var busy = form.querySelector('[data-busy-label]');
+        if (busy) {
+            var label = busy.getAttribute('data-busy-label') || 'Working…';
+            window.setTimeout(function () {
+                busy.disabled = true;
+                busy.textContent = label;
+            }, 0);
+        }
+
         // If this is a chat form, show the question + a thinking indicator immediately. We do NOT cancel
         // the submit — the browser navigates as usual, and this state stays on screen during the
         // round-trip instead of a blank page with only the tab spinner.

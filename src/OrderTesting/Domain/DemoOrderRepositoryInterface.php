@@ -17,7 +17,8 @@ interface DemoOrderRepositoryInterface
      * Insert, or refresh the row the triple already names.
      *
      * Idempotent by design: a second import of an unchanged document compares equal on `content_hash`
-     * and writes nothing at all, so a scan that runs every minute does not touch the table all day.
+     * and writes nothing at all, so pressing Sync demo orders twice in a row writes nothing the
+     * second time.
      *
      * @param int|null $matchAttemptId credited only on INSERT. An order that already exists keeps the
      *                                 attribution it was given; re-running the importer must never move

@@ -14,9 +14,18 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function dirname;
+use function fclose;
+use function file_get_contents;
+use function flock;
+use function fopen;
 use function gmdate;
 use function urlencode;
 use function str_repeat;
+
+use const LOCK_EX;
+use const LOCK_NB;
+use const LOCK_UN;
 
 /**
  * Order Testing: a second administrative surface over the recordings Audio-to-Text already holds.
@@ -392,6 +401,105 @@ final class OrderTestingCest
         $I->see(self::STORE_NAME);
         $I->dontSee(self::SILENT_STORE_NAME);
         $I->see('Uploaded audio', 'a.filter-chip--active');
+    }
+
+    // ------------------------------------------------------------------ sync demo orders, by hand
+
+    /**
+     * The picker offers a manual demo-order sync, as a POST.
+     *
+     * A POST because it does work. Demo-order import is manual by decision — nothing runs it on a
+     * timer — so this button IS the synchronisation, and without it seeing a demo order would mean
+     * shell access an administrator testing the workflow does not have.
+     */
+    public function thePickerOffersAManualDemoOrderSync(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage('/order-testing');
+
+        $I->see('Sync demo orders');
+        $I->seeElement('form[action="/order-testing/sync-demo-orders"][method="post"]');
+        // The CSRF token is in the form, like every other state change here.
+        $I->seeElement('form[action="/order-testing/sync-demo-orders"] input[name="_csrf"]');
+        // The generic double-submit guard admin.js binds to.
+        $I->seeElement('form[action="/order-testing/sync-demo-orders"] button[data-busy-label]');
+    }
+
+    /** Pressing it runs the import, says what happened, and leaves the operator on the picker. */
+    public function syncingDemoOrdersReportsBackOnThePicker(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $I->amOnPage('/order-testing');
+        $I->submitForm('form[action="/order-testing/sync-demo-orders"]', []);
+
+        // Post/Redirect/Get: a refresh must not replay the sync.
+        $I->seeCurrentUrlEquals('/order-testing');
+        // One of the two honest answers. Which one depends on what this machine's demo directory
+        // holds, and asserting on a specific count here would be asserting about the filesystem.
+        $I->see('Demo orders');
+        $I->dontSee('Demo order sync is already running');
+    }
+
+    /**
+     * A sync while the lock is held says so rather than queueing or importing twice.
+     *
+     * The lock is taken here on the same file the service uses, which is exactly what a running
+     * `kf:order-testing:import-demo-orders` looks like to this request.
+     */
+    public function syncingWhileTheImporterRunsSaysSo(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        $lockFile = dirname(__DIR__, 2) . '/runtime/order-testing-import.lock';
+        $holder = fopen($lockFile, 'c');
+        Assert::assertNotFalse($holder);
+        Assert::assertTrue(flock($holder, LOCK_EX | LOCK_NB), 'the lock must be free before this test');
+
+        try {
+            $I->amOnPage('/order-testing');
+            $I->submitForm('form[action="/order-testing/sync-demo-orders"]', []);
+
+            $I->seeCurrentUrlEquals('/order-testing');
+            $I->see('Demo order sync is already running');
+        } finally {
+            flock($holder, LOCK_UN);
+            fclose($holder);
+        }
+    }
+
+    /** It is admin-only, like everything else on this surface. */
+    public function aGuestCannotSyncDemoOrders(WebTester $I): void
+    {
+        // A page first, so the browser has history for the assertion below to read.
+        $I->amOnPage('/login');
+
+        // POST, not GET: the route only answers POST, so a GET would be refused by the router before
+        // the admin gate was ever consulted — which would make this test pass without proving it.
+        $I->sendAjaxPostRequest('/order-testing/sync-demo-orders', []);
+
+        // Bounced to the login form rather than having run anything.
+        $I->seeCurrentUrlEquals('/login');
+        $I->seeElement('form input[name="username"]');
+    }
+
+    /**
+     * The sync never shells out.
+     *
+     * It calls the same application service the console command calls. A web request that can run a
+     * shell command is a liability regardless of how carefully the arguments are built — and there
+     * are no arguments here to build.
+     */
+    public function theSyncNeverShellsOutToTheConsole(WebTester $I): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2) . '/src/OrderTesting/Web/Sync/Action.php',
+        );
+
+        foreach (['shell_exec', 'exec(', 'system(', 'passthru', 'proc_open', 'popen'] as $forbidden) {
+            Assert::assertStringNotContainsString($forbidden, $source, 'the sync action must not ' . $forbidden);
+        }
     }
 
     /** Saving the shared transcription setting from this picker returns here, not to the audio one. */

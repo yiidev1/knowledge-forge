@@ -6,7 +6,7 @@ use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Application\DemoOrderDirectory;
 use App\OrderTesting\Application\TestAttemptService;
-use App\OrderTesting\Console\ImportDemoOrdersCommand;
+use App\OrderTesting\Application\DemoOrderSyncService;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
@@ -56,10 +56,11 @@ return [
         ],
     ],
 
-    ImportDemoOrdersCommand::class => [
+    DemoOrderSyncService::class => [
         '__construct()' => [
-            // Its OWN lock file. Sharing one with another command is how every run of both ends up
-            // skipping — a mistake this project has made before and documented.
+            // ONE lock file, named once, for both callers: the console command and the "Sync demo
+            // orders" button. Its OWN file, never shared with another command's — sharing a lock is
+            // how every run of both ends up skipping, a mistake this project has made before.
             'lockFile' => DynamicReference::to(
                 static fn(Aliases $aliases): string => $aliases->get('@runtime') . '/order-testing-import.lock',
             ),
