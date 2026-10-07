@@ -203,6 +203,13 @@ return [
         'minDurationMs' => Environment::int('AUDIO_UTTERANCE_MIN_MS'),
     ],
 
+    // Order Testing: the demo-order mirror and the attempt window. Transport only — every value is
+    // read straight from the environment SPEC and resolved in config/common/di/order-testing.php.
+    'app/order-testing' => [
+        'demoOrdersDir' => Environment::string('ORDER_TESTING_DEMO_ORDERS_DIR'),
+        'attemptTtlMinutes' => Environment::int('ORDER_TESTING_ATTEMPT_TTL_MINUTES'),
+    ],
+
     'app/order58' => [
         'baseUrl' => Environment::string('ORDER58_API_BASE_URL'),
         'token' => Environment::string('ORDER58_API_TOKEN'),

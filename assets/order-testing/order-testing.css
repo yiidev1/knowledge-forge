@@ -7,3 +7,59 @@
 
    The alternative — adding Order Testing rules to the shared `a2t-` block — would mean the two surfaces
    could not be restyled apart, which is the whole reason the boundary exists. */
+
+/* ---------------------------------------------------------------- the demo-order column and button
+
+   The first rules this file has needed, and they are here rather than in the shared `a2t-` block for
+   exactly the reason stated above: the Demo Orders column and the Demo URL button exist on this surface
+   only, and the audio page must not grow either of them by accident.
+
+   `ot-linkbutton` is a <button> that has to read as a link. Demo URL became a form submit when it
+   started recording who clicked it — the attempt has to be written before the browser leaves — and an
+   operator should not have to notice that change. */
+
+.ot-col-demo-orders {
+    width: 7.5rem;
+}
+
+.ot-demo-form {
+    display: inline;
+    margin: 0;
+}
+
+.ot-linkbutton {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--link, #7f9bf0);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.ot-linkbutton:hover,
+.ot-linkbutton:focus-visible {
+    text-decoration: none;
+}
+
+/* The refusal the script writes in place — "another administrator is already testing this order".
+   Hidden until there is something to say, and `role="alert"` so a screen reader hears it when there
+   is: the operator clicked expecting a new tab, and nothing else on the page would tell them why one
+   did not appear. */
+
+.ot-demo-message {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: #e06a6a;
+}
+
+.ot-demo-message[hidden] {
+    display: none;
+}
+
+.ot-linkbutton[disabled] {
+    opacity: 0.55;
+    cursor: progress;
+}

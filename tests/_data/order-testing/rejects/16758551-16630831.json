@@ -1,0 +1,12 @@
+{
+  "id": 16630831,
+  "account_id": 1731,
+  "is_test": "1",
+  "uid": "99999999-19178532637-1791353759",
+  "status": "completed",
+  "type": "delivery",
+  "payment_method": "cash",
+  "total_amount": "4.28000",
+  "data": "{\"reservation\": {\"first_name\": \"testa\", \"last_name\": \"Customer\", \"phone\": \"19178532637\"}, \"shipping\": {\"street1\": \"162 N Main St\", \"city\": \"Freeport\", \"state\": \"NY\", \"zipcode\": \"11520\"}}",
+  "items": []
+}

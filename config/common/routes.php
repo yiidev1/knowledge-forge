@@ -22,6 +22,7 @@ use App\Chat\Web\RuleChat as AdminRuleChat;
 use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
+use App\OrderTesting\Web as OrderTestingModule;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\CallHistory as Order58CallHistory;
 use App\Order58\Web\CallRecordings as Order58CallRecordings;
@@ -497,6 +498,29 @@ return [
             )
                 ->action(AudioToText\Job\Store\Group\ReplaceAction::class)
                 ->name(OrderTestingRoute::STORE_GROUP_REPLACE),
+            // ---------------------------------------------------------------------------------------
+            // The demo-order half, served by the App\OrderTesting module.
+            //
+            // POST, not a link: clicking Demo URL writes who is testing before the browser leaves for
+            // Order58, and who that is can only be known here. A GET that wrote a row would also be
+            // triggerable by any page that could make this browser issue a request.
+            Route::post('/order-testing/store/{sourceId:\d+}/demo-url')
+                ->action(OrderTestingModule\DemoUrl\Action::class)
+                ->name(OrderTestingRoute::DEMO_URL),
+            // The orders a trainee produced from one call, and one of them beside the original.
+            //
+            // The ids in these paths are Order58's own source and demo order numbers, which the store
+            // page already prints in plain sight — not local row ids. There is nothing to hide behind a
+            // public id, and every lookup is bounded by all the ids in the path, so changing one
+            // reaches another merchant's data no more than inventing one does.
+            Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
+                ->action(OrderTestingModule\DemoOrders\Action::class)
+                ->name(OrderTestingRoute::DEMO_ORDERS),
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo/{demoOrderId:\d+}',
+            )
+                ->action(OrderTestingModule\Compare\Action::class)
+                ->name(OrderTestingRoute::DEMO_COMPARE),
             // One store's audio: the upload form and that store's own history. The store id lives in
             // the URL because that is the only place it may come from — a posted store id would let
             // one store's page write a conversation onto another store's history.

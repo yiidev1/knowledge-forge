@@ -1,0 +1,129 @@
+ORDER TESTING — DEMO ORDER IMPORT
+=================================
+
+What this is
+------------
+Order Testing is a training workflow. A trainee listens to a recorded call, clicks Demo URL, recreates
+the order by hand in Order58, and Knowledge Forge then shows what they produced beside the original.
+
+The demo orders themselves are NOT fetched from an API. They arrive as JSON files written by the
+existing Order58 WebSocket listener, and this application only ever READS them.
+
+  /root/order58/get-mix-order.py     the listener. NOT part of Knowledge Forge, and not changed by it.
+  /data/orders/mix_orders/           LIVE customer orders.  NEVER READ BY THIS FEATURE.
+  /data/orders/demo_mix_orders/      demo/test orders.      The only directory this feature reads.
+
+Filename shape, which the listener already commits to:
+
+  {SOURCE_ORDER_ID}-{DEMO_ORDER_ID}.json      e.g. 16758551-16630651.json
+
+One source order produces MANY demo orders. All of them are kept; a later one never replaces an
+earlier one.
+
+
+Two defences against reading live orders
+----------------------------------------
+1. The configured directory is refused if it is, or is inside, a path segment named `mix_orders`.
+   The check is segment by segment, so `demo_mix_orders` is fine and `mix_orders_old` is not.
+   It runs on the CONFIGURED value before the path is resolved (so a directory that does not exist
+   yet is still refused rather than reported as missing) and again on the RESOLVED path (so a symlink
+   cannot evade it).
+
+2. Every document must carry `is_test == 1`. A document without it is refused and left on disk.
+
+Neither defence depends on the other. Configuration is edited by people in a hurry.
+
+
+Configuration
+-------------
+Two environment variables, both with safe local defaults. Set them in `.env`.
+
+  ORDER_TESTING_DEMO_ORDERS_DIR
+      Default: @runtime/order-testing/demo_mix_orders   (local; the alias resolves inside the project)
+      Production: /data/orders/demo_mix_orders
+
+      The production path is deliberately NOT the default. A development machine has no such
+      directory, and a default pointing at an absolute production path is one typo away from the live
+      one.
+
+  ORDER_TESTING_ATTEMPT_TTL_MINUTES
+      Default: 60. How long one Demo URL click holds its source order.
+
+The web user must be able to READ the directory and the files in it. It never needs write access —
+nothing in this application creates, renames, moves, truncates or deletes a demo order file.
+
+
+Running it
+----------
+  php yii kf:order-testing:import-demo-orders               import everything new
+  php yii kf:order-testing:import-demo-orders --dry-run     report the directory, import nothing
+  php yii kf:order-testing:import-demo-orders --limit=50    bound one pass
+
+Exit codes:
+  0  normal, INCLUDING "the directory does not exist" — that is the expected state of a machine that
+     has never produced a demo order, and failing every minute over it would train operators to
+     ignore the alert.
+  65 (CONFIG) the directory is, or is inside, the live order directory. The only configuration error
+     this command treats as a failure, because it is the one that must never be left in place.
+
+A run holds `flock` on `runtime/order-testing-import.lock`, non-blocking: a run that overlaps a slow
+predecessor exits instead of scanning the same files twice. The lock file is ITS OWN — sharing one
+with another command is how every run of both ends up skipping, which this project has done before.
+
+
+Recommended production schedule
+-------------------------------
+Every minute. The import is small local reads plus, almost always, zero writes: a document whose
+content hash is unchanged is not written at all, so a directory of old files costs one stat and one
+read each and nothing in the database.
+
+Follow the existing cron convention in `docs/server/cron/`, with a DEDICATED lock file for the cron
+wrapper — not the application's own `runtime/order-testing-import.lock`, or every run skips:
+
+  * * * * * /usr/bin/flock -n /var/lock/kf-order-testing-import.lock \
+      /usr/bin/php /var/www/knowledge-forge/yii kf:order-testing:import-demo-orders \
+      >> /var/log/knowledge-forge/order-testing-import.log 2>&1
+
+Do NOT add it as a drainer inside `kf:worker:run`. That worker also processes documents and Order58
+sync, and how quickly a trainee sees their order would start depending on how long those take.
+
+This task did not change production cron, PM2 or the Python listener. Nothing above has been applied.
+
+
+What is stored, and what is not
+-------------------------------
+`order_testing_demo_orders` keeps typed columns for what the list and comparison read, plus the
+complete original document in `raw_payload` — MINUS payment secrets.
+
+  cvv, card_num, exp_date, billing_zip, street1   are stripped at every depth, including from inside
+  the JSON-encoded `data` and `commit_data` strings.
+
+A CVV must never be persisted after authorisation (PCI DSS 3.2), and a training tool that never
+charges a card has no reason to hold one. A trainee is being taught to ENTER card details, so the
+demo directory is if anything more likely to contain them than the live one.
+
+`street1` is the billing street. Order58 reuses the same key name for the delivery address, so the
+delivery address is read out of the document BEFORE redaction and written to its own columns. That is
+why the demo side shows a street and the comparison reports the street line as "not comparable" —
+the mirrored source order has no such column, so there is nothing on the left to compare with.
+
+
+Attribution, and its one real limitation
+----------------------------------------
+Clicking Demo URL writes a row in `order_testing_attempts` BEFORE redirecting to Order58. That click
+is the only moment at which who is testing can be known: Order58's demo document carries no field
+this application controls, and the listener derives everything from `uid`, which Order58 composes
+itself from the source order, the phone and a timestamp.
+
+So when a demo order is imported, the only thing linking it to a person is WHICH ATTEMPT WAS OPEN for
+that source order at the time. That inference is sound exactly as long as one attempt is open at a
+time, which is why a second person is refused rather than given an ambiguous second open attempt.
+
+LIMITATION: this cannot support several people testing the SAME source order simultaneously. For the
+admin-only phase that is acceptable — one trainer, one order at a time. A future Agent rollout needs
+Order58 to preserve and return a correlation identifier. Inventing one in the demo URL would NOT
+work: nothing in the source proves Order58 echoes it back, and a guess that looks like attribution is
+worse than an honest blank.
+
+A demo order imported with nothing open is shown as "Unmatched". It is never attributed to whoever
+clicked most recently, and re-running the importer never moves attribution that already exists.

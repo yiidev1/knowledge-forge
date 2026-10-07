@@ -187,6 +187,21 @@ final class Environment
         // 72h tolerates two missed daily agent syncs (scheduled 01:00 America/New_York).
         'ORDER58_VALIDATE_MAX_MIRROR_AGE_HOURS' => ['type' => 'int', 'default' => 72, 'min' => 1, 'max' => 720],
 
+        // Order Testing: where the Order58 listener drops demo/test order documents.
+        //
+        // LOCAL-FIRST on purpose. The production listener writes to `/data/orders/demo_mix_orders`, but
+        // that path is not the default here: a development machine has no such directory, and a default
+        // pointing at an absolute production path is one typo away from `/data/orders/mix_orders`, which
+        // holds LIVE customer orders. The importer refuses any directory that is, or is inside, a
+        // segment named `mix_orders` — see DemoOrderDirectory — but configuration should not rely on
+        // that alone. Production sets this explicitly in its own `.env`.
+        'ORDER_TESTING_DEMO_ORDERS_DIR' => ['type' => 'string', 'default' => '@runtime/order-testing/demo_mix_orders'],
+        // How long one Demo URL click holds its source order. Only one attempt may be open per store
+        // and source order at a time — Order58 returns no correlation token, so the open attempt is the
+        // only thing that can attribute an arriving demo order to a person. Without an expiry, one
+        // operator who clicked and walked away would hold that order shut for everyone, permanently.
+        'ORDER_TESTING_ATTEMPT_TTL_MINUTES' => ['type' => 'int', 'default' => 60, 'min' => 5, 'max' => 1440],
+
         // Storage and upload limits.
         'KNOWLEDGE_STORAGE_PATH' => ['type' => 'string', 'default' => '@runtime/storage'],
         'MAX_UPLOAD_SIZE_MB' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 512],

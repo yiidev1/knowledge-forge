@@ -37,6 +37,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var array<string, list<string>> $errors
  * @var list<StoreOrderGroup> $groups one row per order, newest activity first
  * @var array<string, \App\Shared\Order58\DemoOrderUrl> $demoLinks keyed by the order id each row shows
+ * @var array<string, int> $demoOrderCounts demo orders imported per order id, keyed the same way
  * @var int $total
  * @var int $page
  * @var int $pageCount
@@ -68,6 +69,10 @@ $this->setParameter('breadcrumbs', [
 ]);
 
 $csrfField = (string) $csrf->hiddenInput();
+
+// One per page, not one per row: every Demo URL form on this table posts to the same store-scoped
+// address and names its own order in a hidden field.
+$demoUrlAction = $urlGenerator->generate(OrderTestingRoute::DEMO_URL, ['sourceId' => $store->sourceId]);
 $storeUrl = $urlGenerator->generate(OrderTestingRoute::STORE, ['sourceId' => $store->sourceId]);
 // One endpoint for the whole page. The attribute that uses it is rendered only while something is
 // still being downloaded, so an idle page never asks.
@@ -847,6 +852,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                     <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
                     <col class="a2t-col-demo">
+                    <col class="ot-col-demo-orders">
                     <col class="a2t-col-tts">
                     <col class="a2t-col-row-actions">
                 </colgroup>
@@ -859,6 +865,9 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                         <th>Recording / Conversation</th>
                         <th>Status</th>
                         <th>Demo URL</th>
+                        <?php // Immediately after Demo URL, because it is the result of pressing it:?>
+                        <?php // the orders a trainee produced from this call, each compared on its own.?>
+                        <th>Demo Orders</th>
                         <th>Text to Audio</th>
                         <th>Actions</th>
                     </tr>
@@ -1037,15 +1046,57 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                     ?>
                             <?php if ($demo->isReady()): ?>
                                 <?php
-                // `noopener noreferrer` is not decoration here. The destination carries a customer's
-                // phone number in its path, and without `noreferrer` the browser would hand this
-                // store page's URL to it as the Referer.
+                // A POST, not a link — and this is the one place on either surface where the two
+                // templates genuinely differ in behaviour rather than in wording.
+                //
+                // Order58's demo document carries no field this application controls, so the ONLY
+                // moment at which "who is testing this order" can be captured is this click. A plain
+                // anchor cannot capture it. The form writes the attempt first, then the action
+                // redirects to the Order58 address — which it builds from the mirrored host and phone
+                // through DemoOrderUrl's allow-list, never from anything the browser sent.
+                //
+                // `target="_blank"` keeps the behaviour an operator already had: the browser opens the
+                // new tab, posts into it, and follows the redirect there. `rel` still matters on it —
+                // the destination carries a customer's phone number in its path, and without
+                // `noreferrer` the browser would hand this store page's URL to it as the Referer.
                                 ?>
-                                <a href="<?= Html::encode((string) $demo->url) ?>"
-                                   target="_blank" rel="noopener noreferrer">Demo URL</a>
+                                <form class="ot-demo-form" method="post" target="_blank"
+                                      rel="noopener noreferrer"
+                                      action="<?= Html::encode($demoUrlAction) ?>">
+                                    <?= $csrfField ?>
+                                    <input type="hidden" name="source_order_id"
+                                           value="<?= Html::encode($orderKey) ?>">
+                                    <?php
+                // `data-ot-demo-url` is what `order-testing.js` binds to. It is a real submit button
+                // and the form is a real form: with the script absent the browser posts it, the
+                // attempt is still recorded, and the server answers in the new tab with a page
+                // carrying the link. The script only spares the operator that second click.
+                                ?>
+                                    <button class="ot-linkbutton" type="submit"
+                                            data-ot-demo-url>Demo URL</button>
+                                </form>
+                                <?php // Filled by the script on a refusal — most often "somebody else is testing this".?>
+                                <span class="ot-demo-message" role="alert" data-ot-demo-message hidden></span>
                             <?php else: ?>
                                 <?php // Plain text, not a dead link: nothing to click is clearer than something that cannot work.?>
                                 <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td class="a2t-cell-tight">
+                            <?php
+                // Counted for the whole page in one query before rendering; this cell prints the
+                // answer and links on to Order Testing's own page for that order. A dash is the honest
+                // answer for "nothing has been created from this call yet" — a "View (0)" would be a
+                // link to an empty page.
+                $demoCount = $demoOrderCounts[$orderKey] ?? 0;
+                    ?>
+                            <?php if ($orderKey !== '' && $demoCount > 0): ?>
+                                <a href="<?= Html::encode($urlGenerator->generate(
+                                    OrderTestingRoute::DEMO_ORDERS,
+                                    ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
+                                )) ?>">View (<?= Html::encode((string) $demoCount) ?>)</a>
+                            <?php else: ?>
+                                <span class="util-muted">&mdash;</span>
                             <?php endif; ?>
                         </td>
                         <td>

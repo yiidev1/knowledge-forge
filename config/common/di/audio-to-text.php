@@ -67,6 +67,9 @@ return [
     // importer depends on the interface, so neither module has to name the other.
     App\Shared\Audio\AudioIngestionPortInterface::class => App\AudioToText\Application\AudioIngestionService::class,
     App\AudioToText\Domain\DemoOrderLinkReaderInterface::class => App\AudioToText\Infrastructure\DbDemoOrderLinkReader::class,
+    // Only a COUNT crosses into this module from Order Testing; everything else about a demo order
+    // is reached by following a link to that module's own pages. See DemoOrderCountReaderInterface.
+    App\AudioToText\Domain\DemoOrderCountReaderInterface::class => App\AudioToText\Infrastructure\DbDemoOrderCountReader::class,
 
     // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
     // still on their way in, and the module that imports them answers. Bound here beside its counterpart

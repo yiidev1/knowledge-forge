@@ -1,0 +1,101 @@
+/*
+ * Order Testing — demo orders and source-vs-demo comparison.
+ *
+ * Scoped under `.ot-` throughout. These two pages are the only ones that load this file, but the prefix
+ * is what keeps that true: a bare `.summary` here would be one stylesheet-ordering accident away from
+ * restyling a page nobody was looking at.
+ *
+ * Colours come from the admin theme's own custom properties, with a literal fallback for each, so this
+ * file states no palette of its own and follows dark mode without knowing it exists.
+ */
+
+.ot-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem 1.5rem;
+    margin: 0;
+}
+
+.ot-summary dt {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted, #8a8f98);
+}
+
+.ot-summary dd {
+    margin: 0.15rem 0 0;
+}
+
+/*
+ * The verdict chip. The word comes from ComparisonStatus; only the colour is decided here, and only
+ * from the modifier that enum supplies — so adding a status cannot silently render an unstyled chip
+ * without also failing to match any rule below, which is visible immediately.
+ */
+.ot-verdict {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.ot-verdict--match {
+    background: rgba(34, 160, 94, 0.16);
+    color: #2ea36a;
+}
+
+.ot-verdict--different {
+    background: rgba(214, 69, 69, 0.16);
+    color: #e06a6a;
+}
+
+.ot-verdict--missing {
+    background: rgba(214, 140, 40, 0.16);
+    color: #d99340;
+}
+
+.ot-verdict--extra {
+    background: rgba(90, 120, 220, 0.16);
+    color: #7f9bf0;
+}
+
+.ot-verdict--unknown {
+    background: rgba(130, 130, 140, 0.16);
+    color: var(--muted, #8a8f98);
+}
+
+/* The two order columns get equal width, so a long original cannot squeeze the demo beside it. */
+.ot-compare th[scope="row"] {
+    width: 18%;
+    font-weight: 500;
+    text-align: left;
+}
+
+.ot-compare td:nth-child(2),
+.ot-compare td:nth-child(3) {
+    width: 32%;
+}
+
+/* An item's own row is the heading for the field rows indented beneath it. */
+.ot-compare__item-head > * {
+    border-top: 2px solid var(--border, #2a2d34);
+    padding-top: 0.6rem;
+}
+
+.ot-compare__item-field th[scope="row"] {
+    padding-left: 1.5rem;
+    font-size: 0.85rem;
+    color: var(--muted, #8a8f98);
+}
+
+@media (max-width: 720px) {
+    /* Stacked rather than scrolled sideways: a comparison nobody can see both halves of is useless. */
+    .ot-compare th[scope="row"],
+    .ot-compare td:nth-child(2),
+    .ot-compare td:nth-child(3) {
+        width: auto;
+    }
+}

@@ -4,8 +4,26 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\OrderTesting;
 
+use App\AudioToText\Application\ArrivingRecordingMerger;
+use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Application\AudioUploadValidator;
+use App\AudioToText\Application\SeparateUploadValidator;
+use App\AudioToText\Application\TranscriptionQueue;
+use App\AudioToText\Application\UploadOptions;
+use App\AudioToText\Application\WorkerHealthService;
+use App\AudioToText\Domain\AudioConversationRepositoryInterface;
+use App\AudioToText\Domain\AudioStoreLookupInterface;
+use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
+use App\AudioToText\Domain\DemoOrderCountReaderInterface;
+use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
+use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Web\Job\Store\Action as AudioStoreAction;
+use App\Auth\Application\CurrentAdmin;
+use App\Shared\Application\Time\AppTimeZone;
+use App\Shared\Domain\Clock\ClockInterface;
+use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
+use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
  * One store's recordings, on the Order Testing surface.
@@ -31,6 +49,69 @@ use Psr\Http\Message\ResponseInterface;
  */
 final readonly class StoreAction extends AudioStoreAction
 {
+    /**
+     * The parent's dependencies, restated, plus the one this surface adds.
+     *
+     * Verbose on purpose. The alternative — giving the shared page the demo-order reader so the
+     * subclass needs no constructor — would make the Audio-to-Text store page run an extra query on
+     * every render for a column it does not show. This surface pays for its own column.
+     *
+     * Restating the list also means a change to the parent's constructor fails here loudly at
+     * construction rather than being absorbed by a variadic that silently passes the wrong things.
+     */
+    public function __construct(
+        WebViewRenderer $viewRenderer,
+        AudioStoreLookupInterface $stores,
+        AudioConversationRepositoryInterface $conversations,
+        AudioUploadValidator $validator,
+        SeparateUploadValidator $separateValidator,
+        TranscriptionQueue $queue,
+        WorkerHealthService $workerHealth,
+        AudioToTextSettings $settings,
+        AudioToTextSettingsRepositoryInterface $settingsRepository,
+        UploadOptions $uploadOptions,
+        CurrentAdmin $currentAdmin,
+        Redirect $redirect,
+        AppTimeZone $appTimeZone,
+        StoreOrderGroupRepositoryInterface $groups,
+        DemoOrderLinkReaderInterface $demoLinks,
+        ArrivingRecordingMerger $arriving,
+        ClockInterface $clock,
+        /** This surface's own question: how many demo orders each order on the page produced. */
+        private DemoOrderCountReaderInterface $demoOrderCounts,
+    ) {
+        parent::__construct(
+            $viewRenderer,
+            $stores,
+            $conversations,
+            $validator,
+            $separateValidator,
+            $queue,
+            $workerHealth,
+            $settings,
+            $settingsRepository,
+            $uploadOptions,
+            $currentAdmin,
+            $redirect,
+            $appTimeZone,
+            $groups,
+            $demoLinks,
+            $arriving,
+            $clock,
+        );
+    }
+
+    /**
+     * The demo-order counts behind this surface's extra column.
+     *
+     * One query for the whole page, keyed by the order id each row shows — the same shape the demo
+     * links already use, and for the same reason: twenty rows would otherwise be twenty queries.
+     */
+    protected function extraTemplateData(int $sourceId, array $orderIds): array
+    {
+        return ['demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds)];
+    }
+
     protected function storeMissing(): ResponseInterface
     {
         return $this->redirect->toRoute(OrderTestingRoute::PAGE);

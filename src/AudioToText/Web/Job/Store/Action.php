@@ -304,7 +304,26 @@ readonly class Action
                 // Whether the opt-in below the provider select can do anything. LOCAL configuration
                 // only, like every other readiness question on this page — rendering it opens no socket.
                 'ttsConfigured' => $this->uploadOptions->aiAudioIsUsable(),
-            ]);
+            ] + $this->extraTemplateData($store->sourceId, $this->orderIdsOf($groups)));
+    }
+
+    /**
+     * Anything the surface's own template needs that this page does not.
+     *
+     * Empty here, and that is the point: the audio store page asks exactly the queries it asked before,
+     * so adding a column to the Order Testing surface costs it nothing — not a join, not a row, not a
+     * millisecond. {@see \App\AudioToText\Web\OrderTesting\StoreAction} overrides it to count demo
+     * orders, which is a question only that surface asks.
+     *
+     * Merged with `+`, so a subclass can add keys but cannot quietly replace one this page relies on.
+     *
+     * @param list<string> $orderIds the order ids the page is about to render, already collected
+     *
+     * @return array<string, mixed>
+     */
+    protected function extraTemplateData(int $sourceId, array $orderIds): array
+    {
+        return [];
     }
 
     /**

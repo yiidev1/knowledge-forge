@@ -53,4 +53,25 @@ final class OrderTestingRoute
     public const STORE_GROUP_RECORDINGS = 'order-testing.store.group.recordings';
 
     public const STORE_GROUP_REPLACE = 'order-testing.store.group.replace';
+
+    // ---------------------------------------------------------------- the demo-order half of Order Testing
+    //
+    // These three are served by `App\OrderTesting`, a module of its own, and are named here only as
+    // strings — a route name is not a namespace, so nothing about module isolation is relaxed by
+    // linking to them from this template.
+    //
+    // That split does not contradict the reasoning above. What belongs in this module is the audio
+    // SURFACE, because it reuses the audio domain. Demo orders, test attempts and source-versus-demo
+    // comparison reuse none of it: they read Order58 order documents and files a listener wrote, and
+    // keeping them here would have put a filesystem importer and two tables inside the transcription
+    // module for no reason other than where the link happens to be rendered.
+
+    /** POST. Records who is testing, then redirects to Order58. Never a plain external link. */
+    public const DEMO_URL = 'order-testing.demo-url';
+
+    /** The demo orders one source order produced — the "View (N)" destination. */
+    public const DEMO_ORDERS = 'order-testing.demo-orders';
+
+    /** One demo order beside the source order it was recreated from. */
+    public const DEMO_COMPARE = 'order-testing.demo-compare';
 }
