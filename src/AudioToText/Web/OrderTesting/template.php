@@ -770,6 +770,23 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
             <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
                data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
         <?php endif; ?>
+        <?php
+        // The same button, the same endpoint and the same importer as the picker's — the only
+        // difference is the `return` field, which brings the operator back to this store rather than
+        // to the picker. The import itself stays global: one configured directory, and the store is
+        // read from inside each document, so there is nothing here to scope it by.
+        //
+        // `data-busy-label` is the generic double-submit guard in admin.js. The real protection is the
+        // lock on the server, which also holds across two tabs and against the console command.
+?>
+        <form method="post"
+              action="<?= Html::encode($urlGenerator->generate(OrderTestingRoute::SYNC_DEMO_ORDERS)) ?>">
+            <?= $csrfField ?>
+            <input type="hidden" name="return" value="<?= Html::encode(OrderTestingRoute::STORE) ?>">
+            <input type="hidden" name="sourceId" value="<?= Html::encode((string) $store->sourceId) ?>">
+            <button class="btn btn--secondary" type="submit"
+                    data-busy-label="Syncing…">Sync demo orders</button>
+        </form>
         <?php // Order Testing's own list, not the Order58 picker, whose links go to the audio page.?>
         <a class="btn" href="<?= Html::encode($urlGenerator->generate(OrderTestingRoute::PAGE)) ?>">All stores</a>
     </div>
@@ -779,6 +796,7 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
     Store #<?= $store->sourceId ?><?php if ($store->company !== null): ?> &middot; <?= Html::encode($store->company) ?><?php endif; ?>
     <?php if (!$store->active): ?> &middot; <span class="badge badge--error">Source inactive</span><?php endif; ?>
 </p>
+
 
 <?php
 // Only when something is wrong. An administrator about to queue a recording needs to know when nothing

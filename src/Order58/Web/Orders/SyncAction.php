@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Web\Orders;
 
 use App\Order58\Application\Orders\OrderDateRange;
+use App\Order58\Application\Orders\OrderSyncInProgress;
 use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Client\Orders\OrderDataFailed;
 use App\Order58\Domain\StoreDirectoryQuery;
@@ -15,32 +16,35 @@ use App\Shared\Web\Support\FormData;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Yiisoft\Db\Connection\ConnectionInterface;
 
 use function sprintf;
 
 /**
  * Runs one sync (POST /admin/order58/orders/sync) and reports what it did.
  *
- * Thin on purpose: validate, take a lock, call one service, turn its summary into a sentence. Every
- * decision about what to fetch, map or write belongs to {@see OrderSyncService}.
+ * Thin on purpose: validate, call one service, turn its summary into a sentence. Every decision about
+ * what to fetch, map or write belongs to {@see OrderSyncService}.
  *
- * ## The lock, and why idempotency is not a substitute for it
+ * ## The lock moved into the service, and this class stopped taking one
  *
  * Two operators syncing the same store and range at once would both fetch, both map and both write. The
  * unique key keeps the *table* correct, but it does not stop the second run doing all the work twice, and
  * it does not stop the two interleaving so that each reports counts describing a state neither produced.
- * So the second request is refused outright, by a MySQL advisory lock keyed on the exact store and range.
  *
- * `GET_LOCK` rather than a table: it is released when the connection ends, including when PHP dies
- * mid-request, so a crashed sync cannot leave a flag that blocks every future one.
+ * That lock used to live here — which left the OTHER caller unprotected:
+ * `kf:order58:import-recordings` calls the service directly after a settled recording batch and
+ * acquired nothing. It now lives in {@see \App\Order58\Application\Orders\OrderSyncLock}, held by
+ * the service for the whole run, so both callers are covered by construction.
+ *
+ * This action no longer acquires anything, so the lock is taken exactly once per request and there is
+ * no nesting. A refusal arrives as {@see OrderSyncInProgress} and is reported in the same words as
+ * before.
  */
 final readonly class SyncAction
 {
     public function __construct(
         private OrderSyncService $sync,
         private StoreDirectoryReaderInterface $stores,
-        private ConnectionInterface $connection,
         private Redirect $redirect,
         private FlashMessages $flash,
     ) {}
@@ -54,12 +58,27 @@ final readonly class SyncAction
         $to = $form->string('date_to');
 
         // Carried back on every outcome so a refused sync does not also clear the operator's choices.
-        $back = static fn(): array => [
-            'form_account_id' => (string) $accountId,
-            'form_from' => $from,
-            'form_to' => $to,
-            'account_id' => (string) $accountId,
-        ];
+        // Declared, because the closure below captures it by reference and is built before the sync
+        // runs: without this Psalm narrows it to `null` and calls the later check impossible.
+        /** @var int|null $batchId */
+        $batchId = null;
+
+        // Carried back on every outcome so a refused sync does not also clear the operator's choices,
+        // and so the progress panel knows which operation to poll.
+        $back = static function () use (&$batchId, $accountId, $from, $to): array {
+            $carried = [
+                'form_account_id' => (string) $accountId,
+                'form_from' => $from,
+                'form_to' => $to,
+                'account_id' => (string) $accountId,
+            ];
+
+            if ($batchId !== null) {
+                $carried['batch'] = (string) $batchId;
+            }
+
+            return $carried;
+        };
 
         if ($accountId <= 0 || !$this->storeExists($accountId)) {
             $this->flash->error('Choose a store from the list.');
@@ -75,23 +94,20 @@ final readonly class SyncAction
             return $this->redirect->afterPost('order58.orders', $back());
         }
 
-        $lock = sprintf('kf-o58-orders-%d-%s-%s', $accountId, $range->from, $range->to);
-
-        if (!$this->acquire($lock)) {
+        try {
+            $summary = $this->sync->sync($accountId, $range);
+            $batchId = $summary->batchId;
+        } catch (OrderSyncInProgress) {
+            // Somebody else — another administrator, or the recording worker — holds this store and
+            // range. The same sentence this page has always shown; the service releases its own lock.
             $this->flash->error('That store and date range is already being synchronised. Wait for it to finish.');
 
             return $this->redirect->afterPost('order58.orders', $back());
-        }
-
-        try {
-            $summary = $this->sync->sync($accountId, $range);
         } catch (OrderDataFailed $e) {
             // Nothing was written: the client fails before the first order is mapped.
             $this->flash->error($e->getMessage());
 
             return $this->redirect->afterPost('order58.orders', $back());
-        } finally {
-            $this->release($lock);
         }
 
         $counts = sprintf(
@@ -133,18 +149,5 @@ final readonly class SyncAction
         }
 
         return false;
-    }
-
-    /** Zero timeout: a second request is refused immediately rather than queueing behind the first. */
-    private function acquire(string $name): bool
-    {
-        return (int) $this->connection
-            ->createCommand('SELECT GET_LOCK(:name, 0)', [':name' => $name])
-            ->queryScalar() === 1;
-    }
-
-    private function release(string $name): void
-    {
-        $this->connection->createCommand('SELECT RELEASE_LOCK(:name)', [':name' => $name])->queryScalar();
     }
 }

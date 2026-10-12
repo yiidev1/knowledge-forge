@@ -178,7 +178,7 @@ final class DemoOrderImportRulesTest extends TestCase
         self::assertNotNull($order);
         self::assertSame(self::SOURCE_ORDER, $order->sourceOrderId);
         self::assertSame(16630651, $order->demoOrderId);
-        self::assertSame(1731, $order->storeSourceId);
+        self::assertSame(987655920, $order->storeSourceId);
     }
 
     public function testTheCustomerAndTotalsAreReadOutOfTheNestedDataString(): void

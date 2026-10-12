@@ -7,6 +7,10 @@ use App\Console;
 return [
     'hello' => Console\HelloCommand::class,
     'kf:health' => Console\HealthCommand::class,
+    // Run this BEFORE migrate:up, every time. Configuration cannot answer "which database am I about
+    // to change" reliably — an env override, a .env edit and a server variable all claim to, and the
+    // winner depends on load order. This asks the server, and refuses anything it cannot prove local.
+    'kf:db:where' => App\Shared\Console\WhereAmIDbCommand::class,
     'kf:admin:create' => App\Auth\Console\CreateAdminCommand::class,
     'kf:openai:ping' => App\Ai\OpenAi\Console\OpenAiPingCommand::class,
     'kf:worker:run' => App\Worker\Console\RunWorkerCommand::class,
@@ -41,6 +45,10 @@ return [
     // Nothing in this project runs it on a timer, and this command exists for server-side and
     // debugging use rather than as something for a scheduler to call.
     'kf:order-testing:import-demo-orders' => App\OrderTesting\Console\ImportDemoOrdersCommand::class,
+
+    // ONE order's original line items, from a shell. The same service both manual buttons call; two
+    // required arguments and no "all" mode, so it cannot turn into a backfill.
+    'kf:order58:sync-order-items' => App\Order58\Console\SyncOrderItemsCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
     'kf:rules:repair-lifecycle' => App\Rules\Console\RepairRuleLifecycleCommand::class,
     'kf:rules:retire-store-projections' => App\Rules\Console\RetireStoreRuleProjectionsCommand::class,

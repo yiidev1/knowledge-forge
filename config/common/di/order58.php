@@ -4,12 +4,24 @@ declare(strict_types=1);
 
 use App\Order58\Client\HttpOrder58Client;
 use App\Order58\Client\HttpOrder58CredentialValidator;
+use App\Order58\Application\Items\OrderItemSyncInterface;
+use App\Order58\Application\Items\OriginalOrderItemSyncService;
+use App\Order58\Application\Orders\OrderSyncLockInterface;
 use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Client\Order58RetryPolicy;
 use App\Order58\Client\Orders\HttpOrderDataClient;
+use App\Order58\Client\Items\HttpOrderItemClient;
+use App\Order58\Client\Items\OrderItemClientInterface;
+use App\Order58\Client\Items\OrderItemSettings;
 use App\Order58\Client\Orders\OrderDataClientInterface;
 use App\Order58\Client\Orders\OrderDataSettings;
+use App\Order58\Domain\Items\ItemSyncStateRepositoryInterface;
+use App\Order58\Domain\Items\ItemSyncBatchRepositoryInterface;
+use App\Order58\Domain\Items\ItemSyncSummaryReaderInterface;
+use App\Order58\Domain\Items\OrderItemRepositoryInterface;
 use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
+use App\Order58\Infrastructure\DbItemSyncBatchRepository;
+use App\Order58\Infrastructure\DbItemSyncSummaryReader;
 use App\Order58\Infrastructure\DbOrder58OrderRepository;
 use App\Order58\Contract\Order58ClientInterface;
 use App\Order58\Contract\Order58CredentialValidatorInterface;
@@ -23,6 +35,9 @@ use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\SyncRunRepositoryInterface;
 use App\Order58\Infrastructure\DbOrder58AgentRepository;
+use App\Order58\Infrastructure\DbItemSyncStateRepository;
+use App\Order58\Infrastructure\DbOrder58OrderItemRepository;
+use App\Order58\Infrastructure\DbOrderSyncLock;
 use App\Order58\Infrastructure\DbOrder58KnowledgeRepository;
 use App\Order58\Infrastructure\DbOrder58RuleRepository;
 use App\Order58\Infrastructure\DbOrder58StoreRepository;
@@ -80,6 +95,14 @@ return [
             // systemd unit so the temporary file shares a filesystem with its destination.
             'temporaryDirectory' => DynamicReference::to(static fn(): string => sys_get_temp_dir()),
             'enabled' => $params['app/order58']['recordingImportEnabled'],
+            // Item work rides along with this command rather than needing a worker of its own. The
+            // bounds keep it strictly subordinate to the recordings: see drainItems().
+            // The concrete drainer, named here because the command asks only for a DrainerInterface.
+            'itemDrainer' => Reference::to(App\Order58\Application\Items\OrderItemSyncDrainer::class),
+            'itemDrainPerRun' => $params['app/order58-items']['drainPerRun'],
+            'itemBudgetSeconds' => $params['app/order58-items']['drainBudgetSeconds'],
+            'itemRunCeilingSeconds' => $params['app/order58-items']['runCeilingSeconds'],
+            'itemRequestCostSeconds' => $params['app/order58-items']['requestCostSeconds'],
         ],
     ],
 
@@ -190,10 +213,76 @@ return [
         ],
     ],
 
+    // ---------------------------------------------------------------- original order ITEMS (Phase 2)
+    //
+    // A fourth Order58 endpoint with its own credential and its own kill switch. SHIPS OFF:
+    // ORDER58_ITEM_SYNC_ENABLED defaults to false, and the client refuses before opening a socket, so
+    // wiring it up sends no traffic.
+    OrderItemSettings::class => DynamicReference::to(static fn(): OrderItemSettings => new OrderItemSettings(
+        url: $params['app/order58-items']['url'],
+        token: $params['app/order58-items']['token'],
+        authScheme: $params['app/order58-items']['authScheme'],
+        connectTimeoutSeconds: $params['app/order58-items']['connectTimeoutSeconds'],
+        timeoutSeconds: $params['app/order58-items']['timeoutSeconds'],
+        maxResponseBytes: $params['app/order58-items']['maxResponseBytes'],
+        enabled: $params['app/order58-items']['enabled'],
+    )),
+
+    OrderItemClientInterface::class => [
+        'class' => HttpOrderItemClient::class,
+        '__construct()' => [
+            // Its own Guzzle instance, like the orders client: a shorter timeout, because a manual
+            // click waits on this inside a web request.
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => $params['app/order58-items']['connectTimeoutSeconds'],
+                'timeout' => $params['app/order58-items']['timeoutSeconds'],
+                'http_errors' => false,
+                // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
+                'stream' => true,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
+        ],
+    ],
+
+    // The progress bar above the orders listing: one grouped count, local tables only.
+    ItemSyncSummaryReaderInterface::class => DbItemSyncSummaryReader::class,
+
+    // Per-operation progress. Settled from OriginalOrderItemSyncService, so one provider
+    // request settles every batch waiting on that order.
+    ItemSyncBatchRepositoryInterface::class => DbItemSyncBatchRepository::class,
+
+    App\Order58\Web\Orders\SyncStatusAction::class => [
+        '__construct()' => [
+            'stalledAfterSeconds' => $params['app/order58-items']['batchStalledSeconds'],
+        ],
+    ],
+
+    OrderItemRepositoryInterface::class => DbOrder58OrderItemRepository::class,
+    ItemSyncStateRepositoryInterface::class => DbItemSyncStateRepository::class,
+
+    // The drainer and both manual actions depend on the interface, so none of them names the concrete
+    // service — and the service stays final.
+    OrderItemSyncInterface::class => OriginalOrderItemSyncService::class,
+
+    OriginalOrderItemSyncService::class => [
+        '__construct()' => [
+            'leaseSeconds' => $params['app/order58-items']['leaseSeconds'],
+            'maxAttempts' => $params['app/order58-items']['maxAttempts'],
+        ],
+    ],
+
+    // The order-sync lock, which lives in the service so BOTH callers are covered: the Orders page
+    // button and kf:order58:import-recordings. It used to be two lines in the web action, leaving the
+    // recording path unprotected.
+    OrderSyncLockInterface::class => DbOrderSyncLock::class,
+
     OrderSyncService::class => [
         'class' => OrderSyncService::class,
         '__construct()' => [
             'deadlineSeconds' => $params['app/order58']['ordersDeadlineSeconds'],
+            // Shared with the item sync service so "due a retry" means one thing in both.
+            'itemMaxAttempts' => $params['app/order58-items']['maxAttempts'],
         ],
     ],
 ];

@@ -29,6 +29,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $importEnabled
  * @var bool $usingFixtures
  * @var string $source
+ * @var int|null $itemSyncBatchId the item-sync operation this store's recordings last opened
+ * @var string $itemSyncStatusUrl where that operation's progress is polled
  */
 
 $assetManager->register(CallRecordingsAsset::class);
@@ -45,6 +47,18 @@ $downloadUrl = $urlGenerator->generate('order58.call-recordings.download');
 // Generated from the route name, not written out: the same name the sidebar entry uses, so the two
 // cannot drift apart and the link stays correct under whatever base path a deployment is served from.
 $ordersUrl = $urlGenerator->generate('order58.orders');
+
+// "Sync demo orders": the same endpoint and the same importer service as the Order Testing picker's
+// button, so there is one importer, one lock and one set of rules about a malformed document. Only the
+// `return` field differs, which brings the operator back here with this store and day still loaded —
+// `load` matters as much as `store`, because without it the page renders its picker and no calls.
+//
+// The import itself stays global: one configured directory, with each document naming its own store,
+// so there is nothing here to scope it by.
+//
+// The route NAME as a literal, not a constant: `OrderTestingRoute` lives in the Audio-to-Text module,
+// which ModuleIsolationTest forbids this file from naming. A route name is not a namespace.
+$demoSyncUrl = $urlGenerator->generate('order-testing.sync-demo-orders');
 
 /**
  * One channel as a step: its mark, the provider's name for it, and where it has got to.
@@ -153,8 +167,60 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
     <div class="page-header__actions">
         <a class="btn btn--secondary" href="<?= Html::encode($historyUrl) ?>">View Download History</a>
         <a class="btn btn--secondary" href="<?= Html::encode($ordersUrl) ?>">Sync Order58 Orders</a>
+        <form method="post" action="<?= Html::encode($demoSyncUrl) ?>">
+            <?= $csrfField ?>
+            <input type="hidden" name="return" value="order58.call-recordings">
+            <?php if ($selectedStore !== null): ?>
+                <input type="hidden" name="store" value="<?= Html::encode((string) $selectedStore) ?>">
+            <?php endif; ?>
+            <?php if ($loaded): ?>
+                <input type="hidden" name="load" value="1">
+            <?php endif; ?>
+            <input type="hidden" name="date" value="<?= Html::encode($businessDate) ?>">
+            <?php if ($source !== ''): ?>
+                <input type="hidden" name="source" value="<?= Html::encode($source) ?>">
+            <?php endif; ?>
+            <button class="btn btn--secondary" type="submit"
+                    data-busy-label="Syncing…">Sync demo orders</button>
+        </form>
     </div>
 </div>
+
+<?php if ($itemSyncBatchId !== null): ?>
+    <?php
+    // ORDER ITEMS, deliberately apart from the recording progress above.
+    //
+    // Downloading a recording and fetching an order's items are different operations with different
+    // counts, and the importer does them in that order. One combined figure would be unreadable the
+    // moment the two disagreed, so this panel speaks only about items and says so.
+    ?>
+    <section class="card o58-sync-op"
+             data-o58-sync-batch="<?= Html::encode((string) $itemSyncBatchId) ?>"
+             data-o58-sync-url="<?= Html::encode($itemSyncStatusUrl) ?>">
+        <div class="o58-sync-op__heading">
+            <h2 class="card__title o58-sync-op__title">Original order items</h2>
+            <span class="ot-verdict ot-verdict--info" data-o58-sync-state>Checking…</span>
+        </div>
+
+        <progress class="o58-sync-op__bar" data-o58-sync-bar value="0" max="100"></progress>
+
+        <p class="o58-sync-op__detail">
+            <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
+            <span class="badge badge--ok" data-o58-sync-done hidden></span>
+            <span class="badge badge--info" data-o58-sync-remaining hidden></span>
+            <span class="badge badge--error" data-o58-sync-failed hidden></span>
+            <span class="badge badge--muted" data-o58-sync-skipped hidden></span>
+        </p>
+
+        <p class="o58-sync-op__note" data-o58-sync-note hidden></p>
+
+        <p class="o58-sync-op__scope">
+            Separate from the recording downloads above: this is the line items of the orders those
+            recordings belong to. The importer fetches them after the recordings, with whatever time
+            remains in each run.
+        </p>
+    </section>
+<?php endif; ?>
 
 <?php if (!$importEnabled): ?>
     <div class="alert alert--warning">

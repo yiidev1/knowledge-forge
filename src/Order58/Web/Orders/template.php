@@ -29,6 +29,9 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var list<array<array-key, mixed>> $rows
  * @var int $total
  * @var OrderListQuery $listQuery
+ * @var \App\Order58\Domain\Items\ItemSyncSummary $itemSyncSummary item progress for the store filter
+ * @var int|null $syncBatchId the operation this page was redirected from, if any
+ * @var string $syncStatusUrl where the panel polls for that operation's progress
  * @var int $perPage
  * @var int $maxDates
  * @var int|null $formAccountId
@@ -61,6 +64,94 @@ $money = static fn(mixed $value): string => $value === null ? '—' : number_for
 $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
     ? '—'
     : gmdate('Y-m-d H:i', (int) $ts) . ' UTC';
+
+
+/**
+ * The ORDER ITEMS cell: what is known about this order's original line items, and a way to fetch them.
+ *
+ * Six states, and the two that look alike are kept apart deliberately. `EMPTY` means the provider
+ * answered and this order genuinely has no lines — it is comparable. `FAILED` means we do not know,
+ * and it never claims the order is empty. `PENDING` is "never considered", which is where every
+ * historical order starts so that installing this feature queues nothing.
+ *
+ * The button is always offered, even mid-sync: pressing it while the worker holds the order is
+ * answered with "already in progress" and costs no provider request, which is a better outcome than a
+ * control that disappears exactly when somebody wants to know what is happening.
+ */
+/**
+ * `items_synced_at`, as a stored UTC datetime, shortened for a table cell.
+ *
+ * The stored value is kept in the `title` so the exact timestamp is still available on hover and to a
+ * screen reader — a date alone is not enough to decide whether a snapshot is worth re-fetching.
+ */
+$syncedAt = static fn(mixed $value): ?string => $value === null || (string) $value === ''
+    ? null
+    : (string) $value;
+
+$itemsLabel = static function (array $row) use ($syncedAt): string {
+    $status = (string) ($row['items_status'] ?? 'PENDING');
+    $count = (int) ($row['items_count'] ?? 0);
+    $stamp = $syncedAt($row['items_synced_at'] ?? null);
+    $lines = $count . ' item' . ($count === 1 ? '' : 's');
+
+    // `items_synced_at` is the ONLY thing separating "never successfully synced" from "a previous
+    // snapshot is still stored". Both can sit under a FAILED or PROCESSING status, and they mean
+    // completely different things to somebody deciding whether a comparison can be trusted.
+    $kept = $stamp === null
+        ? ''
+        : ' <span class="util-muted" title="Last successful sync: ' . Html::encode($stamp)
+            . ' UTC">' . $lines . ' from ' . Html::encode(substr($stamp, 0, 10)) . '</span>';
+
+    return match ($status) {
+        'QUEUED' => '<span class="badge badge--muted">Queued</span>',
+        // A refresh in flight over a kept snapshot still has usable items behind it.
+        'PROCESSING' => '<span class="badge badge--info">Syncing…</span>' . $kept,
+        'SYNCED' => '<span class="badge badge--ok">Synced</span> <span class="util-muted"'
+            . ($stamp === null ? '' : ' title="Last successful sync: ' . Html::encode($stamp) . ' UTC"')
+            . '>' . $lines . '</span>',
+        // Authoritative, and NOT the same statement as "we could not find out".
+        'EMPTY' => '<span class="badge badge--ok">No items</span>',
+        // Failed with a snapshot is a freshness warning; failed without one is an absence of data.
+        'FAILED' => $stamp === null
+            ? '<span class="badge badge--error">Failed</span>'
+            : '<span class="badge badge--warning">Stale</span>' . $kept,
+        default => '<span class="util-muted">Not synced</span>',
+    };
+};
+
+$itemsCell = static function (array $row) use ($itemsLabel, $csrf, $urlGenerator, $listQuery): string {
+    $action = $urlGenerator->generate('order58.order-items.sync');
+
+    // Every filter the listing is currently showing, so a sync returns the operator to the page they
+    // were reading rather than to an unfiltered page one.
+    $carried = [
+        'account_id' => $listQuery->accountId,
+        'order_id' => $listQuery->sourceOrderId,
+        'status' => $listQuery->status,
+        'list_from' => $listQuery->dateFrom,
+        'list_to' => $listQuery->dateTo,
+        'page' => $listQuery->page > 1 ? $listQuery->page : null,
+    ];
+
+    $hidden = '';
+    foreach ($carried as $name => $value) {
+        if ($value !== null && $value !== '') {
+            $hidden .= '<input type="hidden" name="' . Html::encode($name)
+                . '" value="' . Html::encode((string) $value) . '">';
+        }
+    }
+
+    return $itemsLabel($row)
+        . '<form class="o58-items-form" method="post" action="' . Html::encode($action) . '">'
+        . $csrf->hiddenInput()
+        . '<input type="hidden" name="account_id" value="' . Html::encode((string) $row['account_id']) . '">'
+        . '<input type="hidden" name="source_order_id" value="'
+        . Html::encode((string) $row['source_order_id']) . '">'
+        . '<input type="hidden" name="return" value="order58.orders">'
+        . $hidden
+        . '<button class="btn btn--sm" type="submit" data-busy-label="Syncing…">Sync Order Items</button>'
+        . '</form>';
+};
 ?>
 <div class="page-header">
     <div>
@@ -117,6 +208,100 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
         </p>
     <?php endif; ?>
 </section>
+
+<?php
+// THIS OPERATION's progress, which is a different question from the bar below it.
+//
+// The bar underneath answers "how much of this store's history has its items", and is unchanged. This
+// panel answers "what is the sync I just started doing", and exists only after one. Keeping them apart
+// is the point: a figure that sometimes meant one and sometimes the other would be worse than either.
+//
+// Rendered server-side from the batch id carried back by the redirect, then refreshed in place by
+// polling, so it is correct with scripts off and live with them on.
+?>
+<?php if ($syncBatchId !== null): ?>
+    <section class="card o58-sync-op"
+             data-o58-sync-batch="<?= Html::encode((string) $syncBatchId) ?>"
+             data-o58-sync-url="<?= Html::encode($syncStatusUrl) ?>">
+        <div class="o58-sync-op__heading">
+            <h2 class="card__title o58-sync-op__title">This synchronisation</h2>
+            <span class="ot-verdict ot-verdict--info" data-o58-sync-state>Starting…</span>
+        </div>
+
+        <progress class="o58-sync-op__bar" data-o58-sync-bar value="0" max="100"></progress>
+
+        <p class="o58-sync-op__detail">
+            <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
+            <span class="badge badge--ok" data-o58-sync-done hidden></span>
+            <span class="badge badge--info" data-o58-sync-remaining hidden></span>
+            <span class="badge badge--error" data-o58-sync-failed hidden></span>
+            <span class="badge badge--muted" data-o58-sync-skipped hidden></span>
+        </p>
+
+        <p class="o58-sync-op__note" data-o58-sync-note hidden></p>
+
+        <p class="o58-sync-op__scope">
+            Item requests are made by the Order58 importer, not by this page. If nothing moves for a
+            few minutes the importer is probably not running — its systemd units have to be installed
+            and enabled for items to be fetched automatically.
+        </p>
+    </section>
+<?php endif; ?>
+
+<?php
+// Original order items, across the orders this listing covers.
+//
+// One grouped count, computed in the action — see ItemSyncSummaryReaderInterface. It follows the STORE
+// filter and nothing else: the date, order-id and status filters pick which rows appear in the table,
+// while this answers how much of the store's history has its items. The scope is printed in words
+// beside the numbers so the figure cannot be read as meaning something narrower.
+//
+// Rendered only when there are orders to report on; an empty bar reads as a fault rather than as an
+// absence of work.
+?>
+<?php if (!$itemSyncSummary->isEmpty()): ?>
+    <section class="card o58-item-sync">
+        <div class="o58-item-sync__heading">
+            <h2 class="card__title o58-item-sync__title">Original order items</h2>
+            <span class="o58-item-sync__count">
+                <?= $itemSyncSummary->ready ?> of <?= $itemSyncSummary->total ?> ready to compare
+            </span>
+        </div>
+
+        <?php // A real <progress>: the browser draws it, announces it and honours reduced-motion.?>
+        <progress class="o58-item-sync__bar"
+                  value="<?= $itemSyncSummary->ready ?>"
+                  max="<?= $itemSyncSummary->total ?>"></progress>
+
+        <p class="o58-item-sync__detail">
+            <?php if ($itemSyncSummary->notSynced > 0): ?>
+                <span class="badge badge--muted"><?= $itemSyncSummary->notSynced ?> not synced</span>
+            <?php endif; ?>
+            <?php if ($itemSyncSummary->inProgress > 0): ?>
+                <span class="badge badge--info"><?= $itemSyncSummary->inProgress ?> in progress</span>
+            <?php endif; ?>
+            <?php if ($itemSyncSummary->stale > 0): ?>
+                <span class="badge badge--warning"><?= $itemSyncSummary->stale ?> from an earlier fetch</span>
+            <?php endif; ?>
+            <?php if ($itemSyncSummary->failed > 0): ?>
+                <span class="badge badge--error"><?= $itemSyncSummary->failed ?> failed</span>
+            <?php endif; ?>
+            <?php if ($itemSyncSummary->outstanding() === 0 && !$itemSyncSummary->needsAttention()): ?>
+                <span class="badge badge--ok">Every order in this view has its items</span>
+            <?php endif; ?>
+        </p>
+
+        <p class="o58-item-sync__scope">
+            <?php if ($listQuery->accountId === null): ?>
+                Counted across all <?= $itemSyncSummary->total ?> stored orders, every store.
+            <?php else: ?>
+                Counted across all <?= $itemSyncSummary->total ?> stored orders of the selected store.
+            <?php endif; ?>
+            Date and order filters below do not change this count. Items are fetched per order; nothing
+            on this page contacts Order58 by itself.
+        </p>
+    </section>
+<?php endif; ?>
 
 <?php
 // `o58-wide` is the marker `.content:has(.o58-wide)` looks for: it opens the page column past the
@@ -180,6 +365,8 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
                         <th>Test</th>
                         <th>Placed</th>
                         <th>Synced</th>
+                        <?php // The original line items, and the control that fetches them now.?>
+                        <th>Order Items</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -198,6 +385,7 @@ $sourceTime = static fn(mixed $ts): string => $ts === null || (int) $ts === 0
                             <td><?= (int) $row['is_test'] === 1 ? 'Yes' : 'No' ?></td>
                             <td><?= Html::encode($sourceTime($row['source_created_at'] ?? null)) ?></td>
                             <td><?= Html::encode((string) $row['synced_at']) ?></td>
+                            <td class="o58-items-cell"><?= $itemsCell($row) ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

@@ -29,6 +29,7 @@ use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
+use App\Order58\Web\OrderItems as Order58OrderItems;
 use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
@@ -319,6 +320,21 @@ return [
             Route::post('/admin/order58/orders/sync')
                 ->action(Order58Orders\SyncAction::class)
                 ->name('order58.orders.sync'),
+            // One original order's items, fetched now. Posted to from BOTH the Orders listing and the
+            // original-vs-demo comparison page — the same operation, differing only in where the
+            // operator is sent afterwards, which travels as an allow-listed `return` field.
+            //
+            // It lives under /admin/order58 rather than under /order-testing because the work is
+            // Order58's: OrderTestingBoundariesTest forbids that module from naming App\Order58, so the
+            // comparison page reaches this by route NAME.
+            // What one sync operation has got to. Read-only JSON, polled by the panel; it starts and
+            // settles nothing.
+            Route::get('/admin/order58/orders/sync-status')
+                ->action(Order58Orders\SyncStatusAction::class)
+                ->name('order58.orders.sync-status'),
+            Route::post('/admin/order58/order-items/sync')
+                ->action(Order58OrderItems\SyncAction::class)
+                ->name('order58.order-items.sync'),
             Route::post('/admin/order58/calls/sync')
                 ->action(Order58Calls\SyncAction::class)
                 ->name('order58.calls.sync'),

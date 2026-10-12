@@ -8,10 +8,12 @@ use App\OrderTesting\Application\DemoOrderDirectory;
 use App\OrderTesting\Application\TestAttemptService;
 use App\OrderTesting\Application\DemoOrderSyncService;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
+use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
 use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
 use App\OrderTesting\Infrastructure\DbDemoOrderRepository;
+use App\OrderTesting\Infrastructure\DbOriginalItemsReader;
 use App\OrderTesting\Infrastructure\DbSourceOrderReader;
 use App\OrderTesting\Infrastructure\DbStoreReader;
 use App\OrderTesting\Infrastructure\DbTestAttemptRepository;
@@ -33,6 +35,10 @@ return [
     DemoOrderRepositoryInterface::class => DbDemoOrderRepository::class,
     TestAttemptRepositoryInterface::class => DbTestAttemptRepository::class,
     SourceOrderReaderInterface::class => DbSourceOrderReader::class,
+
+    // The original order's line items and their synchronisation state. Separate from the order reader
+    // because "mirrored" and "items known" are different states; see OriginalItemsReaderInterface.
+    OriginalItemsReaderInterface::class => DbOriginalItemsReader::class,
     StoreReaderInterface::class => DbStoreReader::class,
 
     DemoOrderDirectory::class => [

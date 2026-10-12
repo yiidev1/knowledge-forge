@@ -46,7 +46,8 @@ use const LOCK_UN;
  */
 final class DemoOrderSyncServiceTest extends Unit
 {
-    private const STORE = 1731;
+    /** A fixture store id, outside the mirrored range — see DemoOrderImportTest::STORE. */
+    private const STORE = 987655920;
 
     private ConnectionInterface $connection;
     private string $lockFile;

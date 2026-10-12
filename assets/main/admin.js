@@ -922,6 +922,143 @@
     }
 })();
 
+/* ---------------------------------------------------------------------------
+ * Order58: progress for ONE synchronisation operation.
+ *
+ * Polls the batch the page was redirected from and refreshes the panel in place. It starts nothing and
+ * settles nothing — the fetching is done by the importer — so a closed browser changes only what is on
+ * screen, never what the operation does.
+ *
+ * The panel is rendered server-side before this runs, so with scripts off it still shows the state at
+ * page load; this only keeps it current. Polling stops the moment the operation reaches a verdict, so a
+ * finished page makes no further requests.
+ * ------------------------------------------------------------------------- */
+(function () {
+    'use strict';
+
+    var panel = document.querySelector('[data-o58-sync-batch]');
+
+    if (!panel || typeof window.fetch !== 'function') {
+        return;
+    }
+
+    var batch = panel.getAttribute('data-o58-sync-batch');
+    var endpoint = panel.getAttribute('data-o58-sync-url');
+
+    if (!batch || !endpoint) {
+        return;
+    }
+
+    var POLL_MS = 5000;
+    var timer = null;
+    var stopped = false;
+
+    function el(name) {
+        return panel.querySelector('[data-o58-sync-' + name + ']');
+    }
+
+    function badge(name, text) {
+        var node = el(name);
+
+        if (!node) {
+            return;
+        }
+
+        if (text === null) {
+            node.hidden = true;
+            return;
+        }
+
+        node.textContent = text;
+        node.hidden = false;
+    }
+
+    function stop() {
+        stopped = true;
+
+        if (timer) {
+            window.clearInterval(timer);
+            timer = null;
+        }
+    }
+
+    function render(data) {
+        var state = el('state');
+
+        if (state) {
+            state.textContent = data.state;
+            // The verdict's own colour, so this script holds no opinion about which state is which.
+            state.className = 'ot-verdict ot-verdict--' + data.modifier;
+        }
+
+        var bar = el('bar');
+
+        if (bar) {
+            bar.value = data.percent;
+        }
+
+        badge('orders', 'Orders: ' + data.ordersSaved + ' saved of ' + data.ordersReceived + ' received');
+        badge('done', data.done > 0 ? data.done + ' items done' : null);
+        badge('remaining', data.remaining > 0 ? data.remaining + ' remaining' : null);
+        badge('failed', data.failed > 0 ? data.failed + ' failed' : null);
+        badge('skipped', data.skipped > 0 ? data.skipped + ' already current' : null);
+
+        var note = el('note');
+
+        if (note) {
+            var message = '';
+
+            if (data.ordersError) {
+                message = data.ordersError;
+            } else if (data.truncated) {
+                // Said plainly: the scope was cut short, so "finished" is not the same as "complete".
+                message = 'The order synchronisation ran out of time, so this operation covered only '
+                    + 'part of the range you asked for. Narrow the dates and run it again.';
+            } else if (data.stalled) {
+                message = 'Nothing has moved for a while. The Order58 importer may not be running — '
+                    + 'its systemd units have to be installed and enabled.';
+            }
+
+            note.textContent = message;
+            note.hidden = message === '';
+        }
+
+        if (data.finished) {
+            stop();
+        }
+    }
+
+    function poll() {
+        if (stopped) {
+            return;
+        }
+
+        window.fetch(endpoint + (endpoint.indexOf('?') === -1 ? '?' : '&') + 'batch=' + encodeURIComponent(batch), {
+            headers: { Accept: 'application/json' },
+            credentials: 'same-origin'
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('status ' + response.status);
+                }
+
+                return response.json();
+            })
+            .then(function (data) {
+                if (!stopped && data && data.success) {
+                    render(data);
+                }
+            })
+            .catch(function () {
+                // A failed poll says nothing about the operation, which is running elsewhere. The panel
+                // keeps whatever it last showed and the next tick tries again.
+            });
+    }
+
+    poll();
+    timer = window.setInterval(poll, POLL_MS);
+}());
+
 /* ------------------------------------------------------------------------------------------------
  * Audio to Text — job status polling and list refresh.
  *

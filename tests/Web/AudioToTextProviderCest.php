@@ -100,7 +100,7 @@ final class AudioToTextProviderCest
      * The store picker is what an administrator came here for; a permanent settings card for something
      * changed once a quarter pushed it below the fold.
      */
-    public function thePickerOffersTranscriptionSettingsBesideAllConversions(WebTester $I): void
+    public function thePickerOffersTranscriptionSettings(WebTester $I): void
     {
         $this->signIn($I);
 
@@ -109,7 +109,9 @@ final class AudioToTextProviderCest
 
         $I->seeElement('.page-header__actions [data-a2t-settings-open]');
         $I->see('Transcription settings', '.page-header__actions');
-        $I->see('All conversions', '.page-header__actions');
+        // "All conversions" is temporarily hidden here at the client's request; the route and the page
+        // it pointed at are untouched. See the commented block in the picker template.
+        $I->dontSee('All conversions', '.page-header__actions');
     }
 
     /**

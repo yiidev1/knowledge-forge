@@ -24,6 +24,14 @@ final class OrderSyncSummary
     /** True when the deadline ended the run before every order was processed. */
     public bool $stoppedEarly = false;
 
+    /**
+     * The progress batch this run opened, so the page can poll it.
+     *
+     * Nullable because progress bookkeeping must never be able to fail a sync: if the batch could not
+     * be opened, the orders are still fetched and saved and the page simply shows no panel.
+     */
+    public ?int $batchId = null;
+
     /** @var list<string> operator-facing reasons, bounded so one bad page cannot flood the screen */
     public array $errors = [];
 

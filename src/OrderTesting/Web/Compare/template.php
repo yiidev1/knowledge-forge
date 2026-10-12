@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\OrderTesting\Web\DemoOrdersAsset;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
+use App\OrderTesting\Domain\Comparison\ItemAvailability;
 use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\OrderComparison;
@@ -16,6 +17,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
 /**
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
+ * @var Yiisoft\Yii\View\Renderer\Csrf $csrf
  * @var Yiisoft\Assets\AssetManager $assetManager
  * @var int $sourceId
  * @var string $storeName
@@ -43,6 +45,14 @@ $listUrl = $urlGenerator->generate('order-testing.demo-orders', [
     'sourceOrderId' => $demo->sourceOrderId,
 ]);
 
+// Fetches the ORIGINAL order's items — the left-hand column — and nothing else. The demo order on the
+// right is a file somebody's listener wrote and is never touched here; its id travels with the form
+// only so that this exact comparison is what reloads afterwards.
+//
+// The literal route name, not a constant: this module may not name `App\Order58`, which owns the
+// action. A name is not a namespace, so the module boundary holds.
+$syncItemsUrl = $urlGenerator->generate('order58.order-items.sync');
+
 /** A value as the document recorded it, or an explicit blank. Never guessed at, never reformatted. */
 $value = static fn(?string $v): string => $v === null || $v === ''
     ? '<span class="util-muted">—</span>'
@@ -56,6 +66,33 @@ $value = static fn(?string $v): string => $v === null || $v === ''
  */
 $chip = static fn(FieldComparison|ItemComparison $c): string => '<span class="ot-verdict ot-verdict--'
     . Html::encode($c->status->modifier()) . '">' . Html::encode($c->status->label()) . '</span>';
+
+/**
+ * The item-synchronisation state, in words an administrator can act on.
+ *
+ * Named in the summary card and not only explained above the item table: somebody scanning this card
+ * needs to know whether the comparison below can be trusted before they read any of it.
+ *
+ * `EMPTY` deliberately reads as "No items" rather than "Synced, 0 items": the provider confirmed the
+ * order has no lines, which is a comparable fact, and "0 items" reads as a sync that quietly failed.
+ */
+$itemStateLabel = match ($comparison->itemAvailability) {
+    ItemAvailability::Synced => 'Synced',
+    ItemAvailability::AuthoritativeEmpty => 'No items',
+    ItemAvailability::Queued => 'Queued',
+    ItemAvailability::Fetching => 'Synchronizing',
+    ItemAvailability::Unavailable => 'Failed',
+    ItemAvailability::StaleAfterFailure => 'Stale — last refresh failed',
+    ItemAvailability::StaleWhileFetching => 'Stale — refreshing',
+    ItemAvailability::NeverRequested => 'Not synced',
+};
+
+$itemStateModifier = match ($comparison->itemAvailability) {
+    ItemAvailability::Synced, ItemAvailability::AuthoritativeEmpty => 'match',
+    ItemAvailability::Unavailable => 'different',
+    ItemAvailability::StaleAfterFailure, ItemAvailability::StaleWhileFetching => 'extra',
+    default => 'unknown',
+};
 
 $itemSummary = static function (?NormalizedItem $item) use ($value): string {
     if ($item === null) {
@@ -83,6 +120,17 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
         </p>
     </div>
     <div class="page-header__actions">
+        <form method="post" action="<?= Html::encode($syncItemsUrl) ?>">
+            <?= $csrf->hiddenInput() ?>
+            <input type="hidden" name="account_id" value="<?= Html::encode((string) $sourceId) ?>">
+            <input type="hidden" name="source_order_id"
+                   value="<?= Html::encode((string) $demo->sourceOrderId) ?>">
+            <input type="hidden" name="demo_order_id"
+                   value="<?= Html::encode((string) $demo->demoOrderId) ?>">
+            <input type="hidden" name="return" value="order-testing.demo-compare">
+            <button class="btn btn--secondary" type="submit"
+                    data-busy-label="Syncing…">Sync Original Order Items</button>
+        </form>
         <a class="btn" href="<?= Html::encode($listUrl) ?>">All demo orders for this call</a>
     </div>
 </div>
@@ -107,6 +155,20 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
             </dd>
         </div>
         <div><dt>Imported from</dt><dd><code><?= Html::encode($demo->sourceFilename) ?></code></dd></div>
+        <div>
+            <dt>Original items</dt>
+            <dd>
+                <span class="ot-verdict ot-verdict--<?= Html::encode($itemStateModifier) ?>">
+                    <?= Html::encode($itemStateLabel) ?>
+                </span>
+                <?php if ($comparison->itemsSyncedAt !== null): ?>
+                    <span class="util-muted">
+                        <?= $comparison->itemAvailability->isStale() ? 'from' : 'synced' ?>
+                        <?= Html::encode($comparison->itemsSyncedAt) ?> UTC
+                    </span>
+                <?php endif; ?>
+            </dd>
+        </div>
     </dl>
 </div>
 
@@ -149,12 +211,37 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
 
 <div class="card">
     <h2 class="card__title">Order items</h2>
+
+    <?php if ($comparison->itemNote() !== ''): ?>
+        <?php
+        // Why the comparison below is what it is. Two different kinds of message share this one place:
+        // "these cannot be compared" and "these are from an earlier fetch". Both are statements about
+        // the synchronisation, and neither is a statement about the trainee — which is exactly what the
+        // old behaviour got wrong when it reported every demo line as invented.
+        ?>
+        <div class="alert alert--<?= Html::encode($comparison->itemAvailability->modifier()) ?>"
+             role="status">
+            <?= Html::encode($comparison->itemNote()) ?>
+            <?php if ($comparison->itemsSyncedAt !== null && $comparison->itemAvailability->isStale()): ?>
+                Last synchronized <?= Html::encode($comparison->itemsSyncedAt) ?>.
+            <?php endif; ?>
+        </div>
+    <?php endif; ?>
+
     <?php if ($comparison->items === []): ?>
-        <p class="util-muted">Neither order records any line items.</p>
+        <?php if ($comparison->itemsWereCompared()): ?>
+            <?php // Both sides known, and both empty. That is agreement, not an absence of data.?>
+            <p class="util-muted">Neither order records any line items.</p>
+        <?php else: ?>
+            <p class="util-muted">No line items to show.</p>
+        <?php endif; ?>
     <?php else: ?>
-        <?php // Paired by product name, never by a document id: a demo order's item ids are synthetic?>
-        <?php // and pairing on one would compare a trainee's line against an unrelated original.?>
-        <table class="table ot-compare">
+        <?php
+        // Paired on the merchant's catalogue id where both documents carry one, and on the
+        // canonicalised product name otherwise — never on a document line id, which a demo document is
+        // allowed to invent. Lines of the same product pair by closest match rather than by position.
+        ?>
+        <table class="table ot-compare ot-items">
             <thead>
                 <tr>
                     <th scope="col">Item</th>
@@ -182,6 +269,28 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
             <?php endforeach; ?>
             </tbody>
         </table>
+    <?php endif; ?>
+
+    <?php if ($comparison->removedItems !== []): ?>
+        <?php
+        // Lines the provider marked removed. Listed apart and never compared: a trainee is right not to
+        // have entered them, so counting them as "missing in demo" would penalise correct work.
+        ?>
+        <h3 class="card__subtitle">Removed from the original order</h3>
+        <p class="util-muted">
+            The provider marked these lines removed. They are not expected in the demo order and are not
+            compared.
+        </p>
+        <ul class="ot-removed-items">
+            <?php foreach ($comparison->removedItems as $removed): ?>
+                <li>
+                    <?= Html::encode($removed->name ?? 'Unnamed item') ?>
+                    <?php if ($removed->quantityLabel() !== null): ?>
+                        &times;<?= Html::encode($removed->quantityLabel()) ?>
+                    <?php endif; ?>
+                </li>
+            <?php endforeach; ?>
+        </ul>
     <?php endif; ?>
 </div>
 

@@ -203,6 +203,36 @@ return [
         'minDurationMs' => Environment::int('AUDIO_UTTERANCE_MIN_MS'),
     ],
 
+    // Order58 original order items. Transport only — every value comes from the environment SPEC
+    // and is resolved in config/common/di/order58.php.
+    'app/order58-items' => [
+        'url' => Environment::string('ORDER58_ITEM_API_URL'),
+        // ONE credential, not two copies of it.
+        //
+        // The client has confirmed the items endpoint takes the same token as the orders endpoint, and
+        // both live on order58.com. Writing that secret into a second variable would mean two places to
+        // rotate it and one of them silently going stale — so `ORDER58_ITEM_API_TOKEN` is an OVERRIDE,
+        // empty by default, and the orders token is what is actually used. If the provider ever issues
+        // an items-specific credential, setting that variable takes precedence with no code change.
+        'token' => Environment::string('ORDER58_ITEM_API_TOKEN') !== ''
+            ? Environment::string('ORDER58_ITEM_API_TOKEN')
+            : Environment::string('ORDER58_ORDERS_API_TOKEN'),
+        'authScheme' => Environment::string('ORDER58_ITEM_API_AUTH_SCHEME'),
+        'connectTimeoutSeconds' => Environment::int('ORDER58_ITEM_API_CONNECT_TIMEOUT_SECONDS'),
+        'timeoutSeconds' => Environment::int('ORDER58_ITEM_API_TIMEOUT_SECONDS'),
+        'maxResponseBytes' => Environment::int('ORDER58_ITEM_API_MAX_RESPONSE_MB') * 1048576,
+        'leaseSeconds' => Environment::int('ORDER58_ITEM_LEASE_SECONDS'),
+        'maxAttempts' => Environment::int('ORDER58_ITEM_MAX_ATTEMPTS'),
+        'enabled' => Environment::bool('ORDER58_ITEM_SYNC_ENABLED'),
+        'drainPerRun' => Environment::int('ORDER58_ITEM_DRAIN_PER_RUN'),
+        'drainBudgetSeconds' => Environment::int('ORDER58_ITEM_DRAIN_BUDGET_SECONDS'),
+        'runCeilingSeconds' => Environment::int('ORDER58_ITEM_RUN_CEILING_SECONDS'),
+        'batchStalledSeconds' => Environment::int('ORDER58_ITEM_BATCH_STALLED_SECONDS'),
+        // One request's worst case: the read timeout plus the write that follows it. Derived rather
+        // than configured, so it cannot drift away from the timeout it is protecting.
+        'requestCostSeconds' => Environment::int('ORDER58_ITEM_API_TIMEOUT_SECONDS') + 5,
+    ],
+
     // Order Testing: the demo-order mirror and the attempt window. Transport only — every value is
     // read straight from the environment SPEC and resolved in config/common/di/order-testing.php.
     'app/order-testing' => [

@@ -134,7 +134,17 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
         </form>
         <a class="btn btn--secondary" href="<?= Html::encode($settingsUrl) ?>"
            data-a2t-settings-open>Transcription settings</a>
+        <?php /* TEMPORARILY HIDDEN at the client's request (2026-10-09).
+
+        Commented out rather than deleted: this is expected to come back, and the markup is the whole
+        of it. Nothing else changes — `audio-to-text.jobs` keeps its route, action and page, and the
+        conversions list stays reachable from the sidebar and by URL. To restore, delete this comment
+        wrapper and nothing else.
+
+        `.page-header__actions` is a flex row, so removing one child leaves no gap behind it.
+
         <a class="btn" href="<?= Html::encode($urlGenerator->generate('audio-to-text.jobs')) ?>">All conversions</a>
+        */ ?>
     </div>
 </div>
 

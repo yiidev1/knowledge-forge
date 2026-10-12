@@ -7,12 +7,15 @@ namespace App\OrderTesting\Web\Sync;
 use App\OrderTesting\Application\DemoOrderSyncService;
 use App\OrderTesting\Application\ImportReport;
 use App\Shared\Web\Flash\FlashMessages;
+use App\Shared\Web\Support\FormData;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
 use function implode;
+use function preg_match;
 use function sprintf;
 
 /**
@@ -52,8 +55,12 @@ final readonly class Action
         private LoggerInterface $logger,
     ) {}
 
-    public function __invoke(): ResponseInterface
+    public function __invoke(ServerRequestInterface $request): ResponseInterface
     {
+        // Worked out before anything runs, so every outcome below — including a thrown one — returns
+        // the operator to the page they pressed the button on.
+        $back = $this->target($request);
+
         try {
             $outcome = $this->sync->sync();
         } catch (Throwable $e) {
@@ -63,7 +70,7 @@ final readonly class Action
             $this->logger->error('Order Testing: manual demo order sync failed', ['error' => $e->getMessage()]);
             $this->flash->error('Demo order sync failed. The details are in the application log.');
 
-            return $this->back();
+            return $this->back($back);
         }
 
         if ($outcome->busy) {
@@ -71,7 +78,7 @@ final readonly class Action
             // thing is to wait a moment rather than force a second pass over the same directory.
             $this->flash->warning('Demo order sync is already running.');
 
-            return $this->back();
+            return $this->back($back);
         }
 
         $report = $outcome->report;
@@ -79,18 +86,18 @@ final readonly class Action
         if ($report === null) {
             $this->flash->error('Demo orders cannot be synced: ' . (string) $outcome->problem);
 
-            return $this->back();
+            return $this->back($back);
         }
 
         if (!$outcome->changedSomething()) {
             $this->flash->info('Demo orders are already up to date.' . $this->refusalNote($report));
 
-            return $this->back();
+            return $this->back($back);
         }
 
         $this->flash->success($this->summary($report) . $this->refusalNote($report));
 
-        return $this->back();
+        return $this->back($back);
     }
 
     /**
@@ -129,10 +136,73 @@ final readonly class Action
             : sprintf(' %d file(s) could not be imported — see the application log.', $skipped);
     }
 
-    private function back(): ResponseInterface
+    /**
+     * Post/Redirect/Get, so a refresh cannot replay the sync — back to wherever it was pressed.
+     *
+     * @param array{string, array<string, scalar|null>} $target
+     */
+    private function back(array $target): ResponseInterface
     {
-        // Post/Redirect/Get, so a refresh cannot replay the sync. Straight back to the picker, which
-        // is where the button is.
-        return $this->redirect->afterPost('order-testing');
+        [$route, $arguments] = $target;
+
+        return $this->redirect->afterPost($route, $arguments);
+    }
+
+    /**
+     * Which page to return to, and with what.
+     *
+     * ## Why this is an allow-list and not the submitted URL
+     *
+     * The alternative — posting a `redirect_to` path and sending the browser there — is an open
+     * redirect: anything that reflects a submitted URL into a `Location` header will eventually send
+     * somebody to a site that looks like this one. Route NAMES cannot express an off-site target at
+     * all, so the worst a crafted value can do here is land on the picker.
+     *
+     * The three pages are the three that carry the button. Each names only the arguments its own route
+     * actually takes, so a value for one page cannot be smuggled onto another.
+     *
+     * The picker deliberately posts **no** `return` field: its button predates this, and the default
+     * keeps its behaviour — and its test — exactly as it was.
+     *
+     * @return array{string, array<string, scalar|null>}
+     */
+    private function target(ServerRequestInterface $request): array
+    {
+        $form = FormData::fromRequest($request);
+        $requested = $form->string('return');
+
+        if ($requested === OrderTestingReturn::STORE) {
+            $sourceId = $this->positiveInt($form->string('sourceId'));
+
+            // Only a real store id can rebuild that URL; without one the generator would throw, so
+            // this falls back rather than failing a sync that actually succeeded.
+            if ($sourceId !== null) {
+                return [OrderTestingReturn::STORE, ['sourceId' => $sourceId]];
+            }
+        }
+
+        if ($requested === OrderTestingReturn::CALL_RECORDINGS) {
+            // The filters that page reads. Carried so a sync does not throw away the store and day
+            // the operator had loaded — `load` included, or the table would come back empty.
+            $filters = [];
+
+            foreach (['store', 'load', 'date', 'source'] as $key) {
+                $value = $form->string($key);
+
+                if ($value !== '') {
+                    $filters[$key] = $value;
+                }
+            }
+
+            return [OrderTestingReturn::CALL_RECORDINGS, $filters];
+        }
+
+        return [OrderTestingReturn::PICKER, []];
+    }
+
+    /** Digits only and bounded; anything else is refused rather than cast into a different number. */
+    private function positiveInt(string $raw): ?int
+    {
+        return preg_match('/^[1-9][0-9]{0,18}$/', $raw) === 1 ? (int) $raw : null;
     }
 }

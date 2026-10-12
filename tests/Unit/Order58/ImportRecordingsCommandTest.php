@@ -32,7 +32,11 @@ use Psr\Log\NullLogger;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 use App\Order58\Application\Orders\OrderMapper;
+use App\Worker\Application\DrainResult;
+use App\Worker\Application\DrainerInterface;
 use App\Order58\Application\Orders\OrderSyncService;
+use App\Tests\Support\Fake\Order58\FakeOrderSyncLock;
+use App\Tests\Support\Fake\Order58\RecordingItemSyncState;
 use App\Order58\Client\Orders\OrderDataClientInterface;
 use App\Order58\Domain\Orders\Order58Order;
 use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
@@ -285,6 +289,74 @@ final class ImportRecordingsCommandTest extends Unit
     // ------------------------------------------------------------------ plumbing
 
     /** @return array{ImportRecordingsCommand, BufferedOutput} */
+    // ------------------------------------------------------------------ the item pass
+
+    /**
+     * Items run only with time genuinely left, and the check happens BEFORE a request is started.
+     *
+     * One item request can cost a whole provider timeout, so a budget tested only after a request
+     * could start one with seconds to spare and be killed mid-write by the unit's `TimeoutStartSec`.
+     * Here the ceiling is already spent, so no pass may begin at all.
+     */
+    public function testNoItemRequestStartsWithoutRoomForAWholeOne(): void
+    {
+        $drainer = new CountingDrainer();
+
+        // Ceiling 300s, request cost 30s, safety margin 20s: a run that has already used 280s has
+        // nothing like room for one request.
+        [$command, $output] = $this->command(
+            new SpyCallImportRepository(0),
+            self::MIN_MB * 4,
+            0.1,
+            itemDrainer: $drainer,
+            itemDrainPerRun: 5,
+            elapsedSeconds: 280,
+        );
+
+        $command->run(new ArrayInput(['--once' => true]), $output);
+
+        self::assertSame(0, $drainer->drains, 'No pass may begin without room for a full request.');
+        self::assertStringContainsString('no time left', $output->fetch());
+    }
+
+    /** With a whole run's budget available, the queue is drained in bounded passes. */
+    public function testItemsAreDrainedInBoundedPassesWhenThereIsTime(): void
+    {
+        $drainer = new CountingDrainer(processedPerDrain: [3, 2, 0]);
+
+        [$command, $output] = $this->command(
+            new SpyCallImportRepository(0),
+            self::MIN_MB * 4,
+            0.1,
+            itemDrainer: $drainer,
+            itemDrainPerRun: 5,
+        );
+
+        $command->run(new ArrayInput(['--once' => true]), $output);
+
+        // Three passes: two that moved something, and one empty pass that ends the loop.
+        self::assertSame(3, $drainer->drains);
+        self::assertSame([5, 5, 5], $drainer->limits, 'Each pass is bounded by the configured size.');
+    }
+
+    /** A drain size of zero turns the whole thing off without touching anything else. */
+    public function testADrainSizeOfZeroDisablesTheItemPassEntirely(): void
+    {
+        $drainer = new CountingDrainer();
+
+        [$command, $output] = $this->command(
+            new SpyCallImportRepository(0),
+            self::MIN_MB * 4,
+            0.1,
+            itemDrainer: $drainer,
+            itemDrainPerRun: 0,
+        );
+
+        $command->run(new ArrayInput(['--once' => true]), $output);
+
+        self::assertSame(0, $drainer->drains);
+    }
+
     private function command(
         SpyCallImportRepository $repository,
         int $availableMb,
@@ -293,11 +365,30 @@ final class ImportRecordingsCommandTest extends Unit
         bool $enabled = true,
         ?string $temporaryDirectory = null,
         ?OrderSyncService $orderSync = null,
+        ?DrainerInterface $itemDrainer = null,
+        int $itemDrainPerRun = 0,
+        /** Seconds the run has already spent by the time the item pass is reached. */
+        int $elapsedSeconds = 0,
     ): array {
-        $clock = new class implements ClockInterface {
+        // The first reading is when the run started; every later one is that plus however long the
+        // test says the run has already taken. That is what lets a test put the item pass up against
+        // the unit's timeout without waiting for it.
+        $clock = new class ($elapsedSeconds) implements ClockInterface {
+            private bool $started = false;
+
+            public function __construct(private readonly int $elapsedSeconds) {}
+
             public function now(): DateTimeImmutable
             {
-                return new DateTimeImmutable('2026-09-25 10:00:00', new DateTimeZone('UTC'));
+                $base = new DateTimeImmutable('2026-09-25 10:00:00', new DateTimeZone('UTC'));
+
+                if (!$this->started) {
+                    $this->started = true;
+
+                    return $base;
+                }
+
+                return $base->modify('+' . $this->elapsedSeconds . ' seconds');
             }
         };
 
@@ -332,6 +423,13 @@ final class ImportRecordingsCommandTest extends Unit
             $lockFile ?? $this->temporaryPath(),
             $temporaryDirectory ?? sys_get_temp_dir(),
             $enabled,
+            // Item draining is off in these tests: they are about recordings, and a drainer that could
+            // run would make "no network" a promise this file cannot keep. Its own tests cover it.
+            $itemDrainer ?? neverCalledItemDrainer(),
+            $itemDrainPerRun,
+            120,
+            300,
+            30,
         );
 
         return [$command, new BufferedOutput()];
@@ -429,7 +527,15 @@ function neverCalledOrderSync(): OrderSyncService
                 return new DateTimeImmutable('2026-10-05 12:00:00');
             }
         },
+        new NullLogger(),
+        // Granted freely: these cases are about recording admission and the one-call bound, not about
+        // lock contention. A test that wanted contention would pass FakeOrderSyncLock(false).
+        new FakeOrderSyncLock(),
+        new RecordingItemSyncState(),
+        new \App\Tests\Support\Fake\Order58\RecordingItemSyncBatches(),
+        new \App\Order58\Application\ImportRunRequest('/dev/null', new NullLogger()),
         30,
+        3,
     );
 }
 
@@ -651,5 +757,66 @@ final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
         ];
 
         return AudioIngestionOutcome::queued('c0ffee00c0ffee00c0ffee00c0ffee00');
+    }
+}
+
+/**
+ * An item drainer that must never be reached.
+ *
+ * `itemDrainPerRun` defaults to 0 in these tests, which short-circuits the item pass before this could
+ * be called. If a change ever removes that guard, this fails loudly rather than letting a recording
+ * test quietly start fetching items.
+ */
+function neverCalledItemDrainer(): DrainerInterface
+{
+    return new class implements DrainerInterface {
+        public function name(): string
+        {
+            return 'order58-order-items';
+        }
+
+        public function recover(): void
+        {
+            Assert::fail('The item drainer must not run in a recordings test.');
+        }
+
+        public function drain(int $limit): DrainResult
+        {
+            Assert::fail('The item drainer must not run in a recordings test.');
+        }
+    };
+}
+
+/**
+ * A drainer that counts what it was asked to do, and never touches a network.
+ *
+ * `processedPerDrain` is the sequence of pass results: the importer keeps draining while a pass moves
+ * something and stops on the first that does not, so the final zero is what ends the loop.
+ */
+final class CountingDrainer implements DrainerInterface
+{
+    public int $drains = 0;
+
+    /** @var list<int> the limit each pass was given */
+    public array $limits = [];
+
+    /** @param list<int> $processedPerDrain */
+    public function __construct(private readonly array $processedPerDrain = [0]) {}
+
+    public function name(): string
+    {
+        return 'order58-order-items';
+    }
+
+    public function recover(): void {}
+
+    public function drain(int $limit): DrainResult
+    {
+        $processed = $this->processedPerDrain[$this->drains] ?? 0;
+
+        ++$this->drains;
+        $this->limits[] = $limit;
+
+        return new DrainResult($processed, 0);
     }
 }

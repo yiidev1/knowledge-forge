@@ -6,6 +6,7 @@ namespace App\OrderTesting\Web\Compare;
 
 use App\OrderTesting\Application\Comparison\DemoOrderNormalizer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
+use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
@@ -24,6 +25,14 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
  * {@see DemoOrderRepositoryInterface::findOne()}. Changing any one of them to another merchant's value
  * produces the same 404 as an id that never existed — the narrow lookup is what enforces that, not a
  * check afterwards that somebody could forget to write.
+ *
+ * ## The items are read separately, and may legitimately be unknown
+ *
+ * The original order comes from the orders mirror; its line items do not live in that payload at all
+ * and come from their own table, filled by a sync somebody asked for. So "mirrored" and "items known"
+ * are two different states, and the second is read on its own. Without that, an order whose items have
+ * never been fetched would look like an order with an empty basket, and every line the trainee entered
+ * would be reported as invented.
  *
  * ## The left-hand side may legitimately be empty
  *
@@ -44,6 +53,7 @@ final readonly class Action
         private WebViewRenderer $viewRenderer,
         private DemoOrderRepositoryInterface $demoOrders,
         private SourceOrderReaderInterface $sourceOrders,
+        private OriginalItemsReaderInterface $originalItems,
         private TestAttemptRepositoryInterface $attempts,
         private StoreReaderInterface $stores,
         private DemoOrderNormalizer $demoNormalizer,
@@ -87,6 +97,9 @@ final readonly class Action
                 'comparison' => $this->comparator->compare(
                     $this->sourceOrders->find($sourceId, $sourceOrderId),
                     $this->demoNormalizer->normalize($demo),
+                    // Local tables only, and two bounded queries. Rendering a comparison never calls
+                    // the provider: the item fetch is a deliberate action with its own lock and lease.
+                    $this->originalItems->read($sourceId, $sourceOrderId),
                 ),
             ]);
     }

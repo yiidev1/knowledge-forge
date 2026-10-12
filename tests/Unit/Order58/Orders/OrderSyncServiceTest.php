@@ -7,6 +7,9 @@ namespace App\Tests\Unit\Order58\Orders;
 use App\Order58\Application\Orders\OrderMapper;
 use App\Order58\Application\Orders\OrderDateRange;
 use App\Order58\Application\Orders\OrderSyncService;
+use App\Tests\Support\Fake\Order58\FakeOrderSyncLock;
+use App\Tests\Support\Fake\Order58\RecordingItemSyncState;
+use Psr\Log\NullLogger;
 use App\Order58\Client\Orders\OrderDataClientInterface;
 use App\Order58\Client\Orders\OrderDataFailed;
 use App\Order58\Domain\Orders\Order58Order;
@@ -261,7 +264,19 @@ final class OrderSyncServiceTest extends Unit
                 ClockInterface $clock,
                 int $deadlineSeconds,
             ) {
-                $this->inner = new OrderSyncService($client, $repo, new OrderMapper(), $clock, $deadlineSeconds);
+                $this->inner = new OrderSyncService(
+                    $client,
+                    $repo,
+                    new OrderMapper(),
+                    $clock,
+                    new NullLogger(),
+                    new FakeOrderSyncLock(),
+                    new RecordingItemSyncState(),
+                    new \App\Tests\Support\Fake\Order58\RecordingItemSyncBatches(),
+                    new \App\Order58\Application\ImportRunRequest('/dev/null', new NullLogger()),
+                    $deadlineSeconds,
+                    3,
+                );
                 $this->responses = $client->responses;
             }
 

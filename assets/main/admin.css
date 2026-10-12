@@ -1421,6 +1421,60 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .o58-table__when { width: 150px; white-space: nowrap; }
 .o58-table__progress { width: 180px; }
 
+/* Original order items, above the stored-orders table.
+   A card like the two it sits between, so the page reads as three stacked panels rather than a banner
+   wedged into a list. Every colour is a theme variable, so it follows the dark theme without restating
+   any of it. */
+.o58-item-sync { display: flex; flex-direction: column; gap: .45rem; }
+.o58-item-sync__heading { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }
+.o58-item-sync__title { margin: 0; }
+.o58-item-sync__count { color: var(--text-muted); font-size: .78rem; white-space: nowrap; }
+
+.o58-item-sync__bar {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--surface-sunken, rgba(255, 255, 255, .08));
+    border: 0;
+    border-radius: 999px;
+    display: block;
+    height: .35rem;
+    width: 100%;
+}
+
+.o58-item-sync__bar::-webkit-progress-bar { background: var(--surface-sunken, rgba(255, 255, 255, .08)); border-radius: 999px; }
+.o58-item-sync__bar::-webkit-progress-value { background: var(--primary); border-radius: 999px; transition: width 240ms ease-out; }
+.o58-item-sync__bar::-moz-progress-bar { background: var(--primary); border-radius: 999px; }
+
+/* The badges wrap on a narrow viewport rather than pushing the bar out of the card. */
+.o58-item-sync__detail { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; }
+.o58-item-sync__scope { color: var(--text-muted); font-size: .74rem; margin: 0; }
+
+/* ONE synchronisation operation, above the all-orders bar.
+   Visually a sibling of it rather than a variant: the two answer different questions, and making them
+   look interchangeable is how a reader conflates them. Theme variables only. */
+.o58-sync-op { display: flex; flex-direction: column; gap: .45rem; }
+.o58-sync-op__heading { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }
+.o58-sync-op__title { margin: 0; }
+
+.o58-sync-op__bar {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--surface-sunken, rgba(255, 255, 255, .08));
+    border: 0;
+    border-radius: 999px;
+    display: block;
+    height: .35rem;
+    width: 100%;
+}
+
+.o58-sync-op__bar::-webkit-progress-bar { background: var(--surface-sunken, rgba(255, 255, 255, .08)); border-radius: 999px; }
+.o58-sync-op__bar::-webkit-progress-value { background: var(--primary); border-radius: 999px; transition: width 240ms ease-out; }
+.o58-sync-op__bar::-moz-progress-bar { background: var(--primary); border-radius: 999px; }
+
+.o58-sync-op__detail { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; }
+.o58-sync-op__note { color: var(--warning, #e0b341); font-size: .76rem; margin: 0; }
+.o58-sync-op__scope { color: var(--text-muted); font-size: .74rem; margin: 0; }
+
 /* History's ids are narrower than the live page's: that table carries four more columns. */
 .o58-history__order { width: 110px; white-space: nowrap; }
 .o58-history__id { width: 125px; white-space: nowrap; }
@@ -2656,6 +2710,7 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
 .a2t-arriving__bar::-moz-progress-bar { background: var(--primary); border-radius: 999px; }
 
 .a2t-arriving__detail { color: var(--text-muted); font-size: .73rem; margin: 0; }
+
 
 /* The confirmation shown before transcription starts.
    Narrow on purpose: it asks one question about one recording, and a dialog as wide as the review

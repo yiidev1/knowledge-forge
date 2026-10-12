@@ -8,6 +8,8 @@ use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
 use App\OrderTesting\Domain\Comparison\ComparisonStatus;
+use App\OrderTesting\Domain\Comparison\ItemAvailability;
+use App\OrderTesting\Domain\Comparison\OriginalItems;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
 use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
@@ -92,9 +94,24 @@ final class OrderComparisonTest extends TestCase
         return (new OrderNormalizer())->normalize($raw);
     }
 
-    private function compare(?NormalizedOrder $source, string $basename): OrderComparison
-    {
-        return (new OrderComparator())->compare($source, $this->demo($basename));
+    /**
+     * The original's items now arrive separately, as a synchronised snapshot.
+     *
+     * They used to be read out of `payload_json`, which never contained them — that is the whole
+     * reason the item sync exists. These tests describe a store whose items HAVE been synchronised, so
+     * they pass the source order's lines in as a `SYNCED` snapshot; the "not synchronised" states are
+     * covered by their own tests below.
+     */
+    private function compare(
+        ?NormalizedOrder $source,
+        string $basename,
+        ?OriginalItems $items = null,
+    ): OrderComparison {
+        return (new OrderComparator())->compare(
+            $source,
+            $this->demo($basename),
+            $items ?? OriginalItems::of(ItemAvailability::Synced, $source?->items ?? []),
+        );
     }
 
     private function field(OrderComparison $comparison, string $section, string $label): FieldComparison
@@ -243,11 +260,11 @@ final class OrderComparisonTest extends TestCase
     }
 
     /**
-     * Pairing never uses a document id.
+     * Pairing never uses a document LINE id, and survives a catalogue id only one side has.
      *
-     * The client was explicit that a demo document's record ids may be synthetic. This proves the
-     * pairing survives ids that disagree completely — the same two lines still pair, because only the
-     * product name is used.
+     * The client was explicit that a demo document's record ids may be synthetic. Here the demo lines
+     * carry `product_id` values the original does not have at all, so the shared-id pass finds nothing
+     * and the name pass does the work — the same two lines still pair.
      */
     public function testItemsPairByNameEvenWhenEveryIdDisagrees(): void
     {
@@ -267,9 +284,12 @@ final class OrderComparisonTest extends TestCase
             ],
         ];
 
+        $source = $this->source();
+
         $comparison = (new OrderComparator())->compare(
-            $this->source(),
+            $source,
             (new OrderNormalizer())->normalize($demoRaw),
+            OriginalItems::of(ItemAvailability::Synced, $source->items),
         );
 
         self::assertSame(ComparisonStatus::Match, $this->item($comparison, 'Wonton Soup')->status);

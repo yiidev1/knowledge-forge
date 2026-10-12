@@ -9,6 +9,7 @@ use App\OrderTesting\Domain\Comparison\NormalizedCustomer;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\Comparison\NormalizedTotals;
+use App\Shared\Order58\Items\ItemCanonicalizer;
 use JsonException;
 
 use function array_slice;
@@ -49,7 +50,18 @@ final readonly class OrderNormalizer
     private const MONEY = '/^-?[0-9]{1,7}(\.[0-9]{1,5})?$/';
 
     private const MAX_ITEMS = 200;
-    private const MAX_OPTIONS = 50;
+
+    public function __construct(
+        /**
+         * The line-item canonicaliser, shared with the Order58 item sync.
+         *
+         * One canonicaliser for both sides: a demo document's `items[]` element has the same shape as
+         * an Order Items API element, so reading them differently is how a parsing decision becomes a
+         * difference the trainee did not make. Defaulted so the many existing `new OrderNormalizer()`
+         * call sites keep working.
+         */
+        private ItemCanonicalizer $canonicalizer = new ItemCanonicalizer(),
+    ) {}
 
     /** @param array<array-key, mixed> $raw a decoded order document */
     public function normalize(array $raw): NormalizedOrder
@@ -141,55 +153,17 @@ final readonly class OrderNormalizer
                 continue;
             }
 
-            $items[] = new NormalizedItem(
-                name: self::stringOf($line['name'] ?? $line['product_name'] ?? $line['title'] ?? null, 255),
-                sn: self::stringOf($line['sn'] ?? $line['product_sn'] ?? null, 64),
-                quantity: self::intOf($line['quantity'] ?? $line['qty'] ?? null),
-                unitPrice: self::money($line['price'] ?? $line['unit_price'] ?? null),
-                total: self::money($line['total'] ?? $line['total_price'] ?? null),
-                options: self::optionLabels($line),
-                instructions: self::stringOf($line['instruction'] ?? $line['note'] ?? null, 500),
+            // Through the shared canonicaliser, so the product name, modifier set and instructions are
+            // derived exactly as they are for the original's items. `total` is the one value taken
+            // straight from the document: the provider states no line total, so there is nothing to
+            // canonicalise and nothing to compare it against.
+            $items[] = NormalizedItem::fromCanonical(
+                $this->canonicalizer->canonicalize($line),
+                self::money($line['total'] ?? $line['total_price'] ?? null),
             );
         }
 
         return $items;
-    }
-
-    /**
-     * Option, addition and combination labels for one line, flattened to text.
-     *
-     * Flattened because the source nests them differently per product type, and a faithful tree would be
-     * a parser for a shape nobody has documented. The labels are what an operator checks, and what a
-     * later scoring pass will compare.
-     *
-     * @param array<array-key, mixed> $line
-     *
-     * @return list<string>
-     */
-    private static function optionLabels(array $line): array
-    {
-        $labels = [];
-
-        foreach (['options', 'additions', 'modifiers', 'combinations'] as $key) {
-            /** @var mixed $group */
-            $group = $line[$key] ?? null;
-
-            if (!is_array($group)) {
-                continue;
-            }
-
-            foreach (array_slice($group, 0, self::MAX_OPTIONS) as $option) {
-                $label = is_array($option)
-                    ? self::stringOf($option['name'] ?? $option['label'] ?? $option['title'] ?? null, 190)
-                    : self::stringOf($option, 190);
-
-                if ($label !== null) {
-                    $labels[] = $label;
-                }
-            }
-        }
-
-        return $labels;
     }
 
     /**

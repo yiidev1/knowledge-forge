@@ -1573,16 +1573,24 @@ final class AudioToTextStoreCest
         $I->dontSeeLink(self::STORE_A_NAME);
     }
 
-    /** The picker is where you go to upload; it also has to be a way back to everything already done. */
-    public function thePickerLinksToTheGlobalConversionsList(WebTester $I): void
+    /**
+     * The picker's link to the global conversions list is temporarily hidden.
+     *
+     * Hidden at the client's request, not removed: the markup is commented out in the picker template
+     * and is expected to return. What this test now guards is that hiding the ENTRY POINT did not take
+     * the destination with it — the route still resolves and the page still renders, so restoring the
+     * link is deleting a comment rather than rebuilding anything.
+     */
+    public function theGlobalConversionsListStillWorksWhileItsPickerLinkIsHidden(WebTester $I): void
     {
         $this->signIn($I);
 
         $I->amOnPage(self::PICKER_URL);
-        $I->seeLink('All conversions', '/audio-to-text/jobs');
+        $I->dontSeeLink('All conversions');
 
-        $I->click('All conversions');
-        $I->seeCurrentUrlEquals('/audio-to-text/jobs');
+        // The destination is untouched and still reachable directly.
+        $I->amOnPage('/audio-to-text/jobs');
+        $I->seeResponseCodeIs(200);
         $I->see('Audio conversions');
     }
 

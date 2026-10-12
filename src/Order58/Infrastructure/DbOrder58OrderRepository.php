@@ -144,6 +144,10 @@ final readonly class DbOrder58OrderRepository implements Order58OrderRepositoryI
             ->select([
                 'id', 'account_id', 'source_order_id', 'reservation_phone', 'type', 'payment_method',
                 'status', 'is_test', 'total_amount', 'source_created_at', 'synced_at',
+                // Item-sync state for the ORDER ITEMS cell. Three narrow columns, named explicitly:
+                // `items_response_json` is a blob and is deliberately NOT here, for the same reason
+                // `payload_json` never was.
+                'items_status', 'items_count', 'items_synced_at',
             ])
             ->from(self::TABLE)
             ->where($where)

@@ -106,6 +106,10 @@ final readonly class StoreAction extends AudioStoreAction
      *
      * One query for the whole page, keyed by the order id each row shows — the same shape the demo
      * links already use, and for the same reason: twenty rows would otherwise be twenty queries.
+     *
+     * Item-synchronisation progress is deliberately NOT read here. That bar lives on
+     * `/admin/order58/orders`, where it can count every stored order rather than only the handful this
+     * page can open a comparison for; this surface pays for no query on its behalf.
      */
     protected function extraTemplateData(int $sourceId, array $orderIds): array
     {

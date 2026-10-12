@@ -10,6 +10,7 @@ use App\OrderTesting\Domain\Comparison\FieldComparison;
 use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
+use App\OrderTesting\Domain\Comparison\OriginalItems;
 use App\OrderTesting\Domain\Comparison\OrderComparison;
 use App\Shared\Order58\PaymentSecretRedactor;
 
@@ -33,12 +34,21 @@ use function in_array;
  * field comes back `Uncomparable` and the demo side is still fully populated — the page says the mirror
  * does not have it, rather than hiding work a trainee really did.
  *
- * ## Items are paired by name, never by id
+ * ## An itemless original is not an empty original
  *
- * See {@see NormalizedItem::matchKey()}. The pairing is a single pass over the original's lines, each
- * claiming at most one unclaimed demo line with the same key; whatever is left on either side becomes
- * `MissingInDemo` or `ExtraInDemo`. Duplicate names therefore pair in document order, which is
- * deterministic and is the only property a later scoring pass needs from it.
+ * The original order's lines do not live in its payload — that document has no line items at any depth,
+ * which is why a second provider endpoint exists for them. They are fetched separately and carry a
+ * synchronisation state, so an empty list means either "this order genuinely has none" or "nobody has
+ * fetched them yet", and only {@see OriginalItems} knows which.
+ *
+ * Trusting an empty list was this comparison's one real defect: every line the trainee entered was
+ * reported `ExtraInDemo`, which told them they had invented an order they had in fact recreated
+ * correctly. So the item lists are compared only when {@see OriginalItems::isComparable()} says the
+ * left-hand side is actually known, and are otherwise all `Uncomparable`.
+ *
+ * ## Items are paired by catalogue id or name, never by a document line id
+ *
+ * See {@see ItemMatcher}, which also decides how duplicate lines of one product pair up.
  */
 final readonly class OrderComparator
 {
@@ -53,13 +63,28 @@ final readonly class OrderComparator
         return in_array('street1', PaymentSecretRedactor::PAYMENT_SECRETS, true);
     }
 
-    public function compare(?NormalizedOrder $original, NormalizedOrder $demo): OrderComparison
-    {
+    public function __construct(private ItemMatcher $matcher = new ItemMatcher()) {}
+
+    /**
+     * @param OriginalItems|null $originalItems null is read as "never requested", which keeps every
+     *                                          existing caller honest rather than silently comparing
+     *                                          against an empty basket
+     */
+    public function compare(
+        ?NormalizedOrder $original,
+        NormalizedOrder $demo,
+        ?OriginalItems $originalItems = null,
+    ): OrderComparison {
+        $items = $originalItems ?? OriginalItems::neverRequested();
+
         return new OrderComparison(
             $original,
             $demo,
             $this->sections($original, $demo),
-            $this->items($original, $demo),
+            $this->items($original, $demo, $items),
+            $items->availability,
+            $items->syncedAt,
+            $items->removed(),
         );
     }
 
@@ -154,10 +179,24 @@ final readonly class OrderComparator
         return new FieldComparison($label, $original, $demo, $status);
     }
 
-    /** @return list<ItemComparison> */
-    private function items(?NormalizedOrder $original, NormalizedOrder $demo): array
+    /**
+     * The item rows, or an honest refusal to compare them.
+     *
+     * Two separate reasons to refuse, and neither is the trainee's fault:
+     *
+     *  - the source order is not mirrored at all, so there is nothing on the left;
+     *  - the order is mirrored but its lines have never been fetched, or the last fetch failed with
+     *    nothing stored from before.
+     *
+     * In both cases every demo line is `Uncomparable` and stays fully visible. The alternative — the
+     * behaviour this replaces — was to treat an unknown left-hand side as an empty one and report the
+     * trainee's whole basket as invented.
+     *
+     * @return list<ItemComparison>
+     */
+    private function items(?NormalizedOrder $original, NormalizedOrder $demo, OriginalItems $items): array
     {
-        if ($original === null) {
+        if ($original === null || !$items->isComparable()) {
             return array_map(
                 fn(NormalizedItem $item): ItemComparison => new ItemComparison(
                     null,
@@ -169,78 +208,56 @@ final readonly class OrderComparator
             );
         }
 
-        // Paired by INDEX, not by value identity.
-        //
-        // The obvious implementation keeps the matched objects in a list and asks `in_array(…, true)`
-        // what is left over. That is wrong for the case this feature exists to catch: two lines of the
-        // same product with the same quantity and price are equal value objects, so the second one
-        // would be reported as already claimed and silently vanish from the comparison. Marking the
-        // position claimed cannot confuse two identical lines.
-        //
-        // O(n * m) over lists capped at 200 entries by the normalizer, which is nothing, and it keeps
-        // the pairing in document order — the only property a later scoring pass needs from it.
-        $claimed = [];
         $rows = [];
 
-        foreach ($original->items as $item) {
-            $key = $item->matchKey();
-            $matchIndex = null;
-
-            if ($key !== '') {
-                foreach ($demo->items as $index => $candidate) {
-                    if (!isset($claimed[$index]) && $candidate->matchKey() === $key) {
-                        $matchIndex = $index;
-
-                        break;
-                    }
-                }
-            }
-
-            if ($matchIndex === null) {
-                $rows[] = new ItemComparison(
-                    $item,
-                    null,
-                    ComparisonStatus::MissingInDemo,
-                    $this->itemFields($item, null, true),
-                );
-
-                continue;
-            }
-
-            $claimed[$matchIndex] = true;
-            $match = $demo->items[$matchIndex];
-            $fields = $this->itemFields($item, $match, true);
-
-            $differs = false;
-            foreach ($fields as $field) {
-                if ($field->status !== ComparisonStatus::Match) {
-                    $differs = true;
-
-                    break;
-                }
-            }
-
-            $rows[] = new ItemComparison(
-                $item,
-                $match,
-                $differs ? ComparisonStatus::Different : ComparisonStatus::Match,
-                $fields,
-            );
-        }
-
-        // Whatever no original line claimed is something the trainee added.
-        foreach ($demo->items as $index => $item) {
-            if (!isset($claimed[$index])) {
-                $rows[] = new ItemComparison(
-                    null,
-                    $item,
-                    ComparisonStatus::ExtraInDemo,
-                    $this->itemFields(null, $item, true),
-                );
-            }
+        // `live()` excludes lines the provider marked removed: those are reported separately and must
+        // never read as "missing in demo", because a trainee is right not to have entered them.
+        foreach ($this->matcher->pair($items->live(), $demo->items) as $pair) {
+            $rows[] = $this->row($pair['original'], $pair['demo']);
         }
 
         return $rows;
+    }
+
+    /** One paired row, or one side alone. */
+    private function row(?NormalizedItem $original, ?NormalizedItem $demo): ItemComparison
+    {
+        if ($original === null) {
+            // Nothing on the left claimed it, and the left-hand side is known. The trainee added it.
+            return new ItemComparison(
+                null,
+                $demo,
+                ComparisonStatus::ExtraInDemo,
+                $this->itemFields(null, $demo, true),
+            );
+        }
+
+        if ($demo === null) {
+            return new ItemComparison(
+                $original,
+                null,
+                ComparisonStatus::MissingInDemo,
+                $this->itemFields($original, null, true),
+            );
+        }
+
+        $fields = $this->itemFields($original, $demo, true);
+
+        $differs = false;
+        foreach ($fields as $field) {
+            if ($field->status !== ComparisonStatus::Match) {
+                $differs = true;
+
+                break;
+            }
+        }
+
+        return new ItemComparison(
+            $original,
+            $demo,
+            $differs ? ComparisonStatus::Different : ComparisonStatus::Match,
+            $fields,
+        );
     }
 
     /**
@@ -254,27 +271,74 @@ final readonly class OrderComparator
         $money = ComparisonRules::moneyEquals(...);
 
         $pairs = [
-            ['Quantity', $this->asText($original?->quantity), $this->asText($demo?->quantity), $text],
+            // The interpreted name, so `[F7]Fried Chicken Wings (4)` and `Fried Chicken Wings (4)`
+            // agree. The row heading above still shows the provider's exact string.
+            ['Product', $original?->productName ?? $original?->name, $demo?->productName ?? $demo?->name, $text],
+            // Quantity through the decimal rule, so `"1"` and `"1.000"` are one quantity.
+            ['Quantity', $original?->quantityLabel(), $demo?->quantityLabel(), $money],
             ['Unit price', $original?->unitPrice, $demo?->unitPrice, $money],
-            ['Line total', $original?->total, $demo?->total, $money],
-            ['Options', $original?->optionsLabel(), $demo?->optionsLabel(), $text],
+            // Modifiers get three rows, because an operator fixes the two kinds differently: an
+            // addition is something asked for on top of the product ("extra hot sauce"), a combination
+            // is a choice the product requires ("size: large"). `Options` stays as the whole set, so a
+            // page that only reads one row still sees every difference.
+            //
+            // Each is **shown** as readable labels in document order and **compared** on the canonical
+            // signature, which is sorted — a trainee who chose the right extras in a different order
+            // has made no mistake, and comparing the document order reported one. Hence the two extra
+            // columns on each pair.
+            [
+                'Options',
+                $original?->optionsLabel(),
+                $demo?->optionsLabel(),
+                $text,
+                $original?->modifierSignature,
+                $demo?->modifierSignature,
+            ],
+            [
+                'Additions',
+                $original?->additionsLabel(),
+                $demo?->additionsLabel(),
+                $text,
+                $original?->additionSignature,
+                $demo?->additionSignature,
+            ],
+            [
+                'Combinations',
+                $original?->combinationsLabel(),
+                $demo?->combinationsLabel(),
+                $text,
+                $original?->combinationSignature,
+                $demo?->combinationSignature,
+            ],
             ['Item instructions', $original?->instructions, $demo?->instructions, $text],
             ['Product SN', $original?->sn, $demo?->sn, $text],
         ];
 
+        // `Line total` is deliberately absent: the provider's items carry no line total, so comparing
+        // one would report a difference on every line of every order.
+
         $fields = [];
 
-        foreach ($pairs as [$label, $left, $right, $equals]) {
+        foreach ($pairs as $pair) {
+            [$label, $left, $right, $equals] = $pair;
+
+            // A field may be compared on something other than what it displays. Where it is not, the
+            // displayed values are the compared ones.
+            $compareLeft = $pair[4] ?? $left;
+            $compareRight = $pair[5] ?? $right;
+
             // An empty options label is "no options", not a value worth a row of its own.
             $left = $left === '' ? null : $left;
             $right = $right === '' ? null : $right;
+            $compareLeft = $compareLeft === '' ? null : $compareLeft;
+            $compareRight = $compareRight === '' ? null : $compareRight;
 
             $fields[] = new FieldComparison(
                 $label,
                 $left,
                 $right,
                 $comparable
-                    ? ComparisonRules::status($left, $right, $equals)
+                    ? ComparisonRules::status($compareLeft, $compareRight, $equals)
                     : ComparisonStatus::Uncomparable,
             );
         }

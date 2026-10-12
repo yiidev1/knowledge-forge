@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Web\Orders;
 
 use App\Order58\Application\Orders\OrderDateRange;
+use App\Order58\Domain\Items\ItemSyncSummaryReaderInterface;
 use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
 use App\Order58\Domain\Orders\OrderListQuery;
 use App\Order58\Domain\StoreDirectoryQuery;
@@ -12,6 +13,7 @@ use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreSourceStatusFilter;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
+use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 use function is_string;
@@ -29,6 +31,8 @@ final readonly class Action
         private WebViewRenderer $viewRenderer,
         private StoreDirectoryReaderInterface $stores,
         private Order58OrderRepositoryInterface $orders,
+        private ItemSyncSummaryReaderInterface $itemSyncSummary,
+        private UrlGeneratorInterface $urlGenerator,
     ) {}
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
@@ -69,6 +73,15 @@ final readonly class Action
                 'formAccountId' => $this->positiveInt($query['form_account_id'] ?? null),
                 'formFrom' => $this->date($query['form_from'] ?? null),
                 'formTo' => $this->date($query['form_to'] ?? null),
+                // One grouped count, over the SAME store filter the table below uses — one store, or
+                // every stored order when unfiltered. Deliberately not narrowed by the date, order-id
+                // or status filters: those pick which rows are shown, while the bar answers how much
+                // of the store's history has its items.
+                'itemSyncSummary' => $this->itemSyncSummary->summaryFor($accountId),
+                // The operation the redirect pointed at, if any. One extra read, only when a batch id
+                // is actually present, so an ordinary page view costs nothing for it.
+                'syncBatchId' => $this->positiveInt($query['batch'] ?? null),
+                'syncStatusUrl' => $this->urlGenerator->generate('order58.orders.sync-status'),
             ])
             ->withHeader('Cache-Control', 'no-store, private');
     }

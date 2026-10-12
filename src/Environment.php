@@ -187,6 +187,42 @@ final class Environment
         // 72h tolerates two missed daily agent syncs (scheduled 01:00 America/New_York).
         'ORDER58_VALIDATE_MAX_MIRROR_AGE_HOURS' => ['type' => 'int', 'default' => 72, 'min' => 1, 'max' => 720],
 
+        // Order58 ORIGINAL ORDER ITEMS. A fourth Order58 endpoint, with its OWN credential — this
+        // project already runs three distinct Order58 credential pairs, one per endpoint, so assuming
+        // the orders token carries here would assume the opposite of what the provider has shown.
+        //
+        // SHIPS OFF. ORDER58_ITEM_SYNC_ENABLED=false means no request is ever made, so merging the
+        // feature sends no traffic and costs nothing until somebody decides otherwise.
+        'ORDER58_ITEM_API_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_ITEM_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        // NOT confirmed. `Bearer` because the sibling endpoint uses it, not because anyone has said so.
+        // An empty value sends the token with no prefix, for a provider that expects it bare.
+        'ORDER58_ITEM_API_AUTH_SCHEME' => ['type' => 'string', 'default' => 'Bearer'],
+        'ORDER58_ITEM_API_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 30],
+        // One order's items is a small response; this bounds a manual click inside a web request.
+        'ORDER58_ITEM_API_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 40],
+        'ORDER58_ITEM_API_MAX_RESPONSE_MB' => ['type' => 'int', 'default' => 4, 'min' => 1, 'max' => 24],
+        // How long one claim holds an order. Comfortably longer than the request timeout, so a lease
+        // cannot expire while its own request is still in flight.
+        'ORDER58_ITEM_LEASE_SECONDS' => ['type' => 'int', 'default' => 120, 'min' => 30, 'max' => 900],
+        // Past this, an order needs an explicit click: a provider refusing us is not fixed by asking again.
+        'ORDER58_ITEM_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
+        'ORDER58_ITEM_SYNC_ENABLED' => ['type' => 'bool', 'default' => false],
+
+        // How item work rides along with the recording importer, instead of needing a worker of its
+        // own. See ImportRecordingsCommand::drainItems().
+        //
+        // The per-run count is small because one order can cost a whole provider timeout, and the
+        // budget is a ceiling on what ONE run may spend on items after recordings have had their turn.
+        'ORDER58_ITEM_DRAIN_PER_RUN' => ['type' => 'int', 'default' => 5, 'min' => 0, 'max' => 50],
+        'ORDER58_ITEM_DRAIN_BUDGET_SECONDS' => ['type' => 'int', 'default' => 120, 'min' => 0, 'max' => 600],
+        // `TimeoutStartSec` of knowledge-forge-order58-import.service, as the application understands
+        // it. A process cannot read its own unit's timeout, so this must be changed WITH the unit.
+        'ORDER58_ITEM_RUN_CEILING_SECONDS' => ['type' => 'int', 'default' => 300, 'min' => 60, 'max' => 3600],
+        // How long before an operation with nothing settling is displayed as stalled. A display state,
+        // never a verdict — the usual cause is the importer unit not being installed.
+        'ORDER58_ITEM_BATCH_STALLED_SECONDS' => ['type' => 'int', 'default' => 180, 'min' => 30, 'max' => 3600],
+
         // Order Testing: where the Order58 listener drops demo/test order documents.
         //
         // LOCAL-FIRST on purpose. The production listener writes to `/data/orders/demo_mix_orders`, but

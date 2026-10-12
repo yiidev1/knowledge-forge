@@ -51,7 +51,14 @@ use function PHPUnit\Framework\assertTrue;
 final class DemoOrderImportTest extends Unit
 {
     /** Far outside the mirrored range, so nothing here can collide with real data. */
-    private const STORE = 1731;
+    /**
+     * A fixture store id, deliberately far outside the mirrored range.
+     *
+     * This was a REAL store id, and {@see cleanup()} deletes every demo order belonging to it. The
+     * fixture documents carry the same filenames and demo order ids as the real ones, so nothing
+     * could tell the two apart and each run of this suite destroyed the real store's demo orders.
+     */
+    private const STORE = 987655920;
     private const SOURCE_ORDER = 16758551;
     private const OTHER_SOURCE_ORDER = 16754561;
 
@@ -137,7 +144,7 @@ final class DemoOrderImportTest extends Unit
     {
         $this->importer()->import();
 
-        // The fixtures all belong to store 1731. Asking as a different store must find nothing, which
+        // The fixtures all belong to one fixture store. Asking as a different store must find nothing, which
         // is the predicate that stops a URL reaching another merchant's data.
         assertNull($this->demoOrders->findOne(self::STORE + 1, self::SOURCE_ORDER, 16630651));
         assertSame([], $this->demoOrders->forSourceOrder(self::STORE + 1, self::SOURCE_ORDER));
