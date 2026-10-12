@@ -106,11 +106,11 @@ $itemsLabel = static function (array $row) use ($syncedAt): string {
         'QUEUED' => '<span class="badge badge--muted">Queued</span>',
         // A refresh in flight over a kept snapshot still has usable items behind it.
         'PROCESSING' => '<span class="badge badge--info">Syncing…</span>' . $kept,
-        'SYNCED' => '<span class="badge badge--ok">Synced</span> <span class="util-muted"'
+        'SYNCED' => '<span class="badge badge--success">Synced</span> <span class="util-muted"'
             . ($stamp === null ? '' : ' title="Last successful sync: ' . Html::encode($stamp) . ' UTC"')
             . '>' . $lines . '</span>',
         // Authoritative, and NOT the same statement as "we could not find out".
-        'EMPTY' => '<span class="badge badge--ok">No items</span>',
+        'EMPTY' => '<span class="badge badge--success">No items</span>',
         // Failed with a snapshot is a freshness warning; failed without one is an absence of data.
         'FAILED' => $stamp === null
             ? '<span class="badge badge--error">Failed</span>'
@@ -232,7 +232,7 @@ $itemsCell = static function (array $row) use ($itemsLabel, $csrf, $urlGenerator
 
         <p class="o58-sync-op__detail">
             <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
-            <span class="badge badge--ok" data-o58-sync-done hidden></span>
+            <span class="badge badge--success" data-o58-sync-done hidden></span>
             <span class="badge badge--info" data-o58-sync-remaining hidden></span>
             <span class="badge badge--error" data-o58-sync-failed hidden></span>
             <span class="badge badge--muted" data-o58-sync-skipped hidden></span>
@@ -287,7 +287,7 @@ $itemsCell = static function (array $row) use ($itemsLabel, $csrf, $urlGenerator
                 <span class="badge badge--error"><?= $itemSyncSummary->failed ?> failed</span>
             <?php endif; ?>
             <?php if ($itemSyncSummary->outstanding() === 0 && !$itemSyncSummary->needsAttention()): ?>
-                <span class="badge badge--ok">Every order in this view has its items</span>
+                <span class="badge badge--success">Every order in this view has its items</span>
             <?php endif; ?>
         </p>
 

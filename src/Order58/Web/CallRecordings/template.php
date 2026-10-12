@@ -206,7 +206,7 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
 
         <p class="o58-sync-op__detail">
             <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
-            <span class="badge badge--ok" data-o58-sync-done hidden></span>
+            <span class="badge badge--success" data-o58-sync-done hidden></span>
             <span class="badge badge--info" data-o58-sync-remaining hidden></span>
             <span class="badge badge--error" data-o58-sync-failed hidden></span>
             <span class="badge badge--muted" data-o58-sync-skipped hidden></span>

@@ -327,6 +327,11 @@ textarea.field__control { min-height: 110px; resize: vertical; }
     padding: .2rem .6rem; border-radius: 999px;
     font-size: .78rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap;
 }
+/* `display` above is an AUTHOR rule, so it beats the user agent's `[hidden] { display: none }` and the
+   HTML attribute stops working: a badge hidden by script stayed on screen as an empty coloured pill —
+   the progress panel showed a red oval whenever a sync had zero failures. Restated here so `hidden`
+   means hidden. Same reason as `.chat__jump[hidden]` and the `.a2t-*[hidden]` rules further down. */
+.badge[hidden] { display: none; }
 .badge__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .badge--success { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
 .badge--error   { background: var(--error-bg);   color: var(--error-text);   border-color: var(--error-border); }
