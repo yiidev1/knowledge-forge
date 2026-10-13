@@ -70,6 +70,14 @@ once the replacement finishes does it take over — with the one it replaced kep
 openable. `complete-replacement.php` stands in for the transcription worker's status write, so no
 Whisper run is needed to reach the state under test.
 
+`transcript.js` — Original transcript, reached from the View conversation dialog on the Order Testing
+listing. That listing used to carry an Actions column holding the only button for it; the column is
+gone and the button is in the dialog's header, which is the only reason an operation user still has a
+way in — they are kept out of the audio module, where an administrator could always reach the same
+thing. So "the button is in the markup" is the wrong assertion: this presses it and checks that real
+transcript text arrives, that the conversation stays open underneath, and that the table is down to
+five columns with five cells in every row, at desktop and at phone width.
+
 `voices.js` — a recording whose type names its speaker. A Caller upload is diarized like any other, so
 its `speaker_segments` really do contain two clusters; these assert that every screen still reads it as
 one person, that the speaker controls are absent, that edit/history/merge still work, and that a Mixed

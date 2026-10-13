@@ -21,7 +21,9 @@ use function flock;
 use function fopen;
 use function gmdate;
 use function urlencode;
+use function json_encode;
 use function str_repeat;
+use function substr_count;
 
 use const LOCK_EX;
 use const LOCK_NB;
@@ -665,6 +667,132 @@ final class OrderTestingCest
     }
 
     /** One mixed recording for this store, written straight in — no worker and no provider involved. */
+    // ------------------------------------------------- the listing's two action columns
+
+    /**
+     * The listing is down to the five columns that describe an order, and nothing is left where the
+     * other two were.
+     *
+     * Their controls did not stop existing — they are in the dialog behind "View conversation", which
+     * is why this asserts the cells are gone rather than that the features are. A header without its
+     * cells, or cells without their header, would misalign every row below.
+     */
+    public function theListingNoLongerCarriesTheTwoActionColumns(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedTranscribedRecording();
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->dontSee('Text to Audio', 'th');
+        $I->dontSee('Actions', 'th');
+        $I->dontSeeElement('.a2t-conversions td.a2t-cell-actions');
+        $I->dontSeeElement('.a2t-conversions .a2t-tts-list');
+        // The buttons themselves, not just their column. `.a2t-slot__link` is what the Actions cell
+        // used; the conversation cell's own "+ Add audio" is an `.a2t-slot__add` and stays, because
+        // adding a missing channel is part of reading the row rather than an action on the order.
+        $I->dontSeeElement('.a2t-conversions .a2t-slot__link[data-a2t-manage]');
+        $I->dontSeeElement('.a2t-conversions .a2t-slot__link[data-a2t-tts]');
+        $I->dontSeeElement('.a2t-conversions .a2t-slot__link[data-a2t-transcripts]');
+
+        // The five that remain, and the `<col>`s that size them — one per header, or the table drifts.
+        foreach (['Order No#', 'Recording / Conversation', 'Status', 'Demo URL', 'Demo Orders'] as $header) {
+            $I->see($header, 'th');
+        }
+
+        Assert::assertSame(
+            5,
+            substr_count($I->grabPageSource(), '<col class='),
+            'The colgroup and the headers must describe the same five columns.',
+        );
+    }
+
+    /**
+     * Original transcript moved into the dialog rather than disappearing with its column.
+     *
+     * This is the half of the change that matters for authorization. An administrator could always
+     * reach the original transcript from the audio store page as well, but an operation user is kept
+     * out of that module entirely — so for them the listing's button was the only way in, and the
+     * dialog is now it. The endpoint is unchanged and still the order-testing-scoped one, which is
+     * what `theStorePageNeverLinksIntoTheAudioSurface` keeps honest for both realms at once.
+     */
+    public function theOriginalTranscriptIsReachableFromTheConversationDialog(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedTranscribedRecording();
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->seeElement('.a2t-review-dialog [data-a2t-review-transcripts]');
+        $I->see('Original transcript', '.a2t-review-dialog');
+
+        // The row tells the dialog which order it is looking at. Order-testing-scoped, never the audio
+        // module's copy of the same endpoint.
+        $url = $I->grabAttributeFrom('.a2t-conversions tr[data-a2t-row-transcripts]', 'data-a2t-row-transcripts');
+        Assert::assertStringStartsWith('/order-testing/store/' . self::STORE_ID . '/group/', (string) $url);
+        Assert::assertStringEndsWith('/transcripts', (string) $url);
+
+        // And the way in is still there to open it with.
+        $I->see('View conversation');
+    }
+
+    /** Nothing transcribed, nothing to open: the row offers no endpoint and the button stays away. */
+    public function aRowWithNoTranscriptOffersNoTranscriptEndpoint(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedRecording();
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->dontSeeElement('.a2t-conversions tr[data-a2t-row-transcripts]');
+    }
+
+    /**
+     * A call with an order number and a finished transcript — what the dialog needs to be opened at all.
+     *
+     * Both halves matter. Without the order id the row renders no "View conversation", because there is
+     * no order to review; without a completed transcript the group reports nothing readable and the
+     * dialog's Original transcript control stays hidden.
+     */
+    private function seedTranscribedRecording(): string
+    {
+        $conversationId = $this->seedRecording();
+
+        $this->connection->createCommand()->update(
+            '{{%audio_conversations}}',
+            ['order_id' => '16800401'],
+            ['public_id' => $conversationId],
+        )->execute();
+
+        $this->connection->createCommand()->update(
+            '{{%audio_transcription_jobs}}',
+            [
+                'status' => 'COMPLETED',
+                'processing_stage' => 'DONE',
+                'transcript' => 'Hello, I would like to place an order. Sure, pickup or delivery?',
+                // `isReviewable()` asks for segments, not words: the dialog corrects speaker turns, and
+                // a transcript with no turns in it has nothing to open. `hasReadableTranscript()` is
+                // the laxer of the two and is what decides whether the original transcript is offered.
+                'speaker_segments' => (string) json_encode([
+                    [
+                        'start_ms' => 0, 'end_ms' => 3000, 'speaker' => 'A', 'role' => 'CUSTOMER',
+                        'text' => 'Hello, I would like to place an order.',
+                        'confidence' => 0.95, 'approx' => false,
+                    ],
+                    [
+                        'start_ms' => 3500, 'end_ms' => 5500, 'speaker' => 'B', 'role' => 'AGENT',
+                        'text' => 'Sure, pickup or delivery?',
+                        'confidence' => 0.95, 'approx' => false,
+                    ],
+                ]),
+                'completed_at' => gmdate('Y-m-d H:i:s'),
+            ],
+            ['public_id' => str_repeat('b', 32)],
+        )->execute();
+
+        return $conversationId;
+    }
+
     private function seedRecording(): string
     {
         $now = gmdate('Y-m-d H:i:s');

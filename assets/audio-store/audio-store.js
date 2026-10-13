@@ -1999,6 +1999,9 @@ window.KFAudioStages = {
 
     var listen = document.querySelector('[data-a2t-listen]');
     var reviewActions = document.querySelector('[data-a2t-review-actions]');
+    // Only the order-testing listing draws this; on the audio store page the column it replaces is
+    // still there, so the lookup comes back null and everything below quietly does nothing.
+    var reviewTranscripts = document.querySelector('[data-a2t-review-transcripts]');
     var listenBusy = false;
     var lastAudio = null;      // the audio block from the last read, for the Generate button
     var lastFragment = null;   // the whole of it, for the two dialogs that open on top of this one
@@ -4108,6 +4111,10 @@ window.KFAudioStages = {
 
         orderLabel = null;
         showChannels([], null);
+        // One recording of a call, but the original transcript is read per order and the row is the
+        // same row. Set here too, or a Details click after an order click would leave the button
+        // pointing at whichever order was opened last.
+        offerTranscripts(button.closest('tr'), button.getAttribute('data-a2t-order') || '');
 
         openReviewOn(
             button.getAttribute('data-a2t-details'),
@@ -4147,8 +4154,39 @@ window.KFAudioStages = {
         }
 
         orderLabel = 'Order #' + button.getAttribute('data-a2t-order-open');
+        offerTranscripts(button.closest('tr'), button.getAttribute('data-a2t-order-open'));
         showChannels(channels, channels[0]);
         openReviewOn(channels[0].url, orderLabel, channels[0].full, channels[0].label);
+    }
+
+    /**
+     * Point the header's Original transcript button at the order this dialog was opened on.
+     *
+     * The row knows its own transcript endpoint; the dialog is one element shared by every row, so it
+     * has to be told each time it opens. Setting `data-a2t-transcripts` here is what makes the button
+     * work: the page-wide click handler already binds that attribute and opens the existing dialog, so
+     * there is no second opener and no second request shape to keep in step with the first.
+     *
+     * A row with nothing transcribed carries no endpoint, and the button goes away rather than opening
+     * a dialog that could only say there is nothing to show.
+     */
+    function offerTranscripts(row, order) {
+        if (!reviewTranscripts) {
+            return;
+        }
+
+        var url = row === null ? null : row.getAttribute('data-a2t-row-transcripts');
+
+        if (!url) {
+            reviewTranscripts.hidden = true;
+            reviewTranscripts.removeAttribute('data-a2t-transcripts');
+
+            return;
+        }
+
+        reviewTranscripts.setAttribute('data-a2t-transcripts', url);
+        reviewTranscripts.setAttribute('data-a2t-order', order || '');
+        reviewTranscripts.hidden = false;
     }
 
     /**

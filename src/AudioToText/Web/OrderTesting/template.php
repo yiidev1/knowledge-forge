@@ -244,10 +244,6 @@ $originalUrl = static fn(string $jobPublicId): string => $urlGenerator->generate
     AudioToTextRoute::JOB_ORIGINAL_FILE,
     ['publicId' => $jobPublicId],
 );
-$generatedUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
-    AudioToTextRoute::JOB_AI_AUDIO_FILE,
-    ['publicId' => $jobPublicId],
-);
 $fragmentUrl = static fn(string $jobPublicId): string => $urlGenerator->generate(
     AudioToTextRoute::JOB_REVIEW_FRAGMENT,
     ['publicId' => $jobPublicId],
@@ -731,28 +727,6 @@ $conversationCell = static function (StoreOrderGroup $group) use (
     return $html . '</div></div>';
 };
 
-/**
- * The generated-audio side of one recording.
- *
- * A play control only when there are bytes to play. Every other state is a word, because a button that
- * cannot do anything is worse than a sentence saying why.
- */
-$ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): string {
-    // Two grid cells rather than a row wrapper: the whole column is one grid, so every recording's
-    // status starts at the same x whatever its label is, and neither half ever wraps mid-phrase.
-    $html = '<span class="a2t-tts__label">' . Html::encode($slot->label()) . '</span>';
-
-    if ($slot->hasGeneratedAudio()) {
-        return $html
-            . '<button class="a2t-play a2t-play--sm" type="button"'
-            . ' data-a2t-play="' . Html::encode($generatedUrl($slot->jobPublicId)) . '"'
-            . ' aria-label="' . Html::encode('Play generated ' . $slot->label() . ' audio') . '">'
-            . '<span class="a2t-play__icon" aria-hidden="true"></span></button>';
-    }
-
-    return $html . '<span class="a2t-tts__state">'
-        . Html::encode($slot->aiAudioState()->label()) . '</span>';
-};
 ?>
 <div class="page-header">
     <div>
@@ -871,8 +845,6 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                     <col class="a2t-col-status">
                     <col class="a2t-col-demo">
                     <col class="ot-col-demo-orders">
-                    <col class="a2t-col-tts">
-                    <col class="a2t-col-row-actions">
                 </colgroup>
                 <thead>
                     <tr>
@@ -886,15 +858,25 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                         <?php // Immediately after Demo URL, because it is the result of pressing it:?>
                         <?php // the orders a trainee produced from this call, each compared on its own.?>
                         <th>Demo Orders</th>
-                        <th>Text to Audio</th>
-                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                 <?php foreach ($groups as $group): ?>
                     <?php $status = $group->aggregateStatus(); ?>
+                    <?php
+                    // Read by the review dialog's Original transcript button, which is opened from this
+                    // row and has no other way to know which order it is looking at. A deliberately
+                    // inert attribute name: `data-a2t-transcripts` is what the page-wide click handler
+                    // binds to, and putting that on the `<tr>` would make a click anywhere in the row
+                    // open the transcript dialog. Absent when there is nothing transcribed, which is
+                    // what keeps the button hidden rather than opening an empty dialog.
+                    ?>
                     <tr<?= $group->arriving !== null
                 ? ' data-a2t-arriving-call="' . Html::encode($group->arriving->callSessionId) . '"'
+                : '' ?><?= $group->hasAnyTranscript()
+                ? ' data-a2t-row-transcripts="' . Html::encode(
+                    $groupUrl(OrderTestingRoute::STORE_GROUP_TRANSCRIPTS, $group->key),
+                ) . '"'
                 : '' ?>>
                         <td>
                             <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
@@ -1116,55 +1098,6 @@ $ttsCell = static function (StoreRecordingSlot $slot) use ($generatedUrl): strin
                             <?php else: ?>
                                 <span class="util-muted">&mdash;</span>
                             <?php endif; ?>
-                        </td>
-                        <td>
-                            <?php $primaries = $group->primaries(); ?>
-                            <?php if ($primaries === []): ?>
-                                <span class="util-muted">&mdash;</span>
-                            <?php else: ?>
-                                <div class="a2t-tts-list">
-                                    <?php foreach ($primaries as $slot): ?>
-                                        <?= $ttsCell($slot) ?>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
-                        </td>
-                        <td class="a2t-cell-actions">
-                            <?php if ($group->hasAnyTranscript()): ?>
-                                <button class="a2t-slot__link" type="button"
-                                        data-a2t-transcripts="<?= Html::encode(
-                                            $groupUrl(OrderTestingRoute::STORE_GROUP_TRANSCRIPTS, $group->key),
-                                        ) ?>"
-                                        data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
-                                    Original transcript
-                                </button>
-                            <?php endif; ?>
-                            <?php
-                            // Withheld for a row with nothing transcribed. AI audio is a reading of a
-                            // transcript, so offering it where there is none is offering to read
-                            // nothing aloud — the same rule the action above it has always followed.
-                    ?>
-                            <?php if ($group->hasAnyTranscript()): ?>
-                                <button class="a2t-slot__link" type="button"
-                                        data-a2t-tts="<?= Html::encode(
-                                            $groupUrl(OrderTestingRoute::STORE_GROUP_TTS_OPTIONS, $group->key),
-                                        ) ?>"
-                                        data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
-                                    Generate Text to Audio
-                                </button>
-                            <?php endif; ?>
-                            <?php
-                            // Offered for every row, including one whose recordings cannot be replaced:
-                            // the dialog is also where an administrator reads what an order holds and
-                            // why a replacement is refused, and a missing button answers neither.
-                    ?>
-                            <button class="a2t-slot__link" type="button"
-                                    data-a2t-manage="<?= Html::encode(
-                                        $groupUrl(OrderTestingRoute::STORE_GROUP_RECORDINGS, $group->key),
-                                    ) ?>"
-                                    data-a2t-order="<?= Html::encode($group->orderId ?? '') ?>">
-                                Manage Audio
-                            </button>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -1393,6 +1326,23 @@ $last = min($page * $perPage, $total);
             // cannot work in a dialog, so they stay where they work and this is the way to them.
 ?>
             <a class="btn btn--sm" data-a2t-full-editor href="#">Open full editor</a>
+            <?php
+            // The machine's own output, beside the corrected conversation it produced.
+            //
+            // The listing's Actions column used to hold the only way in, and the two realms that share
+            // this page do not share a fallback: an administrator could still reach it from the audio
+            // store page, while an operation user is deliberately kept out of that module altogether.
+            // Hiding the column would therefore have taken the original transcript away from one role
+            // and not the other.
+            //
+            // So the way in moved here rather than disappearing. It opens the SAME dialog the column
+            // opened, over the SAME order-testing-scoped route — the script fills in which order from
+            // the row the dialog was opened on, and a row with nothing transcribed leaves this hidden.
+            // No new endpoint, no second copy of the transcript, and no change to who may read one.
+?>
+            <button class="btn btn--sm" type="button" data-a2t-review-transcripts hidden>
+                Original transcript
+            </button>
         </div>
 
         <?php
