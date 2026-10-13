@@ -29,8 +29,6 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $importEnabled
  * @var bool $usingFixtures
  * @var string $source
- * @var int|null $itemSyncBatchId the item-sync operation this store's recordings last opened
- * @var string $itemSyncStatusUrl where that operation's progress is polled
  */
 
 $assetManager->register(CallRecordingsAsset::class);
@@ -185,42 +183,6 @@ $recordingsCell = static function (?RecordingAcquisition $acquisition) use ($cha
         </form>
     </div>
 </div>
-
-<?php if ($itemSyncBatchId !== null): ?>
-    <?php
-    // ORDER ITEMS, deliberately apart from the recording progress above.
-    //
-    // Downloading a recording and fetching an order's items are different operations with different
-    // counts, and the importer does them in that order. One combined figure would be unreadable the
-    // moment the two disagreed, so this panel speaks only about items and says so.
-    ?>
-    <section class="card o58-sync-op"
-             data-o58-sync-batch="<?= Html::encode((string) $itemSyncBatchId) ?>"
-             data-o58-sync-url="<?= Html::encode($itemSyncStatusUrl) ?>">
-        <div class="o58-sync-op__heading">
-            <h2 class="card__title o58-sync-op__title">Original order items</h2>
-            <span class="ot-verdict ot-verdict--info" data-o58-sync-state>Checking…</span>
-        </div>
-
-        <progress class="o58-sync-op__bar" data-o58-sync-bar value="0" max="100"></progress>
-
-        <p class="o58-sync-op__detail">
-            <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
-            <span class="badge badge--success" data-o58-sync-done hidden></span>
-            <span class="badge badge--info" data-o58-sync-remaining hidden></span>
-            <span class="badge badge--error" data-o58-sync-failed hidden></span>
-            <span class="badge badge--muted" data-o58-sync-skipped hidden></span>
-        </p>
-
-        <p class="o58-sync-op__note" data-o58-sync-note hidden></p>
-
-        <p class="o58-sync-op__scope">
-            Separate from the recording downloads above: this is the line items of the orders those
-            recordings belong to. The importer fetches them after the recordings, with whatever time
-            remains in each run.
-        </p>
-    </section>
-<?php endif; ?>
 
 <?php if (!$importEnabled): ?>
     <div class="alert alert--warning">

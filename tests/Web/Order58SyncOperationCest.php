@@ -207,8 +207,15 @@ final class Order58SyncOperationCest
 
     // ------------------------------------------------------------------ the recordings panel
 
-    /** Item progress on the recordings page is its own panel, apart from the downloads. */
-    public function theCallRecordingsPageShowsItemProgressSeparately(WebTester $I): void
+    /**
+     * The recordings page no longer carries the item-sync panel.
+     *
+     * It was removed on request. Asserted here rather than simply deleted, because a panel that fed
+     * itself from a live batch is exactly the kind of thing that comes back: the batch still exists,
+     * the endpoint it polled still answers, and the orders page still shows it — only this page does
+     * not. Nothing is left behind either, no empty card and no heading with nothing under it.
+     */
+    public function theCallRecordingsPageDoesNotShowItemProgress(WebTester $I): void
     {
         $batch = $this->seedBatch('recording_sync');
         $this->seedEnrolment($batch, 1, required: true);
@@ -216,12 +223,15 @@ final class Order58SyncOperationCest
         $this->signIn($I);
         $I->amOnPage('/admin/order58/call-recordings?store=' . self::STORE_ID);
 
-        $I->seeElement('[data-o58-sync-batch="' . $batch . '"]');
-        $I->see('Original order items');
-        $I->see('Separate from the recording downloads above');
+        $I->dontSeeElement('[data-o58-sync-batch]');
+        $I->dontSeeElement('.o58-sync-op');
+        $I->dontSee('Original order items');
+        $I->dontSee('Separate from the recording downloads above');
         // The page's own purpose is untouched.
         $I->see('Order58 Call Recordings');
         $I->see('View Download History');
+        $I->see("Find a store's calls");
+        $I->see('Sync demo orders');
     }
 
     // ------------------------------------------------------------------ harness

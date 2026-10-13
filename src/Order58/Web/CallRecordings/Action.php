@@ -7,7 +7,6 @@ namespace App\Order58\Web\CallRecordings;
 use App\Integration\Order58Recording\CallSummary;
 use App\Integration\Order58Recording\ChannelApiProbe;
 use App\Integration\Order58Recording\FixtureAvailability;
-use App\Order58\Domain\Items\ItemSyncBatchRepositoryInterface;
 use App\Integration\Order58Recording\FixtureCallSource;
 use App\Integration\Order58Recording\LatestCallsRequest;
 use App\Order58\Application\TodayCallFilter;
@@ -69,14 +68,6 @@ final readonly class Action
         private CallImportRepositoryInterface $imports,
         private ClockInterface $clock,
         private UrlGeneratorInterface $urlGenerator,
-        /**
-         * The item-sync operation the recording flow last opened for this store.
-         *
-         * Shown in its own panel, apart from the recording progress above it: the two count different
-         * things, and one number that sometimes meant recordings and sometimes items would be worse
-         * than two that each mean one thing.
-         */
-        private ItemSyncBatchRepositoryInterface $itemBatches,
         private bool $importEnabled,
     ) {}
 
@@ -129,9 +120,6 @@ final readonly class Action
                 'today' => $this->today->businessDate($now),
                 'importEnabled' => $this->importEnabled,
                 'usingFixtures' => $usingFixtures,
-                // Only when a store is chosen: without one there is no operation to speak about.
-                'itemSyncBatchId' => $storeId === null ? null : $this->itemBatches->latestFor($storeId),
-                'itemSyncStatusUrl' => $this->urlGenerator->generate('order58.orders.sync-status'),
                 // Carried through so the page's own links keep whatever source the operator asked for.
                 'source' => is_string($params['source'] ?? null) ? (string) $params['source'] : '',
                 // One endpoint for the whole table. The page appends the ids it is showing.
