@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Review;
 
+use App\AudioToText\Domain\AudioActor;
+use App\AudioToText\Domain\AudioActorInterface;
 use App\AudioToText\Domain\Exception\ReviewConflict;
 use App\AudioToText\Domain\Exception\ReviewRejected;
 use App\AudioToText\Web\AudioToTextRoute;
-use App\Auth\Application\CurrentAdmin;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\FormData;
 use App\Shared\Web\Support\Redirect;
@@ -31,15 +32,23 @@ use const JSON_THROW_ON_ERROR;
 final readonly class ReviewRequest
 {
     public function __construct(
-        private CurrentAdmin $currentAdmin,
+        private AudioActorInterface $actor,
         private Redirect $redirect,
         private FlashMessages $flash,
         private ResponseFactoryInterface $responseFactory,
     ) {}
 
-    public function adminId(): int
+    /**
+     * Who is making this correction.
+     *
+     * Was `adminId(): int` while administrators were the only reviewers. Order58 operation users review
+     * too now, and they hold no `admin_users` row — asking for an administrator here is exactly what
+     * produced a 500 for them. The actor carries its own realm, so the revision records the right
+     * person either way.
+     */
+    public function actor(): AudioActor
     {
-        return $this->currentAdmin->get()->id();
+        return AudioActor::fromPort($this->actor);
     }
 
     /**

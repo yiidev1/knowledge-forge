@@ -35,7 +35,7 @@ final readonly class Action
         int $index,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
         $form = $this->support->form($request);
         $direction = MergeDirection::tryFrom($form->string('direction')) ?? MergeDirection::Next;
@@ -48,10 +48,10 @@ final readonly class Action
             return $this->support->apply(
                 $publicId,
                 'Turns joined.',
-                function () use ($publicId, $adminId, $index, $version, $direction): void {
+                function () use ($publicId, $actor, $index, $version, $direction): void {
                     $direction === MergeDirection::Previous
-                        ? $this->review->mergeWithPrevious($publicId, $adminId, $index, $version)
-                        : $this->review->mergeWithNext($publicId, $adminId, $index, $version);
+                        ? $this->review->mergeWithPrevious($publicId, $actor, $index, $version)
+                        : $this->review->mergeWithNext($publicId, $actor, $index, $version);
                 },
                 // Passed so the shared shell can answer in the modal's language when asked;
                 // an ordinary submission still gets the flash and the redirect.
@@ -70,10 +70,10 @@ final readonly class Action
             $direction === MergeDirection::Previous
                 ? 'Selected text moved into the previous message.'
                 : 'Selected text moved into the next message.',
-            function () use ($publicId, $adminId, $index, $direction, $start, $end, $selected, $version): void {
+            function () use ($publicId, $actor, $index, $direction, $start, $end, $selected, $version): void {
                 $this->review->mergeSelection(
                     $publicId,
-                    $adminId,
+                    $actor,
                     $index,
                     $direction,
                     $start,

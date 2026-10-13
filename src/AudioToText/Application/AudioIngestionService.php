@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Application;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
@@ -73,7 +74,7 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
         ?string $orderId,
         TranscriptionProvider $provider,
         bool $generateAiAudio,
-        int $adminUserId,
+        AudioActor $uploadedBy,
         ?string $callSessionId = null,
         ?string $callTimeRaw = null,
         bool $transcribe = true,
@@ -110,7 +111,7 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
             ConversationMode::Common,
             $storeSourceId,
             [$role->value => $file],
-            $adminUserId,
+            $uploadedBy,
             $provider,
             $generateAiAudio,
             $recordingType,
@@ -176,6 +177,9 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
         $file = new UploadedFile($path, $size, UPLOAD_ERR_OK, basename($filename), 'audio/wav');
 
         try {
+            // The shared port carries a plain administrator id, because the module that calls it may
+            // not name this one's types. Every import through it is administrator-requested, so the
+            // actor is built here rather than threaded through a boundary that cannot express it.
             $result = $this->ingest(
                 $storeSourceId,
                 $file,
@@ -183,7 +187,7 @@ final readonly class AudioIngestionService implements AudioIngestionPortInterfac
                 $orderId,
                 $engine,
                 $generateAiAudio,
-                $adminUserId,
+                AudioActor::admin($adminUserId),
                 $callSessionId,
                 $callTimeRaw,
                 $transcribe,

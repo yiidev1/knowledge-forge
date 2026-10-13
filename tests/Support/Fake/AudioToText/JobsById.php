@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
@@ -99,7 +100,7 @@ final class JobsById implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function create(string $publicId, int $uploadedByAdminId, string $originalFilename, ?string $storedAudioPath, ?float $durationSeconds, ?DateTimeImmutable $expiresAt, ?int $conversationId = null, ?SourceRole $sourceRole = null, ?TranscriptionProvider $transcriptionProvider = null, JobStatus $status = JobStatus::QUEUED, ?string $retainedAudioPath = null): string
+    public function create(string $publicId, AudioActor $uploadedBy, string $originalFilename, ?string $storedAudioPath, ?float $durationSeconds, ?DateTimeImmutable $expiresAt, ?int $conversationId = null, ?SourceRole $sourceRole = null, ?TranscriptionProvider $transcriptionProvider = null, JobStatus $status = JobStatus::QUEUED, ?string $retainedAudioPath = null): string
     {
         throw new RuntimeException('Not used by these tests.');
     }
@@ -159,17 +160,17 @@ final class JobsById implements TranscriptionJobRepositoryInterface
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function saveReview(int $id, string $reviewedSegmentsJson, ?string $reviewedAgentText, ?string $reviewedCustomerText, int $reviewedByAdminId, int $expectedReviewCount): bool
+    public function saveReview(int $id, string $reviewedSegmentsJson, ?string $reviewedAgentText, ?string $reviewedCustomerText, AudioActor $reviewedBy, int $expectedReviewCount): bool
     {
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function confirmRoles(int $id, string $segmentsJson, string $agentText, string $customerText, int $confirmedByAdminId, int $expectedReviewCount): bool
+    public function confirmRoles(int $id, string $segmentsJson, string $agentText, string $customerText, AudioActor $confirmedBy, int $expectedReviewCount): bool
     {
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool
+    public function clearReview(int $id, AudioActor $reviewedBy, int $expectedReviewCount): bool
     {
         throw new RuntimeException('Not used by these tests.');
     }

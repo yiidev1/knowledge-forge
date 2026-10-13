@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\AudioToText\Application\Tts;
 
 use App\AudioToText\Application\AudioToTextSettings;
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\TranscriptionJob;
 use App\AudioToText\Domain\Tts\TtsEnqueueOutcome;
@@ -174,7 +175,7 @@ final readonly class TtsGenerationService
     public function enqueue(
         TranscriptionJob $job,
         TtsOutputType $outputType,
-        ?int $adminId,
+        ?AudioActor $requestedBy,
         ?string $expectedHash = null,
     ): TtsEnqueueOutcome {
         if (!in_array($outputType, $this->availableTypes($job), true)) {
@@ -215,7 +216,7 @@ final readonly class TtsGenerationService
         // The repository re-checks the in-flight condition inside the write, so the read above is an
         // early exit rather than the guarantee. Two requests arriving together both get past it and
         // exactly one of them queues.
-        return $this->renditions->enqueue($job->id, $outputType, $hash, $adminId, self::PROVIDER);
+        return $this->renditions->enqueue($job->id, $outputType, $hash, $requestedBy, self::PROVIDER);
     }
 
     /**

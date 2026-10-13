@@ -78,6 +78,9 @@ return [
         => App\Order58\Infrastructure\Order58PendingRecordingProvider::class,
     TranscriptionJobRepositoryInterface::class => DbTranscriptionJobRepository::class,
     AudioConversationRepositoryInterface::class => DbAudioConversationRepository::class,
+    // Who is acting, for the actor columns on uploads, reviews and TTS requests.
+    App\AudioToText\Domain\AudioActorInterface::class
+        => App\AudioToText\Infrastructure\CurrentActorAudioActor::class,
     StoreOrderGroupRepositoryInterface::class => DbStoreOrderGroupRepository::class,
     AudioStoreLookupInterface::class => DbAudioStoreLookup::class,
     SegmentRevisionRepositoryInterface::class => DbSegmentRevisionRepository::class,

@@ -32,7 +32,7 @@ final readonly class Action
         int $index,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
         // A missing or non-numeric offset becomes 0, which the domain refuses as outside the text.
         $offset = (int) $this->support->form($request)->string('offset');
@@ -40,7 +40,7 @@ final readonly class Action
         return $this->support->apply(
             $publicId,
             'Turn split. Both halves keep the original turn\'s approximate timing.',
-            fn() => $this->review->split($publicId, $adminId, $index, $offset, $version),
+            fn() => $this->review->split($publicId, $actor, $index, $offset, $version),
             // Passed so the shared shell can answer in the modal's language when asked; an
             // ordinary submission still gets the flash and the redirect.
             $request,

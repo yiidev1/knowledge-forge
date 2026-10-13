@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace App\OrderTesting\Web\DemoUrl;
 
-use App\Auth\Application\CurrentAdmin;
 use App\OrderTesting\Application\TestAttemptService;
-use App\OrderTesting\Domain\InitiatorType;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
+use App\OrderTesting\Domain\TestActorInterface;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -69,7 +68,7 @@ final readonly class Action
     public function __construct(
         private TestAttemptService $attempts,
         private SourceOrderReaderInterface $sourceOrders,
-        private CurrentAdmin $currentAdmin,
+        private TestActorInterface $actor,
         private FlashMessages $flash,
         private Redirect $redirect,
         private ResponseFactoryInterface $responses,
@@ -102,11 +101,13 @@ final readonly class Action
         $outcome = $this->attempts->start(
             $sourceId,
             $orderId,
-            // The realm is fixed here, not taken from the request. A client-supplied actor type or id
-            // would let anyone attribute their work to somebody else — the identity comes from the
-            // authenticated session and nowhere else.
-            InitiatorType::Admin,
-            $this->currentAdmin->get()->id(),
+            // The realm and id come from the actor the gate resolved, never from the request. A
+            // client-supplied actor type or id would let anyone attribute their work to somebody else.
+            // Two realms reach this action now — an administrator and an Order58 operation user — and
+            // each is recorded as itself; `admin_users.id = 7` and Order58's `admin_id = 7` are
+            // different people, which is why the pair travels together.
+            $this->actor->initiatorType(),
+            $this->actor->initiatorId(),
         );
 
         if (!$outcome->isAllowed()) {

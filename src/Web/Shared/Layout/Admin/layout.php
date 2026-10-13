@@ -20,6 +20,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var CurrentRoute $currentRoute
  * @var UrlGeneratorInterface $urlGenerator
  * @var CurrentAdmin $currentAdmin
+ * @var \App\Agent\Application\CurrentAgent $currentAgent
  * @var FlashMessages $flash
  * @var Csrf $csrf
  */
@@ -31,6 +32,11 @@ $this->addJsFiles($assetManager->getJsFiles());
 
 $activeRoute = $currentRoute->getName() ?? '';
 $admin = $currentAdmin->getOrNull();
+
+// The Order Testing pages are shared with Order58 `operation` users, who hold no `admin_users` row.
+// They reach this layout through the same actions, so the sidebar is told who they are and shows them
+// only what they may use. An administrator is unaffected: `$operator` is null for them.
+$operator = $admin === null ? $currentAgent->getOrNull() : null;
 
 // The active A–Z letter for the Knowledge Bases sidebar (from the ?letter= query on the store directory).
 $activeLetter = AlphabetIndex::ALL;
@@ -65,6 +71,7 @@ $this->beginPage();
         'activeRoute' => $activeRoute,
         'activeLetter' => $activeLetter,
         'admin' => $admin,
+        'operator' => $operator,
         'urlGenerator' => $urlGenerator,
         'applicationParams' => $applicationParams,
         'csrf' => $csrf,

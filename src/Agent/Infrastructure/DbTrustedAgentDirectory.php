@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Agent\Infrastructure;
 
 use App\Agent\Domain\AgentIdentity;
+use App\Agent\Domain\Order58Role;
 use App\Agent\Domain\TrustedAgentDirectoryInterface;
 use App\Agent\Domain\TrustedAgentLookupResult;
 use App\Shared\Infrastructure\Db\DbDateTime;
@@ -32,7 +33,23 @@ final readonly class DbTrustedAgentDirectory implements TrustedAgentDirectoryInt
 {
     private const TABLE = '{{%order58_agents}}';
 
-    private const REQUIRED_USER_TYPE = 'agent';
+    /**
+     * The same allowlist the primary path applies, kept identical on purpose.
+     *
+     * If the two disagreed, a user refused by one API could be admitted by the other — which is exactly
+     * the "shop for a better answer" path the fallback exists to avoid. Built from
+     * {@see Order58Role} so there is one list, not two that must be remembered together.
+     *
+     * Matched as an SQL `IN`, which is case-sensitive under this schema's `utf8mb4_0900_ai_ci`
+     * collation for the values involved; the enum's own values are the provider's exact spellings.
+     *
+     * @var non-empty-list<string>
+     */
+    private const ELIGIBLE_USER_TYPES = [
+        Order58Role::Agent->value,
+        Order58Role::Operation->value,
+    ];
+
     private const REQUIRED_STATUS = 'active';
 
     public function __construct(
@@ -63,7 +80,10 @@ final readonly class DbTrustedAgentDirectory implements TrustedAgentDirectoryInt
             ->from(self::TABLE)
             ->where([
                 'username' => $username,
-                'user_type' => self::REQUIRED_USER_TYPE,
+                // An `IN` over the admitted roles. The ambiguity rule below is what makes widening this
+                // safe: two eligible rows for one username are refused, whether they are two agents or
+                // an agent and an operation user.
+                'user_type' => self::ELIGIBLE_USER_TYPES,
                 'status' => self::REQUIRED_STATUS,
             ])
             ->limit(2)

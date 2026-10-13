@@ -38,7 +38,7 @@ final readonly class Action
         int $index,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
         $form = $this->support->form($request);
 
@@ -55,12 +55,12 @@ final readonly class Action
             $role === SpeakerRole::AGENT
                 ? 'Moved to the Agent.'
                 : 'Moved to the Customer.',
-            function () use ($publicId, $adminId, $index, $selection, $role, $hint, $version): void {
+            function () use ($publicId, $actor, $index, $selection, $role, $hint, $version): void {
                 if ($role !== SpeakerRole::AGENT && $role !== SpeakerRole::CUSTOMER) {
                     throw ReviewRejected::unsupportedRole();
                 }
 
-                $this->review->moveText($publicId, $adminId, $index, $selection, $role, $hint, $version);
+                $this->review->moveText($publicId, $actor, $index, $selection, $role, $hint, $version);
             },
             // Passed so the shared shell can answer in the modal's language when asked; an
             // ordinary submission still gets the flash and the redirect.

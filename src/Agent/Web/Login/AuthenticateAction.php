@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Agent\Web\Login;
 
 use App\Agent\Application\AgentLoginService;
+use App\Agent\Domain\Order58Role;
 use App\Auth\Application\ThrottleKey;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\Redirect;
@@ -46,7 +47,13 @@ final readonly class AuthenticateAction
         $result = $this->loginService->login($username, $password, $throttleKey);
 
         if ($result->success) {
-            return $this->redirect->afterPost('agent.home');
+            // Each role lands in its own area: agents in the agent app, operation users in Order
+            // Testing, which is the only thing they may use. The route name comes from the role rather
+            // than from a branch here, so a future role cannot be admitted without also being given
+            // somewhere to go.
+            $role = $result->agent === null ? null : Order58Role::fromUserType($result->agent->userType);
+
+            return $this->redirect->afterPost($role?->homeRoute() ?? 'agent.home');
         }
 
         if ($result->locked) {

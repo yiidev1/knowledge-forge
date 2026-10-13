@@ -30,13 +30,13 @@ final readonly class Action
         string $publicId,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
 
         return $this->support->apply(
             $publicId,
             'Speaker roles confirmed. The conversation now shows Agent and Customer.',
-            fn() => $this->review->confirmRoles($publicId, $adminId, $version),
+            fn() => $this->review->confirmRoles($publicId, $actor, $version),
             // Passed so the shared shell can answer in the modal's language when asked; an
             // ordinary submission still gets the flash and the redirect.
             $request,

@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Store\Group;
 
-use App\Auth\Application\CurrentAdmin;
+use App\AudioToText\Domain\AudioActor;
+use App\AudioToText\Domain\AudioActorInterface;
 use App\AudioToText\Application\AudioIngestionService;
 use App\AudioToText\Application\UploadOptions;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
@@ -89,7 +90,7 @@ final readonly class ReplaceAction
          */
         private UploadOptions $uploadOptions,
         private AudioToTextSettingsRepositoryInterface $settingsRepository,
-        private CurrentAdmin $currentAdmin,
+        private AudioActorInterface $actor,
         private JobPageGuard $guard,
         /**
          * Only to build the new recording's polling URL.
@@ -187,7 +188,7 @@ final readonly class ReplaceAction
                 // Only if it was asked for on *this* upload, and only if this server can honour it.
                 // Never inherited: see the class docblock.
                 $this->uploadOptions->wantsAiAudio($body) && $this->uploadOptions->aiAudioIsUsable(),
-                $this->currentAdmin->get()->id(),
+                AudioActor::fromPort($this->actor),
             );
         } catch (AudioTranscriptionException $e) {
             // The uploader-facing half only. technicalDetail() stays in the log, where the queue put it.

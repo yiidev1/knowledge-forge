@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 use App\Agent\Application\FallbackAgentAuthenticator;
 use App\Agent\Domain\AgentConversationRepositoryInterface;
+use App\Agent\Domain\AgentEligibilityReaderInterface;
 use App\Agent\Domain\AgentLoginActivityRepositoryInterface;
 use App\Agent\Domain\AgentStoreDirectoryInterface;
 use App\Agent\Domain\TrustedAgentDirectoryInterface;
 use App\Agent\Infrastructure\DbAgentConversationRepository;
+use App\Agent\Infrastructure\DbAgentEligibilityReader;
 use App\Agent\Infrastructure\DbAgentLoginActivityRepository;
 use App\Agent\Infrastructure\DbAgentStoreDirectory;
 use App\Agent\Infrastructure\DbTrustedAgentDirectory;
@@ -22,6 +24,8 @@ return [
     AgentStoreDirectoryInterface::class => DbAgentStoreDirectory::class,
     AgentLoginActivityRepositoryInterface::class => DbAgentLoginActivityRepository::class,
     TrustedAgentDirectoryInterface::class => DbTrustedAgentDirectory::class,
+    // Re-reads one mirrored user's role and status by `admin_id`, on every protected request.
+    AgentEligibilityReaderInterface::class => DbAgentEligibilityReader::class,
 
     FallbackAgentAuthenticator::class => [
         '__construct()' => [

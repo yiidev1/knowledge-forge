@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Application;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
@@ -97,7 +98,7 @@ final readonly class TranscriptionQueue
         ConversationMode $mode,
         ?int $storeSourceId,
         array $files,
-        int $adminUserId,
+        AudioActor $uploadedBy,
         TranscriptionProvider $provider = TranscriptionProvider::Whisper,
         /**
          * Whether the uploader asked for clean AI training audio afterwards.
@@ -215,7 +216,7 @@ final readonly class TranscriptionQueue
                 $conversationPublicId,
                 $storeSourceId,
                 $mode,
-                $adminUserId,
+                $uploadedBy,
                 $children,
                 $provider,
                 $generateAiAudio,
@@ -231,7 +232,7 @@ final readonly class TranscriptionQueue
                     $conversationPublicId,
                     $storeSourceId,
                     $mode,
-                    $adminUserId,
+                    $uploadedBy,
                     $children,
                     $provider,
                     $generateAiAudio,
@@ -245,7 +246,7 @@ final readonly class TranscriptionQueue
                         $conversationPublicId,
                         $storeSourceId,
                         $mode,
-                        $adminUserId,
+                        $uploadedBy,
                         $this->clock->now(),
                         $generateAiAudio,
                         $recordingType,
@@ -257,7 +258,7 @@ final readonly class TranscriptionQueue
                     foreach ($children as $child) {
                         $this->jobs->create(
                             $child['publicId'],
-                            $adminUserId,
+                            $uploadedBy,
                             $child['originalFilename'],
                             $child['storedName'],
                             $child['duration'],

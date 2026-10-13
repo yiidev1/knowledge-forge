@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\Store;
 
+use App\AudioToText\Domain\AudioActor;
+use App\AudioToText\Domain\AudioActorInterface;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\UploadOptions;
 use App\AudioToText\Application\AudioUploadValidator;
@@ -23,7 +25,6 @@ use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TranscriptionProvider;
 use App\AudioToText\Web\AudioToTextRoute;
-use App\Auth\Application\CurrentAdmin;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Audio\RecordingProcessingPolicy;
@@ -109,7 +110,7 @@ readonly class Action
          * this provider be used" and to "was audio paid for".
          */
         private UploadOptions $uploadOptions,
-        private CurrentAdmin $currentAdmin,
+        private AudioActorInterface $actor,
         // `protected` for the one subclass below: the Order Testing surface overrides where a missing
         // store and an accepted upload go, and both are redirects. Nothing else about it changes.
         protected Redirect $redirect,
@@ -209,7 +210,7 @@ readonly class Action
                         $mode,
                         $store->sourceId,
                         $files,
-                        $this->currentAdmin->get()->id(),
+                        AudioActor::fromPort($this->actor),
                         $provider,
                         // Recorded on the conversation and acted on later, by the workers. Nothing in
                         // this request contacts a speech provider: an upload must not be made to wait

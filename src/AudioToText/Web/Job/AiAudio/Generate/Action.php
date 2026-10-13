@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\Job\AiAudio\Generate;
 
+use App\AudioToText\Domain\AudioActor;
+use App\AudioToText\Domain\AudioActorInterface;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\Tts\TtsGenerationService;
 use App\AudioToText\Domain\RecordingType;
@@ -13,7 +15,6 @@ use App\AudioToText\Domain\TranscriptionJobRepositoryInterface;
 use App\AudioToText\Domain\Tts\TtsException;
 use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Web\AudioToTextRoute;
-use App\Auth\Application\CurrentAdmin;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -70,7 +71,7 @@ final readonly class Action
         private AudioConversationRepositoryInterface $conversations,
         private TtsGenerationService $generation,
         private RecordingVoiceReader $voices,
-        private CurrentAdmin $currentAdmin,
+        private AudioActorInterface $actor,
         private FlashMessages $flash,
         private Redirect $redirect,
         private ResponseFactoryInterface $responseFactory,
@@ -117,7 +118,7 @@ final readonly class Action
             $outcome = $this->generation->enqueue(
                 $job,
                 $outputType,
-                $this->currentAdmin->get()->id(),
+                AudioActor::fromPort($this->actor),
                 // Absent means "whatever is current" — but the page always sends it, so an absent value
                 // here is a hand-made request rather than a button press.
                 $this->field($body, 'expected_hash'),

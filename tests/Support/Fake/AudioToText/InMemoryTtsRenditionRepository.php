@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\Tts\TtsEnqueueOutcome;
 use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Domain\Tts\TtsRendition;
@@ -63,7 +64,7 @@ final class InMemoryTtsRenditionRepository implements TtsRenditionRepositoryInte
         int $jobId,
         TtsOutputType $outputType,
         string $requestedHash,
-        ?int $adminId,
+        ?AudioActor $requestedBy,
         string $provider,
     ): TtsEnqueueOutcome {
         $existing = $this->findForJob($jobId, $outputType);
@@ -95,7 +96,7 @@ final class InMemoryTtsRenditionRepository implements TtsRenditionRepositoryInte
             $existing?->modelAgent,
             $existing?->attempts ?? 0,
             null,
-            $adminId,
+            $requestedBy?->adminId,
             null,
             $existing?->createdAt ?? $now,
             $now,

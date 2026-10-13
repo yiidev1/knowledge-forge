@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
@@ -37,7 +38,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
 
     public function create(
         string $publicId,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         string $originalFilename,
         ?string $storedAudioPath,
         ?float $durationSeconds,
@@ -56,7 +57,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
 
         return $this->inner->create(
             $publicId,
-            $uploadedByAdminId,
+            $uploadedBy,
             $originalFilename,
             $storedAudioPath,
             $durationSeconds,
@@ -186,7 +187,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
         string $reviewedSegmentsJson,
         ?string $reviewedAgentText,
         ?string $reviewedCustomerText,
-        int $reviewedByAdminId,
+        AudioActor $reviewedBy,
         int $expectedReviewCount,
     ): bool {
         return $this->inner->saveReview(
@@ -194,7 +195,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
             $reviewedSegmentsJson,
             $reviewedAgentText,
             $reviewedCustomerText,
-            $reviewedByAdminId,
+            $reviewedBy,
             $expectedReviewCount,
         );
     }
@@ -204,7 +205,7 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
         string $segmentsJson,
         string $agentText,
         string $customerText,
-        int $confirmedByAdminId,
+        AudioActor $confirmedBy,
         int $expectedReviewCount,
     ): bool {
         return $this->inner->confirmRoles(
@@ -212,14 +213,14 @@ final class FailingJobRepository implements TranscriptionJobRepositoryInterface
             $segmentsJson,
             $agentText,
             $customerText,
-            $confirmedByAdminId,
+            $confirmedBy,
             $expectedReviewCount,
         );
     }
 
-    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool
+    public function clearReview(int $id, AudioActor $reviewedBy, int $expectedReviewCount): bool
     {
-        return $this->inner->clearReview($id, $reviewedByAdminId, $expectedReviewCount);
+        return $this->inner->clearReview($id, $reviewedBy, $expectedReviewCount);
     }
 
     public function delete(int $id): void

@@ -6,6 +6,7 @@ namespace App\AudioToText\Application;
 
 use App\AudioToText\Application\Speaker\SpeakerSegmentsDecoder;
 use App\AudioToText\Application\Tts\TtsGenerationService;
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\Exception\ReviewConflict;
 use App\AudioToText\Domain\Exception\ReviewRejected;
@@ -74,11 +75,11 @@ final readonly class ReviewConversationService
         private LoggerInterface $logger,
     ) {}
 
-    public function moveToAgent(string $publicId, int $adminId, int $turnIndex, int $expectedVersion): void
+    public function moveToAgent(string $publicId, AudioActor $actor, int $turnIndex, int $expectedVersion): void
     {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Move,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -86,11 +87,11 @@ final readonly class ReviewConversationService
         );
     }
 
-    public function moveToCustomer(string $publicId, int $adminId, int $turnIndex, int $expectedVersion): void
+    public function moveToCustomer(string $publicId, AudioActor $actor, int $turnIndex, int $expectedVersion): void
     {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Move,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -116,7 +117,7 @@ final readonly class ReviewConversationService
      */
     public function moveText(
         string $publicId,
-        int $adminId,
+        AudioActor $actor,
         int $turnIndex,
         string $selection,
         SpeakerRole $role,
@@ -125,7 +126,7 @@ final readonly class ReviewConversationService
     ): void {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Move,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -133,11 +134,11 @@ final readonly class ReviewConversationService
         );
     }
 
-    public function split(string $publicId, int $adminId, int $turnIndex, int $offset, int $expectedVersion): void
+    public function split(string $publicId, AudioActor $actor, int $turnIndex, int $offset, int $expectedVersion): void
     {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Split,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -158,7 +159,7 @@ final readonly class ReviewConversationService
      */
     public function mergeSelection(
         string $publicId,
-        int $adminId,
+        AudioActor $actor,
         int $turnIndex,
         MergeDirection $direction,
         int $start,
@@ -168,7 +169,7 @@ final readonly class ReviewConversationService
     ): void {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Merge,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -176,11 +177,11 @@ final readonly class ReviewConversationService
         );
     }
 
-    public function mergeWithPrevious(string $publicId, int $adminId, int $turnIndex, int $expectedVersion): void
+    public function mergeWithPrevious(string $publicId, AudioActor $actor, int $turnIndex, int $expectedVersion): void
     {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Merge,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -188,11 +189,11 @@ final readonly class ReviewConversationService
         );
     }
 
-    public function mergeWithNext(string $publicId, int $adminId, int $turnIndex, int $expectedVersion): void
+    public function mergeWithNext(string $publicId, AudioActor $actor, int $turnIndex, int $expectedVersion): void
     {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::Merge,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -202,14 +203,14 @@ final readonly class ReviewConversationService
 
     public function editText(
         string $publicId,
-        int $adminId,
+        AudioActor $actor,
         int $turnIndex,
         string $text,
         int $expectedVersion,
     ): void {
         $this->apply(
             $publicId,
-            $adminId,
+            $actor,
             $expectedVersion,
             ReviewOperation::EditText,
             static fn(ReviewedConversationTurns $turns): ReviewedConversationTurns
@@ -230,7 +231,7 @@ final readonly class ReviewConversationService
      *                        of the two roles has no text
      * @throws ReviewConflict when somebody else corrected the conversation first
      */
-    public function confirmRoles(string $publicId, int $adminId, int $expectedVersion): void
+    public function confirmRoles(string $publicId, AudioActor $actor, int $expectedVersion): void
     {
         $job = $this->load($publicId);
 
@@ -251,8 +252,8 @@ final readonly class ReviewConversationService
 
         $prior = $turns->toJson();
 
-        $this->transaction->run(function () use ($job, $adminId, $expectedVersion, $turns, $prior): void {
-            $this->revisions->add($job->id, $prior, ReviewOperation::ConfirmRoles, $adminId);
+        $this->transaction->run(function () use ($job, $actor, $expectedVersion, $turns, $prior): void {
+            $this->revisions->add($job->id, $prior, ReviewOperation::ConfirmRoles, $actor);
 
             // Confirmation and the derived text are one statement: "roles are confirmed" and "aggregate
             // text exists" must never disagree, because the view's publish gate reads the second to
@@ -264,7 +265,7 @@ final readonly class ReviewConversationService
                 $turns->toJson(),
                 $turns->textFor(SpeakerRole::AGENT),
                 $turns->textFor(SpeakerRole::CUSTOMER),
-                $adminId,
+                $actor,
                 $expectedVersion,
             );
 
@@ -326,7 +327,7 @@ final readonly class ReviewConversationService
      * @throws ReviewRejected when there is nothing to revert
      * @throws ReviewConflict when somebody else corrected the conversation first
      */
-    public function revert(string $publicId, int $adminId, int $expectedVersion): void
+    public function revert(string $publicId, AudioActor $actor, int $expectedVersion): void
     {
         $job = $this->load($publicId);
 
@@ -336,10 +337,10 @@ final readonly class ReviewConversationService
 
         $prior = (string) $job->reviewedSegmentsJson;
 
-        $this->transaction->run(function () use ($job, $adminId, $expectedVersion, $prior): void {
-            $this->revisions->add($job->id, $prior, ReviewOperation::Revert, $adminId);
+        $this->transaction->run(function () use ($job, $actor, $expectedVersion, $prior): void {
+            $this->revisions->add($job->id, $prior, ReviewOperation::Revert, $actor);
 
-            if (!$this->jobs->clearReview($job->id, $adminId, $expectedVersion)) {
+            if (!$this->jobs->clearReview($job->id, $actor, $expectedVersion)) {
                 throw ReviewConflict::versionMoved();
             }
         });
@@ -355,7 +356,7 @@ final readonly class ReviewConversationService
      */
     private function apply(
         string $publicId,
-        int $adminId,
+        AudioActor $actor,
         int $expectedVersion,
         ReviewOperation $operation,
         callable $change,
@@ -388,8 +389,8 @@ final readonly class ReviewConversationService
         // machine's own segments, which is what makes every revision self-contained.
         $prior = $current->toJson();
 
-        $this->transaction->run(function () use ($job, $adminId, $expectedVersion, $operation, $updated, $prior): void {
-            $this->revisions->add($job->id, $prior, $operation, $adminId);
+        $this->transaction->run(function () use ($job, $actor, $expectedVersion, $operation, $updated, $prior): void {
+            $this->revisions->add($job->id, $prior, $operation, $actor);
 
             $applied = $this->jobs->saveReview(
                 $job->id,
@@ -398,7 +399,7 @@ final readonly class ReviewConversationService
                 // speakers were never established; publishing role text is a separate, explicit act.
                 $job->rolesConfirmedAt === null ? null : $updated->textFor(SpeakerRole::AGENT),
                 $job->rolesConfirmedAt === null ? null : $updated->textFor(SpeakerRole::CUSTOMER),
-                $adminId,
+                $actor,
                 $expectedVersion,
             );
 

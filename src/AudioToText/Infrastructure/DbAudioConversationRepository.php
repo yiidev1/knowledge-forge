@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Infrastructure;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\AudioConversation;
 use App\AudioToText\Domain\AudioConversationChild;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
@@ -16,6 +17,7 @@ use App\AudioToText\Domain\TranscriptionProvider;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
 
 use function array_column;
@@ -41,6 +43,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
     private const TABLE = '{{%audio_conversations}}';
     private const JOBS = '{{%audio_transcription_jobs}}';
     private const ADMINS = '{{%admin_users}}';
+    private const OPERATORS = '{{%order58_agents}}';
 
     public function __construct(private ConnectionInterface $connection) {}
 
@@ -48,7 +51,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
         string $publicId,
         ?int $storeSourceId,
         ConversationMode $mode,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         DateTimeImmutable $createdAt,
         bool $generateAiAudio = false,
         ?RecordingType $recordingType = null,
@@ -73,7 +76,13 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             // Exactly what the provider sent. Not parsed, not converted, not given a timezone it does
             // not carry — see the column's migration.
             'call_time_raw' => $callTimeRaw,
-            'uploaded_by_admin_id' => $uploadedByAdminId,
+            // The realm travels with the id: exactly one of the two columns is populated, which the
+            // table's pair CHECK then enforces. An operation user has no `admin_users` row, and
+            // writing their Order58 id into the administrator column would attribute their upload to
+            // whichever administrator happened to share the number.
+            'uploaded_by_admin_id' => $uploadedBy->adminId,
+            'uploaded_by_type' => $uploadedBy->type->value,
+            'uploaded_by_operation_id' => $uploadedBy->operationId,
             'created_at' => DbDateTime::format($createdAt),
             // Written once, at upload, and never rewritten. The generation itself is decided later and
             // elsewhere; this only records what was asked for.
@@ -396,6 +405,7 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
                 'call_session_id' => 'c.call_session_id',
                 'call_time_raw' => 'c.call_time_raw',
                 'uploaded_by_admin_id' => 'c.uploaded_by_admin_id',
+                'uploaded_by_name' => new Expression('COALESCE(a.username, oa.username)'),
                 'created_at' => 'c.created_at',
                 'generate_ai_audio' => 'c.generate_ai_audio',
                 'uploaded_by_username' => 'a.username',
@@ -403,7 +413,12 @@ final readonly class DbAudioConversationRepository implements AudioConversationR
             ->from(['c' => self::TABLE])
             // LEFT: the uploader foreign key is RESTRICT so the row should always be there, but a
             // missing administrator must cost a username, never the whole conversation.
-            ->leftJoin(['a' => self::ADMINS], 'a.id = c.uploaded_by_admin_id');
+            // Two realms, two name sources. An operation user has no `admin_users` row, so their
+            // name comes from the mirror they signed in against; COALESCE picks whichever of the
+            // pair the row actually used. Historical rows are all administrators and are
+            // unaffected.
+            ->leftJoin(['a' => self::ADMINS], 'a.id = c.uploaded_by_admin_id')
+            ->leftJoin(['oa' => self::OPERATORS], 'oa.admin_id = c.uploaded_by_operation_id');
     }
 
     /**

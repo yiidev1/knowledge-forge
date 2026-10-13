@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Application\RecordingVoiceReader;
 use App\AudioToText\Application\Combined\CombinedConversationReader;
 use App\AudioToText\Application\EffectiveConversationReader;
@@ -59,6 +60,7 @@ final class ReviewConversationServiceTest extends Unit
     private DbSegmentRevisionRepository $revisions;
     private EffectiveConversationReader $effective;
     private int $adminId;
+    private AudioActor $actor;
 
     /** @var list<string> */
     private array $createdPublicIds = [];
@@ -112,6 +114,9 @@ final class ReviewConversationServiceTest extends Unit
         $this->createdUsernames[] = $username;
         $this->adminId = (new DbAdminUserRepository($this->connection, $clock))
             ->create($username, '$2y$10$notarealhashnotarealhashnotarealhashnotarealhashnotar');
+
+        // The reviewer, as the service now takes them: a realm beside the id.
+        $this->actor = AudioActor::admin($this->adminId);
     }
 
     protected function _after(): void
@@ -139,14 +144,14 @@ final class ReviewConversationServiceTest extends Unit
         // Every operation type, each one valid. The merge undoes the split, which is the only merge the
         // rule permits here: both halves inherit SPEAKER_00, whereas the fixture's two original turns
         // are different diarization speakers and must stay unmergeable.
-        $this->service->split($publicId, $this->adminId, 0, 5, $this->version($publicId));
-        $this->service->mergeWithNext($publicId, $this->adminId, 0, $this->version($publicId));
-        $this->service->moveToAgent($publicId, $this->adminId, 0, $this->version($publicId));
+        $this->service->split($publicId, $this->actor, 0, 5, $this->version($publicId));
+        $this->service->mergeWithNext($publicId, $this->actor, 0, $this->version($publicId));
+        $this->service->moveToAgent($publicId, $this->actor, 0, $this->version($publicId));
         // Keeps a turn on each side, which confirmation requires.
-        $this->service->moveToCustomer($publicId, $this->adminId, 1, $this->version($publicId));
-        $this->service->editText($publicId, $this->adminId, 0, 'Yes. For pickup', $this->version($publicId));
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
-        $this->service->revert($publicId, $this->adminId, $this->version($publicId));
+        $this->service->moveToCustomer($publicId, $this->actor, 1, $this->version($publicId));
+        $this->service->editText($publicId, $this->actor, 0, 'Yes. For pickup', $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
+        $this->service->revert($publicId, $this->actor, $this->version($publicId));
 
         $this->assertSame($before, $this->rawColumns($publicId), 'A correction must not alter a machine column.');
         $this->assertSame(self::RAW_TRANSCRIPT, $before['transcript']);
@@ -159,8 +164,8 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed();
 
-        $this->service->split($publicId, $this->adminId, 0, 5, $this->version($publicId));
-        $this->service->moveToAgent($publicId, $this->adminId, 1, $this->version($publicId));
+        $this->service->split($publicId, $this->actor, 0, 5, $this->version($publicId));
+        $this->service->moveToAgent($publicId, $this->actor, 1, $this->version($publicId));
 
         $turns = $this->reviewedTurns($publicId);
 
@@ -176,7 +181,7 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed();
 
-        $this->service->editText($publicId, $this->adminId, 0, 'Yes. For pickup or delivery?', $this->version($publicId));
+        $this->service->editText($publicId, $this->actor, 0, 'Yes. For pickup or delivery?', $this->version($publicId));
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -190,10 +195,10 @@ final class ReviewConversationServiceTest extends Unit
 
         // Both roles have to end up populated: confirmation asserts a two-sided split, so the service
         // refuses one where every turn sits on the same side.
-        $this->service->moveToAgent($publicId, $this->adminId, 0, $this->version($publicId));
-        $this->service->moveToCustomer($publicId, $this->adminId, 1, $this->version($publicId));
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
-        $this->service->revert($publicId, $this->adminId, $this->version($publicId));
+        $this->service->moveToAgent($publicId, $this->actor, 0, $this->version($publicId));
+        $this->service->moveToCustomer($publicId, $this->actor, 1, $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
+        $this->service->revert($publicId, $this->actor, $this->version($publicId));
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -212,7 +217,7 @@ final class ReviewConversationServiceTest extends Unit
             // Past the end of the conversation. A manual merge asks only for a neighbour, so this is
             // the shape of invalid it still refuses — differing roles and voices no longer are, since
             // an administrator asking for that merge is correcting the machine, not contradicting it.
-            $this->service->mergeWithNext($publicId, $this->adminId, 1, $this->version($publicId));
+            $this->service->mergeWithNext($publicId, $this->actor, 1, $this->version($publicId));
         } catch (ReviewRejected) {
             $rejected = true;
         }
@@ -230,13 +235,13 @@ final class ReviewConversationServiceTest extends Unit
         $publicId = $this->seed(status: 'PROCESSING');
 
         $this->expectException(ReviewRejected::class);
-        $this->service->moveToAgent($publicId, $this->adminId, 0, 0);
+        $this->service->moveToAgent($publicId, $this->actor, 0, 0);
     }
 
     public function testAnUnknownJobIsRefusedTheSameWayAsAnUncorrectableOne(): void
     {
         $this->expectException(ReviewRejected::class);
-        $this->service->moveToAgent(bin2hex(random_bytes(16)), $this->adminId, 0, 0);
+        $this->service->moveToAgent(bin2hex(random_bytes(16)), $this->actor, 0, 0);
     }
 
     // ---------------------------------------------------------------- confirmation
@@ -252,7 +257,7 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
 
-        $this->service->split($publicId, $this->adminId, 0, 5, $this->version($publicId));
+        $this->service->split($publicId, $this->actor, 0, 5, $this->version($publicId));
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -279,9 +284,9 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
 
-        $this->service->split($publicId, $this->adminId, 0, 5, $this->version($publicId));
-        $this->service->moveToAgent($publicId, $this->adminId, 1, $this->version($publicId));
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
+        $this->service->split($publicId, $this->actor, 0, 5, $this->version($publicId));
+        $this->service->moveToAgent($publicId, $this->actor, 1, $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -310,10 +315,10 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
 
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
 
         $this->expectException(ReviewRejected::class);
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
     }
 
     // ---------------------------------------------------------------- audit and locking
@@ -322,11 +327,11 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed();
 
-        $this->service->split($publicId, $this->adminId, 0, 5, $this->version($publicId));
-        $this->service->moveToAgent($publicId, $this->adminId, 1, $this->version($publicId));
-        $this->service->editText($publicId, $this->adminId, 1, 'For pickup', $this->version($publicId));
-        $this->service->confirmRoles($publicId, $this->adminId, $this->version($publicId));
-        $this->service->revert($publicId, $this->adminId, $this->version($publicId));
+        $this->service->split($publicId, $this->actor, 0, 5, $this->version($publicId));
+        $this->service->moveToAgent($publicId, $this->actor, 1, $this->version($publicId));
+        $this->service->editText($publicId, $this->actor, 1, 'For pickup', $this->version($publicId));
+        $this->service->confirmRoles($publicId, $this->actor, $this->version($publicId));
+        $this->service->revert($publicId, $this->actor, $this->version($publicId));
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -355,7 +360,7 @@ final class ReviewConversationServiceTest extends Unit
         $publicId = $this->seed();
         $stale = $this->version($publicId);
 
-        $this->service->moveToAgent($publicId, $this->adminId, 0, $stale);
+        $this->service->moveToAgent($publicId, $this->actor, 0, $stale);
 
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
@@ -365,7 +370,7 @@ final class ReviewConversationServiceTest extends Unit
 
         try {
             // The second tab still believes the version it read on load.
-            $this->service->moveToCustomer($publicId, $this->adminId, 0, $stale);
+            $this->service->moveToCustomer($publicId, $this->actor, 0, $stale);
         } catch (ReviewConflict) {
             $conflicted = true;
         }
@@ -383,10 +388,10 @@ final class ReviewConversationServiceTest extends Unit
         $publicId = $this->seed(separation: 'NEEDS_REVIEW', agentText: null, customerText: null);
         $stale = $this->version($publicId);
 
-        $this->service->split($publicId, $this->adminId, 0, 5, $stale);
+        $this->service->split($publicId, $this->actor, 0, 5, $stale);
 
         $this->expectException(ReviewConflict::class);
-        $this->service->confirmRoles($publicId, $this->adminId, $stale);
+        $this->service->confirmRoles($publicId, $this->actor, $stale);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -444,11 +449,11 @@ final class ReviewConversationServiceTest extends Unit
 
         foreach (
             [
-                fn(): mixed => $this->service->moveToAgent($publicId, $this->adminId, 0, 0),
-                fn(): mixed => $this->service->moveToCustomer($publicId, $this->adminId, 1, 0),
+                fn(): mixed => $this->service->moveToAgent($publicId, $this->actor, 0, 0),
+                fn(): mixed => $this->service->moveToCustomer($publicId, $this->actor, 1, 0),
                 fn(): mixed => $this->service->moveText(
                     $publicId,
-                    $this->adminId,
+                    $this->actor,
                     0,
                     'Yes. For pikup',
                     SpeakerRole::AGENT,
@@ -488,7 +493,7 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed(sourceRole: 'CUSTOMER');
 
-        $this->service->editText($publicId, $this->adminId, 0, 'Yes. For pickup', 0);
+        $this->service->editText($publicId, $this->actor, 0, 'Yes. For pickup', 0);
 
         $job = $this->jobs->findByPublicId($publicId);
 
@@ -505,7 +510,7 @@ final class ReviewConversationServiceTest extends Unit
     {
         $publicId = $this->seed();
 
-        $this->service->moveToAgent($publicId, $this->adminId, 0, 0);
+        $this->service->moveToAgent($publicId, $this->actor, 0, 0);
 
         $job = $this->jobs->findByPublicId($publicId);
 

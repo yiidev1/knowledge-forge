@@ -26,7 +26,7 @@ interface SegmentRevisionRepositoryInterface
         int $jobId,
         string $priorSegmentsJson,
         ReviewOperation $operation,
-        int $editedByAdminId,
+        AudioActor $editedBy,
     ): int;
 
     /**

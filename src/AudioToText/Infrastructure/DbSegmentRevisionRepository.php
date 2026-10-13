@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Infrastructure;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Domain\SegmentRevision;
 use App\AudioToText\Domain\SegmentRevisionRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
 
 use function is_string;
@@ -31,6 +33,7 @@ final readonly class DbSegmentRevisionRepository implements SegmentRevisionRepos
 {
     private const TABLE = '{{%audio_segment_revisions}}';
     private const ADMINS = '{{%admin_users}}';
+    private const OPERATORS = '{{%order58_agents}}';
     private const PARTICIPANT_ADMIN = 'admin';
 
     public function __construct(
@@ -42,7 +45,7 @@ final readonly class DbSegmentRevisionRepository implements SegmentRevisionRepos
         int $jobId,
         string $priorSegmentsJson,
         ReviewOperation $operation,
-        int $editedByAdminId,
+        AudioActor $editedBy,
     ): int {
         $next = $this->countForJob($jobId) + 1;
 
@@ -51,8 +54,9 @@ final readonly class DbSegmentRevisionRepository implements SegmentRevisionRepos
             'revision_number' => $next,
             'segments_json' => $priorSegmentsJson,
             'operation' => $operation->value,
-            'edited_by_type' => self::PARTICIPANT_ADMIN,
-            'edited_by_id' => $editedByAdminId,
+            // One id column, so the realm beside it is what makes the number mean somebody.
+            'edited_by_type' => $editedBy->type->value,
+            'edited_by_id' => $editedBy->id(),
             'created_at' => DbDateTime::format($this->clock->now()),
         ])->execute();
 
@@ -62,10 +66,15 @@ final readonly class DbSegmentRevisionRepository implements SegmentRevisionRepos
     public function forJob(int $jobId): array
     {
         $rows = (new Query($this->connection))
-            // The editor's name is joined for display; the numeric id stays server-side.
-            ->select(['r.*', 'edited_by_username' => 'a.username'])
+            // The editor's name is joined for display; the numeric id stays server-side. Two realms
+            // edit now, so the name comes from whichever table the row's realm points at.
+            ->select(['r.*', 'edited_by_username' => new Expression('COALESCE(a.username, oa.username)')])
             ->from(['r' => self::TABLE])
-            ->leftJoin(['a' => self::ADMINS], 'a.id = r.edited_by_id')
+            // One polymorphic id column here, not a pair — so each join is conditioned on the
+            // realm as well, or an administrator id would match an operation row that happens
+            // to share the number.
+            ->leftJoin(['a' => self::ADMINS], "a.id = r.edited_by_id AND r.edited_by_type = 'admin'")
+            ->leftJoin(['oa' => self::OPERATORS], "oa.admin_id = r.edited_by_id AND r.edited_by_type = 'operation'")
             ->where(['r.job_id' => $jobId])
             ->orderBy(['r.revision_number' => SORT_ASC])
             ->all();

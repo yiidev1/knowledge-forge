@@ -81,12 +81,17 @@ final class TrustedAgentDirectoryTest extends Unit
     // ---------------------------------------------------------------- authorization
 
     /**
-     * The judy case: a real, active account whose password the validate API confirms, but who is not an
-     * agent. Admitting them would be a privilege escalation into the agent realm.
+     * The judy case: a real, active account whose password the validate API confirms, but whose type is
+     * not one this login admits. Resolving them would be a privilege escalation.
      *
-     * @dataProvider nonAgentTypes
+     * `operation` deliberately left this list when the operation role was approved — those users sign in
+     * through the same page and reach Order Testing. Everything still named here stays refused, and a
+     * type the provider adds later is refused by default because the allowlist names what is admitted
+     * rather than what is not.
+     *
+     * @dataProvider ineligibleTypes
      */
-    public function testANonAgentIsNeverResolved(string $userType): void
+    public function testAnIneligibleTypeIsNeverResolved(string $userType): void
     {
         $this->insertAgent(0, self::USERNAME, $userType, 'active', $this->now);
 
@@ -96,9 +101,38 @@ final class TrustedAgentDirectoryTest extends Unit
         assertSame('no_active_agent', $result->reason);
     }
 
-    public function nonAgentTypes(): array
+    public function ineligibleTypes(): array
     {
-        return [['admin'], ['merchant'], ['operation'], ['trainee'], ['employee']];
+        // Every type the live mirror actually holds, minus the two that may sign in. `PreTraining`
+        // carries its real mixed case: the allowlist is matched exactly, and a case-insensitive
+        // comparison would be a way to admit a type nobody approved.
+        return [['admin'], ['merchant'], ['trainee'], ['trainer'], ['employee'], ['PreTraining']];
+    }
+
+    /**
+     * An active operation user resolves, because Order Testing is theirs.
+     *
+     * The fallback still only says *who* this is; whether they may reach anything is decided by the
+     * authorization gate, which re-reads this same mirror on every request.
+     */
+    public function testAnActiveOperationUserIsResolved(): void
+    {
+        $this->insertAgent(0, self::USERNAME, 'operation', 'active', $this->now);
+
+        $result = $this->directory->findActiveAgentByUsername(self::USERNAME, $this->cutoff);
+
+        assertSame(self::USERNAME, $result->agent?->username);
+        assertSame('operation', $result->agent?->userType);
+    }
+
+    /** An operation user who is no longer active is refused exactly as an inactive agent is. */
+    public function testAnInactiveOperationUserIsNeverResolved(): void
+    {
+        $this->insertAgent(0, self::USERNAME, 'operation', 'disable', $this->now);
+
+        $result = $this->directory->findActiveAgentByUsername(self::USERNAME, $this->cutoff);
+
+        assertNull($result->agent);
     }
 
     /** @dataProvider inactiveStatuses */

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\QueuedAudioStorage;
 use App\AudioToText\Application\TranscriptionQueue;
@@ -160,7 +161,7 @@ final class TranscriptionProviderPersistenceTest extends Unit
                 SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                 SourceRole::Agent->value => $this->wavUpload('agent.wav'),
             ],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Deepgram,
         );
 
@@ -244,7 +245,7 @@ final class TranscriptionProviderPersistenceTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             $provider,
         );
     }

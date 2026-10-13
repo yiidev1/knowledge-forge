@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\QueueSummary;
@@ -86,7 +87,7 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
 
     public function create(
         string $publicId,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         string $originalFilename,
         ?string $storedAudioPath,
         ?float $durationSeconds,
@@ -167,7 +168,7 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         string $reviewedSegmentsJson,
         ?string $reviewedAgentText,
         ?string $reviewedCustomerText,
-        int $reviewedByAdminId,
+        AudioActor $reviewedBy,
         int $expectedReviewCount,
     ): bool {
         throw new RuntimeException('Not used by these tests.');
@@ -178,13 +179,13 @@ final class OneJobRepository implements TranscriptionJobRepositoryInterface
         string $segmentsJson,
         string $agentText,
         string $customerText,
-        int $confirmedByAdminId,
+        AudioActor $confirmedBy,
         int $expectedReviewCount,
     ): bool {
         throw new RuntimeException('Not used by these tests.');
     }
 
-    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool
+    public function clearReview(int $id, AudioActor $reviewedBy, int $expectedReviewCount): bool
     {
         throw new RuntimeException('Not used by these tests.');
     }

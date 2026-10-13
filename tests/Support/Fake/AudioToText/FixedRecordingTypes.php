@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Support\Fake\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\AudioConversation;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\ConversationMode;
@@ -39,7 +40,7 @@ final class FixedRecordingTypes implements AudioConversationRepositoryInterface
         string $publicId,
         ?int $storeSourceId,
         ConversationMode $mode,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         DateTimeImmutable $createdAt,
         bool $generateAiAudio = false,
         ?RecordingType $recordingType = null,

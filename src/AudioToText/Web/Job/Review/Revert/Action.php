@@ -30,13 +30,13 @@ final readonly class Action
         string $publicId,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
 
         return $this->support->apply(
             $publicId,
             'Corrections discarded. This conversation is back to the system\'s original result.',
-            fn() => $this->review->revert($publicId, $adminId, $version),
+            fn() => $this->review->revert($publicId, $actor, $version),
             // Passed so the shared shell can answer in the modal's language when asked; an
             // ordinary submission still gets the flash and the redirect.
             $request,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Infrastructure;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Application\TranscriptText;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
@@ -48,6 +49,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
 {
     private const TABLE = '{{%audio_transcription_jobs}}';
     private const ADMINS = '{{%admin_users}}';
+    private const OPERATORS = '{{%order58_agents}}';
     private const CONVERSATIONS = '{{%audio_conversations}}';
 
     /**
@@ -109,12 +111,17 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 'transcript_preview' => new Expression('LEFT(j.transcript, :len)'),
                 'agent_preview' => new Expression('LEFT(j.agent_text, :len)'),
                 'customer_preview' => new Expression('LEFT(j.customer_text, :len)'),
-                'uploaded_by' => 'a.username',
+                'uploaded_by' => new Expression('COALESCE(a.username, oa.username)'),
                 'store_source_id' => 'c.store_source_id',
                 'store_name' => 'kb.name',
             ])
             ->from(['j' => self::TABLE])
+            // Two realms, two name sources. An operation user has no `admin_users` row, so their
+            // name comes from the mirror they signed in against; COALESCE picks whichever of the
+            // pair the row actually used. Historical rows are all administrators and are
+            // unaffected.
             ->leftJoin(['a' => self::ADMINS], 'a.id = j.uploaded_by_admin_id')
+            ->leftJoin(['oa' => self::OPERATORS], 'oa.admin_id = j.uploaded_by_operation_id')
             // Both LEFT, and for different reasons: a conversion that predates store-wise audio has a
             // conversation but no store, and a store whose knowledge base has not been synced yet has
             // no name row. Neither may cost the list its job row.
@@ -311,7 +318,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
 
     public function create(
         string $publicId,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         string $originalFilename,
         /**
          * The workspace copy, or null when there is none.
@@ -349,7 +356,10 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
             // Copied from the choice made at upload and never revisited. NULL stays legal and means
             // Whisper, so a caller that predates provider selection still writes a valid row.
             'transcription_provider' => $transcriptionProvider?->value,
-            'uploaded_by_admin_id' => $uploadedByAdminId,
+            // Exactly one of the pair is populated; the table's CHECK enforces it.
+            'uploaded_by_admin_id' => $uploadedBy->adminId,
+            'uploaded_by_type' => $uploadedBy->type->value,
+            'uploaded_by_operation_id' => $uploadedBy->operationId,
             'status' => $status->value,
             'processing_stage' => ProcessingStage::QUEUED->value,
             'original_filename' => $originalFilename,
@@ -672,7 +682,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         string $reviewedSegmentsJson,
         ?string $reviewedAgentText,
         ?string $reviewedCustomerText,
-        int $reviewedByAdminId,
+        AudioActor $reviewedBy,
         int $expectedReviewCount,
     ): bool {
         $affected = $this->connection->createCommand()->update(
@@ -682,7 +692,9 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 'reviewed_agent_text' => $reviewedAgentText,
                 'reviewed_customer_text' => $reviewedCustomerText,
                 'reviewed_at' => DbDateTime::format($this->clock->now()),
-                'reviewed_by_admin_id' => $reviewedByAdminId,
+                'reviewed_by_admin_id' => $reviewedBy->adminId,
+                'reviewed_by_type' => $reviewedBy->type->value,
+                'reviewed_by_operation_id' => $reviewedBy->operationId,
                 'review_count' => new Expression('`review_count` + 1'),
             ],
             ['id' => $id, 'review_count' => $expectedReviewCount],
@@ -698,7 +710,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
      * revert cannot make a stale tab's save look current again — and the revert itself is recorded as a
      * revision by the caller.
      */
-    public function clearReview(int $id, int $reviewedByAdminId, int $expectedReviewCount): bool
+    public function clearReview(int $id, AudioActor $reviewedBy, int $expectedReviewCount): bool
     {
         $affected = $this->connection->createCommand()->update(
             self::TABLE,
@@ -710,7 +722,9 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 // left that a confirmation could be about.
                 'roles_confirmed_at' => null,
                 'reviewed_at' => DbDateTime::format($this->clock->now()),
-                'reviewed_by_admin_id' => $reviewedByAdminId,
+                'reviewed_by_admin_id' => $reviewedBy->adminId,
+                'reviewed_by_type' => $reviewedBy->type->value,
+                'reviewed_by_operation_id' => $reviewedBy->operationId,
                 'review_count' => new Expression('`review_count` + 1'),
             ],
             ['id' => $id, 'review_count' => $expectedReviewCount],
@@ -734,7 +748,7 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         string $segmentsJson,
         string $agentText,
         string $customerText,
-        int $confirmedByAdminId,
+        AudioActor $confirmedBy,
         int $expectedReviewCount,
     ): bool {
         $now = DbDateTime::format($this->clock->now());
@@ -749,7 +763,9 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
                 'reviewed_agent_text' => $agentText,
                 'reviewed_customer_text' => $customerText,
                 'reviewed_at' => $now,
-                'reviewed_by_admin_id' => $confirmedByAdminId,
+                'reviewed_by_admin_id' => $confirmedBy->adminId,
+                'reviewed_by_type' => $confirmedBy->type->value,
+                'reviewed_by_operation_id' => $confirmedBy->operationId,
                 'review_count' => new Expression('`review_count` + 1'),
             ],
             ['id' => $id, 'review_count' => $expectedReviewCount],
@@ -763,10 +779,16 @@ final readonly class DbTranscriptionJobRepository implements TranscriptionJobRep
         return (new Query($this->connection))
             // `reviewed_by` is joined for the same reason as `uploaded_by`: the page needs a name, and
             // the numeric administrator id must never reach the browser.
-            ->select(['j.*', 'uploaded_by' => 'a.username', 'reviewed_by' => 'r.username'])
+            ->select([
+                'j.*',
+                'uploaded_by' => new Expression('COALESCE(a.username, oa.username)'),
+                'reviewed_by' => new Expression('COALESCE(r.username, orv.username)'),
+            ])
             ->from(['j' => self::TABLE])
             ->leftJoin(['a' => self::ADMINS], 'a.id = j.uploaded_by_admin_id')
-            ->leftJoin(['r' => self::ADMINS], 'r.id = j.reviewed_by_admin_id');
+            ->leftJoin(['oa' => self::OPERATORS], 'oa.admin_id = j.uploaded_by_operation_id')
+            ->leftJoin(['r' => self::ADMINS], 'r.id = j.reviewed_by_admin_id')
+            ->leftJoin(['orv' => self::OPERATORS], 'orv.admin_id = j.reviewed_by_operation_id');
     }
 
     /**

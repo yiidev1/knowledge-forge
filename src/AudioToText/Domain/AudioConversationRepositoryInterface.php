@@ -24,7 +24,7 @@ interface AudioConversationRepositoryInterface
         string $publicId,
         ?int $storeSourceId,
         ConversationMode $mode,
-        int $uploadedByAdminId,
+        AudioActor $uploadedBy,
         DateTimeImmutable $createdAt,
         /**
          * Whether the uploader ticked "generate clean AI audio after transcription".

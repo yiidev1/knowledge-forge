@@ -11,6 +11,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 /**
  * @var string $activeRoute
  * @var AdminUser|null $admin
+ * @var \App\Agent\Domain\AgentIdentity|null $operator the signed-in Order58 operation user, if any
  * @var UrlGeneratorInterface $urlGenerator
  * @var \App\Shared\ApplicationParams $applicationParams
  * @var Csrf $csrf
@@ -111,9 +112,24 @@ foreach ($items as $item) {
     $navItems[] = ['label' => $item['label'], 'icon' => $item['icon'], 'href' => $href, 'active' => $active];
 }
 
-$adminName = $admin?->username();
-$logoutUrl = $admin !== null ? $urlGenerator->generate('auth.logout') : null;
-$csrfInput = $admin !== null ? (string) $csrf->hiddenInput() : '';
+// An operation user sees ONE entry. This is presentation only — every route in this list is also
+// guarded server-side, and the ones absent from it are refused whether or not they are linked. Hiding
+// a link has never been a permission; it is here so the page is honest about what is reachable.
+if ($operator !== null) {
+    $navItems = array_values(array_filter(
+        $navItems,
+        static fn(array $item): bool => $item['label'] === 'Order Testing',
+    ));
+}
+
+// Each realm signs out through its own door. Sending an operation user to the administrator's logout
+// would clear a session they never had and leave theirs intact.
+$signedInName = $admin?->username() ?? $operator?->displayName;
+$logoutRoute = $admin !== null ? 'auth.logout' : ($operator !== null ? 'agent.logout' : null);
+
+$adminName = $signedInName;
+$logoutUrl = $logoutRoute !== null ? $urlGenerator->generate($logoutRoute) : null;
+$csrfInput = $logoutRoute !== null ? (string) $csrf->hiddenInput() : '';
 
 ?>
 <aside class="sidebar">

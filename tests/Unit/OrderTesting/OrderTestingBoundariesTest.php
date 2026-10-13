@@ -30,6 +30,9 @@ use function substr;
  */
 final class OrderTestingBoundariesTest extends TestCase
 {
+    /** The one migration permitted to introduce the OPERATION initiator literal. */
+    private const OPERATION_INITIATOR_MIGRATION = 'M261012120000AllowOperationInitiator';
+
     private function root(): string
     {
         return dirname(__DIR__, 3);
@@ -95,36 +98,56 @@ final class OrderTestingBoundariesTest extends TestCase
 
     // ------------------------------------------------------------------ no agent, no operation role
 
-    /** Only ADMIN exists. Agents and any operation role are explicitly out of scope for this phase. */
-    public function testOnlyTheAdminRealmExists(): void
+    /**
+     * ADMIN and OPERATION exist. **Agents still do not, and that is the part this pins.**
+     *
+     * The operation role was added deliberately, with a migration widening the CHECK to match. Agents
+     * authenticate through the same login page as operation users, so the realm that must never appear
+     * here is the one most easily added by accident — a third case would silently hand the whole Order
+     * Testing workflow to several hundred agent accounts.
+     *
+     * Asserted as an exact list rather than a `contains`, so adding any realm fails until somebody
+     * changes this line on purpose.
+     */
+    public function testOnlyTheAdminAndOperationRealmsExist(): void
     {
-        self::assertSame(['ADMIN'], array_map(
+        self::assertSame(['ADMIN', 'OPERATION'], array_map(
             static fn(InitiatorType $case): string => $case->value,
             InitiatorType::cases(),
         ));
     }
 
     /**
-     * No migration creates anything for an operation role.
+     * The operation role literal appears in **exactly one** migration, and that one is the approved one.
      *
-     * Asserted over the migrations rather than over this feature's own files, because the instruction
-     * was that none exists anywhere — including as a value sitting in a CHECK constraint "ready for
-     * later", which would be exactly the sort of thing nobody would notice having been added.
+     * This used to assert it appeared nowhere. The role now exists, so the guard narrows rather than
+     * disappears: what it still catches is the role being quietly admitted somewhere *else* — a second
+     * CHECK constraint "ready for later" on a table nobody reviewed, which is precisely the sort of
+     * thing that goes unnoticed. The widening is allowed in one named file and nowhere else.
      */
-    public function testNoMigrationMentionsAnOperationRole(): void
+    public function testOnlyTheApprovedMigrationMentionsTheOperationRole(): void
     {
+        $allowed = 'src/Migration/' . self::OPERATION_INITIATOR_MIGRATION . '.php';
         $offenders = [];
 
         foreach ($this->phpFilesIn($this->root() . '/src/Migration') as $relative => $source) {
             // The quoted VALUE, not the English word. `AiOperations`, "operation" in a docblock and
             // `integration_sync_runs` are all ordinary prose; what must not exist is a role literal a
             // row could be written with.
-            if (preg_match('/[\'"]OPERATION[\'"]/', $source) === 1) {
+            if (preg_match('/[\'"]OPERATION[\'"]/', $source) !== 1) {
+                continue;
+            }
+
+            if ($relative !== $allowed) {
                 $offenders[] = $relative;
             }
         }
 
         self::assertSame([], $offenders, implode("\n", $offenders));
+        self::assertFileExists(
+            $this->root() . '/' . $allowed,
+            'The approved migration is missing; the allowance above would then hide a real regression.',
+        );
     }
 
     /** The Order Testing module names no agent class and no agent route. */

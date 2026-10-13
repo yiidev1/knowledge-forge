@@ -8,6 +8,7 @@ use App\Agent\Domain\AgentAuthenticationResult;
 use App\Agent\Domain\AgentIdentity;
 use App\Agent\Domain\AgentIdentityStoreInterface;
 use App\Agent\Domain\AgentLoginActivityRepositoryInterface;
+use App\Agent\Domain\Order58Role;
 use App\Auth\Application\LoginThrottleInterface;
 use App\Order58\Contract\Exception\Order58Exception;
 use App\Order58\Contract\Order58ClientInterface;
@@ -19,9 +20,11 @@ use Throwable;
  * Authenticates an Order58 agent, entirely server-side.
  *
  * The password is posted to Order58 `POST /authenticate` and is never stored, hashed locally, or logged.
- * Only agents are admitted: the account must authenticate **and** have `user_type === 'agent'` and
- * `status === 'active'` — merchant/admin/operation/trainee accounts are rejected with the same generic
- * result as a wrong password. On success only the safe identity is placed in the session.
+ * Two roles are admitted — `agent` and `operation` — and each must also be `status === 'active'`. The
+ * allowlist lives in {@see Order58Role::fromUserType()} and is matched **case-sensitively**, so
+ * merchant, trainee, trainer, PreTraining, admin and employee accounts are refused with the same generic
+ * result as a wrong password, as is any type the provider adds later. On success only the safe identity
+ * is placed in the session; what that identity may then *do* is decided by the middleware, not here.
  *
  * A **fallback** credential check runs in exactly one situation: the Integration API answered and said the
  * username/password is wrong. Three states deliberately never reach it:
@@ -38,7 +41,6 @@ use Throwable;
  */
 final readonly class AgentLoginService
 {
-    private const REQUIRED_USER_TYPE = 'agent';
     private const REQUIRED_STATUS = 'active';
 
     public function __construct(
@@ -74,7 +76,15 @@ final readonly class AgentLoginService
         if ($result->authenticated && $agent !== null) {
             // The primary identified the user, so authorization is settled here and is final. A refusal at
             // this point is about who they are, not about what they typed, and the fallback must not see it.
-            if ($agent->userType !== self::REQUIRED_USER_TYPE || $agent->status !== self::REQUIRED_STATUS) {
+            //
+            // `Order58Role::fromUserType()` is an allowlist matched case-sensitively: `agent` and
+            // `operation` are admitted, every other type the provider sends — `merchant`, `trainee`,
+            // `trainer`, `PreTraining`, `admin`, `employee`, and anything added later — returns null and
+            // is refused by default.
+            if (
+                Order58Role::fromUserType($agent->userType) === null
+                || $agent->status !== self::REQUIRED_STATUS
+            ) {
                 $this->throttle->registerFailure($throttleKey);
 
                 return AgentAuthenticationResult::invalidCredentials();

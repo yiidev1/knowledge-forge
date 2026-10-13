@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Application\AudioIngestionService;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\AudioUploadValidator;
@@ -238,7 +239,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [$role->value => $this->wavUpload('channel.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             $type,
@@ -266,7 +267,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Mixed,
@@ -335,7 +336,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $conversation = $this->conversations->findByPublicId($publicId);
@@ -361,7 +362,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('caller.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Caller,
@@ -396,7 +397,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('22449119-callee.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Callee,
@@ -409,7 +410,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('by-hand.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         self::assertSame($session, $this->conversations->findByPublicId($linked)?->callSessionId);
@@ -472,7 +473,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('22449119.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $id = (int) $this->connection
@@ -506,7 +507,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('22613839.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Mixed,
@@ -552,7 +553,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('22613709.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Mixed,
@@ -599,7 +600,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $conversation = $this->conversations->findByPublicId($publicId);
@@ -622,7 +623,7 @@ final class AudioConversationTest extends Unit
                 SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                 SourceRole::Agent->value => $this->wavUpload('agent.wav'),
             ],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             null,
@@ -722,7 +723,7 @@ final class AudioConversationTest extends Unit
                 ConversationMode::Common,
                 $this->storeSourceId,
                 [$role->value => $this->wavUpload('channel.wav')],
-                $this->adminId,
+                AudioActor::admin($this->adminId),
                 TranscriptionProvider::Whisper,
                 false,
                 $type,
@@ -761,7 +762,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mixed.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             RecordingType::Mixed,
@@ -793,7 +794,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Separate,
             $this->storeSourceId,
             [SourceRole::Customer->value => $this->wavUpload('customer.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             TranscriptionProvider::Whisper,
             false,
             null,
@@ -814,7 +815,7 @@ final class AudioConversationTest extends Unit
                 SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                 SourceRole::Agent->value => $this->wavUpload('agent.wav'),
             ],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $conversation = $this->conversations->findByPublicId($publicId);
@@ -845,7 +846,7 @@ final class AudioConversationTest extends Unit
                     SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                     SourceRole::Agent->value => $this->wavUpload('agent.wav'),
                 ],
-                $this->adminId,
+                AudioActor::admin($this->adminId),
             );
 
             self::fail('The enqueue should have failed while writing the second child.');
@@ -884,7 +885,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('first.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $before = $this->conversations->countForStore($this->storeSourceId);
@@ -897,7 +898,7 @@ final class AudioConversationTest extends Unit
                     SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                     SourceRole::Agent->value => $this->wavUpload('agent.wav'),
                 ],
-                $this->adminId,
+                AudioActor::admin($this->adminId),
             );
 
             self::fail('A pair needing two slots must not fit in a queue with room for one.');
@@ -926,7 +927,7 @@ final class AudioConversationTest extends Unit
                 SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                 SourceRole::Agent->value => $this->wavUpload('agent.wav'),
             ],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         self::assertSame(1, $this->conversations->countForStore($this->storeSourceId));
@@ -942,7 +943,7 @@ final class AudioConversationTest extends Unit
             ConversationMode::Common,
             $this->storeSourceId,
             [SourceRole::Common->value => $this->wavUpload('mine.wav')],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         self::assertSame(1, $this->conversations->countForStore($this->storeSourceId));
@@ -957,7 +958,7 @@ final class AudioConversationTest extends Unit
                 ConversationMode::Common,
                 $this->storeSourceId,
                 [SourceRole::Common->value => $this->wavUpload($filename)],
-                $this->adminId,
+                AudioActor::admin($this->adminId),
             );
         }
 
@@ -985,7 +986,7 @@ final class AudioConversationTest extends Unit
                 SourceRole::Customer->value => $this->wavUpload('customer.wav'),
                 SourceRole::Agent->value => $this->wavUpload('agent.wav'),
             ],
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $conversation = $this->conversations->findByPublicId($publicId);

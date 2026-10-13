@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain\Tts;
 
+use App\AudioToText\Domain\AudioActor;
+
 /**
  * Storage for AI audio renditions, and the concurrency rules that keep them from being paid for twice.
  *
@@ -52,7 +54,7 @@ interface TtsRenditionRepositoryInterface
         int $jobId,
         TtsOutputType $outputType,
         string $requestedHash,
-        ?int $adminId,
+        ?AudioActor $requestedBy,
         string $provider,
     ): TtsEnqueueOutcome;
 

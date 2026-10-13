@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\Tests\Support\Fake\AudioToText\FixedRecordingTypes;
 use App\Tests\Support\Fake\AudioToText\JobsById;
 use App\AudioToText\Domain\RecordingType;
@@ -120,8 +121,8 @@ final class TtsGenerationServiceTest extends TestCase
     {
         $job = $this->eligibleMixedJob();
 
-        $this->assertSame(TtsEnqueueOutcome::Queued, $this->service->enqueue($job, TtsOutputType::Mixed, 1));
-        $this->assertSame(TtsEnqueueOutcome::AlreadyRunning, $this->service->enqueue($job, TtsOutputType::Mixed, 1));
+        $this->assertSame(TtsEnqueueOutcome::Queued, $this->service->enqueue($job, TtsOutputType::Mixed, AudioActor::admin(1)));
+        $this->assertSame(TtsEnqueueOutcome::AlreadyRunning, $this->service->enqueue($job, TtsOutputType::Mixed, AudioActor::admin(1)));
         $this->assertSame(1, $this->renditions->enqueueCount, 'A second click must not become a second charge.');
     }
 
@@ -130,7 +131,7 @@ final class TtsGenerationServiceTest extends TestCase
     {
         $job = $this->eligibleMixedJob();
 
-        $this->service->enqueue($job, TtsOutputType::Mixed, 1);
+        $this->service->enqueue($job, TtsOutputType::Mixed, AudioActor::admin(1));
         $this->service->enqueueRequested($job, true);
 
         $this->assertSame(1, $this->renditions->enqueueCount);
@@ -143,7 +144,7 @@ final class TtsGenerationServiceTest extends TestCase
     {
         $job = $this->eligibleMixedJob();
 
-        $outcome = $this->service->enqueue($job, TtsOutputType::Mixed, 1, 'a-hash-from-an-older-render');
+        $outcome = $this->service->enqueue($job, TtsOutputType::Mixed, AudioActor::admin(1), 'a-hash-from-an-older-render');
 
         $this->assertSame(TtsEnqueueOutcome::AlreadyCurrent, $outcome);
         $this->assertSame(0, $this->renditions->enqueueCount);
@@ -154,7 +155,7 @@ final class TtsGenerationServiceTest extends TestCase
         $job = $this->eligibleMixedJob();
         $hash = $this->service->currentHash($job, TtsOutputType::Mixed);
 
-        $this->assertSame(TtsEnqueueOutcome::Queued, $this->service->enqueue($job, TtsOutputType::Mixed, 1, $hash));
+        $this->assertSame(TtsEnqueueOutcome::Queued, $this->service->enqueue($job, TtsOutputType::Mixed, AudioActor::admin(1), $hash));
     }
 
     public function testNothingIsQueuedWhenTheUploadDidNotAskForIt(): void
@@ -184,7 +185,7 @@ final class TtsGenerationServiceTest extends TestCase
         $this->expectException(TtsException::class);
 
         // A separate pair has no shared clock, so a merged track would mean inventing an ordering.
-        $this->service->enqueue($customer, TtsOutputType::Mixed, 1);
+        $this->service->enqueue($customer, TtsOutputType::Mixed, AudioActor::admin(1));
     }
 
     public function testAMixedRecordingOffersOnlyMixed(): void
@@ -210,7 +211,7 @@ final class TtsGenerationServiceTest extends TestCase
 
         $this->expectException(TtsException::class);
 
-        $this->service->enqueue($job, TtsOutputType::Agent, 1);
+        $this->service->enqueue($job, TtsOutputType::Agent, AudioActor::admin(1));
     }
 
     private function eligibleMixedJob(): \App\AudioToText\Domain\TranscriptionJob

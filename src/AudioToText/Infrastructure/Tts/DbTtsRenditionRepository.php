@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Infrastructure\Tts;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\Tts\TtsEnqueueOutcome;
 use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Domain\Tts\TtsRendition;
@@ -37,6 +38,7 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
     private const TABLE = '{{%audio_tts_renditions}}';
     private const JOBS = '{{%audio_transcription_jobs}}';
     private const ADMINS = '{{%admin_users}}';
+    private const OPERATORS = '{{%order58_agents}}';
 
     /** `error_message` is VARCHAR(255) and is rendered on a page; a longer message is cut, not refused. */
     private const MAX_ERROR_LENGTH = 255;
@@ -100,7 +102,7 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
         int $jobId,
         TtsOutputType $outputType,
         string $requestedHash,
-        ?int $adminId,
+        ?AudioActor $requestedBy,
         string $provider,
     ): TtsEnqueueOutcome {
         $now = DbDateTime::format($this->clock->now());
@@ -114,7 +116,9 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
                 'attempt_token' => $token,
                 'requested_hash' => $requestedHash,
                 'provider' => $provider,
-                'requested_by_admin_id' => $adminId,
+                'requested_by_admin_id' => $requestedBy?->adminId,
+                'requested_by_type' => $requestedBy?->type->value,
+                'requested_by_operation_id' => $requestedBy?->operationId,
                 'created_at' => $now,
                 'updated_at' => $now,
             ])->execute();
@@ -131,7 +135,9 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
                 'status' => TtsStatus::Queued->value,
                 'attempt_token' => $token,
                 'requested_hash' => $requestedHash,
-                'requested_by_admin_id' => $adminId,
+                'requested_by_admin_id' => $requestedBy?->adminId,
+                'requested_by_type' => $requestedBy?->type->value,
+                'requested_by_operation_id' => $requestedBy?->operationId,
                 'error_message' => null,
                 'generating_since' => null,
                 'updated_at' => $now,
@@ -391,7 +397,12 @@ final readonly class DbTtsRenditionRepository implements TtsRenditionRepositoryI
                 'requested_by_username' => 'a.username',
             ])
             ->from(['r' => self::TABLE])
-            ->leftJoin(['a' => self::ADMINS], 'a.id = r.requested_by_admin_id');
+            // Two realms, two name sources. An operation user has no `admin_users` row, so their
+            // name comes from the mirror they signed in against; COALESCE picks whichever of the
+            // pair the row actually used. Historical rows are all administrators and are
+            // unaffected.
+            ->leftJoin(['a' => self::ADMINS], 'a.id = r.requested_by_admin_id')
+            ->leftJoin(['oa' => self::OPERATORS], 'oa.admin_id = r.requested_by_operation_id');
     }
 
     /**

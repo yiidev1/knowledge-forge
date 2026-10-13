@@ -72,4 +72,9 @@ return [
             ),
         ],
     ],
+
+    // Who is acting. The adapter reads the request-scoped actor the authorization middleware
+    // established; this module never learns which realm that was.
+    App\OrderTesting\Domain\TestActorInterface::class
+        => App\OrderTesting\Infrastructure\CurrentActorTestActor::class,
 ];

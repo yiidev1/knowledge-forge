@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\OrderTesting;
 
+use App\AudioToText\Domain\AudioActorInterface;
 use App\AudioToText\Application\ArrivingRecordingMerger;
 use App\AudioToText\Application\AudioToTextSettings;
 use App\AudioToText\Application\AudioUploadValidator;
@@ -18,7 +19,6 @@ use App\AudioToText\Domain\DemoOrderCountReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Web\Job\Store\Action as AudioStoreAction;
-use App\Auth\Application\CurrentAdmin;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Web\Support\Redirect;
@@ -70,7 +70,7 @@ final readonly class StoreAction extends AudioStoreAction
         AudioToTextSettings $settings,
         AudioToTextSettingsRepositoryInterface $settingsRepository,
         UploadOptions $uploadOptions,
-        CurrentAdmin $currentAdmin,
+        AudioActorInterface $actor,
         Redirect $redirect,
         AppTimeZone $appTimeZone,
         StoreOrderGroupRepositoryInterface $groups,
@@ -91,7 +91,7 @@ final readonly class StoreAction extends AudioStoreAction
             $settings,
             $settingsRepository,
             $uploadOptions,
-            $currentAdmin,
+            $actor,
             $redirect,
             $appTimeZone,
             $groups,

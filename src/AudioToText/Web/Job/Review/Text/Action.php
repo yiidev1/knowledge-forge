@@ -32,7 +32,7 @@ final readonly class Action
         int $index,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
         // raw(): the administrator's text is stored as typed, and escaped where it is rendered.
         $text = $this->support->form($request)->raw('text');
@@ -40,7 +40,7 @@ final readonly class Action
         return $this->support->apply(
             $publicId,
             'Wording corrected. The original transcript is unchanged.',
-            fn() => $this->review->editText($publicId, $adminId, $index, $text, $version),
+            fn() => $this->review->editText($publicId, $actor, $index, $text, $version),
             // Passed so the shared shell can answer in the modal's language when asked; an
             // ordinary submission still gets the flash and the redirect.
             $request,

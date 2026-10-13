@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\Tts\TtsEnqueueOutcome;
@@ -76,7 +77,7 @@ final class TtsRenditionRepositoryTest extends Unit
             bin2hex(random_bytes(16)),
             $this->storeSourceId,
             ConversationMode::Common,
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             new DateTimeImmutable(),
             true,
         );
@@ -84,7 +85,7 @@ final class TtsRenditionRepositoryTest extends Unit
         $this->jobPublicId = bin2hex(random_bytes(16));
         $this->jobs->create(
             $this->jobPublicId,
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             'call.wav',
             'source.wav',
             12.5,
@@ -141,7 +142,7 @@ final class TtsRenditionRepositoryTest extends Unit
             bin2hex(random_bytes(16)),
             $this->storeSourceId,
             ConversationMode::Common,
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             new DateTimeImmutable(),
         );
 
@@ -390,7 +391,7 @@ final class TtsRenditionRepositoryTest extends Unit
     {
         $this->enqueueAs(TtsOutputType::Mixed, null);
         $this->enqueueAs(TtsOutputType::Customer, null);
-        $this->enqueueAs(TtsOutputType::Agent, $this->adminId);
+        $this->enqueueAs(TtsOutputType::Agent, AudioActor::admin($this->adminId));
 
         $claimed = $this->renditions->claim();
 
@@ -415,8 +416,8 @@ final class TtsRenditionRepositoryTest extends Unit
     /** And within the manual band: two administrators are served in the order they pressed. */
     public function testFifoIsPreservedAmongAdminRequests(): void
     {
-        $this->enqueueAs(TtsOutputType::Mixed, $this->adminId);
-        $this->enqueueAs(TtsOutputType::Customer, $this->adminId);
+        $this->enqueueAs(TtsOutputType::Mixed, AudioActor::admin($this->adminId));
+        $this->enqueueAs(TtsOutputType::Customer, AudioActor::admin($this->adminId));
 
         self::assertSame(TtsOutputType::Mixed, $this->renditions->claim()?->outputType);
         self::assertSame(TtsOutputType::Customer, $this->renditions->claim()?->outputType);
@@ -437,7 +438,7 @@ final class TtsRenditionRepositoryTest extends Unit
         self::assertSame(TtsStatus::Generating, $running->status);
 
         // A human presses Generate while that one is mid-flight.
-        $this->enqueueAs(TtsOutputType::Agent, $this->adminId);
+        $this->enqueueAs(TtsOutputType::Agent, AudioActor::admin($this->adminId));
 
         $next = $this->renditions->claim();
 
@@ -452,18 +453,18 @@ final class TtsRenditionRepositoryTest extends Unit
     /** An admin request queued while nothing else waits behaves exactly as before. */
     public function testASoleAdminRequestIsClaimedNormally(): void
     {
-        $this->enqueueAs(TtsOutputType::Mixed, $this->adminId);
+        $this->enqueueAs(TtsOutputType::Mixed, AudioActor::admin($this->adminId));
 
         self::assertSame(TtsOutputType::Mixed, $this->renditions->claim()?->outputType);
     }
 
-    private function enqueueAs(TtsOutputType $type, ?int $adminId): TtsEnqueueOutcome
+    private function enqueueAs(TtsOutputType $type, ?AudioActor $requestedBy): TtsEnqueueOutcome
     {
         return $this->renditions->enqueue(
             $this->jobId,
             $type,
             bin2hex(random_bytes(32)),
-            $adminId,
+            $requestedBy,
             'DEEPGRAM',
         );
     }
@@ -483,7 +484,7 @@ final class TtsRenditionRepositoryTest extends Unit
 
     private function enqueue(string $hash): TtsEnqueueOutcome
     {
-        return $this->renditions->enqueue($this->jobId, TtsOutputType::Mixed, $hash, $this->adminId, 'DEEPGRAM');
+        return $this->renditions->enqueue($this->jobId, TtsOutputType::Mixed, $hash, AudioActor::admin($this->adminId), 'DEEPGRAM');
     }
 
     private function rowCount(): int

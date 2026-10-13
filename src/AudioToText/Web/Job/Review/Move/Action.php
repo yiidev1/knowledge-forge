@@ -30,7 +30,7 @@ final readonly class Action
         int $index,
         ServerRequestInterface $request,
     ): ResponseInterface {
-        $adminId = $this->support->adminId();
+        $actor = $this->support->actor();
         $version = $this->support->expectedVersion($request);
 
         // An unrecognised value is refused rather than resolved to whichever role is not the other:
@@ -43,10 +43,10 @@ final readonly class Action
             $role === SpeakerRole::AGENT
                 ? 'Turn reassigned to the Agent.'
                 : 'Turn reassigned to the Customer.',
-            function () use ($publicId, $adminId, $index, $version, $role): void {
+            function () use ($publicId, $actor, $index, $version, $role): void {
                 match ($role) {
-                    SpeakerRole::AGENT => $this->review->moveToAgent($publicId, $adminId, $index, $version),
-                    SpeakerRole::CUSTOMER => $this->review->moveToCustomer($publicId, $adminId, $index, $version),
+                    SpeakerRole::AGENT => $this->review->moveToAgent($publicId, $actor, $index, $version),
+                    SpeakerRole::CUSTOMER => $this->review->moveToCustomer($publicId, $actor, $index, $version),
                     default => throw ReviewRejected::unsupportedRole(),
                 };
             },

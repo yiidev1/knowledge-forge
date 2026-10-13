@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\ReviewOperation;
 use App\AudioToText\Infrastructure\DbSegmentRevisionRepository;
 use App\AudioToText\Infrastructure\DbTranscriptionJobRepository;
@@ -96,7 +97,7 @@ final class ReviewedConversationPersistenceTest extends Unit
             $this->segments('Yes. For pickup'),
             'For pickup',
             'Yes.',
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             $job->reviewCount,
         );
 
@@ -133,7 +134,7 @@ final class ReviewedConversationPersistenceTest extends Unit
             $this->segments('Yes. For pickup'),
             'For pickup',
             'Yes.',
-            $this->adminId,
+            AudioActor::admin($this->adminId),
             $job->reviewCount,
         );
 
@@ -158,12 +159,12 @@ final class ReviewedConversationPersistenceTest extends Unit
         $staleVersion = $job->reviewCount;
 
         $this->assertTrue(
-            $this->jobs->saveReview($job->id, $this->segments('first'), 'a', 'b', $this->adminId, $staleVersion),
+            $this->jobs->saveReview($job->id, $this->segments('first'), 'a', 'b', AudioActor::admin($this->adminId), $staleVersion),
         );
 
         // The second tab still believes the version it read on load.
         $this->assertFalse(
-            $this->jobs->saveReview($job->id, $this->segments('second'), 'c', 'd', $this->adminId, $staleVersion),
+            $this->jobs->saveReview($job->id, $this->segments('second'), 'c', 'd', AudioActor::admin($this->adminId), $staleVersion),
             'A save carrying a superseded version must be refused.',
         );
 
@@ -179,11 +180,11 @@ final class ReviewedConversationPersistenceTest extends Unit
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
 
-        $this->jobs->saveReview($job->id, $this->segments('corrected'), 'a', 'b', $this->adminId, $job->reviewCount);
+        $this->jobs->saveReview($job->id, $this->segments('corrected'), 'a', 'b', AudioActor::admin($this->adminId), $job->reviewCount);
 
         $reviewed = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($reviewed);
-        $this->assertTrue($this->jobs->clearReview($reviewed->id, $this->adminId, $reviewed->reviewCount));
+        $this->assertTrue($this->jobs->clearReview($reviewed->id, AudioActor::admin($this->adminId), $reviewed->reviewCount));
 
         $reverted = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($reverted);
@@ -205,13 +206,13 @@ final class ReviewedConversationPersistenceTest extends Unit
             $job->id,
             (string) $job->speakerSegmentsJson,
             ReviewOperation::EditText,
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
         $second = $this->revisions->add(
             $job->id,
             $this->segments('Yes. For pickup'),
             ReviewOperation::Move,
-            $this->adminId,
+            AudioActor::admin($this->adminId),
         );
 
         $this->assertSame(1, $first);
@@ -235,7 +236,7 @@ final class ReviewedConversationPersistenceTest extends Unit
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
 
-        $this->revisions->add($job->id, '[]', ReviewOperation::Move, $this->adminId);
+        $this->revisions->add($job->id, '[]', ReviewOperation::Move, AudioActor::admin($this->adminId));
 
         $rejected = false;
 
@@ -290,7 +291,7 @@ final class ReviewedConversationPersistenceTest extends Unit
         $job = $this->jobs->findByPublicId($publicId);
         $this->assertNotNull($job);
 
-        $this->revisions->add($job->id, '[]', ReviewOperation::Move, $this->adminId);
+        $this->revisions->add($job->id, '[]', ReviewOperation::Move, AudioActor::admin($this->adminId));
         $this->assertSame(1, $this->revisions->countForJob($job->id));
 
         IntegrationDb::cleanup($this->connection, '{{%audio_transcription_jobs}}', ['public_id' => $publicId]);

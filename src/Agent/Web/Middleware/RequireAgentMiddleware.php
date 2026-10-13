@@ -6,6 +6,7 @@ namespace App\Agent\Web\Middleware;
 
 use App\Agent\Application\CurrentAgent;
 use App\Agent\Domain\AgentIdentityStoreInterface;
+use App\Agent\Domain\Order58Role;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -31,6 +32,16 @@ final readonly class RequireAgentMiddleware implements MiddlewareInterface
         $identity = $this->identityStore->current();
         if ($identity === null) {
             return $this->redirect->toRoute('agent.login.show');
+        }
+
+        // The same login page now issues sessions to two roles. An operation user holds a perfectly
+        // valid Order58 session and must still be refused here: their area is Order Testing, and the
+        // agent app — store chat, rule chat, the rule list — is not theirs. Sending them to their own
+        // home rather than to a login form matters, because they have already passed one.
+        $role = Order58Role::fromUserType($identity->userType);
+
+        if ($role === null || !$role->canAccessAgentArea()) {
+            return $this->redirect->toRoute($role?->homeRoute() ?? 'agent.login.show');
         }
 
         $this->currentAgent->set($identity);

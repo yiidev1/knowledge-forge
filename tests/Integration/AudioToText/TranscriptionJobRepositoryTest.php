@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\AudioActor;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\ProcessingStage;
 use App\AudioToText\Domain\Speaker\SeparationReviewReason;
@@ -692,7 +693,7 @@ final class TranscriptionJobRepositoryTest extends Unit
 
         $this->repository->create(
             $publicId,
-            $adminId,
+            AudioActor::admin($adminId),
             'call.wav',
             'source.wav',
             73.72,
