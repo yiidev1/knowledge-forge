@@ -109,3 +109,87 @@
     opacity: 0.55;
     cursor: progress;
 }
+
+/* ------------------------------------------------------------------ the floating recording player
+
+   Rendered into a Document Picture-in-Picture window, which is a separate top-level document owned by
+   the listing page. It gets this file because the script clones the page's own <link> elements into
+   it — which is also why these rules live here rather than in the script: `style-src 'self'` allows a
+   stylesheet from this origin and would refuse an inline one.
+
+   Sized for a window about 320x190. Everything is laid out for that, not for a page. */
+
+.ot-pip {
+    margin: 0;
+    padding: 0.7rem 0.8rem;
+    background: var(--surface, #16181d);
+    color: var(--text, #e8e8ea);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.ot-pip__title {
+    margin-bottom: 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--muted, #8a8f98);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ot-pip__row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.45rem;
+}
+
+.ot-pip__btn {
+    flex: none;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--border, #2a2d34);
+    border-radius: 0.4rem;
+    background: var(--surface-2, rgba(255, 255, 255, 0.04));
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.ot-pip__btn:hover {
+    border-color: var(--primary, #6b7cff);
+}
+
+/* The one control the trainee reaches for mid-call, so it is the one that looks like a button. */
+.ot-pip__btn--play {
+    min-width: 4.2rem;
+    border-color: var(--primary, #6b7cff);
+    background: var(--primary, #6b7cff);
+    color: #fff;
+    font-weight: 600;
+}
+
+.ot-pip__time {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted, #8a8f98);
+}
+
+.ot-pip__seek,
+.ot-pip__volume {
+    width: 100%;
+    accent-color: var(--primary, #6b7cff);
+}
+
+.ot-pip__vol-label {
+    flex: none;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted, #8a8f98);
+}
+
+/* The element is driven entirely by the controls above it; its native chrome would only be a second,
+   differently-styled copy of them in a window this small. */
+.ot-pip audio {
+    display: none;
+}
