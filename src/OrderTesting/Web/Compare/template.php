@@ -153,21 +153,74 @@ $itemTitle = static function (?NormalizedItem $item): string {
     return $out;
 };
 
+/**
+ * A row both documents left empty is not a row.
+ *
+ * Decided **here, once, from the shared comparison**, and handed to both panels — never as a condition
+ * inside the markup. A side that dropped a row the other kept would slide everything below it out of
+ * step, and the two orders would quietly disagree about which line is which.
+ *
+ * Empty means the document said nothing: `null`, empty, or whitespace. It does not mean zero. `0`,
+ * `0.00` and a customer count of `1` are answers, and the comparison turns on them — so a stated zero
+ * keeps its row, and only a genuine absence on *both* sides removes one.
+ */
+$isBlank = static fn(?string $v): bool => $v === null || trim($v) === '';
+
+/** @var list<FieldComparison> $fields */
+$keepFilled = static function (array $fields) use ($isBlank): array {
+    $kept = [];
+
+    foreach ($fields as $field) {
+        /** @var FieldComparison $field */
+        if ($isBlank($field->original) && $isBlank($field->demo)) {
+            continue;
+        }
+
+        $kept[] = $field;
+    }
+
+    return $kept;
+};
+
 // Totals close an invoice, so the items go above them. Partitioned by title rather than by position:
 // if the comparator ever reorders its sections, the worst case is that items fall last, not that a
 // section silently disappears.
+//
+// A section left with no rows goes too, heading and all: that is what makes Delivery address vanish
+// for a take-out order without this template knowing what take-out is.
+/** @var list<array{title: string, fields: list<FieldComparison>}> $leadingSections */
 $leadingSections = [];
+
+/** @var list<array{title: string, fields: list<FieldComparison>}> $totalsSections */
 $totalsSections = [];
 
 foreach ($comparison->sections as $section) {
     /** @var ComparisonSection $section */
+    $fields = $keepFilled($section->fields);
+
+    if ($fields === []) {
+        continue;
+    }
+
     if ($section->title === 'Totals') {
-        $totalsSections[] = $section;
+        $totalsSections[] = ['title' => $section->title, 'fields' => $fields];
 
         continue;
     }
 
-    $leadingSections[] = $section;
+    $leadingSections[] = ['title' => $section->title, 'fields' => $fields];
+}
+
+/**
+ * The same rule inside each line item, so an empty Options or Instructions row goes as well.
+ *
+ * @var array<int, list<FieldComparison>> $itemFields
+ */
+$itemFields = [];
+
+foreach ($comparison->items as $index => $item) {
+    /** @var ItemComparison $item */
+    $itemFields[$index] = $keepFilled($item->fields);
 }
 
 /**
@@ -185,6 +238,7 @@ $panel = static function (
     $comparison,
     $leadingSections,
     $totalsSections,
+    $itemFields,
     $value,
     $verdict,
     $itemTitle,
@@ -218,9 +272,9 @@ $panel = static function (
 
     foreach ($leadingSections as $section) {
         $out .= '<div class="ot-book__section"><h3 class="ot-book__section-title">'
-            . Html::encode($section->title) . '</h3><dl class="ot-book__lines">';
+            . Html::encode($section['title']) . '</h3><dl class="ot-book__lines">';
 
-        foreach ($section->fields as $field) {
+        foreach ($section['fields'] as $field) {
             $out .= $line($field->label, $value($pick($field)), $mark($field));
         }
 
@@ -238,7 +292,7 @@ $panel = static function (
     } else {
         $out .= '<div class="ot-items">';
 
-        foreach ($comparison->items as $item) {
+        foreach ($comparison->items as $index => $item) {
             /** @var ItemComparison $item */
             $mine = $isDemo ? $item->demo : $item->original;
 
@@ -248,7 +302,8 @@ $panel = static function (
                 . ($isDemo ? '<span class="ot-book__mark">' . $verdict($item) . '</span>' : '')
                 . '</header><dl class="ot-book__lines">';
 
-            foreach ($item->fields as $field) {
+            foreach ($itemFields[$index] ?? [] as $field) {
+                /** @var FieldComparison $field */
                 $out .= $line($field->label, $value($pick($field)), $mark($field));
             }
 
@@ -290,12 +345,12 @@ $panel = static function (
     // ---- totals close the invoice ----------------------------------------------------------------
     foreach ($totalsSections as $section) {
         $out .= '<div class="ot-book__section ot-book__section--totals">'
-            . '<h3 class="ot-book__section-title">' . Html::encode($section->title) . '</h3>'
+            . '<h3 class="ot-book__section-title">' . Html::encode($section['title']) . '</h3>'
             . '<dl class="ot-book__lines">';
 
-        $last = array_key_last($section->fields);
+        $last = array_key_last($section['fields']);
 
-        foreach ($section->fields as $key => $field) {
+        foreach ($section['fields'] as $key => $field) {
             // The grand total is the figure anybody actually looks for, so it is set apart rather than
             // left as the last of seven identical rows.
             $out .= $line(

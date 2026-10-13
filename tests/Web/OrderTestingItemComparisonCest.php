@@ -359,6 +359,146 @@ final class OrderTestingItemComparisonCest
         $I->dontSee('Missing in demo', '.ot-items');
     }
 
+    // ------------------------------------------------------------------ the two changes
+
+    /** A field neither order filled in is not a row on either panel. */
+    public function aFieldBlankOnBothOrdersIsHiddenOnBothPanels(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        foreach (['original', 'demo'] as $side) {
+            $rows = $this->panelRows($I->grabPageSource(), $side);
+            Assert::assertNotContains('line:Email', $rows, $side . ' still prints an empty Email row');
+            Assert::assertNotContains('line:Payment method', $rows, $side . ' still prints an empty row');
+        }
+    }
+
+    /** A field only one order filled in stays on both, so the comparison has somewhere to be. */
+    public function aFieldOnOneSideOnlyStaysOnBothPanels(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            reservation: ['phone' => self::PHONE, 'email' => 'marta@example.test'],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        foreach (['original', 'demo'] as $side) {
+            $rows = $this->panelRows($I->grabPageSource(), $side);
+            Assert::assertContains('line:Email', $rows, $side . ' dropped a field the other side has');
+        }
+
+        $I->see('marta@example.test', '.ot-book--original');
+        $I->see('Missing in demo', '.ot-book--demo');
+    }
+
+    /** An address neither order has takes its whole section with it, heading included. */
+    public function aDeliveryAddressEmptyOnBothSidesHidesTheWholeSection(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()], address: null, city: null);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->dontSee('Delivery address', '.ot-books');
+
+        foreach (['original', 'demo'] as $side) {
+            $rows = $this->panelRows($I->grabPageSource(), $side);
+            Assert::assertNotContains('title:Delivery address', $rows);
+            Assert::assertNotContains('line:City', $rows);
+        }
+    }
+
+    /** And it is still there the moment either order has one. */
+    public function aDeliveryAddressOnEitherSideKeepsTheSection(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Delivery address', '.ot-book--original');
+        $I->see('Delivery address', '.ot-book--demo');
+        $I->see('162 N Main St', '.ot-book--demo');
+    }
+
+    /**
+     * Zero is a stated number, not an absence, and keeps its row.
+     *
+     * The fixture's demo order states no count at all, so this is also the one-sided case: the row
+     * survives on both panels and the demo side carries the verdict.
+     */
+    public function aZeroIsAStatedNumberAndNotAnAbsence(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            reservation: ['phone' => self::PHONE, 'customer_count' => 0],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        foreach (['original', 'demo'] as $side) {
+            $rows = $this->panelRows($I->grabPageSource(), $side);
+            Assert::assertContains('line:Customer count', $rows, $side . ' dropped a stated zero');
+        }
+
+        $I->see('0', '.ot-book--original');
+    }
+
+    /** Whatever is hidden is hidden from both panels, which is what keeps the two in step. */
+    public function whateverIsHiddenIsHiddenFromBothPanels(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedItem(2, $this->soup(), 1);
+        $this->seedDemoOrder([$this->wings()], address: null, city: null);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $html = $I->grabPageSource();
+        Assert::assertSame(
+            $this->panelRows($html, 'original'),
+            $this->panelRows($html, 'demo'),
+            'the two panels no longer agree about which rows exist',
+        );
+    }
+
+    /** The totals keep their own section, their labels and their verdicts — only their position moved. */
+    public function theTotalsKeepTheirSectionAndTheirVerdicts(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->seeElement('.ot-book--original .ot-book__section--totals');
+        $I->seeElement('.ot-book--demo .ot-book__section--totals');
+        $I->see('Totals', '.ot-book--original');
+        $I->see('Total', '.ot-book--demo');
+        $I->seeElement('.ot-book--original .ot-book__line--grand');
+        $I->seeElement('.ot-book--demo .ot-book__line--grand');
+    }
+
     // ------------------------------------------------------------------ the rest of the page
 
     /** The non-item half of the comparison is untouched by any of this. */
@@ -594,7 +734,9 @@ final class OrderTestingItemComparisonCest
 
         $rows = $this->panelRows($I->grabPageSource(), 'original');
 
-        Assert::assertGreaterThan(100, count($rows), 'twelve lines should produce well over a hundred rows');
+        // Rows blank on both sides are no longer rendered, so the same order is shorter than it was
+        // (73 rows, not ~120). The bound this test exists for is the upper one.
+        Assert::assertGreaterThan(50, count($rows), 'twelve lines should still make a long document');
         // `grid-template-rows: repeat(1000, auto)` in demo-orders.css.
         Assert::assertLessThan(1000, count($rows), 'this order would overflow the shared grid');
     }
@@ -903,8 +1045,11 @@ final class OrderTestingItemComparisonCest
     }
 
     /** @param list<array<string, mixed>> $items */
-    private function seedDemoOrder(array $items): void
-    {
+    private function seedDemoOrder(
+        array $items,
+        ?string $address = '162 N Main St',
+        ?string $city = 'Freeport',
+    ): void {
         $now = gmdate('Y-m-d H:i:s');
         $payload = (string) json_encode([
             'id' => self::DEMO_ORDER,
@@ -926,8 +1071,8 @@ final class OrderTestingItemComparisonCest
             'payment_method' => 'cash',
             'status' => 'completed',
             'total_amount' => '13.35000',
-            'address' => '162 N Main St',
-            'city' => 'Freeport',
+            'address' => $address,
+            'city' => $city,
             'source_filename' => self::ORDER . '-' . self::DEMO_ORDER . '.json',
             'content_hash' => hash('sha256', $payload),
             'raw_payload' => $payload,

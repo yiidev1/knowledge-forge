@@ -47,6 +47,23 @@ function readPanels(page) {
                 top: box.top + window.scrollY,
                 bottom: box.bottom + window.scrollY,
                 left: box.left,
+                width: box.width,
+                // The totals rows are full-bleed grid rows inset by padding, so the row BOX still
+                // starts at the panel edge. What sits bottom-right is their content.
+                totalsLeft: (() => {
+                    const term = panel.querySelector('.ot-book__line--grand .ot-book__term');
+                    return term === null ? null : term.getBoundingClientRect().left;
+                })(),
+                subtotalLeft: (() => {
+                    const row = panel.querySelector(
+                        '.ot-book__section--totals .ot-book__line:not(.ot-book__line--grand) .ot-book__term',
+                    );
+                    return row === null ? null : row.getBoundingClientRect().left;
+                })(),
+                grandTop: (() => {
+                    const g = panel.querySelector('.ot-book__line--grand');
+                    return g === null ? null : g.getBoundingClientRect().top + window.scrollY;
+                })(),
                 rows: [...panel.querySelectorAll(rows)].map((el) => {
                     const r = el.getBoundingClientRect();
                     return {
@@ -125,6 +142,29 @@ async function at(page, width, label) {
         check('both panels end level', Math.abs(original.bottom - demo.bottom) <= TOLERANCE,
             original.bottom.toFixed(1) + ' vs ' + demo.bottom.toFixed(1));
         check('no horizontal page scroll', overflow <= 0, String(overflow));
+
+        // The totals belong in the bottom right of their own panel, measured from the panel box so
+        // the check holds at any width.
+        for (const [name, p] of [['original', original], ['demo', demo]]) {
+            const share = p.totalsLeft === null ? 0 : (p.totalsLeft - p.left) / p.width;
+            check('the grand total sits in the right-hand half (' + name + ')',
+                p.totalsLeft !== null && share >= 0.40 && share <= 0.60,
+                'label starts at ' + (share * 100).toFixed(1) + '% of panel');
+
+            // ...and only the grand total. The figures it sums keep the ordinary row position, which
+            // is the same inset every other label on the page uses.
+            const subShare = p.subtotalLeft === null ? 1 : (p.subtotalLeft - p.left) / p.width;
+            check('the subtotals keep the ordinary row position (' + name + ')',
+                p.subtotalLeft !== null && subShare < 0.15,
+                'labels start at ' + (subShare * 100).toFixed(1) + '% of panel');
+        }
+
+        check('the two totals blocks line up',
+            original.grandTop !== null && demo.grandTop !== null
+            && Math.abs(original.grandTop - demo.grandTop) <= TOLERANCE,
+            original.grandTop === null || demo.grandTop === null
+                ? 'missing a grand total'
+                : original.grandTop.toFixed(1) + ' vs ' + demo.grandTop.toFixed(1));
     }
 
     // ---- stacked: no opposite row to match, so nothing is held ------------------------------------

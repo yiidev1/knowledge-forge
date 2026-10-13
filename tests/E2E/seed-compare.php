@@ -149,10 +149,19 @@ $demoLines = [
     line(45300005, 'Crab Rangoon (6)', 'A9', '6.50000'),
 ];
 
+// The billing summary's whole policy, in one order:
+//   subtotal / tax      differ            -> shown, with the difference
+//   shipping_fee        0.00 vs 2.50      -> shown; a zero is an answer, not a missing value
+//   tip                 0.00 on both      -> suppressed, symmetrically, as an agreed-zero charge
+//   surcharge/discount  absent on both    -> removed entirely
 $payload = (string) json_encode([
     'id' => (string) ORDER,
     'status' => 'completed',
     'type' => 'delivery',
+    'subtotal' => '29.55000',
+    'tax' => '1.95000',
+    'shipping_fee' => '0.00000',
+    'tip' => '0.00000',
     'total_amount' => '31.50000',
     'data' => (string) json_encode([
         'reservation' => [
@@ -202,10 +211,16 @@ foreach ($originalLines as $position => $raw) {
     ])->execute();
 }
 
+// A demo order that carries a payload is read from the payload, not from its columns, so the totals
+// have to be stated here too or the demo side of the billing summary reads as entirely missing.
 $demoPayload = (string) json_encode([
     'id' => DEMO_ORDER,
     'status' => 'completed',
     'type' => 'delivery',
+    'subtotal' => '26.10000',
+    'tax' => '1.72000',
+    'shipping_fee' => '2.50000',
+    'tip' => '0.00000',
     'total_amount' => '28.60000',
     'items' => $demoLines,
     'data' => ['reservation' => ['phone' => PHONE, 'first_name' => 'Marta', 'customer_count' => 2]],
@@ -221,6 +236,10 @@ $c->createCommand()->insert('{{%order_testing_demo_orders}}', [
     'order_type' => 'delivery',
     'payment_method' => 'cash',
     'status' => 'completed',
+    'subtotal' => '26.10000',
+    'tax' => '1.72000',
+    'shipping_fee' => '2.50000',
+    'tip' => '0.00000',
     'total_amount' => '28.60000',
     'address' => '162 N Main St',
     'city' => 'Freeport',

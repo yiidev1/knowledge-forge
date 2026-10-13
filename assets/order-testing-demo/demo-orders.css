@@ -216,6 +216,22 @@
     flex: none;
 }
 
+/*
+ * The grand total sits in the bottom right of its own panel, where an invoice puts the figure a reader
+ * is looking for. The subtotals it sums keep the ordinary row layout of every other line on the page.
+ *
+ * The row stays full-bleed — side by side these are shared grid rows and may not be wrapped in a box of
+ * their own without losing their tracks — so it is inset with padding rather than floated.
+ */
+.ot-book__section--totals > .ot-book__lines > .ot-book__line--grand {
+    padding-left: 50%;
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ot-book__line--grand .ot-book__desc {
+    justify-content: flex-end;
+}
+
 .ot-book__line--grand {
     margin-top: 0.35rem;
     padding-top: 0.7rem;
@@ -283,6 +299,11 @@
 /* One line item against the next is a softer division than a total against its subtotals. */
 .ot-book__item + .ot-book__item > .ot-book__item-head::before {
     border-top-style: dashed;
+}
+
+/* ...and the rule over the grand total runs only under the figures it totals. */
+.ot-book__line--grand::before {
+    left: 50%;
 }
 
 /* Removed lines are informational, so they read as a quiet list rather than as invoice rows: no
@@ -409,6 +430,15 @@
     .ot-book__line {
         grid-template-columns: minmax(0, 1fr);
         gap: 0;
+    }
+
+    .ot-book__section--totals > .ot-book__lines > .ot-book__line--grand {
+        padding-left: 1.25rem;
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .ot-book__line--grand::before {
+        left: 1.25rem;
     }
 
     .ot-book__term {
