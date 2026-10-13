@@ -1,3 +1,4 @@
 node_modules/
 fixtures.json
 package*.json
+fixtures-compare.json

@@ -67,35 +67,353 @@
     color: var(--muted, #8a8f98);
 }
 
-/* The two order columns get equal width, so a long original cannot squeeze the demo beside it. */
-.ot-compare th[scope="row"] {
-    width: 18%;
-    font-weight: 500;
-    text-align: left;
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * Two invoices, side by side.
+ *
+ * Each `.ot-book` is a self-contained document: a reader can cover one and the other still makes sense
+ * on its own. Both are built from the same field list in the same order, so row n of one is row n of the
+ * other — and side by side they share one set of row tracks, so row n is also the same height on both.
+ * See "Keeping the two invoices in step" below for how, and why the rows carry the padding.
+ * ---------------------------------------------------------------------------------------------------
+ */
+
+.ot-books {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+    align-items: start;
 }
 
-.ot-compare td:nth-child(2),
-.ot-compare td:nth-child(3) {
-    width: 32%;
+.ot-books__note {
+    margin-top: 1rem;
 }
 
-/* An item's own row is the heading for the field rows indented beneath it. */
-.ot-compare__item-head > * {
-    border-top: 2px solid var(--border, #2a2d34);
-    padding-top: 0.6rem;
+.ot-book {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border, #2a2d34);
+    border-radius: 0.75rem;
+    background: var(--surface, #16181d);
+    overflow: hidden;
 }
 
-.ot-compare__item-field th[scope="row"] {
-    padding-left: 1.5rem;
+/* The accent names the column at a glance, and survives greyscale as a thicker top edge. */
+.ot-book--original {
+    border-top: 3px solid #7f9bf0;
+}
+
+.ot-book--demo {
+    border-top: 3px solid #2ea36a;
+}
+
+.ot-book__head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.1rem 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border, #2a2d34);
+    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.ot-book__kind {
+    grid-column: 1;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted, #8a8f98);
+}
+
+.ot-book__number {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    font-size: 1.15rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.ot-book__who {
+    grid-column: 1;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.ot-book__phone {
+    grid-column: 1;
+    font-size: 0.82rem;
+    color: var(--muted, #8a8f98);
+    font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The invoice's padding and rules live on the rows, not on the wrappers around them.
+ *
+ * `.ot-book__section`, `.ot-items`, `.ot-book__item` and `.ot-book__lines` group the document for a
+ * reader and for these selectors, but they draw nothing: side by side their boxes are removed so that
+ * every row lands on a shared track (see the bottom of this file). A box there would have taken the
+ * invoice's side padding and its section hairlines with it.
+ */
+.ot-book__section-title {
+    margin: 0;
+    padding: 0.9rem 1.25rem 0.45rem;
+    border-top: 1px solid var(--border, #2a2d34);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted, #8a8f98);
+}
+
+/* The head already closes itself with a border, so the first section must not draw a second line. */
+.ot-book__section:first-of-type .ot-book__section-title {
+    border-top: 0;
+}
+
+.ot-book__lines {
+    margin: 0;
+}
+
+/*
+ * One line of the invoice: label left, value right, verdict hard against the right edge.
+ *
+ * `minmax(0, 1fr)` rather than `1fr`, so a long option list wraps inside the panel instead of widening
+ * the grid track and pushing the verdict off the card.
+ */
+.ot-book__line {
+    position: relative;
+    display: grid;
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+    gap: 0.25rem 0.75rem;
+    align-items: baseline;
+    padding: 0.15rem 1.25rem;
+}
+
+/* The last line of a section closes it. Inside the items, only the last item's last line does, because
+   between two items the next item's heading already provides the space. */
+.ot-book__section > .ot-book__lines > .ot-book__line:last-child,
+.ot-book__item:last-child > .ot-book__lines > .ot-book__line:last-child {
+    padding-bottom: 0.9rem;
+}
+
+.ot-book__term {
+    font-size: 0.82rem;
+    color: var(--muted, #8a8f98);
+}
+
+.ot-book__desc {
+    margin: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.6rem;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}
+
+.ot-book__mark {
+    flex: none;
+}
+
+.ot-book__line--grand {
+    margin-top: 0.35rem;
+    padding-top: 0.7rem;
+}
+
+.ot-book__line--grand .ot-book__term,
+.ot-book__line--grand .ot-book__desc {
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: inherit;
+}
+
+/* ---- line items -------------------------------------------------------------------------------- */
+
+.ot-book__item + .ot-book__item > .ot-book__item-head {
+    margin-top: 0.6rem;
+    padding-top: 0.75rem;
+}
+
+.ot-book__item-head {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.2rem 1.25rem 0.35rem;
+}
+
+.ot-book__item-name {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* A line the other order does not have. Dimmed, never removed: dropping it would slide every line
+   below it out of step with the invoice opposite. */
+.ot-book__item--absent .ot-book__item-name,
+.ot-book__item--absent .ot-book__desc {
+    opacity: 0.55;
+}
+
+.ot-book__removed {
+    position: relative;
+    margin-top: 0.9rem;
+    padding: 0.75rem 1.25rem 0.9rem;
+}
+
+/*
+ * The hairline above a row that opens something — the grand total, a second line item, the removed
+ * lines — is an inset pseudo-element, not the row's own `border-top`.
+ *
+ * The rows are full-bleed: each carries the invoice's side padding itself. A border on one would run
+ * from edge to edge, which is what a section heading wants and what a total does not.
+ */
+.ot-book__line--grand::before,
+.ot-book__item + .ot-book__item > .ot-book__item-head::before,
+.ot-book__removed::before {
+    content: '';
+    position: absolute;
+    inset: 0 1.25rem auto;
+    border-top: 1px solid var(--border, #2a2d34);
+}
+
+/* One line item against the next is a softer division than a total against its subtotals. */
+.ot-book__item + .ot-book__item > .ot-book__item-head::before {
+    border-top-style: dashed;
+}
+
+/* Removed lines are informational, so they read as a quiet list rather than as invoice rows: no
+   bullets, no browser indent, and the same muted tone as the sentence introducing them. */
+.ot-removed-items {
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.2rem;
     font-size: 0.85rem;
     color: var(--muted, #8a8f98);
 }
 
-@media (max-width: 720px) {
-    /* Stacked rather than scrolled sideways: a comparison nobody can see both halves of is useless. */
-    .ot-compare th[scope="row"],
-    .ot-compare td:nth-child(2),
-    .ot-compare td:nth-child(3) {
-        width: auto;
+/* ---- verdicts ---------------------------------------------------------------------------------- */
+
+.ot-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* A match is the quiet case: a tick, no word, no pill. Twenty-seven labels saying "Match" would bury
+   the three that do not. The full wording stays in `title` and in visually-hidden text. */
+.ot-mark--match {
+    padding: 0;
+    background: none;
+    color: #2ea36a;
+    font-size: 0.85rem;
+}
+
+.ot-mark--different {
+    background: rgba(214, 69, 69, 0.16);
+    color: #e06a6a;
+}
+
+.ot-mark--missing {
+    background: rgba(214, 140, 40, 0.16);
+    color: #d99340;
+}
+
+.ot-mark--extra {
+    background: rgba(90, 120, 220, 0.16);
+    color: #7f9bf0;
+}
+
+.ot-mark--unknown {
+    background: rgba(130, 130, 140, 0.16);
+    color: var(--muted, #8a8f98);
+}
+
+.ot-mark__glyph {
+    font-weight: 700;
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * Keeping the two invoices in step, row for row.
+ *
+ * Both panels put out the same rows in the same order, but a value that wraps onto a second line makes
+ * its own row taller — and from there every row below it sits lower than its opposite number. By the
+ * Totals the two invoices disagree about which line is which, which is the one thing a comparison may
+ * not do.
+ *
+ * So the panels share one set of row tracks. `.ot-books` owns the tracks; each panel subgrids onto them.
+ * A track is then as tall as the taller of the two rows that occupy it, and the shorter side simply
+ * keeps the slack. Nothing is measured and nothing is written back, so there is nothing to re-run on a
+ * resize, a font swap or a zoom, and no state that can drift: the pairing belongs to the grid.
+ *
+ * The wrappers between a panel and its rows exist for meaning, not for layout, so their boxes are
+ * removed and each row lands on a track of its own. Their class names still select — which is why the
+ * rules above hang the invoice's padding and hairlines off the rows themselves.
+ *
+ * Side by side only. Stacked there is no opposite row to match, and holding heights would only open
+ * gaps, so the whole mechanism sits behind a min-width and the panels fall back to flowing naturally.
+ * A browser without `subgrid` gets that same natural flow rather than half a grid.
+ * ---------------------------------------------------------------------------------------------------
+ */
+@supports (grid-template-rows: subgrid) {
+    @media (min-width: 1101px) {
+        .ot-books {
+            /*
+             * More tracks than an order can fill. An `auto` track with nothing in it is zero tall and
+             * costs nothing, so this only has to be an upper bound — and the exact count is not
+             * available here: it would have to arrive from PHP in an inline style, which this
+             * application's `style-src 'self'` forbids. `OrderTestingItemComparisonCest` holds the
+             * bound, so an order large enough to reach it fails a test rather than a layout.
+             */
+            grid-template-rows: repeat(1000, auto);
+            align-items: stretch;
+            row-gap: 0;
+        }
+
+        .ot-book {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: subgrid;
+            grid-row: 1 / -1;
+        }
+
+        .ot-book__section,
+        .ot-items,
+        .ot-book__item,
+        .ot-book__lines {
+            display: contents;
+        }
+    }
+}
+
+@media (max-width: 1100px) {
+    /* Stacked, never squeezed: two invoices at half a tablet's width stop being readable before they
+       stop fitting. The original stays first, so the reading order is still original then demo. */
+    .ot-books {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 560px) {
+    .ot-book__line {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .ot-book__term {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
 }

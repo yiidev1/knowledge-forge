@@ -192,6 +192,9 @@ p { margin: 0 0 1rem; }
 .breadcrumbs__current { color: var(--text); font-weight: 600; }
 
 .content { padding: 2rem; max-width: 1180px; width: 100%; }
+/* Opt-in, requested by the page. 1180px is a reading column; two invoices beside one another
+   need the room, and nothing else on the site asks for this class. */
+.content--wide { max-width: 1640px; }
 
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .page-header__title { margin: 0; }

@@ -1,7 +1,9 @@
-# Browser tests — speaker correction
+# Browser tests
 
-These drive a real Chrome against both screens that correct a transcript: the full page at
-`/audio-to-text/job/{publicId}/review` and the Details dialog on `/audio-to-text/store/{sourceId}`.
+These drive a real Chrome against the screens whose behaviour no markup test can reach. Two groups,
+run separately: **speaker correction** (`run.sh`) against the full page at
+`/audio-to-text/job/{publicId}/review` and the Details dialog on `/audio-to-text/store/{sourceId}`, and
+**order comparison geometry** (`run-compare.sh`) against `/order-testing/store/…/order/…/demo/…`.
 
 They are **not** part of `codecept run`. They need a browser, and the rest of the suite deliberately
 does not.
@@ -20,7 +22,8 @@ Both suites were green throughout. Only a browser found either.
 
 ```
 npm install puppeteer-core          # once, in this directory
-KF_BASE=http://127.0.0.1:8080 ./run.sh
+KF_BASE=http://127.0.0.1:8080 ./run.sh            # speaker correction
+KF_BASE=http://127.0.0.1:8080 ./run-compare.sh    # order comparison geometry
 ```
 
 `run.sh` seeds its own store, conversation and administrator, runs a suite, and seeds again for the
@@ -71,3 +74,23 @@ Whisper run is needed to reach the state under test.
 its `speaker_segments` really do contain two clusters; these assert that every screen still reads it as
 one person, that the speaker controls are absent, that edit/history/merge still work, and that a Mixed
 recording is untouched.
+
+## Order comparison geometry
+
+`compare.js` — the two invoice panels on the Order Comparison page, measured rather than asserted
+about. They are laid onto one set of shared row tracks so that row *n* of the original and row *n* of
+the demo are the same height; a value that wraps onto a second line on one side used to push every row
+below it out of step with its opposite number, and by the Totals the two invoices disagreed about which
+line was which.
+
+A markup test can prove both panels emit the same rows in the same order — `OrderTestingItemComparison`
+`Cest` does — but not that those rows end up at the same height, because PhpBrowser neither lays out nor
+wraps anything. So this reads real geometry: every row's top edge and height on both sides at 1600,
+1440, 1200 and 1160px, then the stacked widths 1100, 768 and 390 where the heights must be free to
+differ again. It also asserts no horizontal overflow and no CSP violation — the alignment is pure CSS
+precisely because `style-src 'self'` leaves no room for an inline style.
+
+`seed-compare.php` builds one deliberately lopsided comparison: a line whose options wrap on the
+original only, one where the demo is the taller side, a line only the original has, a line only the demo
+has, and a line the provider removed. A tidy fixture would pass whether or not the mechanism worked.
+It reads the page and changes nothing; `cleanup-compare.php` removes its rows by their own markers.

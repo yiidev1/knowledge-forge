@@ -10,6 +10,10 @@ use App\Shared\Domain\Clock\SystemClock;
 use App\Shared\Order58\Items\ItemCanonicalizer;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use DOMDocument;
+use DOMElement;
+use DOMXPath;
+use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
@@ -17,8 +21,12 @@ use function bin2hex;
 use function gmdate;
 use function hash;
 use function json_encode;
+use function libxml_clear_errors;
+use function libxml_use_internal_errors;
+use function preg_replace;
 use function random_bytes;
 use function str_repeat;
+use function trim;
 
 /**
  * The original-vs-demo item comparison, rendered.
@@ -395,6 +403,368 @@ final class OrderTestingItemComparisonCest
 
     // ------------------------------------------------------------------ harness
 
+    // ---------------------------------------------------------------- invoice layout
+
+    /**
+     * The page is one comparison, not two unrelated columns.
+     *
+     * Asserted on the panel headings rather than on a screenshot: what matters is that each order
+     * number sits inside its own panel, because the whole redesign rests on a reader being able to
+     * tell at a glance which column is which.
+     */
+    public function theTwoOrdersAreHeadedAsTheirOwnPanels(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Order Comparison', 'h1');
+        $I->dontSee('vs demo #', 'h1');
+
+        $I->see('Original order', '.ot-book--original');
+        $I->see((string) self::ORDER, '.ot-book--original');
+        $I->see('Demo / test order', '.ot-book--demo');
+        $I->see((string) self::DEMO_ORDER, '.ot-book--demo');
+    }
+
+    /** The original's name is read from the payload, and belongs to the original panel alone. */
+    public function theOriginalCustomerNameComesFromTheOrderPayload(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            reservation: ['first_name' => 'Marta', 'last_name' => 'Nowak', 'phone' => self::PHONE],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Marta Nowak', '.ot-book--original');
+        // The demo document this fixture writes carries no name, so the original's must not leak
+        // across. Two panels showing one customer would make every comparison look like a match.
+        $I->dontSee('Marta Nowak', '.ot-book--demo');
+    }
+
+    /**
+     * An order naming nobody says so, and says it the same way everywhere.
+     *
+     * This is the common case: the default fixture reservation holds a phone and no name, exactly as
+     * the mirror does for all but six of its orders.
+     */
+    public function anOrderWithoutANameShowsADashRatherThanABlank(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('-', '.ot-book--original .ot-book__who');
+    }
+
+    /** The shipping block answers when the reservation names nobody — the one real fallback in use. */
+    public function theNameFallsBackToShippingWhenTheReservationIsEmpty(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00', reservation: ['phone' => self::PHONE]);
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+        $this->connection->createCommand()->update(
+            '{{%order58_orders}}',
+            ['payload_json' => (string) json_encode([
+                'id' => (string) self::ORDER,
+                'status' => 'completed',
+                'type' => 'delivery',
+                'data' => (string) json_encode([
+                    'reservation' => ['first_name' => '', 'last_name' => null, 'phone' => self::PHONE],
+                    'shipping' => ['first_name' => 'Rafal', 'last_name' => 'Zieba'],
+                ]),
+            ])],
+            ['account_id' => self::STORE_ID, 'source_order_id' => self::ORDER],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Rafal Zieba', '.ot-book--original');
+    }
+
+    /** Both existing controls survive the redesign; losing either would strand the page. */
+    public function theExistingControlsAreStillThere(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->seeElement('form[action*="order-items/sync"] button[type="submit"]');
+        $I->see('Sync Original Order Items');
+        $I->see('All demo orders for this call');
+    }
+
+    /**
+     * The wider content column is opt-in, and stays opt-in.
+     *
+     * Two invoices need more room than the reading column every other admin page wants, so the layout
+     * widens only for a page that asks. The second half is the half worth guarding: if the parameter
+     * were ever read as "default on", every list and form in the admin would silently re-flow, and
+     * nothing on this page would look wrong enough to notice.
+     */
+    public function onlyThisPageAsksForTheWiderColumn(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+
+        $I->amOnPage($this->url());
+        $I->seeElement('.content.content--wide');
+        // Both panels live in the one grid, so they are columns of a page and not two stacked cards.
+        $I->seeElement('.ot-books > .ot-book--original');
+        $I->seeElement('.ot-books > .ot-book--demo');
+
+        $I->amOnPage('/order-testing');
+        $I->seeElement('.content');
+        $I->dontSeeElement('.content--wide');
+    }
+
+    // ------------------------------------------------- the rows the shared grid pairs up
+
+    /**
+     * The invariant the side-by-side alignment rests on.
+     *
+     * Both panels are laid onto one set of row tracks, so row n of the left is row n of the right and
+     * the track is as tall as the taller of the two. That only holds while both panels put out the same
+     * rows in the same order — a side that quietly skipped one would shift everything below it against
+     * its opposite number, and the Totals would end up comparing the wrong lines.
+     *
+     * Nothing in a browser enforces it, so it is asserted here, on a comparison built to be lopsided:
+     * a line only the original has, a line only the demo has, a line the provider removed, and options
+     * long enough to wrap on one side and not the other.
+     */
+    public function theTwoPanelsPutOutTheSameRowsInTheSameOrder(WebTester $I): void
+    {
+        $this->seedLopsidedComparison();
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $html = $I->grabPageSource();
+        $original = $this->panelRows($html, 'original');
+        $demo = $this->panelRows($html, 'demo');
+
+        Assert::assertNotEmpty($original, 'the original panel rendered no rows at all');
+        Assert::assertSame($original, $demo, 'the two invoices disagree about which row is which');
+    }
+
+    /**
+     * The shared grid declares a fixed number of row tracks, because the real count cannot reach it:
+     * it would have to travel from PHP in an inline style, and `style-src 'self'` forbids that.
+     *
+     * The count is an upper bound, so the only way it can fail is an order long enough to exceed it.
+     * This is where that would be caught — a dozen lines is already well beyond any real order, and
+     * lands nowhere near the bound.
+     */
+    public function aLongOrderStaysWellInsideTheSharedGridsTracks(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+
+        $demoLines = [];
+
+        for ($i = 0; $i < 12; $i++) {
+            $line = $this->wings();
+            $line['id'] = 45309000 + $i;
+            $line['name'] = '[F' . $i . ']Fried Chicken Wings (4)';
+            $this->seedItem($i + 1, $line, $i);
+            $demoLines[] = $line;
+        }
+
+        $this->seedDemoOrder($demoLines);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $rows = $this->panelRows($I->grabPageSource(), 'original');
+
+        Assert::assertGreaterThan(100, count($rows), 'twelve lines should produce well over a hundred rows');
+        // `grid-template-rows: repeat(1000, auto)` in demo-orders.css.
+        Assert::assertLessThan(1000, count($rows), 'this order would overflow the shared grid');
+    }
+
+    /**
+     * A line the provider removed is answered on the demo side rather than left blank.
+     *
+     * The original lists them; the demo says why it has none. Saying nothing would cost the demo panel
+     * a row and put the two invoices out of step from there down.
+     */
+    public function removedLinesAreAnsweredOnTheDemoSide(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $removed = $this->wings();
+        $removed['deleted'] = '1';
+        $this->seedItem(1, $removed, 0);
+        $this->seedDemoOrder([$this->soup()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Removed from the original order', '.ot-book--original');
+        $I->seeElement('.ot-book--original .ot-removed-items');
+
+        $I->see('Removed lines', '.ot-book--demo');
+        $I->see('not expected here and nothing is missing', '.ot-book--demo');
+        // The list itself belongs to the original: the demo never had those lines to show.
+        $I->dontSeeElement('.ot-book--demo .ot-removed-items');
+    }
+
+    /** Several items, each pairing with its opposite number and keeping its own verdict. */
+    public function severalItemsEachKeepTheirOwnPlaceAndVerdict(WebTester $I): void
+    {
+        $this->seedLopsidedComparison();
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        // Present on both: compared. Present on one: named as such, on the side that has it.
+        $I->see('Fried Chicken Wings (4)', '.ot-book--original');
+        $I->see('Fried Chicken Wings (4)', '.ot-book--demo');
+        $I->see('Wonton Soup', '.ot-book--original');
+        $I->dontSee('Wonton Soup', '.ot-book--demo');
+        $I->see('Crab Rangoon', '.ot-book--demo');
+        $I->dontSee('Crab Rangoon', '.ot-book--original');
+
+        $I->see('Not on this order', '.ot-book--original');
+        $I->see('Not on this order', '.ot-book--demo');
+
+        $I->see('Missing in demo', '.ot-book--demo');
+        $I->see('Extra in demo', '.ot-book--demo');
+        // Verdicts stay on the side that is being judged, however many items there are.
+        $I->dontSee('Missing in demo', '.ot-book--original');
+        $I->dontSee('Extra in demo', '.ot-book--original');
+    }
+
+    /**
+     * One comparison with every shape that makes the two sides disagree about a row's height.
+     *
+     * Wings are on both sides with options long enough to wrap on the original only; the soup is the
+     * original's alone; the rangoon is the demo's alone; the egg roll was removed by the provider.
+     */
+    private function seedLopsidedComparison(): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+
+        $wings = $this->wings();
+        $wings['data']['additionals'] = [
+            ['additional_name' => 'Add / Extra', 'option_name' => 'Extra crispy, well done, sauce on the side', 'qty' => '1', 'price' => '0.50000'],
+        ];
+        $this->seedItem(1, $wings, 0);
+        $this->seedItem(2, $this->soup(), 1);
+
+        $removed = $this->wings();
+        $removed['id'] = 45309901;
+        $removed['name'] = '[A1]Egg Roll';
+        $removed['deleted'] = '1';
+        $this->seedItem(3, $removed, 2);
+
+        // A different product, not a renamed one: sharing the soup's id would have the comparator pair
+        // the two and leave neither side a line short, which is the case this fixture is here to make.
+        $rangoon = $this->soup();
+        $rangoon['id'] = 45309902;
+        $rangoon['name'] = '[A9]Crab Rangoon (6)';
+        $rangoon['price'] = '6.50000';
+        $rangoon['product_id'] = 506999;
+        $rangoon['data']['product'] = ['id' => 506999, 'sn' => 'A9', 'name' => 'Crab Rangoon (6)'];
+
+        $this->seedDemoOrder([$this->wings(), $rangoon]);
+    }
+
+    /**
+     * The rows of one panel, in the order they are drawn, each reduced to what both sides must agree on.
+     *
+     * Values are left out on purpose — they differ, and that is the point of the page. What must match
+     * is the shape: the same kinds of row, carrying the same field labels, in the same order.
+     *
+     * The selector names every element that occupies a row of the shared grid. It is explicit rather
+     * than "every descendant", because a wrapper that still had a box would not show up here, and that
+     * is exactly the mistake this test exists to catch.
+     *
+     * @return list<string>
+     */
+    private function panelRows(string $html, string $side): array
+    {
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($doc);
+        $has = static fn(string $class): string
+            => "contains(concat(' ', normalize-space(@class), ' '), ' " . $class . " ')";
+
+        $panel = $xpath->query('//section[' . $has('ot-book--' . $side) . ']')->item(0);
+
+        if (!$panel instanceof DOMElement) {
+            return [];
+        }
+
+        $rows = $xpath->query(
+            './/*[' . $has('ot-book__head')
+            . ' or ' . $has('ot-book__section-title')
+            . ' or ' . $has('ot-book__line')
+            . ' or ' . $has('ot-book__item-head')
+            . ' or ' . $has('ot-book__removed')
+            . ' or (self::p and parent::*[' . $has('ot-book__section--items') . '])]',
+            $panel,
+        );
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            if (!$row instanceof DOMElement) {
+                continue;
+            }
+
+            $class = $row->getAttribute('class');
+
+            if (str_contains($class, 'ot-book__line')) {
+                $term = $xpath->query('.//*[' . $has('ot-book__term') . ']', $row)->item(0);
+                $out[] = 'line:' . self::flatten($term?->textContent ?? '');
+
+                continue;
+            }
+
+            if (str_contains($class, 'ot-book__section-title')) {
+                $out[] = 'title:' . self::flatten($row->textContent);
+
+                continue;
+            }
+
+            // An item's heading names what was ordered, and the two sides name different things — or
+            // one of them names nothing at all. Only its position in the sequence has to match.
+            $out[] = match (true) {
+                str_contains($class, 'ot-book__head') => 'head',
+                str_contains($class, 'ot-book__item-head') => 'item',
+                str_contains($class, 'ot-book__removed') => 'removed',
+                default => 'note',
+            };
+        }
+
+        return $out;
+    }
+
+    private static function flatten(string $text): string
+    {
+        return trim((string) preg_replace('/\s+/', ' ', $text));
+    }
+
     private function url(): string
     {
         return '/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER
@@ -473,7 +843,12 @@ final class OrderTestingItemComparisonCest
         ])->execute();
     }
 
-    private function seedOrder(string $itemsStatus, ?string $syncedAt = null): void
+    /**
+     * @param array<string, mixed>|null $reservation what the order's reservation block holds. Defaults
+     *                                               to the real shape: a phone and no name at all,
+     *                                               which is what 390 of 396 mirrored orders carry.
+     */
+    private function seedOrder(string $itemsStatus, ?string $syncedAt = null, ?array $reservation = null): void
     {
         $now = gmdate('Y-m-d H:i:s');
         // Deliberately WITHOUT an `items` key: this is what the orders mirror actually holds, and the
@@ -483,7 +858,7 @@ final class OrderTestingItemComparisonCest
             'status' => 'completed',
             'type' => 'delivery',
             'total_amount' => '13.35000',
-            'data' => (string) json_encode(['reservation' => ['phone' => self::PHONE]]),
+            'data' => (string) json_encode(['reservation' => $reservation ?? ['phone' => self::PHONE]]),
         ]);
 
         $this->connection->createCommand()->insert('{{%order58_orders}}', [

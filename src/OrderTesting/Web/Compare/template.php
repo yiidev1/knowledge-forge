@@ -2,19 +2,41 @@
 
 declare(strict_types=1);
 
-use App\OrderTesting\Web\DemoOrdersAsset;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
+use App\OrderTesting\Domain\Comparison\ComparisonStatus;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
 use App\OrderTesting\Domain\Comparison\ItemAvailability;
 use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
+use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\Comparison\OrderComparison;
 use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\TestAttempt;
+use App\OrderTesting\Web\DemoOrdersAsset;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
 /**
+ * Two invoices, side by side.
+ *
+ * ## The rule this template exists to obey
+ *
+ * **The left panel renders only the original order. The right panel renders only the demo order.**
+ * Neither reaches across. A reader can cover one half of the screen and still be looking at a complete,
+ * truthful invoice — which is the whole point, and what the earlier shared four-column grid could not
+ * do however it was styled.
+ *
+ * The verdict belongs to the demo side, because it is a statement about what the trainee entered. It is
+ * rendered beside the demo value rather than in a column of its own, so the answer sits where the thing
+ * it judges is.
+ *
+ * ## Why both panels walk the same field list
+ *
+ * Alignment. Each panel iterates `$comparison->sections` and `$comparison->items` in the same order and
+ * emits one row per entry, so Customer faces Customer and the fourth line of one faces the fourth line
+ * of the other. A side absent from a pair still emits its row, muted — leaving it out would slide
+ * everything below it out of step and quietly make the two invoices disagree about which line is which.
+ *
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
  * @var Yiisoft\Yii\View\Renderer\Csrf $csrf
@@ -28,7 +50,10 @@ use Yiisoft\Router\UrlGeneratorInterface;
 
 $assetManager->register(DemoOrdersAsset::class);
 
-$this->setTitle('Compare #' . $demo->sourceOrderId . ' with demo #' . $demo->demoOrderId);
+// Two invoices need more than the 1180px a reading column wants. Opt-in, so no other page moves.
+$this->setParameter('wideContent', true);
+
+$this->setTitle('Order comparison #' . $demo->sourceOrderId . ' / demo #' . $demo->demoOrderId);
 $this->setParameter('breadcrumbs', [
     ['label' => 'Order Testing', 'route' => 'order-testing'],
     ['label' => $storeName, 'route' => 'order-testing.store', 'arguments' => ['sourceId' => $sourceId]],
@@ -45,7 +70,7 @@ $listUrl = $urlGenerator->generate('order-testing.demo-orders', [
     'sourceOrderId' => $demo->sourceOrderId,
 ]);
 
-// Fetches the ORIGINAL order's items — the left-hand column — and nothing else. The demo order on the
+// Fetches the ORIGINAL order's items — the left-hand panel — and nothing else. The demo order on the
 // right is a file somebody's listener wrote and is never touched here; its id travels with the form
 // only so that this exact comparison is what reloads afterwards.
 //
@@ -55,23 +80,42 @@ $syncItemsUrl = $urlGenerator->generate('order58.order-items.sync');
 
 /** A value as the document recorded it, or an explicit blank. Never guessed at, never reformatted. */
 $value = static fn(?string $v): string => $v === null || $v === ''
-    ? '<span class="util-muted">—</span>'
+    ? '<span class="util-muted">&mdash;</span>'
     : Html::encode($v);
 
 /**
- * The verdict chip.
+ * The verdict beside a demo value.
  *
- * The word comes from the enum and the colour from its own modifier, so this template holds no opinion
- * about which differences matter — that question belongs to scoring, which is not built yet.
+ * A match is a tick and nothing else — twenty-seven of them spelled out would bury the three that
+ * matter. Everything else keeps its words, because "missing" and "extra" are not opposites of "match"
+ * and a bare mark could not tell them apart. The `title` carries the full wording for the tick, and
+ * `util-visually-hidden` repeats it for a screen reader, so the compact form is never the only copy.
  */
-$chip = static fn(FieldComparison|ItemComparison $c): string => '<span class="ot-verdict ot-verdict--'
-    . Html::encode($c->status->modifier()) . '">' . Html::encode($c->status->label()) . '</span>';
+$verdict = static function (FieldComparison|ItemComparison $c): string {
+    $label = $c->status->label();
+    $modifier = $c->status->modifier();
+
+    if ($c->status === ComparisonStatus::Match) {
+        return '<span class="ot-mark ot-mark--match" title="' . Html::encode($label) . '">'
+            . '<span aria-hidden="true">✓</span>'
+            . '<span class="util-visually-hidden">' . Html::encode($label) . '</span></span>';
+    }
+
+    $glyph = match ($c->status) {
+        ComparisonStatus::Different => '✕',
+        ComparisonStatus::MissingInDemo => '−',
+        ComparisonStatus::ExtraInDemo => '+',
+        ComparisonStatus::Uncomparable => '·',
+        ComparisonStatus::Match => '✓',
+    };
+
+    return '<span class="ot-mark ot-mark--' . Html::encode($modifier) . '">'
+        . '<span class="ot-mark__glyph" aria-hidden="true">' . $glyph . '</span>'
+        . Html::encode($label) . '</span>';
+};
 
 /**
  * The item-synchronisation state, in words an administrator can act on.
- *
- * Named in the summary card and not only explained above the item table: somebody scanning this card
- * needs to know whether the comparison below can be trusted before they read any of it.
  *
  * `EMPTY` deliberately reads as "No items" rather than "Synced, 0 items": the provider confirmed the
  * order has no lines, which is a comparable fact, and "0 items" reads as a sync that quietly failed.
@@ -94,12 +138,13 @@ $itemStateModifier = match ($comparison->itemAvailability) {
     default => 'unknown',
 };
 
-$itemSummary = static function (?NormalizedItem $item) use ($value): string {
+/** The line's own heading inside an invoice: what was ordered, and its catalogue code. */
+$itemTitle = static function (?NormalizedItem $item): string {
     if ($item === null) {
-        return '<span class="util-muted">Not present</span>';
+        return '<span class="util-muted">Not on this order</span>';
     }
 
-    $out = '<strong>' . Html::encode($item->name ?? 'Unnamed item') . '</strong>';
+    $out = Html::encode($item->name ?? 'Unnamed item');
 
     if ($item->sn !== null) {
         $out .= ' <code>' . Html::encode($item->sn) . '</code>';
@@ -107,16 +152,173 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
 
     return $out;
 };
+
+// Totals close an invoice, so the items go above them. Partitioned by title rather than by position:
+// if the comparator ever reorders its sections, the worst case is that items fall last, not that a
+// section silently disappears.
+$leadingSections = [];
+$totalsSections = [];
+
+foreach ($comparison->sections as $section) {
+    /** @var ComparisonSection $section */
+    if ($section->title === 'Totals') {
+        $totalsSections[] = $section;
+
+        continue;
+    }
+
+    $leadingSections[] = $section;
+}
+
+/**
+ * One invoice.
+ *
+ * Called twice, once per side, and told which side it is. Everything it prints comes from that side
+ * alone: `$side` picks the value, and only the demo panel is given the verdicts to show.
+ */
+$panel = static function (
+    string $side,
+    string $kind,
+    int $orderId,
+    ?NormalizedOrder $order,
+) use (
+    $comparison,
+    $leadingSections,
+    $totalsSections,
+    $value,
+    $verdict,
+    $itemTitle,
+): string {
+    $isDemo = $side === 'demo';
+    $pick = static fn(FieldComparison $f): ?string => $isDemo ? $f->demo : $f->original;
+    $mark = static fn(FieldComparison|ItemComparison $c): string => $isDemo ? $verdict($c) : '';
+
+    $line = static function (string $label, string $rendered, string $markup, string $extra = '') use ($isDemo): string {
+        return '<div class="ot-book__line' . $extra . '">'
+            . '<dt class="ot-book__term">' . Html::encode($label) . '</dt>'
+            . '<dd class="ot-book__desc">' . $rendered
+            . ($isDemo ? '<span class="ot-book__mark">' . $markup . '</span>' : '')
+            . '</dd></div>';
+    };
+
+    $out = '<section class="ot-book ot-book--' . Html::encode($side) . '" aria-label="' . Html::encode($kind) . '">';
+
+    // Read once, so an unreadable order prints the same placeholder in both slots rather than half a
+    // header. `$customer` is non-null whenever `$order` is; the nullsafe chain is about the order.
+    $customer = $order?->customer;
+    $phone = $customer?->phone;
+
+    $out .= '<header class="ot-book__head">'
+        . '<span class="ot-book__kind">' . Html::encode($kind) . '</span>'
+        . '<span class="ot-book__number">#' . Html::encode((string) $orderId) . '</span>'
+        . '<span class="ot-book__who">' . Html::encode($customer?->displayName() ?? '-') . '</span>'
+        . '<span class="ot-book__phone">'
+        . ($phone === null ? '<span class="util-muted">-</span>' : Html::encode($phone))
+        . '</span></header>';
+
+    foreach ($leadingSections as $section) {
+        $out .= '<div class="ot-book__section"><h3 class="ot-book__section-title">'
+            . Html::encode($section->title) . '</h3><dl class="ot-book__lines">';
+
+        foreach ($section->fields as $field) {
+            $out .= $line($field->label, $value($pick($field)), $mark($field));
+        }
+
+        $out .= '</dl></div>';
+    }
+
+    // ---- the lines themselves -------------------------------------------------------------------
+    $out .= '<div class="ot-book__section ot-book__section--items"><h3 class="ot-book__section-title">'
+        . 'Order items</h3>';
+
+    if ($comparison->items === []) {
+        $out .= '<p class="util-muted">'
+            . ($comparison->itemsWereCompared() ? 'No line items on this order.' : 'No line items to show.')
+            . '</p>';
+    } else {
+        $out .= '<div class="ot-items">';
+
+        foreach ($comparison->items as $item) {
+            /** @var ItemComparison $item */
+            $mine = $isDemo ? $item->demo : $item->original;
+
+            $out .= '<article class="ot-book__item' . ($mine === null ? ' ot-book__item--absent' : '') . '">'
+                . '<header class="ot-book__item-head">'
+                . '<h4 class="ot-book__item-name">' . $itemTitle($mine) . '</h4>'
+                . ($isDemo ? '<span class="ot-book__mark">' . $verdict($item) . '</span>' : '')
+                . '</header><dl class="ot-book__lines">';
+
+            foreach ($item->fields as $field) {
+                $out .= $line($field->label, $value($pick($field)), $mark($field));
+            }
+
+            $out .= '</dl></article>';
+        }
+
+        $out .= '</div>';
+    }
+
+    // Lines the provider marked removed belong to the original invoice and are not expected opposite.
+    //
+    // The demo panel still emits its own block rather than nothing. Both invoices must put out the same
+    // number of rows in the same order for the shared row grid to pair them up, and a side that quietly
+    // skipped a row would slide its totals one line out of step with the other's. So the counterpart is
+    // a real, labelled statement of why this side has no such lines — not a spacer.
+    if ($comparison->removedItems !== []) {
+        $out .= '<div class="ot-book__removed"><h4 class="ot-book__item-name">'
+            . ($isDemo ? 'Removed lines' : 'Removed from the original order') . '</h4>';
+
+        if ($isDemo) {
+            $out .= '<p class="util-muted">The provider removed these lines from the original order, so '
+                . 'they are not expected here and nothing is missing.</p></div>';
+        } else {
+            $out .= '<p class="util-muted">The provider marked these lines removed. They are not expected '
+                . 'in the demo order and are not compared.</p><ul class="ot-removed-items">';
+
+            foreach ($comparison->removedItems as $removed) {
+                $out .= '<li>' . Html::encode($removed->name ?? 'Unnamed item')
+                    . ($removed->quantityLabel() !== null ? ' &times;' . Html::encode($removed->quantityLabel()) : '')
+                    . '</li>';
+            }
+
+            $out .= '</ul></div>';
+        }
+    }
+
+    $out .= '</div>';
+
+    // ---- totals close the invoice ----------------------------------------------------------------
+    foreach ($totalsSections as $section) {
+        $out .= '<div class="ot-book__section ot-book__section--totals">'
+            . '<h3 class="ot-book__section-title">' . Html::encode($section->title) . '</h3>'
+            . '<dl class="ot-book__lines">';
+
+        $last = array_key_last($section->fields);
+
+        foreach ($section->fields as $key => $field) {
+            // The grand total is the figure anybody actually looks for, so it is set apart rather than
+            // left as the last of seven identical rows.
+            $out .= $line(
+                $field->label,
+                $value($pick($field)),
+                $mark($field),
+                $key === $last ? ' ot-book__line--grand' : '',
+            );
+        }
+
+        $out .= '</dl></div>';
+    }
+
+    return $out . '</section>';
+};
 ?>
 
 <div class="page-header">
     <div>
-        <h1 class="page-header__title">
-            Source #<?= Html::encode((string) $demo->sourceOrderId) ?>
-            vs demo #<?= Html::encode((string) $demo->demoOrderId) ?>
-        </h1>
+        <h1 class="page-header__title">Order Comparison</h1>
         <p class="page-header__subtitle">
-            What the call actually ordered, beside what the trainee entered in Order58.
+            <?= Html::encode($storeName) ?> &middot; Store #<?= Html::encode((string) $sourceId) ?>
+            &mdash; what the call actually ordered, beside what the trainee entered in Order58.
         </p>
     </div>
     <div class="page-header__actions">
@@ -176,125 +378,34 @@ $itemSummary = static function (?NormalizedItem $item) use ($value): string {
     <div class="notice notice--warning">
         <strong>Source order unavailable in the local mirror.</strong>
         Order #<?= Html::encode((string) $demo->sourceOrderId) ?> has not been synced for this store, so
-        there is nothing to compare against. Everything the trainee entered is shown below. Syncing the
-        store for the date this order was placed will fill the left-hand column in; nothing here is lost
-        in the meantime.
+        there is nothing to compare against. Everything the trainee entered is shown on the right.
+        Syncing the store for the date this order was placed will fill the left-hand invoice in; nothing
+        here is lost in the meantime.
     </div>
 <?php endif; ?>
 
-<?php foreach ($comparison->sections as $section): ?>
-    <?php /** @var ComparisonSection $section */ ?>
-    <div class="card">
-        <h2 class="card__title"><?= Html::encode($section->title) ?></h2>
-        <table class="table ot-compare">
-            <thead>
-                <tr>
-                    <th scope="col">Field</th>
-                    <th scope="col">Original order</th>
-                    <th scope="col">Demo / test order</th>
-                    <th scope="col">Result</th>
-                </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($section->fields as $field): ?>
-                <tr>
-                    <th scope="row"><?= Html::encode($field->label) ?></th>
-                    <td><?= $value($field->original) ?></td>
-                    <td><?= $value($field->demo) ?></td>
-                    <td><?= $chip($field) ?></td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-<?php endforeach; ?>
-
-<div class="card">
-    <h2 class="card__title">Order items</h2>
-
-    <?php if ($comparison->itemNote() !== ''): ?>
-        <?php
-        // Why the comparison below is what it is. Two different kinds of message share this one place:
-        // "these cannot be compared" and "these are from an earlier fetch". Both are statements about
-        // the synchronisation, and neither is a statement about the trainee — which is exactly what the
-        // old behaviour got wrong when it reported every demo line as invented.
-        ?>
-        <div class="alert alert--<?= Html::encode($comparison->itemAvailability->modifier()) ?>"
-             role="status">
-            <?= Html::encode($comparison->itemNote()) ?>
-            <?php if ($comparison->itemsSyncedAt !== null && $comparison->itemAvailability->isStale()): ?>
-                Last synchronized <?= Html::encode($comparison->itemsSyncedAt) ?>.
-            <?php endif; ?>
-        </div>
-    <?php endif; ?>
-
-    <?php if ($comparison->items === []): ?>
-        <?php if ($comparison->itemsWereCompared()): ?>
-            <?php // Both sides known, and both empty. That is agreement, not an absence of data.?>
-            <p class="util-muted">Neither order records any line items.</p>
-        <?php else: ?>
-            <p class="util-muted">No line items to show.</p>
+<?php if ($comparison->itemNote() !== ''): ?>
+    <?php
+    // Why the line items below read as they do. Two different kinds of message share this one place:
+    // "these cannot be compared" and "these are from an earlier fetch". Both are statements about the
+    // synchronisation, and neither is a statement about the trainee — which is exactly what the old
+    // behaviour got wrong when it reported every demo line as invented.
+    ?>
+    <div class="alert alert--<?= Html::encode($comparison->itemAvailability->modifier()) ?>" role="status">
+        <?= Html::encode($comparison->itemNote()) ?>
+        <?php if ($comparison->itemsSyncedAt !== null && $comparison->itemAvailability->isStale()): ?>
+            Last synchronized <?= Html::encode($comparison->itemsSyncedAt) ?>.
         <?php endif; ?>
-    <?php else: ?>
-        <?php
-        // Paired on the merchant's catalogue id where both documents carry one, and on the
-        // canonicalised product name otherwise — never on a document line id, which a demo document is
-        // allowed to invent. Lines of the same product pair by closest match rather than by position.
-        ?>
-        <table class="table ot-compare ot-items">
-            <thead>
-                <tr>
-                    <th scope="col">Item</th>
-                    <th scope="col">Original order</th>
-                    <th scope="col">Demo / test order</th>
-                    <th scope="col">Result</th>
-                </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($comparison->items as $item): ?>
-                <tr class="ot-compare__item-head">
-                    <th scope="row"><?= Html::encode($item->label()) ?></th>
-                    <td><?= $itemSummary($item->original) ?></td>
-                    <td><?= $itemSummary($item->demo) ?></td>
-                    <td><?= $chip($item) ?></td>
-                </tr>
-                <?php foreach ($item->fields as $field): ?>
-                    <tr class="ot-compare__item-field">
-                        <th scope="row"><?= Html::encode($field->label) ?></th>
-                        <td><?= $value($field->original) ?></td>
-                        <td><?= $value($field->demo) ?></td>
-                        <td><?= $chip($field) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    <?php endif; ?>
+    </div>
+<?php endif; ?>
 
-    <?php if ($comparison->removedItems !== []): ?>
-        <?php
-        // Lines the provider marked removed. Listed apart and never compared: a trainee is right not to
-        // have entered them, so counting them as "missing in demo" would penalise correct work.
-        ?>
-        <h3 class="card__subtitle">Removed from the original order</h3>
-        <p class="util-muted">
-            The provider marked these lines removed. They are not expected in the demo order and are not
-            compared.
-        </p>
-        <ul class="ot-removed-items">
-            <?php foreach ($comparison->removedItems as $removed): ?>
-                <li>
-                    <?= Html::encode($removed->name ?? 'Unnamed item') ?>
-                    <?php if ($removed->quantityLabel() !== null): ?>
-                        &times;<?= Html::encode($removed->quantityLabel()) ?>
-                    <?php endif; ?>
-                </li>
-            <?php endforeach; ?>
-        </ul>
-    <?php endif; ?>
+<div class="ot-books">
+    <?= $panel('original', 'Original order', $demo->sourceOrderId, $comparison->original) ?>
+    <?= $panel('demo', 'Demo / test order', $demo->demoOrderId, $comparison->demo) ?>
 </div>
 
-<p class="util-muted">
-    These are differences, not a score. No accuracy percentage, weighting or pass mark is calculated
-    here; a later scoring pass reads the same comparison this page renders.
+<p class="util-muted ot-books__note">
+    These are differences, not a score. No accuracy percentage,
+    weighting or pass mark is calculated here; a later scoring pass reads the same comparison this page
+    renders.
 </p>

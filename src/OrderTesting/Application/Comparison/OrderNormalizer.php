@@ -15,6 +15,7 @@ use JsonException;
 use function array_slice;
 use function is_array;
 use function is_int;
+use function is_scalar;
 use function is_string;
 use function json_decode;
 use function preg_match;
@@ -71,12 +72,23 @@ final readonly class OrderNormalizer
         // object or as a JSON-encoded string — both shapes occur, in the same document.
         $reservation = self::nested($data['reservation'] ?? null);
         $shipping = self::nested($data['shipping'] ?? null);
+        $commit = self::nested($raw['commit_data'] ?? null);
+
+        // The customer's NAME alone falls back through the document; everything else below still comes
+        // from `reservation`, because that is where this provider keeps it and widening the others
+        // would change fields nobody asked about.
+        $named = self::firstNamedBlock(
+            $reservation,
+            $shipping,
+            self::nested($commit['reservation'] ?? null),
+            self::nested($commit['shipping'] ?? null),
+        );
 
         return new NormalizedOrder(
             orderId: self::intOf($raw['id'] ?? null),
             customer: new NormalizedCustomer(
-                firstName: self::stringOf($reservation['first_name'] ?? null, 128),
-                lastName: self::stringOf($reservation['last_name'] ?? null, 128),
+                firstName: self::stringOf($named['first_name'] ?? null, 128),
+                lastName: self::stringOf($named['last_name'] ?? null, 128),
                 phone: self::phone($reservation['phone'] ?? null),
                 email: self::stringOf($reservation['email'] ?? null, 190),
                 customerCount: self::intOf($reservation['customer_count'] ?? $reservation['people'] ?? null),
@@ -174,6 +186,44 @@ final readonly class OrderNormalizer
      *
      * @return array<array-key, mixed>
      */
+    /**
+     * The first block that actually names somebody, in the order the caller listed them.
+     *
+     * ## Why a block is chosen rather than each field separately
+     *
+     * Taking the first non-empty `first_name` from one block and the first non-empty `last_name` from
+     * another would invent a person who appears nowhere in the document — a reservation's forename
+     * welded to a delivery recipient's surname. So one block wins outright and both names come from it.
+     *
+     * A block counts as naming somebody when the two parts, trimmed, are not both empty: a document
+     * carrying only a forename is still a name, and the spec asks for the parts that exist. Non-scalar
+     * values are ignored rather than rendered, so an array where a name belongs cannot reach a page.
+     *
+     * Returns `[]` when no block qualifies, which leaves both names null and the page showing `-`. That
+     * is the correct answer for 390 of this installation's 396 mirrored orders, and it is deliberately
+     * not softened into a customer id or any other identifier.
+     *
+     * @param array<array-key, mixed> ...$blocks
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function firstNamedBlock(array ...$blocks): array
+    {
+        foreach ($blocks as $block) {
+            if (self::namePart($block['first_name'] ?? null) . self::namePart($block['last_name'] ?? null) !== '') {
+                return $block;
+            }
+        }
+
+        return [];
+    }
+
+    /** A name part is a trimmed scalar, or nothing at all. */
+    private static function namePart(mixed $value): string
+    {
+        return is_scalar($value) ? trim((string) $value) : '';
+    }
+
     public static function nested(mixed $value): array
     {
         if (is_string($value)) {

@@ -53,6 +53,10 @@ $flashMessages = $flash->consume();
 /** @var list<array{label: string, route?: string}> $breadcrumbs */
 $breadcrumbs = $this->hasParameter('breadcrumbs') ? (array) $this->getParameter('breadcrumbs') : [];
 
+// Opt-in, set by the page itself. Two invoices side by side need more than the reading column a single
+// document wants; every other page is untouched because it never asks.
+$wide = $this->hasParameter('wideContent') && $this->getParameter('wideContent') === true;
+
 $this->beginPage();
 ?>
 <!DOCTYPE html>
@@ -87,7 +91,7 @@ $this->beginPage();
             </div>
         </div>
 
-        <div class="content">
+        <div class="content<?= $wide ? ' content--wide' : '' ?>">
             <?= $this->render(__DIR__ . '/_flash', ['messages' => $flashMessages]) ?>
             <?= $content ?>
         </div>
