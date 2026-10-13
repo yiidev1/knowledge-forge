@@ -159,17 +159,40 @@
 
 /* Scoped to this table on purpose: `a2t-col-status` is also the jobs listing's status column, and a
    bare `.a2t-table col.a2t-col-status` here would resize a table on another page. */
-.a2t-orders { table-layout: fixed; min-width: 72rem; }
-.a2t-orders col.a2t-col-order { width: 11rem; }
-/* One column now, where three channel columns used to sit, so it takes the slack they shared. */
-.a2t-orders col.a2t-col-conversation { width: auto; min-width: 16rem; }
-.a2t-orders col.a2t-col-status { width: 9rem; }
-/* Wide enough for the longest label and the longest state side by side on one line — "Common / Mixed"
-   next to "Not generated" is the pair that sets it. Narrower and the cell wrapped mid-phrase, which
-   read as two recordings where there was one. */
-.a2t-orders col.a2t-col-tts { width: 14.5rem; }
-/* Wide enough for "Generate Text to Audio" to stay on one line. */
-.a2t-orders col.a2t-col-row-actions { width: 12.5rem; }
+/* Four columns, stated as proportions of the table rather than as fixed sizes.
+ *
+ * They were fixed sizes when there were six, with the conversation column taking whatever was left.
+ * Text to Audio and Actions are gone — their work is in the dialog behind "View conversation" — and
+ * their 27rem fell to the one column that was sized by subtraction, which left it around half the
+ * table with Status and Demo URL bunched against the right edge. Percentages keep the four in
+ * proportion at every width instead of only at the one the old fixed sizes happened to suit.
+ *
+ * `table-layout: fixed` is what makes the browser honour them exactly. The minimum came down with the
+ * column count: a table that scrolls sideways when it does not have to is a table nobody scrolls.
+ *
+ * Order Testing's copy of this table carries `.ot-orders` and sets its own five; see
+ * `order-testing.css`. */
+.a2t-orders { table-layout: fixed; min-width: 48rem; }
+.a2t-orders col.a2t-col-order { width: 20%; }
+/* The widest share, because it holds the most: a duration, a play control, the way in, and a line of
+   channel names under them. */
+.a2t-orders col.a2t-col-conversation { width: 42%; min-width: 0; }
+.a2t-orders col.a2t-col-status { width: 17%; }
+.a2t-orders col.a2t-col-demo { width: 21%; }
+
+/* A status badge broken across two lines reads as two statuses. The conversation column is deliberately
+   left out: it is the one that may wrap, and wrapping it is what keeps the others from having to. */
+.a2t-orders td.a2t-cell-tight,
+.a2t-orders .a2t-badge { white-space: nowrap; }
+
+@media (max-width: 54rem) {
+    /* Below the table's own minimum the wrapper scrolls, and percentages of a width nobody can see are
+       not useful. The columns fall back to their content, which is what a scrolled table wants. */
+    .a2t-orders col.a2t-col-order,
+    .a2t-orders col.a2t-col-conversation,
+    .a2t-orders col.a2t-col-status,
+    .a2t-orders col.a2t-col-demo { width: auto; }
+}
 .a2t-orders td { vertical-align: top; }
 
 .a2t-order-id { display: block; font-weight: 650; font-size: .95rem; letter-spacing: -.01em; }

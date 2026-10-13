@@ -1650,7 +1650,7 @@ final class AudioToTextStoreCest
         // F. Common, still queued: no machine transcript yet, so no action.
         $this->uploadCommon($I, self::STORE_A);
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->dontSeeElement('[data-a2t-transcripts]');
+        $I->dontSeeElement('[data-a2t-row-transcripts]');
 
         // E. The same conversion once the worker has finished with it.
         $child = $this->childrenOf((int) $this->conversationsFor(self::STORE_A)[0]['id'])[0];
@@ -1658,7 +1658,7 @@ final class AudioToTextStoreCest
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
         $I->see('Original transcript');
-        $I->seeElement('[data-a2t-transcripts]');
+        $I->seeElement('[data-a2t-row-transcripts]');
         // Beside the way in to the corrections, never instead of it.
         $I->seeElement('[data-a2t-details]');
 
@@ -1667,7 +1667,7 @@ final class AudioToTextStoreCest
         // the heading whether or not any row can open it.
         $this->uploadSeparate($I, self::STORE_B);
         $I->amOnPage($this->storeUrl(self::STORE_B));
-        $I->dontSeeElement('[data-a2t-transcripts]');
+        $I->dontSeeElement('[data-a2t-row-transcripts]');
     }
 
     /**
@@ -1716,7 +1716,7 @@ final class AudioToTextStoreCest
         $this->completeWithSeparation($child['public_id']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $transcripts = $I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts');
+        $transcripts = $this->transcriptsUrl($I);
 
         // Its own store: a transcript, as data.
         $I->amOnPage($transcripts);
@@ -1763,7 +1763,7 @@ final class AudioToTextStoreCest
         )->execute();
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+        $I->amOnPage($this->transcriptsUrl($I));
 
         $I->seeResponseCodeIs(200);
         $I->seeInSource('One large pepperoni for pickup.');
@@ -1798,7 +1798,7 @@ final class AudioToTextStoreCest
         )->execute();
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+        $I->amOnPage($this->transcriptsUrl($I));
 
         $I->seeResponseCodeIs(200);
         $I->seeInSource('Can I get a shrimp fried rice?');
@@ -1820,7 +1820,7 @@ final class AudioToTextStoreCest
         $this->completeWithSeparation($child['public_id']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $transcripts = $I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts');
+        $transcripts = $this->transcriptsUrl($I);
 
         $this->connection->createCommand()->update(
             '{{%audio_transcription_jobs}}',
@@ -1850,7 +1850,7 @@ final class AudioToTextStoreCest
         $this->completeWithSeparation($child['public_id']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->amOnPage($I->grabAttributeFrom('[data-a2t-transcripts]', 'data-a2t-transcripts'));
+        $I->amOnPage($this->transcriptsUrl($I));
 
         /** @var array<string, mixed> $payload */
         $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
@@ -1890,7 +1890,7 @@ final class AudioToTextStoreCest
         $this->completeWithSeparation($child['public_id']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $I->amOnPage($I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts'));
+        $I->amOnPage($this->ttsOptionsUrl($I));
 
         /** @var array<string, mixed> $payload */
         $payload = json_decode($I->grabPageSource(), true, 512, JSON_THROW_ON_ERROR);
@@ -1913,27 +1913,28 @@ final class AudioToTextStoreCest
     }
 
     /**
-     * The Text to Audio cell is a two-column grid, not a stack of wrapped phrases.
+     * The Text to Audio column is gone, and nothing is left where it stood.
      *
-     * The label and its state are siblings in one grid so every status starts at the same x, and both
-     * are `nowrap` so "Common / Mixed" and "Not generated" each stay on one line. Before this the
-     * column was narrow enough to break them mid-phrase, which read as two recordings where there
-     * was one.
+     * What it showed — each recording's generated-audio state, and a player once there is one — is in
+     * the dialog behind "View conversation", built there by `generatedControls` in audio-store.js from
+     * the server's own payload. It still uses `a2t-tts-list` and its two grid children, which is why
+     * those rules stay in the stylesheet; they are simply no longer rendered by this template, so
+     * there is no cell here to assert about any more.
      */
-    public function theTextToAudioCellKeepsEachRecordingOnOneLine(WebTester $I): void
+    public function theTextToAudioColumnIsGoneFromTheListing(WebTester $I): void
     {
         $this->signIn($I);
         $this->uploadCommon($I, self::STORE_A);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
 
-        // Column 7, not 6: the Demo URL column sits between Status and Text to Audio.
-        $cell = '.a2t-orders tbody tr:first-child td:nth-child(5)';
-        $I->seeElement($cell . ' .a2t-tts-list');
-        // Direct children of the grid, not wrapped in a row: the grid is what aligns the columns.
-        $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__label');
-        $I->seeElement($cell . ' .a2t-tts-list > .a2t-tts__state');
-        $I->dontSeeElement($cell . ' .a2t-tts__row');
+        $I->dontSee('Text to Audio', '.a2t-orders thead th');
+        $I->dontSeeElement('.a2t-orders .a2t-tts-list');
+        $I->dontSeeElement('.a2t-orders td.a2t-cell-actions');
+        // Four headers and four cells in the row beneath them: a header without its cell, or a cell
+        // without its header, puts every value in the row under the wrong title.
+        Assert::assertCount(4, $I->grabMultiple('.a2t-orders thead th'));
+        Assert::assertCount(4, $I->grabMultiple('.a2t-orders tbody tr:first-child > td'));
     }
 
     /**
@@ -2069,7 +2070,7 @@ final class AudioToTextStoreCest
         $this->completeWithSeparation($child['public_id']);
 
         $I->amOnPage($this->storeUrl(self::STORE_A));
-        $options = $I->grabAttributeFrom('[data-a2t-tts]', 'data-a2t-tts');
+        $options = $this->ttsOptionsUrl($I);
 
         $I->amOnPage($options);
         $I->seeResponseCodeIs(200);
@@ -2948,9 +2949,9 @@ final class AudioToTextStoreCest
         $I->see('Recording / Conversation', '.a2t-orders thead th');
 
         Assert::assertSame(
-            ['Order No#', 'Recording / Conversation', 'Status', 'Demo URL', 'Text to Audio', 'Actions'],
+            ['Order No#', 'Recording / Conversation', 'Status', 'Demo URL'],
             array_map('trim', $I->grabMultiple('.a2t-orders thead th')),
-            'The three channel columns are one.',
+            'The three channel columns are one, and the two action columns are gone.',
         );
     }
 
@@ -4451,6 +4452,31 @@ final class AudioToTextStoreCest
             ->one();
 
         return $row === null ? 0 : (int) $row['Value'];
+    }
+
+    /**
+     * Where this page writes down the group-scoped transcript endpoint, now that the Actions column
+     * that used to hold its button is gone.
+     *
+     * The row carries it, because the dialog that opens it is opened from the row. Same route, same
+     * group, same answer — only the element it is written on has changed.
+     */
+    private function transcriptsUrl(WebTester $I): string
+    {
+        return (string) $I->grabAttributeFrom('[data-a2t-row-transcripts]', 'data-a2t-row-transcripts');
+    }
+
+    /**
+     * The group's TTS-options endpoint, derived rather than read off the page.
+     *
+     * Nothing links to it any more: its only button lived in the Actions column, and generating audio
+     * is now done per recording from inside the dialog. The endpoint itself is untouched and still
+     * routed, which is precisely what the tests calling this check — so they build its address from
+     * the sibling endpoint the row does carry rather than from a control that no longer exists.
+     */
+    private function ttsOptionsUrl(WebTester $I): string
+    {
+        return str_replace('/transcripts', '/tts-options', $this->transcriptsUrl($I));
     }
 
     private function storeUrl(int $sourceId): string

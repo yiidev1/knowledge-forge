@@ -18,8 +18,54 @@
    started recording who clicked it — the attempt has to be written before the browser leaves — and an
    operator should not have to notice that change. */
 
-.ot-col-demo-orders {
-    width: 7.5rem;
+/* ------------------------------------------------------------------- the five columns, in proportion
+
+   The audio page's widths were set when this table had seven columns: four fixed ones and the
+   conversation taking whatever was left. With Text to Audio and Actions gone that slack all fell to
+   one column, which ended up around half the table while Status, Demo URL and Demo Orders stayed at
+   their old fixed sizes and bunched against the right edge.
+
+   So this surface states all five as percentages of the table instead. They stay in proportion at every
+   width rather than only at the one the fixed sizes happened to suit, and no column can inherit the
+   space another one gives up. `table-layout: fixed` (from `.a2t-orders`) is what makes the browser
+   honour them exactly.
+
+   `.ot-orders` is on this table alone. The audio page's table carries the same `a2t-` classes, and
+   without a class of our own these widths would reach it too — it has four columns now, and sizing them
+   as if there were five would be worse than leaving it alone. */
+.a2t-orders.ot-orders {
+    /* Lowered from the 72rem the seven-column table needed. Five columns fit a tablet comfortably, and
+       a table that scrolls sideways when it does not have to is a table nobody scrolls. */
+    min-width: 54rem;
+}
+
+.a2t-orders.ot-orders col.a2t-col-order { width: 17%; }
+/* The widest share, because it holds the most: a duration, a play control, the way in, and a line of
+   channel names underneath. Wide enough for all of it on one line, and no wider — the space beyond
+   that was going to a column that had nothing to put in it. */
+.a2t-orders.ot-orders col.a2t-col-conversation { width: 34%; min-width: 0; }
+.a2t-orders.ot-orders col.a2t-col-status { width: 14%; }
+.a2t-orders.ot-orders col.a2t-col-demo { width: 18%; }
+.a2t-orders.ot-orders col.ot-col-demo-orders { width: 17%; }
+
+/* Short values that should never wrap: a status badge broken across two lines reads as two statuses,
+   and "View (4)" split after the word is simply wrong. The conversation column is deliberately left
+   out — it is the one that may wrap, and wrapping it is what keeps the others from having to. */
+.a2t-orders.ot-orders td.a2t-cell-tight,
+.a2t-orders.ot-orders .a2t-badge {
+    white-space: nowrap;
+}
+
+@media (max-width: 60rem) {
+    /* Below the table's own minimum the wrapper scrolls, and percentages of a width nobody can see are
+       not useful. The columns fall back to their content, which is what a scrolled table wants. */
+    .a2t-orders.ot-orders col.a2t-col-order,
+    .a2t-orders.ot-orders col.a2t-col-conversation,
+    .a2t-orders.ot-orders col.a2t-col-status,
+    .a2t-orders.ot-orders col.a2t-col-demo,
+    .a2t-orders.ot-orders col.ot-col-demo-orders {
+        width: auto;
+    }
 }
 
 .ot-demo-form {

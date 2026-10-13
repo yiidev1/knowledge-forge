@@ -834,7 +834,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
                 data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
             <?php endif; ?>>
-            <table class="table a2t-table a2t-orders a2t-conversions">
+            <table class="table a2t-table a2t-orders a2t-conversions ot-orders">
                 <?php
                         // Sized to content, with the one recording column taking the slack: a filename no
                         // longer appears here, so nothing in this table has an unbounded length.

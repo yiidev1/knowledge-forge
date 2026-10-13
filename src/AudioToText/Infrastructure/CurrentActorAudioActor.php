@@ -22,9 +22,22 @@ final readonly class CurrentActorAudioActor implements AudioActorInterface
 {
     public function __construct(private CurrentActor $actor) {}
 
+    /**
+     * The realm, asked for in a way that cannot mistake "nobody" for "an administrator".
+     *
+     * `isOperation()` alone answered false for an unresolved holder, so a route wired without the
+     * middleware that fills it looked exactly like an administrator with no id — and the write failed
+     * several frames later saying it needed a positive `admin_users` id, which is a true sentence about
+     * the wrong problem. That is precisely how the upload and replacement actions on the store page came
+     * to be broken without anybody reading the error as "this route has no actor".
+     *
+     * `realm()` throws its own message for that case, naming the actual fault.
+     */
     public function actorType(): AudioActorType
     {
-        return $this->actor->isOperation() ? AudioActorType::Operation : AudioActorType::Admin;
+        return $this->actor->realm() === CurrentActor::REALM_OPERATION
+            ? AudioActorType::Operation
+            : AudioActorType::Admin;
     }
 
     public function adminId(): ?int

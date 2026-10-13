@@ -70,6 +70,17 @@ once the replacement finishes does it take over — with the one it replaced kep
 openable. `complete-replacement.php` stands in for the transcription worker's status write, so no
 Whisper run is needed to reach the state under test.
 
+`tables.js` — the column proportions of both store listings, and the transcript control on each. Both
+tables were sized for seven columns, with the conversation column taking whatever the others left; when
+Text to Audio and Actions went, all of that slack fell to that one column and it grew to about half the
+table. They are percentages now, which is precisely what a markup test cannot check — so this measures
+the rendered share of every column at 1600, 1440, 1200, 768 and 390px on both pages, and checks that
+nothing is clipped and no row has a different number of cells than its header row.
+
+It also covers the **audio** listing's Original transcript control, which `AudioToTextStoreCest` cannot
+reach: that suite's upload fixture throws on HEAD (see the report on `AudioActor`), so every test there
+that needs an uploaded recording errors before it asserts anything.
+
 `transcript.js` — Original transcript, reached from the View conversation dialog on the Order Testing
 listing. That listing used to carry an Actions column holding the only button for it; the column is
 gone and the button is in the dialog's header, which is the only reason an operation user still has a
