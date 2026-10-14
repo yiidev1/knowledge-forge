@@ -648,6 +648,14 @@ return [
                 ->action(OrderTestingModule\Compare\Action::class)
                 ->name(OrderTestingRoute::DEMO_COMPARE),
 
+            // The same demo order as a printable receipt. Same group, so the same access rule and the
+            // same three-id lookup guard it; nothing about who may read a demo order changes here.
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo/{demoOrderId:\d+}/receipt',
+            )
+                ->action(OrderTestingModule\Receipt\Action::class)
+                ->name(OrderTestingRoute::DEMO_RECEIPT),
+
             // The 32-hex constraint rejects a malformed id before any action runs, and keeps job URLs
             // non-enumerable: the internal database id never appears in a URL.
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}')

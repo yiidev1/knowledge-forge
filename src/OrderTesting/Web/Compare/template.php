@@ -70,6 +70,14 @@ $listUrl = $urlGenerator->generate('order-testing.demo-orders', [
     'sourceOrderId' => $demo->sourceOrderId,
 ]);
 
+// The same demo order as a printable receipt. A page of its own, not a dialog: it is a document, and a
+// document wants an address somebody can keep, print or send.
+$receiptUrl = $urlGenerator->generate('order-testing.demo-receipt', [
+    'sourceId' => $sourceId,
+    'sourceOrderId' => $demo->sourceOrderId,
+    'demoOrderId' => $demo->demoOrderId,
+]);
+
 // Fetches the ORIGINAL order's items — the left-hand panel — and nothing else. The demo order on the
 // right is a file somebody's listener wrote and is never touched here; its id travels with the form
 // only so that this exact comparison is what reloads afterwards.
@@ -389,6 +397,9 @@ $panel = static function (
                     data-busy-label="Syncing…">Sync Original Order Items</button>
         </form>
         <a class="btn" href="<?= Html::encode($listUrl) ?>">All demo orders for this call</a>
+        <a class="btn btn--secondary" href="<?= Html::encode($receiptUrl) ?>">
+            <span aria-hidden="true">🧾</span> View Receipt
+        </a>
     </div>
 </div>
 

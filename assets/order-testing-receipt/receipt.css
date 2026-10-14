@@ -1,0 +1,581 @@
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * Two receipts, side by side, and what differs between them.
+ *
+ * White paper documents on the application's dark page. That inversion is deliberate: a receipt is a
+ * thing you print, and it is read on paper as often as on screen, so it is black on white in both
+ * places. Every colour here is stated outright rather than taken from the application's custom
+ * properties — those describe the dark chrome around these cards, and inheriting them would tint the
+ * paper.
+ * ---------------------------------------------------------------------------------------------------
+ */
+
+.rc-muted {
+    color: #767b85;
+}
+
+/* ---- the summary strip --------------------------------------------------------------------------- */
+
+.rc-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.1rem;
+}
+
+.rc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--border, #2a2d34);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.rc-chip__count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+/* The chip wears its verdict's colour, so the strip reads as a key as well as a set of filters. */
+.rc-chip--match { color: #3f9e6c; border-color: rgba(63, 158, 108, 0.45); }
+.rc-chip--different { color: #d08a3c; border-color: rgba(208, 138, 60, 0.45); }
+.rc-chip--missing { color: #d4605f; border-color: rgba(212, 96, 95, 0.45); }
+.rc-chip--extra { color: #8f87d6; border-color: rgba(143, 135, 214, 0.45); }
+.rc-chip--unknown { color: #8a8f98; border-color: rgba(138, 143, 152, 0.45); }
+
+.rc-chip[aria-pressed='true'] {
+    background: rgba(255, 255, 255, 0.08);
+    border-width: 2px;
+}
+
+.rc-summary__total {
+    margin-left: auto;
+    font-size: 0.8rem;
+}
+
+/*
+ * ---- the pair ------------------------------------------------------------------------------------
+ *
+ * Both cards are built from one list of comparison rows, so row n of one is row n of the other. Side
+ * by side they also share a set of row TRACKS, so row n is the same height on both: a value that wraps
+ * on one side would otherwise push everything below it out of step with its opposite number, and by the
+ * totals the two receipts would disagree about which line is which.
+ *
+ * This is why every element a card emits is a direct child of it — those children are the shared rows —
+ * and why the card's padding and rules hang off the rows themselves rather than off the card.
+ */
+.rc-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+    align-items: start;
+}
+
+.rc {
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.5rem;
+    background: #ffffff;
+    color: #1a1d23;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    overflow: hidden;
+}
+
+/* ---- masthead ------------------------------------------------------------------------------------- */
+
+.rc__head {
+    padding: 1.25rem 1.5rem 1rem;
+    border-bottom: 2px solid #1a1d23;
+    text-align: center;
+}
+
+.rc__kind {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: #ffffff;
+    background: var(--rc-accent, #3f5fb8);
+    display: inline-block;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+}
+
+.rc--original { --rc-accent: #3f5fb8; }
+.rc--demo { --rc-accent: #2f8f63; }
+
+.rc__store {
+    margin: 0.5rem 0 0;
+    font-size: 1.22rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.rc__number {
+    margin-top: 0.1rem;
+    font-size: 1rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc__date {
+    margin-top: 0.1rem;
+    font-size: 0.76rem;
+    color: #767b85;
+}
+
+.rc__absent {
+    padding: 0.9rem 1.5rem;
+    background: #f5f6f8;
+    font-size: 0.84rem;
+    color: #4a4f58;
+}
+
+/* ---- captions and rows ---------------------------------------------------------------------------- */
+
+/*
+ * A section heading, set apart from the rows under it.
+ *
+ * A tinted band rather than another line of small grey text: on a document this dense the headings are
+ * what a reader scans for, and at the old weight they disappeared into the rows.
+ */
+.rc__caption {
+    padding: 0.5rem 1.5rem 0.45rem;
+    border-top: 1px solid #dfe3ea;
+    border-bottom: 1px solid #dfe3ea;
+    background: #eef1f6;
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #2f3947;
+}
+
+.rc__head + .rc__caption,
+.rc__absent + .rc__caption {
+    border-top: 0;
+}
+
+.rc__row {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: 0.2rem 0.75rem;
+    align-items: baseline;
+    padding: 0.16rem 1.5rem;
+}
+
+.rc__caption + .rc__row,
+.rc__caption + .rc__line,
+.rc__caption + .rc__sum {
+    padding-top: 0.5rem;
+}
+
+.rc__label {
+    font-size: 0.78rem;
+    color: #767b85;
+}
+
+.rc__value {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc__mark {
+    flex: none;
+}
+
+/* ---- the lines ------------------------------------------------------------------------------------ */
+
+.rc__line {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 2.6rem 4.2rem 4.6rem;
+    gap: 0.2rem 0.5rem;
+    align-items: baseline;
+    padding: 0.16rem 1.5rem;
+}
+
+.rc__line--head {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid #e4e6ea;
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #767b85;
+}
+
+.rc__item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+    min-width: 0;
+    overflow-wrap: break-word;
+}
+
+.rc__qty,
+.rc__price,
+.rc__total {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.rc__line--item {
+    position: relative;
+    margin-top: 0.35rem;
+    padding-top: 0.4rem;
+    font-weight: 600;
+}
+
+/* The hairline is an inset pseudo-element: the rows are full-bleed and carry the card's side padding
+   themselves, so a border would run from edge to edge. */
+.rc__line--item::before {
+    content: '';
+    position: absolute;
+    inset: 0 1.5rem auto;
+    border-top: 1px dashed #e4e6ea;
+}
+
+.rc__line--head + .rc__line--item {
+    margin-top: 0.1rem;
+}
+
+.rc__line--head + .rc__line--item::before {
+    border-top: 0;
+}
+
+/* A line the other receipt does not have. Dimmed, never dropped: removing it would slide every line
+   below it out of step with the receipt opposite. */
+.rc__line--absent {
+    opacity: 0.6;
+}
+
+.rc__line--mods,
+.rc__line--note {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 2.6rem;
+    font-size: 0.82rem;
+    font-weight: 400;
+}
+
+.rc__line--note {
+    font-style: italic;
+    color: #4a4f58;
+}
+
+.rc__item-name {
+    overflow-wrap: anywhere;
+}
+
+.rc__sn {
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.2rem;
+    background: #eef0f3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: #4a4f58;
+}
+
+.rc__mods {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: #4a4f58;
+}
+
+.rc__mods li::before {
+    content: '+ ';
+    color: #767b85;
+}
+
+.rc__removed {
+    padding: 0.2rem 1.5rem 0.5rem;
+    font-size: 0.82rem;
+    color: #4a4f58;
+}
+
+.rc__empty {
+    padding: 0.2rem 1.5rem 0.6rem;
+}
+
+/* ---- the money -------------------------------------------------------------------------------------- */
+
+.rc__caption--sum {
+    margin-top: 0.5rem;
+}
+
+/* Label, amount and verdict on one line, with the amounts in a column of their own. The verdict track
+   is reserved on BOTH cards so the figures line up whether or not a row carries a badge. */
+.rc__sum {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 5.6rem;
+    gap: 0.2rem 0.5rem;
+    align-items: baseline;
+    padding: 0.14rem 1.5rem;
+}
+
+.rc__sum .rc__mark {
+    text-align: right;
+}
+
+.rc__amount {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc__sum--grand {
+    position: relative;
+    margin-top: 0.35rem;
+    padding-top: 0.55rem;
+    padding-bottom: 0.9rem;
+    font-size: 1.06rem;
+    font-weight: 700;
+}
+
+.rc__sum--grand .rc__label {
+    color: inherit;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+.rc__sum--grand::before {
+    content: '';
+    position: absolute;
+    inset: 0 1.5rem auto;
+    border-top: 2px solid #1a1d23;
+}
+
+/* ---- footer ------------------------------------------------------------------------------------------ */
+
+.rc__foot {
+    margin-top: auto;
+    padding: 0.9rem 1.5rem 1.1rem;
+    border-top: 1px dashed #e4e6ea;
+    text-align: center;
+}
+
+.rc__thanks {
+    margin: 0;
+    font-size: 0.94rem;
+    font-weight: 700;
+}
+
+.rc__fine {
+    margin: 0.25rem 0 0;
+    font-size: 0.72rem;
+    color: #767b85;
+}
+
+/* ---- verdict marks ------------------------------------------------------------------------------------ */
+
+.rc-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22rem;
+    padding: 0.03rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.rc-mark__glyph {
+    font-weight: 700;
+}
+
+/* Soft fills: enough to find a row at a glance, not enough to shout over the receipt. */
+.rc-mark--match { background: #e6f4ec; color: #2d7a52; }
+.rc-mark--different { background: #fdf0df; color: #9a5f17; }
+.rc-mark--missing { background: #fdeaea; color: #a53b3a; }
+.rc-mark--extra { background: #eeecfa; color: #5b51a8; }
+.rc-mark--unknown { background: #eef0f3; color: #5c6169; }
+
+/*
+ * ---- filtering ------------------------------------------------------------------------------------------
+ *
+ * A chip dims every row that does not carry its verdict. Dimmed rather than hidden, deliberately: a
+ * receipt with rows removed from the middle is no longer a receipt, and the two cards would fall out of
+ * step with each other.
+ */
+/* `:where()` contributes no specificity, so this rule and the one below it weigh the same and the
+   later one wins for the verdict being asked for. Naming the classes directly would have made this
+   rule heavier and it would have dimmed the rows it was meant to leave alone. */
+[data-rc-filter-active] :where(.rc__row, .rc__line, .rc__sum)[data-rc-status] {
+    opacity: 0.22;
+    transition: opacity 0.12s ease-out;
+}
+
+[data-rc-filter-active='MATCH'] [data-rc-status='MATCH'],
+[data-rc-filter-active='DIFFERENT'] [data-rc-status='DIFFERENT'],
+[data-rc-filter-active='MISSING_IN_DEMO'] [data-rc-status='MISSING_IN_DEMO'],
+[data-rc-filter-active='EXTRA_IN_DEMO'] [data-rc-status='EXTRA_IN_DEMO'],
+[data-rc-filter-active='UNCOMPARABLE'] [data-rc-status='UNCOMPARABLE'] {
+    opacity: 1;
+}
+
+/*
+ * ---- keeping the two receipts in step, row for row -----------------------------------------------------
+ *
+ * Both cards put out the same rows in the same order, but a value that wraps makes its own row taller —
+ * and from there every row below it sits lower than its opposite number. By the totals the two receipts
+ * would disagree about which line is which, which is the one thing a comparison may not do.
+ *
+ * So the cards share one set of row tracks: `.rc-pair` owns them and each card subgrids onto them. A
+ * track is as tall as the taller of the two rows that occupy it and the shorter side keeps the slack.
+ * Nothing is measured and nothing is written back, so there is no state to drift on a resize or a zoom.
+ *
+ * Side by side only. Stacked there is no opposite row to match and holding heights would only open
+ * gaps, so the mechanism sits behind a min-width; a browser without `subgrid` gets the same natural
+ * flow rather than half a grid.
+ */
+@supports (grid-template-rows: subgrid) {
+    @media (min-width: 1101px) {
+        .rc-pair {
+            /* More tracks than a receipt can fill. An `auto` track with nothing in it is zero tall and
+               costs nothing, so this only has to be an upper bound — and the exact count cannot arrive
+               from PHP, because that would need an inline style and this application sends
+               `style-src 'self'`. A Web test holds the bound. */
+            grid-template-rows: repeat(400, auto);
+            align-items: stretch;
+            row-gap: 0;
+        }
+
+        .rc {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: subgrid;
+            grid-row: 1 / -1;
+        }
+    }
+}
+
+/* ---- narrow screens --------------------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+    /* Stacked, never squeezed: two receipts at half a tablet's width stop being readable before they
+       stop fitting. The original stays first, so the reading order is still original then demo. */
+    .rc-pair {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 560px) {
+    .rc__row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .rc__label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .rc__line--item {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .rc__line--item .rc__item {
+        grid-column: 1 / -1;
+    }
+
+    .rc__line--item .rc__qty {
+        grid-column: 1;
+        text-align: left;
+    }
+
+    .rc__line--item .rc__price,
+    .rc__line--item .rc__total {
+        grid-column: 2;
+    }
+
+    .rc__line--head {
+        display: none;
+    }
+
+    .rc__line--item .rc__qty::before { content: 'Qty '; color: #767b85; font-weight: 400; }
+    .rc__line--item .rc__price::before { content: 'Price '; color: #767b85; font-weight: 400; }
+    .rc__line--item .rc__total::before { content: 'Total '; color: #767b85; font-weight: 400; }
+}
+
+/*
+ * ---- paper -----------------------------------------------------------------------------------------------
+ *
+ * Landscape, because the whole point of the page is two columns and portrait would stack them. The
+ * application's chrome and every control go; the summary stays, because the counts are part of what a
+ * reader is being shown.
+ */
+@page {
+    size: landscape;
+    margin: 12mm;
+}
+
+@media print {
+    .sidebar,
+    .topbar,
+    .rc-screen-only {
+        display: none !important;
+    }
+
+    .app,
+    .main,
+    .content {
+        display: block !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+    }
+
+    .rc-summary {
+        margin-bottom: 8mm;
+        color: #000000;
+    }
+
+    /* The chips carry the application's dark button fill, which on paper is a block of toner around
+       four words. On white they only need their outline and their colour. */
+    .rc-chip {
+        background: #ffffff !important;
+        border-color: #999999;
+    }
+
+    /* The band is a block of grey on paper. The rules and the weight carry the heading instead. */
+    .rc__caption {
+        background: #ffffff !important;
+        color: #000000;
+    }
+
+    .rc-pair {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8mm;
+    }
+
+    .rc {
+        box-shadow: none;
+        border: 1px solid #cccccc;
+        border-radius: 0;
+        color: #000000;
+        font-size: 9pt;
+    }
+
+    /* A line and its notes belong on one page; a run of items may break between them. */
+    .rc__line,
+    .rc__row,
+    .rc__sum,
+    .rc__foot {
+        break-inside: avoid;
+    }
+}

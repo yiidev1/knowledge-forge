@@ -499,6 +499,300 @@ final class OrderTestingItemComparisonCest
         $I->seeElement('.ot-book--demo .ot-book__line--grand');
     }
 
+    // ------------------------------------------------------------------ the receipt
+
+    /** The one change to the comparison page: a button, pointing at the receipt for this demo order. */
+    public function theComparisonPageOffersAReceiptForThisDemoOrder(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('View Receipt', '.page-header__actions');
+        $I->seeElement('.page-header__actions a[href="' . $this->receiptUrl() . '"]');
+    }
+
+    /** Two receipts, each showing its own order's number and lines. */
+    public function theReceiptPageShowsBothOrdersAsSeparateReceipts(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->seeResponseCodeIs(200);
+        $I->seeElement('.rc--original');
+        $I->seeElement('.rc--demo');
+        $I->see('Original order receipt', '.rc--original');
+        $I->see('Demo order receipt', '.rc--demo');
+        $I->see('#' . self::ORDER, '.rc--original .rc__number');
+        $I->see('#' . self::DEMO_ORDER, '.rc--demo .rc__number');
+        $I->see('Fried Chicken Wings (4)', '.rc--original');
+        $I->see('Fried Chicken Wings (4)', '.rc--demo');
+    }
+
+    /** The sections are headed as a receipt's, not as the comparison's field groups. */
+    public function theReceiptSectionsCarryReceiptHeadings(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        foreach (['original', 'demo'] as $side) {
+            $I->see('Customer Details', '.rc--' . $side);
+            $I->see('Order Details', '.rc--' . $side);
+            $I->see('Order Items', '.rc--' . $side);
+            $I->see('Summary', '.rc--' . $side);
+        }
+    }
+
+    /** Amounts are written for a person: two decimals, never the stored five. */
+    public function amountsAreWrittenToTwoDecimals(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->see('13.35', '.rc--demo');
+        $I->dontSee('13.35000', '.rc--demo');
+        $I->dontSee('11.35000', '.rc--original');
+    }
+
+    /**
+     * The verdicts belong to the demo receipt, because they judge what the trainee entered.
+     *
+     * The original card carries none: a receipt of what was actually ordered is not a verdict on
+     * anything, and marking it would invite reading the left-hand column as the one under test.
+     */
+    public function theVerdictsAreOnTheDemoReceiptOnly(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedItem(2, $this->soup(), 1);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->seeElement('.rc--demo .rc-mark');
+        $I->dontSeeElement('.rc--original .rc-mark');
+        $I->see('Missing in demo', '.rc--demo');
+    }
+
+    /** The summary strip counts the very rows the receipts draw. */
+    public function theSummaryCountsTheRowsTheReceiptsDraw(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedItem(2, $this->soup(), 1);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->seeElement('[data-rc-summary]');
+        $I->seeElement('[data-rc-filter="MISSING_IN_DEMO"]');
+
+        // Every chip's count equals the rows carrying that verdict on one card — the two cards mirror
+        // each other, so one side is the whole list.
+        $html = $I->grabPageSource();
+
+        foreach ($this->chipCounts($html) as $status => $claimed) {
+            Assert::assertSame(
+                $this->rowsWithStatus($html, $status),
+                $claimed,
+                'the summary claims ' . $claimed . ' ' . $status . ' rows',
+            );
+        }
+    }
+
+    /** A field neither order filled in is not a row, and so is not counted as agreement. */
+    public function aFieldEmptyOnBothOrdersIsNotCountedAsAMatch(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        // Neither order carries an email, so neither receipt prints the row.
+        $I->dontSee('Email', '.rc--original');
+        $I->dontSee('Email', '.rc--demo');
+    }
+
+    /** Both receipts put out the same rows in the same order, which is what lets them be read across. */
+    public function bothReceiptsPutOutTheSameRowsInTheSameOrder(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedItem(2, $this->soup(), 1);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $html = $I->grabPageSource();
+        Assert::assertSame(
+            $this->receiptRows($html, 'original'),
+            $this->receiptRows($html, 'demo'),
+            'the two receipts no longer agree about which rows exist',
+        );
+    }
+
+    /** A long order stays inside the shared grid's tracks. */
+    public function theReceiptPairStaysInsideItsSharedTracks(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+
+        $lines = [];
+
+        for ($i = 0; $i < 12; $i++) {
+            $line = $this->wings();
+            $line['id'] = 45409000 + $i;
+            $line['name'] = '[F' . $i . ']Fried Chicken Wings (4)';
+            $this->seedItem($i + 1, $line, $i);
+            $lines[] = $line;
+        }
+
+        $this->seedDemoOrder($lines);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        // `grid-template-rows: repeat(400, auto)` in receipt.css.
+        Assert::assertLessThan(
+            400,
+            count($this->receiptRows($I->grabPageSource(), 'original')),
+            'this order would overflow the shared grid',
+        );
+    }
+
+    /**
+     * The original order is named, and named as the original's.
+     *
+     * Its number and its customer appear on their own labelled line. Nothing else of the original's is
+     * on this page, which is what keeps the two orders' figures from being read as one.
+     */
+    public function theReceiptNamesTheOriginalOrderAndItsCustomerSeparately(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            reservation: ['phone' => self::PHONE, 'first_name' => 'Marta', 'last_name' => 'Nowak'],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        // The original's name is on the ORIGINAL receipt, in its own Customer Details rows...
+        $I->see('Customer Details', '.rc--original');
+        $I->see('Marta', '.rc--original');
+        $I->see('Nowak', '.rc--original');
+        $I->dontSee('Nowak', '.rc--demo');
+        // ...and the demo's own customer stays on the demo receipt.
+        $I->see('testa', '.rc--demo');
+        $I->dontSee('testa', '.rc--original');
+    }
+
+    /** With no name anywhere in the original's JSON, the receipt says so with a dash. */
+    public function theReceiptPrintsADashWhenTheOriginalHasNoName(WebTester $I): void
+    {
+        // The default reservation carries a phone and no name at all, which is the common real shape.
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        // No name anywhere in the original's JSON, so its receipt prints a dash — and does not borrow
+        // the trainee's name to fill the gap.
+        $I->see('-', '.rc--original');
+        $I->dontSee('testa', '.rc--original');
+    }
+
+    /** The name falls through to the shipping block, exactly as the comparison does. */
+    public function theReceiptFallsBackToTheShippingNameForTheOriginal(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00', reservation: ['phone' => self::PHONE]);
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        // Written straight into the payload, as the comparison's own shipping-fallback test does: the
+        // seed helper models the common shape, and this is deliberately the uncommon one.
+        $this->connection->createCommand()->update(
+            '{{%order58_orders}}',
+            ['payload_json' => (string) json_encode([
+                'id' => (string) self::ORDER,
+                'status' => 'completed',
+                'type' => 'delivery',
+                'total_amount' => '13.35000',
+                'data' => (string) json_encode([
+                    'reservation' => ['first_name' => '  ', 'last_name' => null, 'phone' => self::PHONE],
+                    'shipping' => ['first_name' => 'Rafal', 'last_name' => 'Zieba'],
+                ]),
+            ])],
+            ['account_id' => self::STORE_ID, 'source_order_id' => self::ORDER],
+        )->execute();
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->see('Rafal', '.rc--original');
+        $I->see('Zieba', '.rc--original');
+        $I->dontSee('Zieba', '.rc--demo');
+    }
+
+    /**
+     * The three ids in the path are the ownership check.
+     *
+     * A demo order that exists, asked for under another store, is not found — the same answer as an id
+     * that never existed, and produced by the lookup rather than by a test somebody has to remember.
+     */
+    public function aReceiptForAnotherStoresDemoOrderIsNotFound(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+
+        $I->amOnPage('/order-testing/store/' . (self::STORE_ID + 1) . '/order/' . self::ORDER
+            . '/demo/' . self::DEMO_ORDER . '/receipt');
+        $I->seeResponseCodeIs(404);
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . (self::ORDER + 1)
+            . '/demo/' . self::DEMO_ORDER . '/receipt');
+        $I->seeResponseCodeIs(404);
+    }
+
+    /** And a guest sees none of it. */
+    public function aGuestCannotReadAReceipt(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $I->amOnPage($this->receiptUrl());
+
+        $I->dontSeeElement('.rc--original');
+        $I->seeInCurrentUrl('/login');
+    }
+
     // ------------------------------------------------------------------ the rest of the page
 
     /** The non-item half of the comparison is untouched by any of this. */
@@ -905,6 +1199,143 @@ final class OrderTestingItemComparisonCest
     private static function flatten(string $text): string
     {
         return trim((string) preg_replace('/\s+/', ' ', $text));
+    }
+
+    private function receiptUrl(): string
+    {
+        return $this->url() . '/receipt';
+    }
+
+    /**
+     * Every row of one receipt, in the order it is drawn, named by what it is.
+     *
+     * Explicit about which elements count as rows rather than "every child", because an element that
+     * slipped out of the shared sequence is exactly what would break the pairing, and a loose selector
+     * would hide it.
+     *
+     * @return list<string>
+     */
+    private function receiptRows(string $html, string $side): array
+    {
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($doc);
+        $has = static fn(string $class): string
+            => "contains(concat(' ', normalize-space(@class), ' '), ' " . $class . " ')";
+
+        $card = $xpath->query('//section[' . $has('rc--' . $side) . ']')->item(0);
+
+        if (!$card instanceof DOMElement) {
+            return [];
+        }
+
+        $rows = $xpath->query(
+            './*[' . $has('rc__head')
+            . ' or ' . $has('rc__absent')
+            . ' or ' . $has('rc__caption')
+            . ' or ' . $has('rc__row')
+            . ' or ' . $has('rc__line')
+            . ' or ' . $has('rc__empty')
+            . ' or ' . $has('rc__removed')
+            . ' or ' . $has('rc__sum')
+            . ' or ' . $has('rc__foot') . ']',
+            $card,
+        );
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            if (!$row instanceof DOMElement) {
+                continue;
+            }
+
+            $class = $row->getAttribute('class');
+
+            // A labelled row is named by its label, so the two cards must agree about which field each
+            // row is — not merely about how many rows there are.
+            if (str_contains($class, 'rc__row') || str_contains($class, 'rc__sum')) {
+                $label = $xpath->query('.//*[' . $has('rc__label') . ']', $row)->item(0);
+                $out[] = 'field:' . self::flatten($label?->textContent ?? '');
+
+                continue;
+            }
+
+            if (str_contains($class, 'rc__caption')) {
+                $out[] = 'caption:' . self::flatten($row->textContent);
+
+                continue;
+            }
+
+            // An item names different things on the two sides — or nothing at all on one. Only its
+            // position in the sequence has to match.
+            $out[] = match (true) {
+                str_contains($class, 'rc__line--mods') => 'mods',
+                str_contains($class, 'rc__line--note') => 'note',
+                str_contains($class, 'rc__line--head') => 'items-head',
+                str_contains($class, 'rc__line') => 'item',
+                str_contains($class, 'rc__head') => 'head',
+                str_contains($class, 'rc__absent') => 'absent',
+                str_contains($class, 'rc__removed') => 'removed',
+                str_contains($class, 'rc__foot') => 'foot',
+                default => 'other',
+            };
+        }
+
+        return $out;
+    }
+
+    /**
+     * What the summary strip claims, keyed by status.
+     *
+     * @return array<string, int>
+     */
+    private function chipCounts(string $html): array
+    {
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($doc);
+        $out = [];
+
+        foreach ($xpath->query('//*[@data-rc-filter]') as $chip) {
+            if (!$chip instanceof DOMElement) {
+                continue;
+            }
+
+            $count = $xpath->query(
+                './/*[contains(concat(" ", normalize-space(@class), " "), " rc-chip__count ")]',
+                $chip,
+            )->item(0);
+
+            $out[$chip->getAttribute('data-rc-filter')] = (int) self::flatten($count?->textContent ?? '0');
+        }
+
+        return $out;
+    }
+
+    /** How many primary rows of the demo receipt carry this verdict. Sub-rows repeat their item's. */
+    private function rowsWithStatus(string $html, string $status): int
+    {
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($doc);
+        $has = static fn(string $class): string
+            => "contains(concat(' ', normalize-space(@class), ' '), ' " . $class . " ')";
+
+        $rows = $xpath->query(
+            '//section[' . $has('rc--demo') . ']/*[@data-rc-status="' . $status . '"]'
+            . '[not(' . $has('rc__line--mods') . ') and not(' . $has('rc__line--note') . ')]',
+        );
+
+        return $rows->length;
     }
 
     private function url(): string

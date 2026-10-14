@@ -75,6 +75,9 @@ final class OrderTestingRoute
     /** One demo order beside the source order it was recreated from. */
     public const DEMO_COMPARE = 'order-testing.demo-compare';
 
+    /** The same demo order printed as a receipt. Read-only, and a page of its own so it can be printed. */
+    public const DEMO_RECEIPT = 'order-testing.demo-receipt';
+
     /**
      * Run the demo-order import now, from the picker.
      *
