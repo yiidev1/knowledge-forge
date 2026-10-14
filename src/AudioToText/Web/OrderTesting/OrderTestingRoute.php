@@ -85,4 +85,15 @@ final class OrderTestingRoute
      * under the same lock, so this button neither competes with it nor becomes redundant.
      */
     public const SYNC_DEMO_ORDERS = 'order-testing.sync-demo-orders';
+
+    /**
+     * Putting a topic on one order, and on several at once.
+     *
+     * On this surface because this is where training content is *managed*. The practice surfaces show
+     * which topic an order carries and never change it: they render no control that posts here, and
+     * their route groups do not mount these addresses at all.
+     */
+    public const TOPIC_ASSIGN = 'order-testing.topic.assign';
+
+    public const TOPIC_BULK = 'order-testing.topic.bulk';
 }

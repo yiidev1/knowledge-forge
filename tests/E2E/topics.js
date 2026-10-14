@@ -336,86 +336,157 @@ async function run() {
             return scroller !== null && getComputedStyle(scroller).overflowX === 'auto';
         }));
 
-        // ---------------------------------------------------------------- Practice Orders
+        // ---------------------------------------------------------------- Order Testing: assigning
         await page.setViewport({ width: 1500, height: 1000 });
-        const storeUrl = BASE + '/practice-orders/store/' + fx.store;
-        await page.goto(storeUrl, { waitUntil: 'networkidle0' });
+        const otUrl = BASE + '/order-testing/store/' + fx.store;
+        await page.goto(otUrl, { waitUntil: 'networkidle0' });
 
         const rowsOf = () => page.evaluate(
             () => Array.from(document.querySelectorAll('tbody [data-practice-select]')).map((b) => b.value),
         );
 
-        const allRows = await rowsOf();
-        check('both assignable orders are listed', allRows.length === 2, allRows.join(', '));
-        check('the recording with no mirrored order offers no checkbox',
-            !allRows.includes(String(fx.orphanOrder)), allRows.join(', '));
-        check('and offers no Set Topic button',
-            await page.$('[data-practice-set-topic="' + fx.orphanOrder + '"]') === null);
+        check('the management table lists the practisable orders',
+            (await rowsOf()).length === 2, (await rowsOf()).join(', '));
+        check('and still lists the one with no mirrored order', await page.evaluate(
+            (orphan) => document.body.textContent.indexOf(String(orphan)) !== -1,
+            fx.orphanOrder,
+        ));
+        check('which offers no control of its own',
+            await page.$('#practice-topic-' + fx.orphanOrder) === null);
 
-        // **The auto-apply regression.** Choose an option and fire the event a real select fires.
-        const urlBefore = page.url();
-        await page.select('.practice-filter select[name="topic"]', String(fx.topicA.id));
+        const selectFor = (order) => '#practice-topic-' + order;
+
+        // The inline Save is removed once the script runs, so the confirmation is the only path.
+        check('the inline Save is withdrawn when the script is running', await page.evaluate(
+            () => {
+                const save = document.querySelector('[data-practice-assign-save]');
+
+                return save !== null && save.hidden === true;
+            },
+        ));
+
+        // **Choosing does not save.** Pick a topic and wait; nothing may be written.
+        await page.select(selectFor(fx.assignedOrder), String(fx.topicB.id));
         await sleep(400);
 
-        check('choosing a topic does not navigate', page.url() === urlBefore, page.url());
-        check('and does not change the rows', (await rowsOf()).length === 2);
-        check('the select is holding the new choice', await page.evaluate(
-            () => document.querySelector('.practice-filter select[name="topic"]').value,
-        ) === String(fx.topicA.id));
+        const confirmState = await page.evaluate(() => {
+            const dialog = document.querySelector('#practice-confirm-dialog');
 
-        // Apply is what filters.
+            return {
+                open: dialog.matches(':modal'),
+                order: dialog.querySelector('[data-practice-confirm-order]').textContent.trim(),
+                current: dialog.querySelector('[data-practice-confirm-current]').textContent.trim(),
+                next: dialog.querySelector('[data-practice-confirm-next]').textContent.trim(),
+            };
+        });
+
+        check('choosing a topic opens a confirmation', confirmState.open);
+        check('it names the order', confirmState.order === '#' + fx.assignedOrder, confirmState.order);
+        check('it shows the current topic', confirmState.current === fx.topicA.name, confirmState.current);
+        check('it shows the new topic', confirmState.next === fx.topicB.name, confirmState.next);
+        check('and nothing has navigated', page.url() === otUrl, page.url());
+
+        // Cancel: nothing written, and the control goes back to what is stored.
+        await page.click('#practice-confirm-dialog [data-practice-dialog-close]');
+        await sleep(300);
+
+        check('Cancel restores the stored selection', await page.evaluate(
+            (sel, saved) => document.querySelector(sel).value === String(saved),
+            selectFor(fx.assignedOrder), fx.topicA.id,
+        ));
+        check('and saved nothing', page.url() === otUrl, page.url());
+
+        // Confirm: this one writes.
+        await page.select(selectFor(fx.assignedOrder), String(fx.topicB.id));
+        await sleep(300);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('[data-practice-confirm-submit]'),
+        ]);
+
+        check('Confirm saves and returns to the list', page.url().indexOf('/order-testing/store/') !== -1,
+            page.url());
+        check('the saved topic is what the control now shows', await page.evaluate(
+            (sel, expected) => document.querySelector(sel).value === String(expected),
+            selectFor(fx.assignedOrder), fx.topicB.id,
+        ));
+
+        // ---------------------------------------------------------------- the multi-topic filter
+        await page.goto(otUrl, { waitUntil: 'networkidle0' });
+
+        const beforeFilter = (await rowsOf()).length;
+
+        await page.click('[data-practice-filter-picker] summary');
+        await sleep(200);
+        await page.evaluate((id) => {
+            document.querySelector('.practice-filter input[value="' + id + '"]').click();
+        }, fx.topicB.id);
+        await sleep(400);
+
+        check('ticking a topic does not filter anything yet',
+            (await rowsOf()).length === beforeFilter && page.url() === otUrl, page.url());
+        check('the summary counts what is ticked', await page.evaluate(
+            () => document.querySelector('[data-practice-filter-summary]').textContent.trim(),
+        ) === '1 selected');
+
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('.practice-filter button[type="submit"]'),
         ]);
 
-        check('Apply puts the filter in the address', page.url().includes('topic=' + fx.topicA.id), page.url());
-        const filtered = await rowsOf();
-        check('Apply narrows the list to that topic',
-            filtered.length === 1 && filtered[0] === String(fx.assignedOrder), filtered.join(', '));
+        check('Apply puts the selection in the address',
+            page.url().indexOf('topics') !== -1, page.url());
+        check('and narrows the list', (await rowsOf()).length === 1, (await rowsOf()).join(', '));
+        check('the ticked box comes back ticked', await page.evaluate(
+            (id) => document.querySelector('.practice-filter input[value="' + id + '"]').checked,
+            fx.topicB.id,
+        ));
 
-        // Clear takes it off again.
+        // Two at once, OR across them.
+        await page.click('[data-practice-filter-picker] summary');
+        await sleep(200);
+        await page.evaluate(() => {
+            document.querySelector('.practice-filter input[value="none"]').click();
+        });
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.click('.practice-filter button[type="submit"]'),
+        ]);
+
+        check('a topic OR unassigned matches both', (await rowsOf()).length === 2,
+            (await rowsOf()).join(', '));
+
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
             page.click('.practice-filter a.btn'),
         ]);
-        check('Clear returns to every order', (await rowsOf()).length === 2, page.url());
+        check('Clear removes every restriction', page.url() === otUrl, page.url());
 
-        // ---------------------------------------------------------------- the Set Topic column
-        //
-        // Rows in three different states — assigned, unassigned, and a recording with no source order
-        // at all — must still produce one tidy column rather than three different shapes.
-        const topicColumn = await page.evaluate(() => {
-            const cells = Array.from(document.querySelectorAll('.practice-topic-cell'));
+        // ---------------------------------------------------------------- Practice Orders, read-only
+        const poUrl = BASE + '/practice-orders/store/' + fx.store;
+        await page.goto(poUrl, { waitUntil: 'networkidle0' });
 
-            return cells.map((cell) => {
-                const btn = cell.querySelector('.btn');
-                const stack = cell.querySelector('.practice-topic-cell__stack');
-                const rect = cell.getBoundingClientRect();
+        const readOnly = await page.evaluate(() => ({
+            selects: document.querySelectorAll('[data-practice-assign-select]').length,
+            checkboxes: document.querySelectorAll('[data-practice-select]').length,
+            bulk: document.querySelectorAll('#practice-bulk-form').length,
+            upload: document.querySelectorAll('[data-a2t-open="a2t-upload-dialog"]').length,
+            manage: document.querySelectorAll('#a2t-manage-dialog').length,
+            fullEditor: document.querySelectorAll('[data-a2t-full-editor]').length,
+            filter: document.querySelectorAll('.practice-filter').length,
+            topicNames: document.querySelectorAll('[data-practice-topic-details]').length,
+            players: document.querySelectorAll('[data-a2t-play]').length,
+        }));
 
-                return {
-                    hasStack: stack !== null,
-                    button: btn === null ? null : btn.textContent.trim(),
-                    // Where the button's left edge sits relative to its own cell.
-                    buttonInset: btn === null ? null : Math.round(btn.getBoundingClientRect().left - rect.left),
-                    // Does anything spill out of the column?
-                    overflows: cell.scrollWidth > cell.clientWidth + 1,
-                };
-            });
-        });
-
-        check('every topic cell uses the one stack',
-            topicColumn.every((c) => c.hasStack), JSON.stringify(topicColumn.map((c) => c.hasStack)));
-        check('no topic cell overflows its column',
-            topicColumn.every((c) => !c.overflows));
-
-        const insets = topicColumn.filter((c) => c.button !== null).map((c) => c.buttonInset);
-        check('every button starts at the same left edge', new Set(insets).size === 1,
-            insets.join(', '));
-        // Row order is by newest activity, so the states are compared as a set rather than a sequence.
-        const states = topicColumn.map((c) => String(c.button)).sort().join('|');
-
-        check('the three states are each present once', states === 'Change|Set Topic|null', states);
+        check('Practice Orders offers no assignment control',
+            readOnly.selects === 0 && readOnly.checkboxes === 0 && readOnly.bulk === 0,
+            JSON.stringify(readOnly));
+        check('and no audio management',
+            readOnly.upload === 0 && readOnly.manage === 0 && readOnly.fullEditor === 0,
+            JSON.stringify(readOnly));
+        check('while keeping the filter, the topic names and the players',
+            readOnly.filter === 1 && readOnly.topicNames > 0 && readOnly.players > 0,
+            JSON.stringify(readOnly));
 
         // ---------------------------------------------------------------- the details dialog
         await page.click('.practice-topic-cell [data-practice-topic-details]');
@@ -427,40 +498,13 @@ async function run() {
             return {
                 modal: dialog.matches(':modal'),
                 name: dialog.querySelector('[data-practice-details-name]').textContent.trim(),
-                description: dialog.querySelector('[data-practice-details-description]').textContent.trim(),
-                status: dialog.querySelector('[data-practice-details-status]').textContent.trim(),
-                statusClasses: dialog.querySelector('[data-practice-details-status]').className,
                 forms: dialog.querySelectorAll('form').length,
-                assignAlsoOpen: document.querySelector('#practice-assign-dialog').open,
             };
         });
 
-        check('the topic name opens the details dialog', details.modal);
-        check('it shows the topic name', details.name === fx.topicA.name, details.name);
-        check('it shows the description', details.description === fx.topicA.description, details.description);
-        check('it shows the real status', details.status === 'Active', details.status);
-        check('the status is badged green', details.statusClasses.includes('badge--success'),
-            details.statusClasses);
-        check('it is read-only: no form in it', details.forms === 0, String(details.forms));
-        check('and it did not open the assignment dialog', details.assignAlsoOpen === false);
-
-        await page.click('#practice-topic-details-dialog [data-practice-dialog-close]');
-        await sleep(150);
-
-        // Change opens the other one — two controls, two purposes.
-        await page.click('[data-practice-set-topic="' + fx.assignedOrder + '"]');
-        await sleep(200);
-
-        const afterChange = await page.evaluate(() => ({
-            assign: document.querySelector('#practice-assign-dialog').matches(':modal'),
-            details: document.querySelector('#practice-topic-details-dialog').open,
-            preselected: document.querySelector('[data-practice-assign-topic]').value,
-        }));
-
-        check('Change opens the assignment dialog', afterChange.assign);
-        check('and leaves the details dialog closed', afterChange.details === false);
-        check('with the current topic preselected',
-            afterChange.preselected === String(fx.topicA.id), afterChange.preselected);
+        check('the topic name still opens its details', details.modal);
+        check('read-only: no form in it', details.forms === 0, String(details.forms));
+        check('and it names a topic', details.name !== '', details.name);
 
         // ---------------------------------------------------------------- nothing broke quietly
         const csp = await page.evaluate(() => window.__csp || []);

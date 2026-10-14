@@ -9,6 +9,8 @@ use App\Agent\Web\Logout as AgentLogout;
 use App\Agent\Web\Middleware\RequireAgentMiddleware;
 use App\Agent\Web\Middleware\RequireOrder58SessionMiddleware;
 use App\Agent\Web\Middleware\RequireOrderTestingAccessMiddleware;
+use App\Agent\Web\Middleware\RequirePracticeOrdersMiddleware;
+use App\Agent\Web\PracticeOrders as AgentPracticeOrders;
 use App\Agent\Web\RuleChat as AgentRuleChat;
 use App\Agent\Web\Sources as AgentSources;
 use App\Ai\Web\Usage;
@@ -30,6 +32,7 @@ use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\CallHistory as Order58CallHistory;
 use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
+use App\AudioToText\Web\AgentPracticeOrders as AgentPracticeOrdersSurface;
 use App\AudioToText\Web\PracticeOrders as PracticeOrdersSurface;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
@@ -685,12 +688,22 @@ return [
 
             // Assigning a topic. The store id is in the path because that is the only place it may
             // come from — a posted store id would let one store's page write onto another's orders.
-            Route::post('/practice-orders/store/{sourceId:\d+}/topic')
+            // Topic assignment lives with Order Testing, where recordings are managed — not with
+            // Practice Orders, which is where training content is used. Moving the addresses as well
+            // as the buttons is the point: a control removed from a page whose endpoint still answers
+            // is a permission still granted, just harder to find.
+            // The conversation fragment, read-only, for the Practice Orders view. The editing surfaces
+            // keep the audio module's own address; this one answers with no per-turn edit URLs, so the
+            // dialog on a viewing page builds no edit form at all.
+            Route::get('/practice-orders/job/{publicId:[0-9a-f]{32}}/review/fragment')
+                ->action(AudioToText\Job\Review\Fragment\ReadOnlyAction::class)
+                ->name('practice-orders.job.review.fragment'),
+            Route::post('/order-testing/store/{sourceId:\d+}/topic')
                 ->action(Practice\Assign\AssignAction::class)
-                ->name('practice-orders.topic.assign'),
-            Route::post('/practice-orders/store/{sourceId:\d+}/topic/bulk')
+                ->name(OrderTestingRoute::TOPIC_ASSIGN),
+            Route::post('/order-testing/store/{sourceId:\d+}/topic/bulk')
                 ->action(Practice\Assign\BulkAssignAction::class)
-                ->name('practice-orders.topic.bulk'),
+                ->name(OrderTestingRoute::TOPIC_BULK),
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
                 ->action(OrderTestingModule\DemoOrders\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),
@@ -899,5 +912,104 @@ return [
             Route::post('/agent/stores/{slug}/chat/{conversationId:\d+}/messages/{messageId:\d+}/dismiss-score')
                 ->action(AgentChat\DismissScoreAction::class)
                 ->name('agent.chat.message.score.dismiss'),
+
+            // ---------------------------------------------------------------------------------------
+            // Practice Orders for agents: a READ-ONLY view of the same recordings, orders and demo
+            // results the administrators practise with, plus one permitted write — Demo URL.
+            //
+            // A NESTED group, inside the agent gate rather than beside it. RequireAgentMiddleware has
+            // already proved the session; RequirePracticeOrdersMiddleware then adds the three things
+            // only this surface needs — an actor identity to attribute an attempt to, a per-request
+            // re-read of the agent's role, and an object-level scope. The agent gate itself is
+            // untouched, so store chat, rule chat and the rule list cannot regress because of this.
+            //
+            // **Which stores an agent sees is one rule and one rule only:** the store holds at least
+            // one recording that still has its audio and names a source order of that same store. Not
+            // `agent_enabled`, not chat or vector readiness, not `active`. PracticeStoreScope owns the
+            // predicate, the picker's directory is built from the same SQL, and the middleware
+            // re-answers it for whatever this request names — a store, or a recording, including the
+            // routes that stream bytes. Knowing an id is not permission.
+            //
+            // Every route here is a GET except the Demo URL post. **Deliberately NOT mounted:** upload,
+            // replace, transcribe, download, every review/* correction endpoint, TTS options and
+            // generation, sync-demo-orders, and the topic assign/bulk endpoints. A hand-crafted POST to
+            // an administrator address hits RequireOrderTestingAccessMiddleware, which refuses agents
+            // outright, so the absence here is the second lock rather than the only one.
+            // ---------------------------------------------------------------------------------------
+            Group::create()
+                ->middleware(RequirePracticeOrdersMiddleware::class)
+                ->routes(
+                    Route::get('/agent/practice-orders')
+                        ->action(AgentPracticeOrders\Action::class)
+                        ->name('agent.practice-orders'),
+
+                    // GET only. The administrator route accepts POST because that is where an upload
+                    // lands; there is no upload here, so there is no POST.
+                    Route::get('/agent/practice-orders/store/{sourceId:\d+}')
+                        ->action(AgentPracticeOrdersSurface\StoreAction::class)
+                        ->name('agent.practice-orders.store'),
+
+                    // The same actions the administrator surface mounts, at a second address — reading
+                    // a transcript and listing a call's recordings are the same question whoever asks
+                    // it. No second copy of either reader.
+                    Route::get('/agent/practice-orders/store/{sourceId:\d+}/arriving')
+                        ->action(AudioToText\Job\Store\ArrivingAction::class)
+                        ->name('agent.practice-orders.store.arriving'),
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/group/{groupKey}/transcripts',
+                    )
+                        ->action(AudioToText\Job\Store\Group\TranscriptsAction::class)
+                        ->name('agent.practice-orders.store.group.transcripts'),
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/group/{groupKey}/recordings',
+                    )
+                        ->action(OrderTesting\RecordingsAction::class)
+                        ->name('agent.practice-orders.store.group.recordings'),
+
+                    // The two routes that stream audio: the uploaded recording, and AI audio that was
+                    // generated earlier. Both scoped by the middleware on `publicId`, so a job id
+                    // learned elsewhere serves nothing.
+                    Route::get('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/original/file')
+                        ->action(AudioToText\Job\Original\File\Action::class)
+                        ->name('agent.practice-orders.job.original.file'),
+                    Route::get('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/ai-audio/file')
+                        ->action(AudioToText\Job\AiAudio\File\Action::class)
+                        ->name('agent.practice-orders.job.ai-audio.file'),
+
+                    // Read-only data the conversation dialog draws itself from, and the progress poll
+                    // a recording still being transcribed uses.
+                    Route::get('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/review/fragment')
+                        ->action(AudioToText\Job\Review\Fragment\AgentReadOnlyAction::class)
+                        ->name('agent.practice-orders.job.review.fragment'),
+                    Route::get('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/status')
+                        ->action(AudioToText\Job\Status\Action::class)
+                        ->name('agent.practice-orders.job.status'),
+
+                    // **The one write.** The same action, the same service, the same gap lock and the
+                    // same one-open-attempt rule; only the actor differs, and the actor comes from the
+                    // middleware rather than from the body.
+                    Route::post('/agent/practice-orders/store/{sourceId:\d+}/demo-url')
+                        ->action(OrderTestingModule\DemoUrl\Action::class)
+                        ->name('agent.practice-orders.demo-url'),
+
+                    // What the trainee produced, and how it compares with the original. Read-only.
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders',
+                    )
+                        ->action(AgentPracticeOrders\DemoOrdersAction::class)
+                        ->name('agent.practice-orders.demo-orders'),
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                            . '/demo/{demoOrderId:\d+}',
+                    )
+                        ->action(AgentPracticeOrders\CompareAction::class)
+                        ->name('agent.practice-orders.demo-compare'),
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                            . '/demo/{demoOrderId:\d+}/receipt',
+                    )
+                        ->action(AgentPracticeOrders\ReceiptAction::class)
+                        ->name('agent.practice-orders.demo-receipt'),
+                ),
         ),
 ];

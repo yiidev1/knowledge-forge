@@ -9,10 +9,10 @@ use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
-use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function dechex;
 use function gmdate;
 use function str_pad;
 use function str_repeat;
@@ -97,26 +97,6 @@ final class PracticeOrdersCest
         $I->seeElement('.alpha-nav');
     }
 
-    public function theStorePageIsTheOrderTestingTablePlusTwoColumns(WebTester $I): void
-    {
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-
-        $I->seeResponseCodeIs(200);
-
-        // The original five, unchanged.
-        $I->see('Order No#', 'thead');
-        $I->see('Recording / Conversation', 'thead');
-        $I->see('Status', 'thead');
-        $I->see('Demo URL', 'thead');
-        $I->see('Demo Orders', 'thead');
-
-        // ...and the two that are new.
-        $I->seeElement('thead [data-practice-select-all]');
-        $I->see('Set Topic', 'thead');
-
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->see('Not Assigned', '.practice-topic-cell');
-    }
 
     /** Its links must come back to Practice Orders, not wander into Order Testing. */
     public function theStorePageLinksBackToItsOwnSurface(WebTester $I): void
@@ -129,192 +109,230 @@ final class PracticeOrdersCest
         $I->dontSeeElement('.page-header a[href="/order-testing"]');
     }
 
-    public function anAdminAssignsATopicToOneOrder(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => (string) self::ORDER,
-            'topic_id' => (string) $topicId,
-        ]);
 
-        $I->seeCurrentUrlEquals('/practice-orders/store/' . self::STORE_ID);
-        $I->see('assigned', '.alert');
-        $I->see(self::TOPIC, '.practice-topic-cell');
-        Assert::assertSame($topicId, $this->assignedTopicId(self::ORDER));
-    }
 
-    public function removingATopicLeavesTheOrderUnassigned(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
-        $this->assignDirectly($topicId);
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->see(self::TOPIC, '.practice-topic-cell');
 
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => (string) self::ORDER,
-            'topic_id' => '',
-        ]);
 
-        $I->see('removed', '.alert');
-        $I->see('Not Assigned', '.practice-topic-cell');
-    }
 
-    public function theBulkToolbarAssignsEveryOrderThatWasSelected(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->seeElement('#practice-bulk-form');
 
-        $I->submitForm('#practice-bulk-form', [
-            'topic_id' => (string) $topicId,
-            'source_order_ids' => [(string) self::ORDER],
-        ]);
 
-        $I->see('assigned to 1 order', '.alert');
-        Assert::assertSame($topicId, $this->assignedTopicId(self::ORDER));
-    }
+
+
+    // ---------------------------------------------------------------- the topic details modal
 
     /**
-     * The security case: an order id from another store, posted at this store's endpoint.
+     * **The whole point of the restructure.** This page shows training content; it does not manage it.
      *
-     * It must be refused and nothing written — the store id comes from the path, and the body is not
-     * trusted to name an order of it.
+     * Asserted by absence in the DOM rather than by looking at styles: a control that is present and
+     * merely hidden is a control, and the endpoints behind these are not mounted for this surface
+     * either. Each one of them is on Order Testing, where the administrator already was.
      */
-    public function anOrderFromAnotherStoreIsRefused(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
-
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => '99999999',
-            'topic_id' => (string) $topicId,
-        ]);
-
-        $I->see('belong to this store', '.alert');
-        Assert::assertNull($this->assignedTopicId(99999999));
-    }
-
-    public function anArchivedTopicCannotBeAssigned(WebTester $I): void
-    {
-        $topicId = $this->seedTopic('ARCHIVED');
-
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => (string) self::ORDER,
-            'topic_id' => (string) $topicId,
-        ]);
-
-        $I->see('cannot be assigned', '.alert');
-        Assert::assertNull($this->assignedTopicId(self::ORDER));
-    }
-
-    // ---------------------------------------------------------------- the topic filter
-
-    public function theTopicFilterNarrowsTheListToThatTopic(WebTester $I): void
+    public function thePracticeSurfaceOffersNoManagementControl(WebTester $I): void
     {
         $topicId = $this->seedTopic();
         $this->assignDirectly($topicId);
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=' . $topicId);
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+        $I->seeResponseCodeIs(200);
+
+        // Topic management.
+        $I->dontSeeElement('[data-practice-assign-row]');
+        $I->dontSeeElement('[data-practice-assign-select]');
+        $I->dontSeeElement('[data-practice-select]');
+        $I->dontSeeElement('[data-practice-select-all]');
+        $I->dontSeeElement('#practice-bulk-form');
+        $I->dontSeeElement('#practice-confirm-dialog');
+
+        // Audio and transcript management.
+        $I->dontSeeElement('[data-a2t-open="a2t-upload-dialog"]');
+        $I->dontSeeElement('#a2t-upload-dialog');
+        $I->dontSeeElement('#a2t-manage-dialog');
+        $I->dontSeeElement('#a2t-tts-confirm-dialog');
+        $I->dontSeeElement('#a2t-transcribe-dialog');
+        $I->dontSeeElement('[data-a2t-review-token]');
+        $I->dontSeeElement('[data-a2t-full-editor]');
+        $I->dontSeeElement('[data-a2t-details-full]');
+        $I->dontSee('Sync demo orders');
+        $I->dontSee('Add Audio');
+    }
+
+    /** What it does keep: the listing, the topic, and the one training action. */
+    public function thePracticeSurfaceKeepsTheTrainingControls(WebTester $I): void
+    {
+        $topicId = $this->seedTopic();
+        $this->assignDirectly($topicId);
+
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->see('Order No#', 'thead');
+        $I->see('Topic', 'thead');
+        $I->dontSee('Set Topic', 'thead');
+        $I->see('Demo URL', 'thead');
+        $I->see('Demo Orders', 'thead');
+        $I->seeElement('[data-a2t-play]');
+        $I->seeElement('[data-a2t-details]');
+        $I->seeElement('.practice-topic-cell [data-practice-topic-details]');
+        $I->seeElement('.practice-filter');
+    }
+
+    /** Order Testing keeps everything, and gains the management controls. */
+    public function orderTestingKeepsItsManagementControls(WebTester $I): void
+    {
+        $this->seedTopic();
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+        $I->seeResponseCodeIs(200);
+
+        $I->seeElement('[data-practice-assign-select]');
+        $I->seeElement('[data-practice-select-all]');
+        $I->seeElement('#practice-bulk-form');
+        $I->seeElement('#practice-confirm-dialog');
+        $I->see('Set Topic', 'thead');
+        $I->see('Sync demo orders');
+        $I->see('Add Audio');
+    }
+
+    // ---------------------------------------------------------------- the multi-topic filter
+
+    /** One topic, chosen as a set of one. */
+    public function filteringByOneTopicNarrowsTheList(WebTester $I): void
+    {
+        $topicId = $this->seedTopic();
+        $this->assignDirectly($topicId);
+
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $topicId);
 
         $I->seeResponseCodeIs(200);
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->dontSeeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
-        // The control agrees with the rows rather than resetting itself to "All topics".
-        $I->seeOptionIsSelected('select[name="topic"]', self::TOPIC);
+        $I->see((string) self::ORDER, 'tbody');
+        $I->dontSee((string) self::ORDER_B, 'tbody');
     }
 
-    public function theNotAssignedFilterShowsOnlyOrdersWithNoTopic(WebTester $I): void
+    /** **OR across the selection**: an order matches if it carries any one of the chosen topics. */
+    public function filteringBySeveralTopicsMatchesAnyOfThem(WebTester $I): void
+    {
+        $first = $this->seedTopic();
+        $second = $this->seedTopic('ACTIVE', self::TOPIC_B);
+        $this->assignDirectly($first);
+        $this->assignDirectly($second, self::ORDER_B);
+
+        $I->amOnPage(
+            '/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $first . '&topics[]=' . $second,
+        );
+
+        $I->see((string) self::ORDER, 'tbody');
+        $I->see((string) self::ORDER_B, 'tbody');
+    }
+
+    /** A topic together with "not assigned", which is one choice in the same list. */
+    public function filteringByATopicAndUnassignedTogether(WebTester $I): void
     {
         $topicId = $this->seedTopic();
         $this->assignDirectly($topicId);
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=none');
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $topicId . '&topics[]=none');
 
-        $I->dontSeeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
-        $I->seeOptionIsSelected('select[name="topic"]', 'Not assigned');
+        $I->see((string) self::ORDER, 'tbody');
+        $I->see((string) self::ORDER_B, 'tbody');
     }
 
-    /** Unfiltered is still every order, which is what the page does without the parameter. */
-    public function noFilterShowsEveryOrder(WebTester $I): void
+    public function filteringByUnassignedAloneShowsOnlyUntopickedOrders(WebTester $I): void
     {
         $topicId = $this->seedTopic();
         $this->assignDirectly($topicId);
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=none');
 
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
-        $I->seeOptionIsSelected('select[name="topic"]', 'All topics');
+        $I->dontSee((string) self::ORDER, 'tbody');
+        $I->see((string) self::ORDER_B, 'tbody');
     }
 
     /** A hand-edited or stale value filters nothing rather than erroring. */
     public function anUnrecognisedFilterValueShowsEveryOrder(WebTester $I): void
     {
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=not-a-topic');
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=not-a-topic');
 
         $I->seeResponseCodeIs(200);
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
-        $I->seeOptionIsSelected('select[name="topic"]', 'All topics');
+        $I->see((string) self::ORDER, 'tbody');
+        $I->see((string) self::ORDER_B, 'tbody');
     }
 
     /**
-     * Setting a topic returns to the filtered list, not to every order.
+     * The control is checkboxes and an Apply button, and nothing submits on its own.
      *
-     * Working through "Not assigned" one order at a time is the whole point of the filter, and a
-     * redirect that dropped it would make the list restart after every assignment.
+     * PhpBrowser runs no script, so what is asserted is the shape the behaviour depends on: a GET form
+     * with a real submit, and no `onchange` anywhere near the choices.
      */
-    public function theFilterSurvivesAnAssignment(WebTester $I): void
+    public function theFilterIsCheckboxesAndAnExplicitApply(WebTester $I): void
     {
         $topicId = $this->seedTopic();
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=none');
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => (string) self::ORDER,
-            'topic_id' => (string) $topicId,
-        ]);
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
-        $I->seeCurrentUrlEquals('/practice-orders/store/' . self::STORE_ID . '?topic=none');
-        $I->see('assigned', '.alert');
-        // And the order that just got one has left the list it was filtered into.
-        $I->dontSeeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
+        $I->seeElement('form.practice-filter[method="get"]');
+        $I->seeElement('.practice-filter input[type="checkbox"][name="topics[]"][value="none"]');
+        $I->seeElement('.practice-filter input[type="checkbox"][name="topics[]"][value="' . $topicId . '"]');
+        $I->seeElement('.practice-filter button[type="submit"]');
+        $I->see('Apply', '.practice-filter');
+        $I->dontSeeElement('.practice-filter [onchange]');
+        $I->dontSeeElement('.practice-filter select[name="topic"]');
     }
 
-    public function theFilterSurvivesABulkAssignment(WebTester $I): void
+    /** What was chosen comes back ticked, so the control and the rows agree. */
+    public function theChosenTopicsComeBackTicked(WebTester $I): void
     {
         $topicId = $this->seedTopic();
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=none');
-        $I->submitForm('#practice-bulk-form', [
-            'topic_id' => (string) $topicId,
-            'source_order_ids' => [(string) self::ORDER],
-        ]);
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $topicId . '&topics[]=none');
 
-        $I->seeCurrentUrlEquals('/practice-orders/store/' . self::STORE_ID . '?topic=none');
-        $I->see('assigned to 1 order', '.alert');
+        $I->seeElement('.practice-filter input[value="' . $topicId . '"][checked]');
+        $I->seeElement('.practice-filter input[value="none"][checked]');
+        $I->see('Clear', '.practice-filter');
+    }
+
+    /** Clear is a link straight back to the unfiltered list. */
+    public function clearReturnsToEveryOrder(WebTester $I): void
+    {
+        $topicId = $this->seedTopic();
+        $this->assignDirectly($topicId);
+
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $topicId);
+        $I->click('Clear', '.practice-filter');
+
+        $I->seeCurrentUrlEquals('/practice-orders/store/' . self::STORE_ID);
+        $I->see((string) self::ORDER_B, 'tbody');
     }
 
     /** An empty filtered list says the filter emptied it, not that the store has no recordings. */
-    public function aFilterThatMatchesNothingSaysSoAndOffersTheWayBack(WebTester $I): void
+    public function aFilterThatMatchesNothingSaysSo(WebTester $I): void
     {
         $empty = $this->seedTopic('ACTIVE', self::TOPIC_B);
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=' . $empty);
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topics[]=' . $empty);
 
-        $I->seeResponseCodeIs(200);
         $I->see('No orders match this topic filter', '.a2t-empty-state');
         $I->dontSee('No audio recordings yet', '.a2t-empty-state');
-        $I->seeElement('.a2t-empty-state a[href="/practice-orders/store/' . self::STORE_ID . '"]');
     }
 
-    // ---------------------------------------------------------------- the topic details modal
+    /** A recording whose order was never mirrored is not practisable, so it is not listed here. */
+    public function aRecordingWithNoSourceOrderIsNotListed(WebTester $I): void
+    {
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->dontSee((string) self::ORPHAN_ORDER, 'tbody');
+        $I->see((string) self::ORDER, 'tbody');
+    }
+
+    /** And Order Testing still lists it, because that is where it can be fixed. */
+    public function orderTestingStillListsARecordingWithNoSourceOrder(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->see((string) self::ORPHAN_ORDER, 'tbody');
+        $I->see('No matching source order', '.practice-topic-cell');
+    }
 
     public function theAssignedTopicNameOpensItsDetails(WebTester $I): void
     {
@@ -388,103 +406,11 @@ final class PracticeOrdersCest
         $I->seeElement('[data-practice-topic-details][data-practice-topic-status="Inactive"]');
     }
 
-    // ---------------------------------------------------------------- rows with no source order
 
-    /**
-     * A recording whose order was never mirrored cannot be practised, and the page says so rather than
-     * offering a control the server would refuse.
-     */
-    public function arecordingWithNoSourceOrderOffersNoAssignment(WebTester $I): void
-    {
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
-        $I->see('No matching source order', '.practice-topic-cell');
-        $I->dontSeeElement('tbody [data-practice-select][value="' . self::ORPHAN_ORDER . '"]');
-        $I->dontSeeElement('[data-practice-set-topic="' . self::ORPHAN_ORDER . '"]');
-        // The recording itself is still fully listed.
-        $I->see((string) self::ORPHAN_ORDER, 'tbody');
-    }
 
-    /** And the server refuses it too, so hiding the control is the second line of defence, not the first. */
-    public function assigningToAnOrderThatDoesNotExistIsRefused(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
 
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->submitForm('[data-practice-assign-form]', [
-            'source_order_id' => (string) self::ORPHAN_ORDER,
-            'topic_id' => (string) $topicId,
-        ]);
 
-        $I->see('belong to this store', '.alert');
-        Assert::assertNull($this->assignedTopicId(self::ORPHAN_ORDER));
-    }
-
-    /** A bulk request naming it is refused whole — "14 of 15 saved" is not an outcome anyone can act on. */
-    public function aBulkAssignmentNamingAnInvalidOrderWritesNothing(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
-
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->submitForm('#practice-bulk-form', [
-            'topic_id' => (string) $topicId,
-            'source_order_ids' => [(string) self::ORDER, (string) self::ORPHAN_ORDER],
-        ]);
-
-        $I->see('belong to this store', '.alert');
-        Assert::assertNull($this->assignedTopicId(self::ORDER), 'the valid half must not be written either');
-        Assert::assertNull($this->assignedTopicId(self::ORPHAN_ORDER));
-    }
-
-    // ---------------------------------------------------------------- the filter is explicit
-
-    /**
-     * The select carries no script hook, so choosing an option cannot navigate.
-     *
-     * PhpBrowser runs no JavaScript, so the absence of the hook is the thing to assert: it is what the
-     * behaviour depends on, and it is what regressed last time.
-     */
-    public function theFilterSelectDoesNotSubmitOnItsOwn(WebTester $I): void
-    {
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-
-        $I->seeElement('.practice-filter select[name="topic"]');
-        $I->dontSeeElement('.practice-filter select[data-practice-filter]');
-        $I->dontSeeElement('.practice-filter select[onchange]');
-        // Apply is a real submit button on a real GET form, which is what does the filtering.
-        $I->seeElement('.practice-filter[method="get"] button[type="submit"]');
-        $I->see('Apply', '.practice-filter');
-    }
-
-    /** Clear is a link straight back to the unfiltered list. */
-    public function clearReturnsToEveryOrder(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
-        $this->assignDirectly($topicId);
-
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID . '?topic=' . $topicId);
-        $I->see('Clear', '.practice-filter');
-
-        $I->click('Clear', '.practice-filter');
-
-        $I->seeCurrentUrlEquals('/practice-orders/store/' . self::STORE_ID);
-        $I->seeElement('tbody [data-practice-select][value="' . self::ORDER_B . '"]');
-    }
-
-    /** Set Topic and Change are real, enabled buttons — not the grey that reads as disabled. */
-    public function theAssignmentButtonsLookEnabled(WebTester $I): void
-    {
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-
-        $I->seeElement('.practice-topic-cell .btn--primary[data-practice-set-topic]');
-        $I->dontSeeElement('.practice-topic-cell .btn[disabled][data-practice-set-topic]');
-
-        $topicId = $this->seedTopic();
-        $this->assignDirectly($topicId);
-
-        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
-        $I->seeElement('.practice-topic-cell .btn--outline-primary[data-practice-set-topic]');
-    }
 
     /**
      * **A store with more than one page of orders.**
@@ -507,37 +433,17 @@ final class PracticeOrdersCest
         }
     }
 
-    /** Order Testing must be untouched by any of this: no checkboxes, no topic column, no filter. */
-    public function theOrderTestingPageGainsNothing(WebTester $I): void
-    {
-        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
 
-        $I->seeResponseCodeIs(200);
-        $I->see('Order No#', 'thead');
-        $I->dontSee('Set Topic', 'thead');
-        $I->dontSeeElement('[data-practice-select-all]');
-        $I->dontSeeElement('#practice-bulk-form');
-        $I->dontSeeElement('.practice-filter');
-        $I->dontSeeElement('select[name="topic"]');
+    /** And an active one says nothing about it. */
+    public function anActiveStoreShowsNoInactiveWarning(WebTester $I): void
+    {
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->dontSee('reports this store as inactive');
     }
 
-    /**
-     * And Order Testing ignores the parameter entirely.
-     *
-     * Its own surface never emits one, but a reader who edits a URL — or a link pasted from the other
-     * surface — must get the page Order Testing has always rendered, not a filtered one.
-     */
-    public function orderTestingIgnoresATopicParameter(WebTester $I): void
-    {
-        $topicId = $this->seedTopic();
-        $this->assignDirectly($topicId);
 
-        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '?topic=none');
 
-        $I->seeResponseCodeIs(200);
-        $I->see((string) self::ORDER, 'tbody');
-        $I->see((string) self::ORDER_B, 'tbody');
-    }
 
     public function aGuestCannotReachPracticeOrders(WebTester $I): void
     {
@@ -597,7 +503,10 @@ final class PracticeOrdersCest
 
         for ($i = 0; $i < $count; $i++) {
             $orderId = 16801000 + $i;
-            $publicId = str_pad('page' . $i, 32, '0', STR_PAD_LEFT);
+            // Hex, because the job routes constrain `{publicId}` to 32 hex characters and the page
+            // builds a URL for every recording that has audio. A fixture id with a letter outside
+            // a-f makes the URL generator throw, which reads as a broken page rather than a bad id.
+            $publicId = 'ab' . str_pad(dechex($i), 30, '0', STR_PAD_LEFT);
 
             $this->connection->createCommand()->insert('{{%order58_orders}}', [
                 'account_id' => self::STORE_ID,
@@ -625,10 +534,11 @@ final class PracticeOrdersCest
                 ->where(['public_id' => $publicId])->scalar();
 
             $this->connection->createCommand()->insert('{{%audio_transcription_jobs}}', [
-                'public_id' => str_pad('job' . $i, 32, '0', STR_PAD_LEFT),
+                'public_id' => 'cd' . str_pad(dechex($i), 30, '0', STR_PAD_LEFT),
                 'conversation_id' => $conversationId,
                 'uploaded_by_admin_id' => $adminId,
                 'original_filename' => 'page.wav',
+                'retained_audio_path' => 'source.wav',
                 'source_role' => 'COMMON',
                 'status' => 'COMPLETED',
                 'processing_stage' => 'COMPLETED',
@@ -730,6 +640,9 @@ final class PracticeOrdersCest
             'conversation_id' => $conversationRowId,
             'uploaded_by_admin_id' => $adminId,
             'original_filename' => 'practice.wav',
+            // Held audio, because the practice surfaces list only recordings that can be practised —
+            // a conversation row with nothing behind it is not one.
+            'retained_audio_path' => 'source.wav',
             'source_role' => 'COMMON',
             'status' => 'NOT_REQUESTED',
             'processing_stage' => 'QUEUED',

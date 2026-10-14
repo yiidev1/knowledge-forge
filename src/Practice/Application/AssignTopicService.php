@@ -72,6 +72,15 @@ final readonly class AssignTopicService
             );
         }
 
+        // "Not Selected" is not an instruction. The toolbar's empty default arrives here as 0, and it
+        // has to mean "nothing was chosen" — never "take the topic off these orders". Removing a topic
+        // is a single order's decision, made in that row's own dropdown, so there is no bulk path to it
+        // and an empty choice changes nothing. The button is disabled in the page as well; this is the
+        // half that holds when the request is hand-crafted.
+        if ($topicId <= 0) {
+            throw ValidationException::forField('topic_id', 'Choose a topic before assigning in bulk.');
+        }
+
         $topic = $this->topics->find($topicId);
 
         if ($topic === null) {

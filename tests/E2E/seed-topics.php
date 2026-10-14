@@ -99,6 +99,31 @@ foreach ([ASSIGNED_ORDER, FREE_ORDER] as $orderId) {
     ])->execute();
 }
 
+/**
+ * Half a second of silence, as a valid 8-bit mono WAV.
+ *
+ * Written by hand rather than copied from the repository: a fixture that borrows a real recording is a
+ * fixture that can leak one. Nothing here is audible, which is the point — the assertion is that bytes
+ * with an audio content type come back, not what they sound like.
+ */
+function writeSilentWav(string $jobPublicId): void
+{
+    $dir = __DIR__ . '/../../runtime/audio-to-text/recordings/' . $jobPublicId;
+
+    if (!is_dir($dir) && !mkdir($dir, 0o755, true) && !is_dir($dir)) {
+        fwrite(STDERR, "could not create {$dir}\n");
+        exit(1);
+    }
+
+    $rate = 8000;
+    $samples = str_repeat(chr(128), $rate / 2);
+    $wav = 'RIFF' . pack('V', 36 + strlen($samples)) . 'WAVE'
+        . 'fmt ' . pack('V', 16) . pack('vvVVvv', 1, 1, $rate, $rate, 1, 8)
+        . 'data' . pack('V', strlen($samples)) . $samples;
+
+    file_put_contents($dir . '/source.wav', $wav);
+}
+
 // Three recordings: two with a mirrored order behind them, one without.
 $conversations = [
     ASSIGNED_ORDER => str_repeat('a', 32),
@@ -124,20 +149,49 @@ foreach ($conversations as $orderId => $publicId) {
     )->queryScalar();
 
     $c->createCommand()->insert('{{%audio_transcription_jobs}}', [
-        'public_id' => substr(str_repeat((string) $orderId, 8), 0, 32),
+        // Hex, because the job routes constrain `{publicId}` to 32 hex characters.
+        'public_id' => substr(str_repeat(dechex($orderId), 8), 0, 32),
         'conversation_id' => $conversationId,
         'uploaded_by_admin_id' => $adminId,
         'original_filename' => 'topics.wav',
+        // Held audio: the practice surfaces list only recordings that can actually be practised.
+        'retained_audio_path' => 'source.wav',
         'source_role' => 'COMMON',
         'status' => 'COMPLETED',
         'processing_stage' => 'COMPLETED',
         'transcription_provider' => 'WHISPER',
         'duration_seconds' => 6.0,
-        'transcript' => 'Hello.',
+        'transcript' => 'Hello. Yes, a large pepperoni please.',
+        // Two turns, one each way. Without these a recording is not reviewable at all and the page
+        // offers no way into the conversation — so a fixture that omits them cannot be used to check
+        // what the conversation dialog shows.
+        'speaker_segments' => (string) json_encode([
+            [
+                'role' => 'AGENT',
+                'speaker' => 'CHANNEL',
+                'text' => 'Thanks for calling, what can I get you?',
+                'start_ms' => 0,
+                'end_ms' => 2500,
+                'confidence' => 0.97,
+            ],
+            [
+                'role' => 'CUSTOMER',
+                'speaker' => 'CHANNEL',
+                'text' => 'Yes, a large pepperoni please.',
+                'start_ms' => 2600,
+                'end_ms' => 5400,
+                'confidence' => 0.95,
+            ],
+        ]),
         'review_count' => 0,
         'created_at' => $now,
         'completed_at' => $now,
     ])->execute();
+
+    // A real file, where the application looks for it. The column alone makes a recording *listed*;
+    // only the file makes it *play*, and the two are worth being able to tell apart — a player with
+    // nothing behind it is exactly the failure a browser check should be able to see.
+    writeSilentWav(substr(str_repeat(dechex($orderId), 8), 0, 32));
 }
 
 // Two topics: one described, one not, so the details dialog can be checked both ways.

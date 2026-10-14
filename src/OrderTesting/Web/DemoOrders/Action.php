@@ -29,7 +29,11 @@ use function array_values;
  * separate pieces of work by possibly several people, and merging them into one view would make the
  * question "did this trainee get it right" unanswerable.
  */
-final readonly class Action
+/*
+ * Not `final`: the agent practice surface renders this same page from its own route group, and
+ * extends this class to supply its own addresses and shell rather than restating the action.
+ */
+readonly class Action
 {
     public function __construct(
         private WebViewRenderer $viewRenderer,
@@ -62,8 +66,9 @@ final readonly class Action
         }
 
         return $this->viewRenderer
-            ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+            ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/template', [
+                'routes' => $this->surfaceRoutes(),
                 'sourceId' => $sourceId,
                 'storeName' => $storeName,
                 'sourceOrderId' => $sourceOrderId,
@@ -74,4 +79,34 @@ final readonly class Action
                 'sourceOrderIsMirrored' => $this->sourceOrders->find($sourceId, $sourceOrderId) !== null,
             ]);
     }
+
+    /**
+     * The addresses this page builds its own links from.
+     *
+     * Order Testing's, here. The agent practice surface renders the same page from its own group and
+     * supplies its own — without this it drew Order Testing links, which that realm's gate refuses, so
+     * Compare simply did not go anywhere.
+     *
+     * Route names, not classes: a name is not a namespace, so this module names nobody.
+     *
+     * @return array<string, string>
+     */
+    protected function surfaceRoutes(): array
+    {
+        return [
+            'page' => 'order-testing',
+            'pageLabel' => 'Order Testing',
+            'store' => 'order-testing.store',
+            'demoOrders' => 'order-testing.demo-orders',
+            'demoCompare' => 'order-testing.demo-compare',
+            'demoReceipt' => 'order-testing.demo-receipt',
+        ];
+    }
+
+    /** The shell this page is drawn inside. The agent surface has its own. */
+    protected function layoutPath(): string
+    {
+        return '@src/Web/Shared/Layout/Admin/layout.php';
+    }
+
 }

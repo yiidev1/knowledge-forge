@@ -194,6 +194,30 @@ final class TopicAssignmentTest extends Unit
     }
 
     /**
+     * The bulk toolbar opens on "Not Selected", and that must stay a non-instruction.
+     *
+     * An empty choice posts `topic_id=` which arrives as 0. It must be refused with nothing written —
+     * in particular it must not be read as "unassign these orders", which is what an empty choice means
+     * in a single row's own dropdown. The two controls look similar and mean different things, so the
+     * difference is asserted rather than assumed.
+     */
+    public function testAnEmptyBulkTopicIsRefusedAndNeverUnassigns(): void
+    {
+        $topic = $this->topicService->create('Bulk', null, true, null);
+        $this->assignService->assign(self::STORE, self::ORDER_A, $topic, $this->admin());
+
+        try {
+            $this->assignService->assignMany(self::STORE, [self::ORDER_A, self::ORDER_B], 0, $this->admin());
+            self::fail('An empty bulk topic should have been refused.');
+        } catch (ValidationException $e) {
+            self::assertStringContainsString('Choose a topic', implode(' ', $e->errors()));
+        }
+
+        self::assertSame(1, $this->rowCount(self::STORE, self::ORDER_A), 'the existing topic was removed');
+        self::assertSame(0, $this->rowCount(self::STORE, self::ORDER_B), 'something was written anyway');
+    }
+
+    /**
      * The security case: an order id that belongs to another store, posted to this store's endpoint.
      *
      * It must be refused outright, and nothing at all may be written — not even the orders in the same

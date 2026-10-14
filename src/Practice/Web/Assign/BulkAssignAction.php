@@ -72,10 +72,10 @@ final readonly class BulkAssignAction
             }
         }
 
-        // Back to the filtered list the selection was made in — see {@see FilterReturn}.
+        // Back to the filtered Order Testing list the selection was made in — see {@see FilterReturn}.
         return $this->redirect->afterPost(
-            'practice-orders.store',
-            ['sourceId' => $sourceId] + FilterReturn::arguments($form->string('filter_topic')),
+            'order-testing.store',
+            ['sourceId' => $sourceId] + FilterReturn::arguments($form->rawValue('filter_topics')),
         );
     }
 }

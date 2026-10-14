@@ -7,6 +7,25 @@ $ids = $c->createCommand(
 )->queryColumn();
 
 foreach ($ids as $id) {
+    // The files first, by the ids that are about to go: once the rows are deleted there is nothing left
+    // to name the directories with, and a fixture that leaves audio behind is a fixture that grows.
+    $paths = $c->createCommand(
+        'SELECT public_id FROM audio_transcription_jobs WHERE conversation_id = :c',
+        [':c' => (int) $id],
+    )->queryColumn();
+
+    foreach ($paths as $publicId) {
+        $dir = dirname(__DIR__, 2) . '/runtime/audio-to-text/recordings/' . $publicId;
+
+        if (is_file($dir . '/source.wav')) {
+            unlink($dir . '/source.wav');
+        }
+
+        if (is_dir($dir)) {
+            rmdir($dir);
+        }
+    }
+
     $c->createCommand()->delete('{{%audio_transcription_jobs}}', ['conversation_id' => (int) $id])->execute();
 }
 

@@ -18,18 +18,19 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var list<DemoOrder> $orders
  * @var array<int, TestAttempt> $attempts keyed by attempt row id
  * @var bool $sourceOrderIsMirrored
+ * @var array<string, string> $routes the addresses this surface builds its links from
  */
 
 $assetManager->register(DemoOrdersAsset::class);
 
 $this->setTitle('Demo orders for #' . $sourceOrderId);
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing', 'route' => 'order-testing'],
-    ['label' => $storeName, 'route' => 'order-testing.store', 'arguments' => ['sourceId' => $sourceId]],
+    ['label' => $routes['pageLabel'], 'route' => $routes['page']],
+    ['label' => $storeName, 'route' => $routes['store'], 'arguments' => ['sourceId' => $sourceId]],
     ['label' => 'Demo orders'],
 ]);
 
-$storeUrl = $urlGenerator->generate('order-testing.store', ['sourceId' => $sourceId]);
+$storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $sourceId]);
 
 /**
  * Who created a demo order, or an honest blank.
@@ -106,7 +107,7 @@ $money = static fn(?string $value): string => $value === null
             </thead>
             <tbody>
             <?php foreach ($orders as $order): ?>
-                <?php $compareUrl = $urlGenerator->generate('order-testing.demo-compare', [
+                <?php $compareUrl = $urlGenerator->generate($routes['demoCompare'], [
                     'sourceId' => $sourceId,
                     'sourceOrderId' => $sourceOrderId,
                     'demoOrderId' => $order->demoOrderId,

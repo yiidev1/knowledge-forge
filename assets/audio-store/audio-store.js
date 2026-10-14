@@ -1335,6 +1335,12 @@ window.KFAudioStages = {
             }
 
             data.combined.children.forEach(function (child) {
+                // No address, no link. A read-only surface has no correction page to send anyone to,
+                // and an anchor with an empty href reloads the page the reader is already on.
+                if (!child.url) {
+                    return;
+                }
+
                 var link = document.createElement('a');
                 link.className = 'btn btn--sm';
                 link.href = child.url;
@@ -4261,7 +4267,14 @@ window.KFAudioStages = {
         busy = false;
         reviewTitle.textContent = title;
         reviewMeta.textContent = '';
-        fullEditor.href = full;
+
+        // Absent on a read-only surface, where the server renders no way through to the correction
+        // page. Guarded rather than assumed: this runs before the dialog is shown, so an unguarded
+        // assignment threw here and the conversation never opened at all — the control was gone and
+        // so, silently, was the dialog.
+        if (fullEditor !== null) {
+            fullEditor.href = full;
+        }
         empty(reviewNoticeBox);
         empty(reviewScroll);
         // A dialog opening on another recording must not inherit the last one's audio, spoken or

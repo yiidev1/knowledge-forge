@@ -126,8 +126,26 @@ final class DerivedViewBoundariesTest extends TestCase
         $fragment = self::source('Web/Job/Review/Fragment/Action.php');
 
         self::assertStringContainsString("'canEdit' => false,", $fragment, 'Borrowed rows withhold it.');
-        self::assertStringContainsString("'canEdit' => true,", $fragment, 'The recording\'s own rows keep it.');
         self::assertStringContainsString("'text' => null", $fragment, 'And carry no endpoint to post to.');
+
+        // The recording's own rows no longer say `true` outright: they defer to the surface, because
+        // the practice views render this same fragment and may change nothing. Two different questions
+        // that used to have one answer — "are these words this recording's to correct" and "may this
+        // reader correct anything" — and both must be asked.
+        self::assertStringContainsString(
+            "'canEdit' => \$this->canEditTranscript(),",
+            $fragment,
+            "The recording's own rows keep it, where the reader is allowed it.",
+        );
+
+        $readOnly = self::source('Web/Job/Review/Fragment/ReadOnlyAction.php');
+
+        self::assertStringContainsString('extends Action', $readOnly, 'One action, not two.');
+        self::assertStringContainsString(
+            'return false;',
+            $readOnly,
+            'And the read-only surfaces mount the one that answers no.',
+        );
 
         $script = (string) file_get_contents(dirname(__DIR__, 3) . '/assets/audio-store/audio-store.js');
 

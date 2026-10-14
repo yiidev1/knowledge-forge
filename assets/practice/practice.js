@@ -85,6 +85,8 @@
             return;
         }
 
+        // Clicking the backdrop of a confirmation is a dismissal like any other.
+
         // Clicking the backdrop is a click on the dialog element itself.
         if (event.target.matches('[data-practice-dialog]')) {
             event.target.close();
@@ -148,6 +150,12 @@
     // on change loses a reader who is still looking at the options, and makes the Apply button a lie.
 
     document.addEventListener('change', function (event) {
+        if (event.target.matches('[data-practice-bulk-topic]')) {
+            refreshBulkTopic();
+
+            return;
+        }
+
         if (event.target.matches('[data-practice-select-all]')) {
             var boxes = document.querySelectorAll('[data-practice-select]');
 
@@ -165,43 +173,267 @@
         }
     });
 
-    document.addEventListener('click', function (event) {
-        var trigger = event.target.closest('[data-practice-set-topic]');
+    // ---- Order Testing: assigning a topic, with a confirmation first -----------------------------
+    //
+    // The control is the select in the row. Choosing a different topic does NOT save: it opens a
+    // confirmation naming the order, what it carries now and what it would carry, and only Confirm
+    // submits the row's own form. Cancel puts the select back to what is actually stored — a control
+    // left showing a choice the database does not hold is a page lying about its own state.
+    //
+    // With no script at all, the Save button beside each select submits the same form directly. That
+    // is why this hides those buttons rather than the markup omitting them: the fallback is real.
 
-        if (trigger === null) {
+    var pendingForm = null;
+
+    function savedValueOf(select) {
+        return select.getAttribute('data-practice-saved') || '';
+    }
+
+    function labelOf(select, value) {
+        for (var i = 0; i < select.options.length; i++) {
+            if (select.options[i].value === value) {
+                return select.options[i].textContent.trim();
+            }
+        }
+
+        return '';
+    }
+
+    function restorePending() {
+        if (pendingForm === null) {
             return;
         }
 
-        var dialog = dialogById('practice-assign-dialog');
+        var select = pendingForm.querySelector('[data-practice-assign-select]');
+
+        if (select !== null) {
+            select.value = savedValueOf(select);
+        }
+
+        pendingForm = null;
+    }
+
+    // Every inline Save is redundant once this file is running, so it is taken away rather than left
+    // as a second way to do the same thing without the confirmation.
+    document.addEventListener('DOMContentLoaded', function () {
+        var saves = document.querySelectorAll('[data-practice-assign-save]');
+
+        for (var i = 0; i < saves.length; i++) {
+            saves[i].hidden = true;
+        }
+
+        var bulk = document.querySelector('[data-practice-bulk-submit]');
+
+        if (bulk !== null) {
+            bulk.setAttribute('type', 'button');
+        }
+
+        refreshBulkTopic();
+    });
+
+    /**
+     * The bulk button follows the bulk choice.
+     *
+     * "Not Selected" is the absence of a choice, not an instruction to unassign, so there is nothing to
+     * confirm and nothing to send while it is showing. The button is disabled rather than hidden: it
+     * says what is missing, where a vanished button would say nothing at all.
+     */
+    function refreshBulkTopic() {
+        var topic = document.querySelector('[data-practice-bulk-topic]');
+        var submit = document.querySelector('[data-practice-bulk-submit]');
+
+        if (topic === null || submit === null) {
+            return;
+        }
+
+        submit.disabled = topic.value === '';
+    }
+
+    document.addEventListener('change', function (event) {
+        if (!event.target.matches('[data-practice-assign-select]')) {
+            return;
+        }
+
+        var select = event.target;
+        var form = select.closest('[data-practice-assign-row]');
+        var dialog = dialogById('practice-confirm-dialog');
+
+        if (form === null || dialog === null) {
+            return;
+        }
+
+        var saved = savedValueOf(select);
+
+        if (select.value === saved) {
+            // Back to what is already stored. Nothing to confirm and nothing to save.
+            return;
+        }
+
+        pendingForm = form;
+
+        var order = form.getAttribute('data-practice-order') || '';
+        var current = form.getAttribute('data-practice-current-label') || '';
+        var next = select.value === '' ? '' : labelOf(select, select.value);
+
+        var orderCell = dialog.querySelector('[data-practice-confirm-order]');
+        var currentCell = dialog.querySelector('[data-practice-confirm-current]');
+        var nextCell = dialog.querySelector('[data-practice-confirm-next]');
+        var note = dialog.querySelector('[data-practice-confirm-note]');
+
+        if (orderCell !== null) {
+            orderCell.textContent = '#' + order;
+        }
+
+        if (currentCell !== null) {
+            currentCell.textContent = current === '' ? 'Not assigned' : current;
+            currentCell.classList.toggle('util-muted', current === '');
+        }
+
+        if (nextCell !== null) {
+            nextCell.textContent = next === '' ? 'Not assigned' : next;
+            nextCell.classList.toggle('util-muted', next === '');
+        }
+
+        if (note !== null) {
+            note.textContent = select.value === ''
+                ? 'This removes the topic from the order. The order keeps everything else.'
+                : 'The order keeps every recording and demo order it already has.';
+        }
+
+        if (!open(dialog)) {
+            // No dialog support: let the form be submitted the ordinary way instead of silently
+            // doing nothing with a selection the reader has already made.
+            form.submit();
+        }
+    });
+
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('[data-practice-confirm-submit]') === null) {
+            return;
+        }
+
+        var form = pendingForm;
+
+        // Cleared first, so a double click cannot submit twice: the second finds nothing pending.
+        pendingForm = null;
+
+        if (form === null) {
+            return;
+        }
+
+        var submit = form.querySelector('[data-practice-assign-save]');
+
+        if (submit !== null) {
+            submit.disabled = true;
+        }
+
+        form.submit();
+    });
+
+    // ---- Order Testing: the bulk confirmation ----------------------------------------------------
+
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('[data-practice-bulk-submit]') === null) {
+            return;
+        }
+
+        var form = bulkForm();
+        var dialog = dialogById('practice-bulk-confirm-dialog');
+
+        if (form === null) {
+            return;
+        }
+
+        var count = selected().length;
+        var chosen = form.querySelector('[data-practice-bulk-topic]');
+
+        if (count === 0 || chosen === null || chosen.value === '') {
+            // Nothing selected, or no topic chosen. Either way there is nothing to confirm — and
+            // "Not Selected" must never be read as "take their topics away".
+            return;
+        }
 
         if (dialog === null) {
+            form.submit();
+
             return;
         }
 
-        var orderId = trigger.getAttribute('data-practice-set-topic');
-        var current = trigger.getAttribute('data-practice-current') || '';
+        var topic = form.querySelector('#practice-bulk-topic');
+        var countCell = dialog.querySelector('[data-practice-bulk-confirm-count]');
+        var topicCell = dialog.querySelector('[data-practice-bulk-confirm-topic]');
 
-        var orderField = dialog.querySelector('[data-practice-assign-order]');
-        var label = dialog.querySelector('[data-practice-assign-label]');
-        var topic = dialog.querySelector('[data-practice-assign-topic]');
-
-        if (orderField !== null) {
-            orderField.value = orderId;
+        if (countCell !== null) {
+            countCell.textContent = count + (count === 1 ? ' order' : ' orders');
         }
 
-        if (label !== null) {
-            label.textContent = '#' + orderId;
+        if (topicCell !== null && topic !== null) {
+            topicCell.textContent = topic.options[topic.selectedIndex].textContent.trim();
         }
 
-        // Pre-select what the row already carries, so "Change" opens on the current answer rather
-        // than on the top of the list.
-        if (topic !== null) {
-            topic.value = current;
+        if (!open(dialog)) {
+            form.submit();
         }
-
-        event.preventDefault();
-        open(dialog);
     });
+
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('[data-practice-bulk-confirm-submit]') === null) {
+            return;
+        }
+
+        var form = bulkForm();
+
+        if (form !== null) {
+            event.target.disabled = true;
+            form.submit();
+        }
+    });
+
+    // ---- The topic filter: open, tick, and apply when asked --------------------------------------
+    //
+    // Nothing here applies anything. The panel is a `<details>`, the choices are checkboxes, and the
+    // list changes when Apply is pressed — which is the whole point of the control. All this adds is
+    // the running summary and the search box, neither of which changes what is submitted.
+
+    function refreshFilterSummary() {
+        var picker = document.querySelector('[data-practice-filter-picker]');
+
+        if (picker === null) {
+            return;
+        }
+
+        var summary = picker.querySelector('[data-practice-filter-summary]');
+        var chosen = picker.querySelectorAll('[data-practice-filter-choice]:checked');
+
+        if (summary !== null) {
+            summary.textContent = chosen.length === 0 ? 'All topics' : chosen.length + ' selected';
+        }
+    }
+
+    document.addEventListener('change', function (event) {
+        if (event.target.matches('[data-practice-filter-choice]')) {
+            refreshFilterSummary();
+        }
+    });
+
+    document.addEventListener('input', function (event) {
+        if (!event.target.matches('[data-practice-filter-search]')) {
+            return;
+        }
+
+        var needle = event.target.value.trim().toLowerCase();
+        var rows = document.querySelectorAll('[data-practice-filter-row]');
+
+        for (var i = 0; i < rows.length; i++) {
+            var text = rows[i].textContent.toLowerCase();
+            // A ticked choice stays visible however the search narrows, so a reader cannot lose track
+            // of something they have already chosen.
+            var ticked = rows[i].querySelector('[data-practice-filter-choice]:checked') !== null;
+            rows[i].hidden = !ticked && needle !== '' && text.indexOf(needle) === -1;
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', refreshFilterSummary);
 
     // ---- Practice Orders: the read-only topic details ---------------------------------------------
     //
@@ -271,6 +503,17 @@
 
         event.preventDefault();
         open(dialog);
+    });
+
+    // Whatever dismissed it — the close button, the backdrop, or Escape — a confirmation that was not
+    // confirmed leaves the select showing what is actually stored. `close` fires for all three, which
+    // is why this listens for it rather than trying to catch each dismissal separately.
+    document.addEventListener('DOMContentLoaded', function () {
+        var confirmDialog = dialogById('practice-confirm-dialog');
+
+        if (confirmDialog !== null) {
+            confirmDialog.addEventListener('close', restorePending);
+        }
     });
 
     document.addEventListener('DOMContentLoaded', refreshSelection);

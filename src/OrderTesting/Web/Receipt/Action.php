@@ -46,7 +46,11 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
  * Four bounded reads and nothing else. No provider is contacted, no stored amount is recalculated and
  * nothing is written — printing this page cannot change an order.
  */
-final readonly class Action
+/*
+ * Not `final`: the agent practice surface renders this same page from its own route group, and
+ * extends this class to supply its own addresses and shell rather than restating the action.
+ */
+readonly class Action
 {
     public function __construct(
         private WebViewRenderer $viewRenderer,
@@ -90,12 +94,43 @@ final readonly class Action
         );
 
         return $this->viewRenderer
-            ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+            ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/template', [
+                'routes' => $this->surfaceRoutes(),
                 'sourceId' => $sourceId,
                 'storeName' => $storeName,
                 'demo' => $demo,
                 'receipt' => ReceiptComparison::from($comparison),
             ]);
     }
+
+    /**
+     * The addresses this page builds its own links from.
+     *
+     * Order Testing's, here. The agent practice surface renders the same page from its own group and
+     * supplies its own — without this it drew Order Testing links, which that realm's gate refuses, so
+     * Compare simply did not go anywhere.
+     *
+     * Route names, not classes: a name is not a namespace, so this module names nobody.
+     *
+     * @return array<string, string>
+     */
+    protected function surfaceRoutes(): array
+    {
+        return [
+            'page' => 'order-testing',
+            'pageLabel' => 'Order Testing',
+            'store' => 'order-testing.store',
+            'demoOrders' => 'order-testing.demo-orders',
+            'demoCompare' => 'order-testing.demo-compare',
+            'demoReceipt' => 'order-testing.demo-receipt',
+        ];
+    }
+
+    /** The shell this page is drawn inside. The agent surface has its own. */
+    protected function layoutPath(): string
+    {
+        return '@src/Web/Shared/Layout/Admin/layout.php';
+    }
+
 }

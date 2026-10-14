@@ -7,11 +7,13 @@ use App\Agent\Domain\AgentConversationRepositoryInterface;
 use App\Agent\Domain\AgentEligibilityReaderInterface;
 use App\Agent\Domain\AgentLoginActivityRepositoryInterface;
 use App\Agent\Domain\AgentStoreDirectoryInterface;
+use App\Agent\Domain\PracticeStoreDirectoryInterface;
 use App\Agent\Domain\TrustedAgentDirectoryInterface;
 use App\Agent\Infrastructure\DbAgentConversationRepository;
 use App\Agent\Infrastructure\DbAgentEligibilityReader;
 use App\Agent\Infrastructure\DbAgentLoginActivityRepository;
 use App\Agent\Infrastructure\DbAgentStoreDirectory;
+use App\Agent\Infrastructure\DbPracticeStoreDirectory;
 use App\Agent\Infrastructure\DbTrustedAgentDirectory;
 
 /** @var array $params */
@@ -22,6 +24,9 @@ use App\Agent\Infrastructure\DbTrustedAgentDirectory;
 return [
     AgentConversationRepositoryInterface::class => DbAgentConversationRepository::class,
     AgentStoreDirectoryInterface::class => DbAgentStoreDirectory::class,
+    // A sibling of the directory above, and a different predicate: store chat asks whether a store can
+    // be talked to, this asks whether there is anything to practise on. See PracticeStoreScope.
+    PracticeStoreDirectoryInterface::class => DbPracticeStoreDirectory::class,
     AgentLoginActivityRepositoryInterface::class => DbAgentLoginActivityRepository::class,
     TrustedAgentDirectoryInterface::class => DbTrustedAgentDirectory::class,
     // Re-reads one mirrored user's role and status by `admin_id`, on every protected request.

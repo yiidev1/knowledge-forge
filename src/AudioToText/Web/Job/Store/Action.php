@@ -16,6 +16,7 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
+use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\OrderId;
@@ -260,7 +261,7 @@ readonly class Action
         );
 
         return $this->viewRenderer
-            ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+            ->withLayout($this->layoutPath())
             ->render($this->templatePath(), [
                 'store' => $store,
                 'mode' => $mode,
@@ -313,6 +314,9 @@ readonly class Action
                 // Whether the opt-in below the provider select can do anything. LOCAL configuration
                 // only, like every other readiness question on this page — rendering it opens no socket.
                 'ttsConfigured' => $this->uploadOptions->aiAudioIsUsable(),
+                // What this reader may change. Everything, on every surface that has existed so far —
+                // so the markup those surfaces render is unchanged by this key existing.
+                'capabilities' => $this->capabilities(),
             ] + $this->extraTemplateData($store->sourceId, $this->orderIdsOf($groups)));
     }
 
@@ -333,6 +337,30 @@ readonly class Action
     protected function extraTemplateData(int $sourceId, array $orderIds): array
     {
         return [];
+    }
+
+    /**
+     * What the person looking at this page is allowed to do to it.
+     *
+     * Everything, here and on both administrator surfaces. The agent practice view overrides it with
+     * the read-only profile, and every control the template offers asks this object its own question —
+     * so a control the reader may not use is never emitted, rather than emitted and refused.
+     */
+    protected function capabilities(): ConversationCapabilities
+    {
+        return ConversationCapabilities::full();
+    }
+
+    /**
+     * The shell this surface's page is drawn inside.
+     *
+     * The administrator layout, for every surface that has existed so far. The agent practice view is
+     * the first one rendered for a reader who has never seen that sidebar and has no business in it,
+     * so it overrides this rather than inheriting a navigation to places it cannot go.
+     */
+    protected function layoutPath(): string
+    {
+        return '@src/Web/Shared/Layout/Admin/layout.php';
     }
 
     /**

@@ -17,12 +17,16 @@ use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\DemoOrderCountReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
+use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
+use App\AudioToText\Domain\TopicAssignmentReaderInterface;
+use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Job\Store\Action as AudioStoreAction;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
@@ -84,6 +88,14 @@ readonly class StoreAction extends AudioStoreAction
         ClockInterface $clock,
         /** This surface's own question: how many demo orders each order on the page produced. */
         private DemoOrderCountReaderInterface $demoOrderCounts,
+        /**
+         * Which topic each order is practised under.
+         *
+         * Here rather than on a subclass because **this** is where topics are assigned. The practice
+         * surfaces inherit the column and show it read-only; the controls that change it live on this
+         * page and nowhere else.
+         */
+        private TopicAssignmentReaderInterface $topics,
     ) {
         parent::__construct(
             $viewRenderer,
@@ -121,7 +133,26 @@ readonly class StoreAction extends AudioStoreAction
         return [
             'demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds),
             'routes' => $this->surfaceRoutes(),
+            // Two queries for the whole page, not two per row: the assignments for the orders being
+            // shown, and the assignable topics once.
+            'topicAssignments' => $this->topics->forOrders($sourceId, $orderIds),
+            'assignableTopics' => $this->topics->assignableTopics(),
+            // The template renders the topic column when this is true; whether that column can be
+            // *used* is a separate question, answered by the capabilities.
+            'practiceMode' => true,
         ];
+    }
+
+    /**
+     * Which topics the reader asked for, as a set.
+     *
+     * Parsed by {@see OrderGroupFilter::fromQuery()} rather than here, so the rule that decides what a
+     * filter value means has one home and the picker, the pager's links and the SQL cannot each decide
+     * it differently. Anything unrecognised filters nothing.
+     */
+    protected function groupFilter(ServerRequestInterface $request): ?OrderGroupFilter
+    {
+        return OrderGroupFilter::fromQuery($request->getQueryParams()[OrderGroupFilter::PARAM] ?? null);
     }
 
     /**
@@ -149,6 +180,21 @@ readonly class StoreAction extends AudioStoreAction
             'transcripts' => OrderTestingRoute::STORE_GROUP_TRANSCRIPTS,
             'demoOrders' => OrderTestingRoute::DEMO_ORDERS,
             'syncDemo' => OrderTestingRoute::SYNC_DEMO_ORDERS,
+            // Where a topic is put on an order, and where several are put at once. Both live on this
+            // surface; the practice surfaces inherit the names and never render a control that uses
+            // them, and their own route groups do not mount them.
+            'topicAssign' => OrderTestingRoute::TOPIC_ASSIGN,
+            'topicBulk' => OrderTestingRoute::TOPIC_BULK,
+
+            // The job-scoped addresses the row controls and the conversation dialog fetch. Here rather
+            // than printed from the audio module's constants, because each surface mounts them at its
+            // own path: an agent reading a page that named the administrator address would be handed a
+            // URL their realm cannot reach, and the dialog would never fill.
+            'jobOriginalFile' => AudioToTextRoute::JOB_ORIGINAL_FILE,
+            'jobFragment' => AudioToTextRoute::JOB_REVIEW_FRAGMENT,
+            'jobTranscribe' => AudioToTextRoute::JOB_TRANSCRIBE,
+            'jobStatus' => AudioToTextRoute::JOB_STATUS,
+            'jobReview' => AudioToTextRoute::JOB_REVIEW,
         ];
     }
 

@@ -45,6 +45,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var string $storeName
  * @var DemoOrder $demo
  * @var ReceiptComparison $receipt
+ * @var array<string, string> $routes the addresses this surface builds its links from
  */
 
 $assetManager->register(ReceiptAsset::class);
@@ -52,11 +53,11 @@ $this->setParameter('wideContent', true);
 
 $this->setTitle('Receipt comparison — #' . $demo->sourceOrderId . ' vs #' . $demo->demoOrderId);
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing', 'route' => 'order-testing'],
-    ['label' => $storeName, 'route' => 'order-testing.store', 'arguments' => ['sourceId' => $sourceId]],
+    ['label' => $routes['pageLabel'], 'route' => $routes['page']],
+    ['label' => $storeName, 'route' => $routes['store'], 'arguments' => ['sourceId' => $sourceId]],
     [
         'label' => 'Demo orders',
-        'route' => 'order-testing.demo-orders',
+        'route' => $routes['demoOrders'],
         'arguments' => ['sourceId' => $sourceId, 'sourceOrderId' => $demo->sourceOrderId],
     ],
     ['label' => 'Receipt #' . $demo->demoOrderId],
@@ -66,7 +67,7 @@ $this->setParameter('breadcrumbs', [
 // name — not even in a comment, because the boundary test matches the text of the file. A route name
 // is not a namespace, so linking to a page another module serves costs nothing; importing its class
 // would have made this module depend on that one.
-$backUrl = $urlGenerator->generate('order-testing.demo-compare', [
+$backUrl = $urlGenerator->generate($routes['demoCompare'], [
     'sourceId' => $sourceId,
     'sourceOrderId' => $demo->sourceOrderId,
     'demoOrderId' => $demo->demoOrderId,

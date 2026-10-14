@@ -4,7 +4,16 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Domain;
 
+use function array_slice;
+use function array_unique;
+use function array_values;
+use function count;
+use function implode;
+use function in_array;
+use function is_array;
+use function is_string;
 use function preg_match;
+use function sort;
 
 /**
  * Which of a store's orders a page is asking for.
@@ -17,72 +26,194 @@ use function preg_match;
  * {@see StoreOrderGroupRepositoryInterface::pageFor()} and
  * {@see StoreOrderGroupRepositoryInterface::countFor()} together, and both answer the same question.
  *
- * `null` in place of one of these means "no filter", which is what Order Testing and the audio store
- * page pass — their SQL is then exactly what it was before this existed.
+ * `null` in place of one of these means "no filter", which is what the audio store page passes — its
+ * SQL is then exactly what it was before this existed.
  *
- * ## The two things it can ask for
+ * ## Two independent dimensions
  *
- * - **a topic**: the orders being practised under it;
- * - **unassigned**: orders that carry no topic yet.
+ * **Which topics**, which a reader chooses. Several at once, combined with OR: an order matches if it
+ * carries *any* of the chosen topics. "Not assigned" is one more choice in the same list rather than a
+ * mode of its own, so "Change Dish or not yet assigned" is one ordinary selection.
  *
- * "Unassigned" deliberately requires a usable order id. An upload that named no order groups under its
- * own conversation key ({@see GroupKey}) and can never carry a topic, so listing it under a filter whose
- * whole purpose is "what still needs a topic" would be noise. Those rows stay visible unfiltered.
+ * "Not assigned" deliberately requires a usable order id. An upload that named no order groups under
+ * its own conversation key ({@see GroupKey}) and can never carry a topic, so listing it under a choice
+ * whose whole purpose is "what still needs a topic" would be noise. Those rows stay visible unfiltered.
+ *
+ * **Whether the order has to be real**, which a reader does not choose. Order Testing lists every
+ * recording a store has, including the ones whose order id names nothing — that is a record of what was
+ * uploaded and the people who can fix it need to see it. Every practice surface lists only what can
+ * actually be practised, which is the same predicate that decides whether its *store* is visible at
+ * all, applied one row further down.
+ *
+ * The two combine freely: a reader filtering by topic on a practice surface asks both at once.
  */
 final readonly class OrderGroupFilter
 {
-    /** What the query string says for "every order", alongside a missing parameter. */
-    public const ALL = '';
-
-    /** What the query string says for "orders with no topic". */
+    /** What the query string says for "orders with no topic", as one of the `topics[]` values. */
     public const UNASSIGNED = 'none';
 
-    private function __construct(
-        public ?int $topicId,
-        public bool $onlyUnassigned,
-    ) {}
-
-    public static function forTopic(int $topicId): self
-    {
-        return new self($topicId, false);
-    }
-
-    public static function unassigned(): self
-    {
-        return new self(null, true);
-    }
+    /** The query parameter the surfaces read and the pager writes back. */
+    public const PARAM = 'topics';
 
     /**
-     * The filter a `?topic=` parameter asks for, or null when it asks for nothing.
+     * How many topics one request may name.
      *
-     * Anything unrecognised — a word, a negative number, an empty string, a missing parameter — filters
-     * nothing rather than erroring. A query string is not a form: a reader who edits one by hand, or
-     * follows a stale link, gets the unfiltered page they would have got without it, which is the
-     * behaviour every other optional parameter on this page already has.
+     * Not a performance limit — fifty `IN` values cost nothing — but a bound on what a crafted query
+     * string can ask the database to build. The picker cannot produce more than the topics that exist.
      */
-    public static function fromQuery(mixed $value): ?self
+    public const MAX_TOPICS = 50;
+
+    /**
+     * @param list<int> $topicIds de-duplicated and sorted, so two spellings of one selection are one
+     *                            filter and the SQL below is stable
+     */
+    private function __construct(
+        public array $topicIds,
+        public bool $includeUnassigned,
+        /**
+         * Keep only groups whose order exists in this store and whose audio is still held.
+         *
+         * Not part of the query string and not a reader's choice: it is a property of the surface
+         * doing the asking.
+         */
+        public bool $requireLinkedOrder = false,
+    ) {}
+
+    /**
+     * A filter over a chosen set of topics, or null when nothing was chosen.
+     *
+     * @param list<int> $topicIds
+     */
+    public static function forTopics(array $topicIds, bool $includeUnassigned = false): ?self
     {
-        if (!is_string($value)) {
+        $clean = self::clean($topicIds);
+
+        if ($clean === [] && !$includeUnassigned) {
             return null;
         }
 
-        if ($value === self::UNASSIGNED) {
-            return self::unassigned();
-        }
+        return new self($clean, $includeUnassigned);
+    }
 
-        return preg_match('/\A[1-9][0-9]{0,18}\z/', $value) === 1
-            ? self::forTopic((int) $value)
-            : null;
+    /** Only practisable orders, with no topic narrowing at all. */
+    public static function linkedOrdersOnly(): self
+    {
+        return new self([], false, true);
     }
 
     /**
-     * The `?topic=` value that asks for this filter again.
+     * The same filter, additionally restricted to practisable orders.
      *
-     * The page's own links are built from it — the pager, and the redirect after a topic is set — so a
-     * chosen filter survives both rather than silently resetting to every order.
+     * Returned as a new instance rather than mutated: a filter is passed to the count and to the page
+     * separately, and one of them seeing a different object than the other is the bug the whole
+     * count/page contract exists to prevent.
      */
-    public function queryValue(): string
+    public function withLinkedOrdersOnly(): self
     {
-        return $this->onlyUnassigned ? self::UNASSIGNED : (string) $this->topicId;
+        return new self($this->topicIds, $this->includeUnassigned, true);
+    }
+
+    /**
+     * The filter a `?topics[]=` parameter asks for, or null when it asks for nothing.
+     *
+     * Accepts a list or a single value, because a query string is not a form: `?topics=5` and
+     * `?topics[]=5` are the same intent typed two ways. Anything unrecognised inside it — a word, a
+     * negative number, a leading zero, an array nested deeper — is dropped rather than erroring, and a
+     * request made entirely of unrecognised values filters nothing, which is the page the reader would
+     * have got without it.
+     */
+    public static function fromQuery(mixed $value): ?self
+    {
+        /** @var list<mixed> $raw */
+        $raw = is_array($value) ? array_values($value) : [$value];
+
+        $topicIds = [];
+        $unassigned = false;
+
+        foreach (array_slice($raw, 0, self::MAX_TOPICS) as $one) {
+            if (!is_string($one)) {
+                continue;
+            }
+
+            if ($one === self::UNASSIGNED) {
+                $unassigned = true;
+
+                continue;
+            }
+
+            if (preg_match('/\A[1-9][0-9]{0,18}\z/', $one) === 1) {
+                $topicIds[] = (int) $one;
+            }
+        }
+
+        return self::forTopics($topicIds, $unassigned);
+    }
+
+    /**
+     * The `topics[]` values that ask for this filter again.
+     *
+     * The page's own links are built from them — the pager, and the redirect after an assignment — so a
+     * chosen filter survives both rather than silently resetting to every order.
+     *
+     * @return list<string>
+     */
+    public function queryValues(): array
+    {
+        $values = [];
+
+        foreach ($this->topicIds as $id) {
+            $values[] = (string) $id;
+        }
+
+        if ($this->includeUnassigned) {
+            $values[] = self::UNASSIGNED;
+        }
+
+        return $values;
+    }
+
+    /** Is this value one of the chosen ones? Used by the picker to tick its own boxes. */
+    public function hasValue(string $value): bool
+    {
+        return in_array($value, $this->queryValues(), true);
+    }
+
+    /** Does this filter narrow by topic at all, or is it only asking for practisable orders? */
+    public function narrowsTopics(): bool
+    {
+        return $this->topicIds !== [] || $this->includeUnassigned;
+    }
+
+    /** How many choices the reader made, for the control's own summary. */
+    public function chosenCount(): int
+    {
+        return count($this->queryValues());
+    }
+
+    /** A stable description, for a page title or a log line. */
+    public function describe(): string
+    {
+        return $this->narrowsTopics() ? implode(',', $this->queryValues()) : 'all';
+    }
+
+    /**
+     * @param list<int> $topicIds
+     *
+     * @return list<int>
+     */
+    private static function clean(array $topicIds): array
+    {
+        $positive = [];
+
+        foreach ($topicIds as $id) {
+            if ($id > 0) {
+                $positive[] = $id;
+            }
+        }
+
+        $unique = array_values(array_unique($positive));
+        sort($unique);
+
+        return array_slice($unique, 0, self::MAX_TOPICS);
     }
 }

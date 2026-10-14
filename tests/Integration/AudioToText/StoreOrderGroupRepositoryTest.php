@@ -6,6 +6,7 @@ namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\StoreOrderGroup;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\ConversationStatus;
@@ -17,9 +18,11 @@ use App\Tests\Support\IntegrationDb;
 use Codeception\Test\Unit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
+use function array_map;
 use function bin2hex;
 use function gmdate;
 use function sprintf;
+use function sort;
 use function str_pad;
 use function strtolower;
 use function random_bytes;
@@ -68,6 +71,9 @@ final class StoreOrderGroupRepositoryTest extends Unit
     /** @var list<array{int, string}> store id and order id of every assignment written */
     private array $assignedOrders = [];
 
+    /** @var list<array{int, string}> store id and order id of every mirrored order written */
+    private array $mirroredOrders = [];
+
     protected function _before(): void
     {
         $this->connection = IntegrationDb::connectOrSkip();
@@ -97,8 +103,16 @@ final class StoreOrderGroupRepositoryTest extends Unit
             IntegrationDb::cleanup($this->connection, '{{%practice_topics}}', ['name' => $name]);
         }
 
+        foreach ($this->mirroredOrders as [$store, $orderId]) {
+            IntegrationDb::cleanup($this->connection, '{{%order58_orders}}', [
+                'account_id' => $store,
+                'source_order_id' => $orderId,
+            ]);
+        }
+
         $this->assignedOrders = [];
         $this->createdTopics = [];
+        $this->mirroredOrders = [];
 
         foreach ($this->createdJobs as $publicId) {
             IntegrationDb::cleanup($this->connection, '{{%audio_transcription_jobs}}', ['public_id' => $publicId]);
@@ -503,7 +517,7 @@ final class StoreOrderGroupRepositoryTest extends Unit
         $this->assignTopic('16513791', $wanted);
         $this->assignTopic('16513792', $other);
 
-        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($wanted));
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([$wanted]));
 
         self::assertCount(1, $groups);
         self::assertSame('16513791', $groups[0]->orderId);
@@ -525,7 +539,7 @@ final class StoreOrderGroupRepositoryTest extends Unit
         $this->assignTopic('16513791', $topic);
         $this->assignTopic('16513792', $topic);
 
-        $filter = OrderGroupFilter::forTopic($topic);
+        $filter = self::topicFilter([$topic]);
 
         self::assertSame(2, $this->repository->countFor(self::STORE, $filter));
         self::assertCount(2, $this->repository->pageFor(self::STORE, 20, 0, $filter));
@@ -541,11 +555,11 @@ final class StoreOrderGroupRepositoryTest extends Unit
         $this->upload(RecordingType::Callee, '16513791');
         $this->assignTopic('16513791', $topic);
 
-        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($topic));
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([$topic]));
 
         self::assertCount(1, $groups);
         self::assertSame(3, $groups[0]->recordingCount());
-        self::assertSame(1, $this->repository->countFor(self::STORE, OrderGroupFilter::forTopic($topic)));
+        self::assertSame(1, $this->repository->countFor(self::STORE, self::topicFilter([$topic])));
     }
 
     public function testUnassignedReturnsOrdersThatCarryNoTopic(): void
@@ -556,11 +570,11 @@ final class StoreOrderGroupRepositoryTest extends Unit
         $this->upload(RecordingType::Mixed, '16513792');
         $this->assignTopic('16513791', $topic);
 
-        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned());
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([], true));
 
         self::assertCount(1, $groups);
         self::assertSame('16513792', $groups[0]->orderId);
-        self::assertSame(1, $this->repository->countFor(self::STORE, OrderGroupFilter::unassigned()));
+        self::assertSame(1, $this->repository->countFor(self::STORE, self::topicFilter([], true)));
     }
 
     /**
@@ -575,7 +589,7 @@ final class StoreOrderGroupRepositoryTest extends Unit
         $this->upload(RecordingType::Mixed, null);
         $this->upload(RecordingType::Mixed, '16513792');
 
-        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned());
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([], true));
 
         self::assertCount(1, $groups);
         self::assertSame('16513792', $groups[0]->orderId);
@@ -596,12 +610,12 @@ final class StoreOrderGroupRepositoryTest extends Unit
 
         self::assertCount(
             0,
-            $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($topic)),
+            $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([$topic])),
             'The topic row belongs to another store and must not match here.',
         );
         self::assertCount(
             1,
-            $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned()),
+            $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([], true)),
             'And this store\'s order is still untopicked.',
         );
     }
@@ -616,11 +630,267 @@ final class StoreOrderGroupRepositoryTest extends Unit
             $this->assignTopic($orderId, $topic);
         }
 
-        $filter = OrderGroupFilter::forTopic($topic);
+        $filter = self::topicFilter([$topic]);
 
         self::assertCount(2, $this->repository->pageFor(self::STORE, 2, 0, $filter));
         self::assertCount(1, $this->repository->pageFor(self::STORE, 2, 2, $filter));
         self::assertSame(3, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    // ------------------------------------------------------------------ several topics at once
+
+    /**
+     * **OR, not AND.** An order matches if it carries *any* of the chosen topics.
+     *
+     * An order carries at most one topic, so AND across two topics would match nothing at all — which
+     * is exactly the shape of bug that looks like "the filter is broken" rather than "the filter means
+     * something else".
+     */
+    public function testSeveralTopicsMatchOrdersCarryingAnyOfThem(): void
+    {
+        $first = $this->topic('ZZ Groups Filter A');
+        $second = $this->topic('ZZ Groups Filter B');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, '16513793');
+        $this->assignTopic('16513791', $first);
+        $this->assignTopic('16513792', $second);
+
+        $filter = self::topicFilter([$first, $second]);
+        $orders = array_map(
+            static fn(StoreOrderGroup $group): ?string => $group->orderId,
+            $this->repository->pageFor(self::STORE, 20, 0, $filter),
+        );
+        sort($orders);
+
+        self::assertSame(['16513791', '16513792'], $orders);
+        self::assertSame(2, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    /** One order appears once however many of the chosen topics it could have matched. */
+    public function testAnOrderIsListedOnceNotOncePerChosenTopic(): void
+    {
+        $first = $this->topic('ZZ Groups Filter A');
+        $second = $this->topic('ZZ Groups Filter B');
+        $third = $this->topic('ZZ Groups Filter C');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Caller, '16513791');
+        $this->assignTopic('16513791', $first);
+
+        $filter = self::topicFilter([$first, $second, $third]);
+
+        self::assertCount(1, $this->repository->pageFor(self::STORE, 20, 0, $filter));
+        self::assertSame(1, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    /** **A topic or nothing yet** — the combination the control exists to make possible. */
+    public function testATopicAndUnassignedTogether(): void
+    {
+        $first = $this->topic('ZZ Groups Filter A');
+        $second = $this->topic('ZZ Groups Filter B');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, '16513793');
+        $this->assignTopic('16513791', $first);
+        $this->assignTopic('16513792', $second);
+
+        $filter = self::topicFilter([$first], true);
+        $orders = array_map(
+            static fn(StoreOrderGroup $group): ?string => $group->orderId,
+            $this->repository->pageFor(self::STORE, 20, 0, $filter),
+        );
+        sort($orders);
+
+        self::assertSame(
+            ['16513791', '16513793'],
+            $orders,
+            'the one with the chosen topic, and the one with none — not the one with the other topic',
+        );
+        self::assertSame(2, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    /** A topic belonging to another store is another store's topic, whatever its number. */
+    public function testATopicChosenByIdDoesNotMatchAnotherStoresAssignment(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->assignTopic('16513791', $topic, self::OTHER_STORE);
+
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([$topic])));
+    }
+
+    /** Paging happens over the matched set, and the count agrees with it. */
+    public function testSeveralTopicsPageByGroup(): void
+    {
+        $first = $this->topic('ZZ Groups Filter A');
+        $second = $this->topic('ZZ Groups Filter B');
+
+        foreach (['16513791', '16513792', '16513793'] as $index => $orderId) {
+            $this->upload(RecordingType::Mixed, $orderId);
+            $this->assignTopic($orderId, $index === 2 ? $second : $first);
+        }
+
+        $filter = self::topicFilter([$first, $second]);
+
+        self::assertSame(3, $this->repository->countFor(self::STORE, $filter));
+        self::assertCount(2, $this->repository->pageFor(self::STORE, 2, 0, $filter));
+        self::assertCount(1, $this->repository->pageFor(self::STORE, 2, 2, $filter));
+    }
+
+    /** A topic nobody is using matches nothing, rather than everything. */
+    public function testAnUnusedTopicMatchesNothing(): void
+    {
+        $used = $this->topic('ZZ Groups Filter A');
+        $unused = $this->topic('ZZ Groups Filter B');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->assignTopic('16513791', $used);
+
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 20, 0, self::topicFilter([$unused])));
+    }
+
+    // ------------------------------------------------------------------ practisable orders only
+
+    /**
+     * **What the agent surface lists.**
+     *
+     * The same predicate that decides whether a store is visible at all, applied one row further down:
+     * the order must exist in THIS store and the recording must still have its audio. A store qualifies
+     * on the strength of one good recording, so without this it then showed every recording it had.
+     */
+    public function testLinkedOrdersOnlyKeepsOrdersThatExistInThisStore(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+
+        // Mirrored for one of them only.
+        $this->mirrorOrder('16513791');
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::linkedOrdersOnly());
+
+        self::assertCount(1, $groups);
+        self::assertSame('16513791', $groups[0]->orderId);
+    }
+
+    /** The `#111` case: an order id typed at upload that was never mirrored anywhere. */
+    public function testLinkedOrdersOnlyDropsAnOrderThatExistsNowhere(): void
+    {
+        $this->upload(RecordingType::Mixed, '111');
+
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::linkedOrdersOnly()));
+        self::assertSame(0, $this->repository->countFor(self::STORE, OrderGroupFilter::linkedOrdersOnly()));
+    }
+
+    /** An upload that named no order groups under its own key and can never be practised. */
+    public function testLinkedOrdersOnlyDropsAnUploadWithNoOrder(): void
+    {
+        $this->upload(RecordingType::Mixed, null);
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->mirrorOrder('16513791');
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::linkedOrdersOnly());
+
+        self::assertCount(1, $groups);
+        self::assertSame('16513791', $groups[0]->orderId);
+    }
+
+    /** The collision: the order exists, in somebody else's store. */
+    public function testLinkedOrdersOnlyDropsAnOrderMirroredToAnotherStore(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->mirrorOrder('16513791', self::OTHER_STORE);
+
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::linkedOrdersOnly()));
+    }
+
+    /** **The pager must agree.** A narrowed list with an unnarrowed count promises pages that are empty. */
+    public function testTheCountAgreesWithThePageUnderLinkedOrdersOnly(): void
+    {
+        foreach (['16513791', '16513792', '16513793'] as $orderId) {
+            $this->upload(RecordingType::Mixed, $orderId);
+        }
+
+        $this->upload(RecordingType::Mixed, '111');
+        $this->upload(RecordingType::Mixed, null);
+        $this->mirrorOrder('16513791');
+        $this->mirrorOrder('16513792');
+
+        $filter = OrderGroupFilter::linkedOrdersOnly();
+
+        self::assertSame(2, $this->repository->countFor(self::STORE, $filter));
+        self::assertCount(2, $this->repository->pageFor(self::STORE, 20, 0, $filter));
+
+        // And it pages by group over the narrowed set, not over the whole one.
+        self::assertCount(1, $this->repository->pageFor(self::STORE, 1, 0, $filter));
+        self::assertCount(1, $this->repository->pageFor(self::STORE, 1, 1, $filter));
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 1, 2, $filter));
+    }
+
+    /** A recording whose audio is gone cannot be practised, however real its order is. */
+    public function testLinkedOrdersOnlyDropsAnOrderWhoseAudioIsNoLongerHeld(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->mirrorOrder('16513791');
+        $this->connection->createCommand()
+            ->update('{{%audio_transcription_jobs}}', ['retained_audio_path' => null], [
+                'public_id' => $this->createdJobs,
+            ])->execute();
+
+        self::assertCount(0, $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::linkedOrdersOnly()));
+    }
+
+    /** The two dimensions compose: an agent filtering by topic asks both questions at once. */
+    public function testLinkedOrdersOnlyComposesWithATopicFilter(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, '111');
+        $this->mirrorOrder('16513791');
+        $this->mirrorOrder('16513792');
+        $this->assignTopic('16513791', $topic);
+        $this->assignTopic('111', $topic);
+
+        $filter = self::topicFilter([$topic])->withLinkedOrdersOnly();
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, $filter);
+
+        self::assertCount(1, $groups, 'the topicked-but-unmirrored order must not appear');
+        self::assertSame('16513791', $groups[0]->orderId);
+        self::assertSame(1, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    /** **The administrator surfaces are unchanged**: without the flag, every recording is still listed. */
+    public function testWithoutTheFlagEveryRecordingIsStillListed(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '111');
+        $this->upload(RecordingType::Mixed, null);
+
+        self::assertCount(3, $this->repository->pageFor(self::STORE, 20));
+        self::assertSame(3, $this->repository->countFor(self::STORE));
+    }
+
+    /**
+     * A selection, proved to be one.
+     *
+     * `forTopics()` returns null when nothing was chosen, which is the right answer for a page but a
+     * silent pass for a test: `pageFor(..., null)` filters nothing and every assertion about narrowing
+     * would succeed for the wrong reason.
+     *
+     * @param list<int> $topicIds
+     */
+    private static function topicFilter(array $topicIds, bool $includeUnassigned = false): OrderGroupFilter
+    {
+        $filter = OrderGroupFilter::forTopics($topicIds, $includeUnassigned);
+
+        self::assertNotNull($filter, 'the test meant to narrow by something');
+
+        return $filter;
     }
 
     // ------------------------------------------------------------------ helpers
@@ -748,6 +1018,27 @@ final class StoreOrderGroupRepositoryTest extends Unit
      * the other module's service here would make a filter test fail when that service changed. The name
      * is prefixed so `_after` can find it and nothing in the live table matches it.
      */
+    /**
+     * A mirrored order for this suite's store, so a recording naming it becomes practisable.
+     *
+     * Written straight to `order58_orders` rather than through the Order58 module: what is under test
+     * is a correlation between two tables, not how one of them is filled.
+     */
+    private function mirrorOrder(string $sourceOrderId, int $store = self::STORE): void
+    {
+        $this->mirroredOrders[] = [$store, $sourceOrderId];
+
+        $this->connection->createCommand()->insert('{{%order58_orders}}', [
+            'account_id' => $store,
+            'source_order_id' => $sourceOrderId,
+            'payload_json' => '{}',
+            'content_hash' => str_pad($sourceOrderId, 64, '0', STR_PAD_LEFT),
+            'synced_at' => gmdate('Y-m-d H:i:s'),
+            'created_at' => gmdate('Y-m-d H:i:s'),
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ])->execute();
+    }
+
     private function topic(string $name): int
     {
         $this->createdTopics[] = $name;

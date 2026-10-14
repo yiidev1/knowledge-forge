@@ -46,6 +46,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var DemoOrder $demo
  * @var TestAttempt|null $attempt
  * @var OrderComparison $comparison
+ * @var array<string, string> $routes the addresses this surface builds its links from
+ * @var bool $canSyncItems whether this surface offers the item re-import
  */
 
 $assetManager->register(DemoOrdersAsset::class);
@@ -55,24 +57,24 @@ $this->setParameter('wideContent', true);
 
 $this->setTitle('Order comparison #' . $demo->sourceOrderId . ' / demo #' . $demo->demoOrderId);
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing', 'route' => 'order-testing'],
-    ['label' => $storeName, 'route' => 'order-testing.store', 'arguments' => ['sourceId' => $sourceId]],
+    ['label' => $routes['pageLabel'], 'route' => $routes['page']],
+    ['label' => $storeName, 'route' => $routes['store'], 'arguments' => ['sourceId' => $sourceId]],
     [
         'label' => 'Demo orders',
-        'route' => 'order-testing.demo-orders',
+        'route' => $routes['demoOrders'],
         'arguments' => ['sourceId' => $sourceId, 'sourceOrderId' => $demo->sourceOrderId],
     ],
     ['label' => 'Demo #' . $demo->demoOrderId],
 ]);
 
-$listUrl = $urlGenerator->generate('order-testing.demo-orders', [
+$listUrl = $urlGenerator->generate($routes['demoOrders'], [
     'sourceId' => $sourceId,
     'sourceOrderId' => $demo->sourceOrderId,
 ]);
 
 // The same demo order as a printable receipt. A page of its own, not a dialog: it is a document, and a
 // document wants an address somebody can keep, print or send.
-$receiptUrl = $urlGenerator->generate('order-testing.demo-receipt', [
+$receiptUrl = $urlGenerator->generate($routes['demoReceipt'], [
     'sourceId' => $sourceId,
     'sourceOrderId' => $demo->sourceOrderId,
     'demoOrderId' => $demo->demoOrderId,
@@ -385,17 +387,24 @@ $panel = static function (
         </p>
     </div>
     <div class="page-header__actions">
-        <form method="post" action="<?= Html::encode($syncItemsUrl) ?>">
-            <?= $csrf->hiddenInput() ?>
-            <input type="hidden" name="account_id" value="<?= Html::encode((string) $sourceId) ?>">
-            <input type="hidden" name="source_order_id"
-                   value="<?= Html::encode((string) $demo->sourceOrderId) ?>">
-            <input type="hidden" name="demo_order_id"
-                   value="<?= Html::encode((string) $demo->demoOrderId) ?>">
-            <input type="hidden" name="return" value="order-testing.demo-compare">
-            <button class="btn btn--secondary" type="submit"
-                    data-busy-label="Syncing…">Sync Original Order Items</button>
-        </form>
+        <?php
+        // Re-importing the original order's items talks to Order58 and rewrites mirrored rows. It is
+        // management, so it is offered only where this page is a management surface — the endpoint is
+        // not mounted for the others either.
+?>
+        <?php if ($canSyncItems): ?>
+            <form method="post" action="<?= Html::encode($syncItemsUrl) ?>">
+                <?= $csrf->hiddenInput() ?>
+                <input type="hidden" name="account_id" value="<?= Html::encode((string) $sourceId) ?>">
+                <input type="hidden" name="source_order_id"
+                       value="<?= Html::encode((string) $demo->sourceOrderId) ?>">
+                <input type="hidden" name="demo_order_id"
+                       value="<?= Html::encode((string) $demo->demoOrderId) ?>">
+                <input type="hidden" name="return" value="order-testing.demo-compare">
+                <button class="btn btn--secondary" type="submit"
+                        data-busy-label="Syncing…">Sync Original Order Items</button>
+            </form>
+        <?php endif; ?>
         <a class="btn" href="<?= Html::encode($listUrl) ?>">All demo orders for this call</a>
         <a class="btn btn--secondary" href="<?= Html::encode($receiptUrl) ?>">
             <span aria-hidden="true">🧾</span> View Receipt

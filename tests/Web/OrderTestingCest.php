@@ -695,15 +695,26 @@ final class OrderTestingCest
         $I->dontSeeElement('.a2t-conversions .a2t-slot__link[data-a2t-tts]');
         $I->dontSeeElement('.a2t-conversions .a2t-slot__link[data-a2t-transcripts]');
 
-        // The five that remain, and the `<col>`s that size them — one per header, or the table drifts.
-        foreach (['Order No#', 'Recording / Conversation', 'Status', 'Demo URL', 'Demo Orders'] as $header) {
+        // What remains, and the `<col>`s that size them — one per header, or the table drifts.
+        //
+        // Seven now, not five: this is where topics are assigned, so the table carries a selection
+        // checkbox and the Set Topic control beside the five that have always been here. Both are
+        // management, which is why they are on this page and not on Practice Orders.
+        foreach ([
+            'Order No#',
+            'Recording / Conversation',
+            'Status',
+            'Demo URL',
+            'Demo Orders',
+            'Set Topic',
+        ] as $header) {
             $I->see($header, 'th');
         }
 
         Assert::assertSame(
-            5,
+            7,
             substr_count($I->grabPageSource(), '<col class='),
-            'The colgroup and the headers must describe the same five columns.',
+            'The colgroup and the headers must describe the same seven columns.',
         );
     }
 

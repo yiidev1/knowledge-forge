@@ -28,6 +28,7 @@ use function array_keys;
 use function array_map;
 use function array_values;
 use function count;
+use function implode;
 use function is_string;
 
 use const SORT_DESC;
@@ -140,25 +141,70 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             return $query;
         }
 
+        // Two independent narrowings, applied in order: which orders exist to be listed at all, then
+        // which topic the reader asked for. Both land on the same query object, so the count and the
+        // page cannot be taken under different halves of it.
+
         $correlation = 'p.store_source_id = c.store_source_id'
             . ' AND p.source_order_id = CAST(c.order_id AS UNSIGNED)';
         $numeric = "c.order_id REGEXP '^[1-9][0-9]{0,18}$'";
 
-        if ($filter->onlyUnassigned) {
-            return $query
+        // The agent surface's own half: keep only groups that can actually be practised. This is the
+        // store-visibility predicate one row further down — the order must exist in THIS store and the
+        // recording must still have its audio. Without it a store qualified on the strength of one good
+        // recording and then listed every recording it had, including ones whose order id names nothing.
+        //
+        // The administrator surfaces never set this. They list what was uploaded, including the broken
+        // rows, because seeing them is how they get fixed.
+        if ($filter->requireLinkedOrder) {
+            $query = $query
                 ->andWhere(new Expression($numeric))
                 ->andWhere(new Expression(
-                    'NOT EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p WHERE ' . $correlation . ')',
+                    'EXISTS (SELECT 1 FROM `order58_orders` `lo`'
+                        . ' WHERE `lo`.`account_id` = `c`.`store_source_id`'
+                        . ' AND `lo`.`source_order_id` = CAST(`c`.`order_id` AS UNSIGNED))',
+                ))
+                ->andWhere(new Expression(
+                    'EXISTS (SELECT 1 FROM `audio_transcription_jobs` `lj`'
+                        . ' WHERE `lj`.`conversation_id` = `c`.`id`'
+                        . ' AND `lj`.`retained_audio_path` IS NOT NULL)',
                 ));
+        }
+
+        if (!$filter->narrowsTopics()) {
+            // Eligibility only, with no topic narrowing asked for.
+            return $query;
+        }
+
+        // OR across the chosen topics, and "not assigned" is one more choice in the same list rather
+        // than a mode of its own — so "this topic or nothing yet" is one ordinary selection. Written as
+        // EXISTS rather than a join because a join would multiply rows per order, which is the one
+        // thing a query that pages by group must not do.
+        $clauses = [];
+        $params = [];
+
+        if ($filter->topicIds !== []) {
+            $placeholders = [];
+
+            foreach ($filter->topicIds as $index => $topicId) {
+                $name = ':topicId' . $index;
+                $placeholders[] = $name;
+                $params[$name] = $topicId;
+            }
+
+            $clauses[] = 'EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
+                . ' WHERE ' . $correlation
+                . ' AND p.topic_id IN (' . implode(', ', $placeholders) . '))';
+        }
+
+        if ($filter->includeUnassigned) {
+            $clauses[] = 'NOT EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
+                . ' WHERE ' . $correlation . ')';
         }
 
         return $query
             ->andWhere(new Expression($numeric))
-            ->andWhere(new Expression(
-                'EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
-                    . ' WHERE ' . $correlation . ' AND p.topic_id = :topicId)',
-                [':topicId' => $filter->topicId],
-            ));
+            ->andWhere(new Expression('(' . implode(' OR ', $clauses) . ')', $params));
     }
 
     public function groupFor(int $storeSourceId, GroupKey $key): ?StoreOrderGroup

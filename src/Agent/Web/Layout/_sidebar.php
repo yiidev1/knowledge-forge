@@ -37,6 +37,12 @@ $items = [
         'route' => 'agent.rule-chat.sources.rules',
         'match' => ['agent.rule-chat.sources.'],
     ],
+    [
+        'label' => 'Practice Orders',
+        'icon' => '🎧',
+        'route' => 'agent.practice-orders',
+        'match' => ['agent.practice-orders'],
+    ],
 ];
 
 $navItems = [];

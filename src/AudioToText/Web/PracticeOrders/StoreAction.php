@@ -4,139 +4,79 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\PracticeOrders;
 
-use App\AudioToText\Application\ArrivingRecordingMerger;
-use App\AudioToText\Application\AudioToTextSettings;
-use App\AudioToText\Application\AudioUploadValidator;
-use App\AudioToText\Application\SeparateUploadValidator;
-use App\AudioToText\Application\TranscriptionQueue;
-use App\AudioToText\Application\UploadOptions;
-use App\AudioToText\Application\WorkerHealthService;
-use App\AudioToText\Domain\AudioActorInterface;
-use App\AudioToText\Domain\AudioConversationRepositoryInterface;
-use App\AudioToText\Domain\AudioStoreLookupInterface;
-use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
-use App\AudioToText\Domain\DemoOrderCountReaderInterface;
-use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
+use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Domain\OrderGroupFilter;
-use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
-use App\AudioToText\Domain\TopicAssignmentReaderInterface;
 use App\AudioToText\Web\OrderTesting\StoreAction as OrderTestingStoreAction;
-use App\Shared\Application\Time\AppTimeZone;
-use App\Shared\Domain\Clock\ClockInterface;
-use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
- * One store's practice orders.
+ * One store's practice orders: where an administrator or operation user **uses** training content.
  *
- * ## The same page, one map of addresses different
+ * ## Managing and using are two pages now
  *
- * This renders the **Order Testing template**, not a copy of it. Seventeen hundred lines decide what a
- * row is, how a recording plays, how a conversation opens and what every dialog says; none of that
- * differs here, and a second copy would be a second thing to keep correct. What differs is where the
- * links go and two extra columns, so {@see surfaceRoutes()} supplies the addresses and
- * {@see extraTemplateData()} supplies the topics.
+ * Topics are assigned on Order Testing, where the recordings are managed. This page is the other half:
+ * listen to a real call, see which topic it is practised under, recreate the order, compare the result.
+ * It is the same page an agent sees, and that is the point — the three realms practise identically, so
+ * there is one listing to keep correct instead of two that drift.
  *
- * ## Group and job endpoints stay on the Order Testing addresses, for now
+ * Everything that changes something is therefore off: no upload, no replacement, no transcription, no
+ * AI audio, no full editor, no topic assignment and no demo-order import. Not hidden — **not emitted**,
+ * because {@see capabilities()} answers no and the template asks before it renders. The one write this
+ * surface keeps is Demo URL, which is the exercise itself.
  *
- * Transcripts, Manage Audio and the arriving poll are reached through `/order-testing/...`. Both realms
- * that can open this page — administrator and operation — already reach those, and mounting a second
- * copy of four routes to answer identically would be four more things to keep in step. The Agent
- * surface in stage two cannot do that, and will mount its own.
+ * The administrator has lost nothing: every one of those controls is on Order Testing, where they
+ * already were, behind the gate they already passed.
  *
- * ## It owns no data
+ * ## Only what can be practised is listed
  *
- * Orders, recordings, conversations, demo orders and comparisons are read through the same services
- * Order Testing uses. The only thing this surface adds is which topic a source order is being practised
- * under, and that is a row in a table of its own keyed on the order — never a copy of the order.
+ * {@see groupFilter()} narrows with the predicate that decides whether a store is visible on the agent
+ * surface at all, applied one row further down. A recording whose order id names nothing is on Order
+ * Testing, where it can be seen and fixed; it is not here, where it could be neither practised nor
+ * demo-tested.
  */
-final readonly class StoreAction extends OrderTestingStoreAction
+readonly class StoreAction extends OrderTestingStoreAction
 {
-    public function __construct(
-        WebViewRenderer $viewRenderer,
-        AudioStoreLookupInterface $stores,
-        AudioConversationRepositoryInterface $conversations,
-        AudioUploadValidator $validator,
-        SeparateUploadValidator $separateValidator,
-        TranscriptionQueue $queue,
-        WorkerHealthService $workerHealth,
-        AudioToTextSettings $settings,
-        AudioToTextSettingsRepositoryInterface $settingsRepository,
-        UploadOptions $uploadOptions,
-        AudioActorInterface $actor,
-        Redirect $redirect,
-        AppTimeZone $appTimeZone,
-        StoreOrderGroupRepositoryInterface $groups,
-        DemoOrderLinkReaderInterface $demoLinks,
-        ArrivingRecordingMerger $arriving,
-        ClockInterface $clock,
-        DemoOrderCountReaderInterface $demoOrderCounts,
-        /** This surface's own column: which topic each order is practised under. */
-        private TopicAssignmentReaderInterface $topics,
-    ) {
-        parent::__construct(
-            $viewRenderer,
-            $stores,
-            $conversations,
-            $validator,
-            $separateValidator,
-            $queue,
-            $workerHealth,
-            $settings,
-            $settingsRepository,
-            $uploadOptions,
-            $actor,
-            $redirect,
-            $appTimeZone,
-            $groups,
-            $demoLinks,
-            $arriving,
-            $clock,
-            $demoOrderCounts,
-        );
+    /**
+     * Look, listen, and press Demo URL.
+     *
+     * The same profile the agent surface uses. An administrator reading this page is doing the same
+     * thing an agent is, and a control that changes a recording belongs on the page where recordings
+     * are managed — not on two pages, one of which is meant for practising.
+     */
+    protected function capabilities(): ConversationCapabilities
+    {
+        return ConversationCapabilities::readOnly();
     }
 
     /**
-     * The parent's data, plus the topic each row carries and the list the dialog offers.
+     * Whatever topics the reader chose, narrowed to orders that can actually be practised.
      *
-     * Two queries for the whole page, not two per row: the assignments for the orders being shown, and
-     * the assignable topics once.
+     * It travels inside the filter, which is what carries it into the count as well as the page. A
+     * listing narrowed without its pager is the bug the filter contract exists to prevent: fifteen
+     * promised, four shown.
      */
-    protected function extraTemplateData(int $sourceId, array $orderIds): array
+    protected function groupFilter(ServerRequestInterface $request): OrderGroupFilter
     {
-        return parent::extraTemplateData($sourceId, $orderIds) + [
-            'topicAssignments' => $this->topics->forOrders($sourceId, $orderIds),
-            'assignableTopics' => $this->topics->assignableTopics(),
-            // The template renders the Select and Set Topic columns only when this is true, which is
-            // how one template serves a surface that assigns topics and one that does not.
-            'practiceMode' => true,
-        ];
-    }
-
-    /**
-     * The `?topic=` filter, which is the one question this surface lets the reader ask of the list.
-     *
-     * Parsed by {@see OrderGroupFilter::fromQuery()} rather than here, so the rule that decides what a
-     * filter value means has one home and the template's control, the pager's links and the SQL cannot
-     * each decide it differently. Anything unrecognised filters nothing.
-     */
-    protected function groupFilter(ServerRequestInterface $request): ?OrderGroupFilter
-    {
-        return OrderGroupFilter::fromQuery($request->getQueryParams()['topic'] ?? null);
+        return parent::groupFilter($request)?->withLinkedOrdersOnly()
+            ?? OrderGroupFilter::linkedOrdersOnly();
     }
 
     protected function surfaceRoutes(): array
     {
         // Literals, like every cross-surface link in this file's neighbours: a route name is not a
-        // namespace, so naming the Practice Orders pages here costs this module no dependency.
-        // Start from the inherited map and replace only the three addresses that belong to this
-        // surface. Group and job endpoints stay on the Order Testing ones; see the class docblock.
+        // namespace. Only the three addresses that belong to this surface are replaced; the group and
+        // job endpoints stay on the Order Testing ones, which both realms that reach this page already
+        // have. The topic-assignment names are inherited and never rendered — see capabilities().
         return array_merge(parent::surfaceRoutes(), [
             'page' => 'practice-orders',
             'pageLabel' => 'Practice Orders',
             'store' => 'practice-orders.store',
+
+            // Read-only, so the conversation dialog builds no edit form. The job-scoped *reads* stay
+            // on the audio module's own addresses, which both realms that reach this page already
+            // have; only the one that decides what the dialog may offer is this surface's own.
+            'jobFragment' => 'practice-orders.job.review.fragment',
         ]);
     }
 
@@ -145,6 +85,10 @@ final readonly class StoreAction extends OrderTestingStoreAction
         return $this->redirect->toRoute('practice-orders');
     }
 
+    /**
+     * Unreachable: no upload route is mounted for this surface and the form that would post to one is
+     * not rendered. Answered anyway, so a route wired by mistake lands the reader back here.
+     */
     protected function afterUpload(string $conversationId, int $sourceId): ResponseInterface
     {
         return $this->redirect->afterPost('practice-orders.store', ['sourceId' => $sourceId]);

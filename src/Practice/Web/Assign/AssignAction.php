@@ -59,11 +59,12 @@ final readonly class AssignAction
             }
         }
 
-        // Back to the list the assignment was made from, filter and all: an argument the route pattern
-        // does not use becomes a query parameter, so this is `?topic=…` without hand-built URLs.
+        // Back to the list the assignment was made from, filter and all. Order Testing, because that
+        // is where topics are assigned now; an argument the route pattern does not use becomes a query
+        // parameter, so this is `?topics[]=…` without a hand-built URL.
         return $this->redirect->afterPost(
-            'practice-orders.store',
-            ['sourceId' => $sourceId] + FilterReturn::arguments($form->string('filter_topic')),
+            'order-testing.store',
+            ['sourceId' => $sourceId] + FilterReturn::arguments($form->rawValue('filter_topics')),
         );
     }
 }

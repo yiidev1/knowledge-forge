@@ -65,7 +65,12 @@ use const JSON_THROW_ON_ERROR;
  * carry are all settled there. This is a second *rendering*, never a second set of rules, and the
  * corrections it offers post to the seven existing routes, which run the existing service.
  */
-final readonly class Action
+/*
+ * Not `final`: the read-only surfaces mount a subclass of this that answers "no" to
+ * {@see canEditTranscript()}. One action, one set of rules, two answers to a single question — rather
+ * than a second endpoint that would have to be kept in step with this one.
+ */
+readonly class Action
 {
     public function __construct(
         private TranscriptionJobRepositoryInterface $jobs,
@@ -95,6 +100,83 @@ final readonly class Action
          */
         private CombinedConversationReader $combined,
     ) {}
+
+    /**
+     * May the reader of this fragment change the transcript?
+     *
+     * True here, which is what the correction page and the Order Testing dialog have always had. The
+     * read-only surfaces — the practice views for all three realms — mount
+     * {@see ReadOnlyAction} instead, and the per-turn addresses come back null.
+     *
+     * **Null rather than merely unused.** The dialog builds its edit forms from these URLs, so a
+     * fragment that still carried them would put a form per turn into the DOM of a page whose reader
+     * may not edit. The endpoints would refuse them — none of them is mounted for those surfaces — but
+     * a control that exists and is refused is not the same as one that was never offered.
+     */
+    protected function canEditTranscript(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Where this surface serves a recording's own audio.
+     *
+     * The dialog plays whatever this names, so it has to be an address the *reader's* realm can reach.
+     * Printing the audio module's own route to an agent gave them a player pointed at a page their
+     * gate refuses: the control was there, the file never arrived, and nothing on screen said why.
+     */
+    protected function originalFileRoute(): string
+    {
+        return AudioToTextRoute::JOB_ORIGINAL_FILE;
+    }
+
+    /** Where this surface serves generated AI audio, by the same argument. */
+    protected function aiAudioFileRoute(): string
+    {
+        return AudioToTextRoute::JOB_AI_AUDIO_FILE;
+    }
+
+    /**
+     * The full correction page for one recording, or null where this surface has none.
+     *
+     * Null on every read-only surface. The links built from it — "Customer recording", "Agent
+     * recording", and the dialog's own way through to the editor — all lead to a page those readers
+     * may not open, and following one rendered the realm's home page inside the dialog.
+     */
+    protected function reviewPageRoute(): ?string
+    {
+        return AudioToTextRoute::JOB_REVIEW;
+    }
+
+    /** One job's full-correction address, or null where this surface offers none. */
+    /**
+     * Where the revision history of this recording is read from, or null where it cannot be read.
+     *
+     * A GET, and the one address in this payload that is neither a mutation nor audio — which is why it
+     * has a seam of its own rather than following {@see canEditTranscript()}. An administrator reading
+     * a practice surface may not change a transcript but can still see how it got there, so the panel
+     * stays for them.
+     *
+     * **Null matters more than it looks.** `loadHistory()` fetches this URL as soon as a recording is
+     * opened and writes the answer into the dialog as markup. For a realm that cannot reach the admin
+     * address, the fetch follows the gate's redirect, comes back 200 with a whole different page, and
+     * that page lands inside the dialog — the conversation is still there, buried under a copy of the
+     * site. A null address is not fetched at all.
+     */
+    protected function historyUrl(string $publicId): ?string
+    {
+        return $this->urlGenerator->generate(
+            AudioToTextRoute::JOB_REVIEW_HISTORY,
+            ['publicId' => $publicId],
+        );
+    }
+
+    private function reviewPageUrl(string $publicId): ?string
+    {
+        $route = $this->reviewPageRoute();
+
+        return $route === null ? null : $this->urlGenerator->generate($route, ['publicId' => $publicId]);
+    }
 
     public function __invoke(#[RouteArgument] string $publicId): ResponseInterface
     {
@@ -200,7 +282,7 @@ final readonly class Action
         // A recording with a named speaker has no other speaker to move a turn to, so the control is
         // withheld from the payload rather than hidden in the browser: an operation the server would
         // refuse must not be one the browser can compose a request for.
-        $canMove = $page->voice === null;
+        $canMove = $page->voice === null && $this->canEditTranscript();
 
         foreach ($page->turns as $turn) {
             // Where "Move" sends this turn. Decided here, exactly as the page decides it, because the
@@ -235,7 +317,7 @@ final readonly class Action
                 'hasHistory' => $turn->hasHistory(),
                 // Always true here: these rows are this recording's own turns, so the editor writes
                 // where the reader is looking. Only a borrowed conversation withholds it.
-                'canEdit' => true,
+                'canEdit' => $this->canEditTranscript(),
                 'canMove' => $canMove,
                 'targetRole' => $canMove ? $other->value : null,
                 'targetLabel' => $canMove ? $other->label() : null,
@@ -257,8 +339,12 @@ final readonly class Action
                     'moveText' => $canMove
                         ? $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MOVE_TEXT, $publicId, $turn->index)
                         : null,
-                    'text' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_TEXT, $publicId, $turn->index),
-                    'merge' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $publicId, $turn->index),
+                    'text' => $this->canEditTranscript()
+                        ? $this->turnUrl(AudioToTextRoute::JOB_REVIEW_TEXT, $publicId, $turn->index)
+                        : null,
+                    'merge' => $this->canEditTranscript()
+                        ? $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $publicId, $turn->index)
+                        : null,
                 ],
             ];
         }
@@ -267,7 +353,7 @@ final readonly class Action
             'version' => $page->version,
             'isReviewed' => $page->isReviewed,
             'rolesPublished' => $page->rolesPublished,
-            'canConfirm' => $page->canConfirm,
+            'canConfirm' => $page->canConfirm && $this->canEditTranscript(),
             'confirmBlockedReason' => $page->confirmBlockedReason,
             // Why the speakers were left open, in words for the person looking at them. Null for a
             // recording that was not left open, and for every row transcribed before the diagnosis was
@@ -289,10 +375,7 @@ final readonly class Action
             // and the dialog behaves exactly as it always has.
             'derivedFrom' => $page->derived === null ? null : [
                 'role' => $page->derived->role->label(),
-                'url' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW,
-                    ['publicId' => $page->derived->sourcePublicId],
-                ),
+                'url' => $this->reviewPageUrl($page->derived->sourcePublicId),
             ],
             // The three ways to hear this recording. Computed here so the dialog renders decisions
             // rather than making them — in particular the staleness rule, which has exactly one home.
@@ -309,19 +392,22 @@ final readonly class Action
             'replace' => $this->replaceTarget($job),
             'turns' => $rows,
             'urls' => [
-                'full' => $this->urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $publicId]),
-                'confirm' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW_CONFIRM,
-                    ['publicId' => $publicId],
-                ),
-                'revert' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW_REVERT,
-                    ['publicId' => $publicId],
-                ),
-                'history' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW_HISTORY,
-                    ['publicId' => $publicId],
-                ),
+                'full' => $this->reviewPageUrl($publicId),
+                // Both change the transcript, so both follow the same flag as the per-turn addresses
+                // above. A reader who may not edit is handed no address that edits.
+                'confirm' => $this->canEditTranscript()
+                    ? $this->urlGenerator->generate(
+                        AudioToTextRoute::JOB_REVIEW_CONFIRM,
+                        ['publicId' => $publicId],
+                    )
+                    : null,
+                'revert' => $this->canEditTranscript()
+                    ? $this->urlGenerator->generate(
+                        AudioToTextRoute::JOB_REVIEW_REVERT,
+                        ['publicId' => $publicId],
+                    )
+                    : null,
+                'history' => $this->historyUrl($publicId),
             ],
         ]);
     }
@@ -395,7 +481,7 @@ final readonly class Action
             'replace' => $this->replaceTarget($job),
             'turns' => $rows,
             'urls' => [
-                'full' => $this->urlGenerator->generate(AudioToTextRoute::JOB_REVIEW, ['publicId' => $publicId]),
+                'full' => $this->reviewPageUrl($publicId),
                 // Absent, not null-valued: there is no mixed-level confirmation, discard or history to
                 // offer, and a url present in the payload is a url something will eventually call.
             ],
@@ -442,7 +528,7 @@ final readonly class Action
             // Per job, and there are two. The strip links to each side's own page instead — see the
             // note on {@see combinedPayload()}.
             'hasHistory' => false,
-            'canEdit' => true,
+            'canEdit' => $this->canEditTranscript(),
             'canMove' => false,
             'targetRole' => null,
             'targetLabel' => null,
@@ -453,8 +539,12 @@ final readonly class Action
             'mergeNext' => $this->merge($turn->mergeWithNext),
             'urls' => [
                 'moveText' => null,
-                'text' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_TEXT, $ownerPublicId, $index),
-                'merge' => $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $ownerPublicId, $index),
+                'text' => $this->canEditTranscript()
+                    ? $this->turnUrl(AudioToTextRoute::JOB_REVIEW_TEXT, $ownerPublicId, $index)
+                    : null,
+                'merge' => $this->canEditTranscript()
+                    ? $this->turnUrl(AudioToTextRoute::JOB_REVIEW_MERGE, $ownerPublicId, $index)
+                    : null,
             ],
         ];
     }
@@ -476,12 +566,10 @@ final readonly class Action
                 'turnCount' => $child->turnCount(),
                 'isReviewed' => $child->isReviewed,
                 'version' => $child->reviewCount,
-                // Where corrections to this side's wording are discarded and its revisions read. The
-                // existing page, unchanged, for the existing job.
-                'url' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_REVIEW,
-                    ['publicId' => $child->jobPublicId],
-                ),
+                // Where corrections to this side's wording are made and its revisions read. The
+                // existing page, unchanged, for the existing job — and null on a surface that has no
+                // such page, so the dialog draws no link to one.
+                'url' => $this->reviewPageUrl($child->jobPublicId),
             ];
         }
 
@@ -509,7 +597,7 @@ final readonly class Action
             // The existing hardened route: it resolves the stored name through the one path builder
             // for retained recordings and composes nothing of its own.
             'url' => $this->urlGenerator->generate(
-                AudioToTextRoute::JOB_ORIGINAL_FILE,
+                $this->originalFileRoute(),
                 ['publicId' => $publicId],
             ),
         ];
@@ -539,15 +627,17 @@ final readonly class Action
                 'playable' => $row->isPlayable(),
                 'playUrl' => $row->isPlayable()
                     ? $this->urlGenerator->generate(
-                        AudioToTextRoute::JOB_AI_AUDIO_FILE,
+                        $this->aiAudioFileRoute(),
                         ['publicId' => $publicId],
                     )
                     : null,
-                'canGenerate' => $row->canGenerate,
+                'canGenerate' => $row->canGenerate && $this->canEditTranscript(),
                 // Drawn at all, as opposed to pressable now. The dialog keeps the control in one place
                 // for the whole lifecycle and disables it while a worker has it, rather than removing
                 // the thing the operator just pressed.
-                'offered' => $row->isActionOffered(),
+                // Whether a Generate button is drawn at all. Both halves must hold: the recording has
+                // to be in a state that can be generated from, and the reader has to be allowed to.
+                'offered' => $row->isActionOffered() && $this->canEditTranscript(),
                 // Whether a worker is already acting. What makes the control disabled, and what tells
                 // the dialog to keep asking — there is no push, so a finished generation is only ever
                 // noticed by looking again.
@@ -568,10 +658,15 @@ final readonly class Action
                 // Everything a Generate needs, named by the server: the exact output type this
                 // recording produces and the digest the dialog was rendered from. The browser echoes
                 // them back and the endpoint revalidates both.
-                'action' => $this->urlGenerator->generate(
-                    AudioToTextRoute::JOB_AI_AUDIO_GENERATE,
-                    ['publicId' => $publicId],
-                ),
+                // Null where the reader may not generate: the dialog draws its Generate button
+                // from this, so a surface that cannot spend money is not offered the button that
+                // spends it.
+                'action' => $this->canEditTranscript()
+                    ? $this->urlGenerator->generate(
+                        AudioToTextRoute::JOB_AI_AUDIO_GENERATE,
+                        ['publicId' => $publicId],
+                    )
+                    : null,
                 'outputType' => $row->outputType->value,
                 'expectedHash' => $row->currentHash,
             ],
@@ -590,6 +685,12 @@ final readonly class Action
      */
     private function replaceTarget(TranscriptionJob $job): ?array
     {
+        if (!$this->canEditTranscript()) {
+            // One more case, and the same answer: a reader who may change nothing is offered no
+            // replacement. The endpoint is not mounted for those surfaces either.
+            return null;
+        }
+
         $conversationId = $job->conversationId;
 
         if ($conversationId === null) {
