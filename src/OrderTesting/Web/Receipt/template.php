@@ -395,9 +395,6 @@ $card = static function (
         </p>
     </div>
     <div class="page-header__actions">
-        <button class="btn btn--secondary" type="button" data-rc-print>
-            <span aria-hidden="true">🖨</span> Print Receipt
-        </button>
         <a class="btn" href="<?= Html::encode($backUrl) ?>">Back to Demo Order</a>
     </div>
 </div>

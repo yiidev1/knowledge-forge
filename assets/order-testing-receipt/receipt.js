@@ -1,26 +1,19 @@
 /*
- * The receipt comparison's two pieces of behaviour: printing, and filtering by verdict.
+ * The receipt comparison's one piece of behaviour: filtering by verdict.
  *
- * Both are bound here rather than written into the markup, because this application sends
- * `script-src 'self'` and an inline handler would be refused by the browser — the button would simply
- * do nothing, silently.
+ * Bound here rather than written into the markup, because this application sends `script-src 'self'`
+ * and an inline handler would be refused by the browser — the chips would simply do nothing, silently.
  *
  * Filtering only dims rows. It reads nothing and writes nothing: no request is made and no order is
  * touched, which is what makes it safe to offer on a page about records somebody is auditing.
+ *
+ * There is no print button; the browser's own print command is enough, and `receipt.css` still lays
+ * the page out for paper when it is used.
  */
 (function () {
     'use strict';
 
     document.addEventListener('click', function (event) {
-        var print = event.target.closest('[data-rc-print]');
-
-        if (print !== null) {
-            event.preventDefault();
-            window.print();
-
-            return;
-        }
-
         var chip = event.target.closest('[data-rc-filter]');
 
         if (chip === null) {
