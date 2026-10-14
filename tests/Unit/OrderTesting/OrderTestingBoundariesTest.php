@@ -14,6 +14,7 @@ use function array_map;
 use function dirname;
 use function file_get_contents;
 use function implode;
+use function in_array;
 use function json_encode;
 use function is_dir;
 use function preg_match;
@@ -31,7 +32,16 @@ use function substr;
 final class OrderTestingBoundariesTest extends TestCase
 {
     /** The one migration permitted to introduce the OPERATION initiator literal. */
-    private const OPERATION_INITIATOR_MIGRATION = 'M261012120000AllowOperationInitiator';
+    /**
+     * The migrations allowed to contain a realm literal — one per realm admitted, and no others.
+     *
+     * The AGENT migration restates the full list in its CHECK, so `'OPERATION'` appears in it too.
+     * That is why this is a list rather than a single name.
+     */
+    private const INITIATOR_MIGRATIONS = [
+        'M261012120000AllowOperationInitiator',
+        'M261014180000AllowAgentInitiator',
+    ];
 
     private function root(): string
     {
@@ -96,22 +106,27 @@ final class OrderTestingBoundariesTest extends TestCase
         self::assertStringContainsString('"keep":"yes"', $clean);
     }
 
-    // ------------------------------------------------------------------ no agent, no operation role
+    // ------------------------------------------------------------------ the realms, and only those
 
     /**
-     * ADMIN and OPERATION exist. **Agents still do not, and that is the part this pins.**
+     * ADMIN, OPERATION and AGENT — the whole list, and no fourth.
      *
-     * The operation role was added deliberately, with a migration widening the CHECK to match. Agents
-     * authenticate through the same login page as operation users, so the realm that must never appear
-     * here is the one most easily added by accident — a third case would silently hand the whole Order
-     * Testing workflow to several hundred agent accounts.
+     * **This case was amended on purpose when the practice surface opened to agents**, and the
+     * amendment is the point: each realm was added with its own migration widening the CHECK to match,
+     * and each had to change this line to land. What the guard still catches is a realm appearing
+     * without that deliberate step — the failure mode it was written for, since agents authenticate
+     * through the same login page as operation users and a fourth case added by accident would hand a
+     * workflow to accounts nobody reviewed.
+     *
+     * Agents reach Order Testing's *data* through the agent practice surface only; this module still
+     * mounts no agent route of its own, which `testOrderTestingNamesNoAgentCode` below pins separately.
      *
      * Asserted as an exact list rather than a `contains`, so adding any realm fails until somebody
      * changes this line on purpose.
      */
-    public function testOnlyTheAdminAndOperationRealmsExist(): void
+    public function testOnlyTheThreeApprovedRealmsExist(): void
     {
-        self::assertSame(['ADMIN', 'OPERATION'], array_map(
+        self::assertSame(['ADMIN', 'OPERATION', 'AGENT'], array_map(
             static fn(InitiatorType $case): string => $case->value,
             InitiatorType::cases(),
         ));
@@ -125,29 +140,35 @@ final class OrderTestingBoundariesTest extends TestCase
      * CHECK constraint "ready for later" on a table nobody reviewed, which is precisely the sort of
      * thing that goes unnoticed. The widening is allowed in one named file and nowhere else.
      */
-    public function testOnlyTheApprovedMigrationMentionsTheOperationRole(): void
+    public function testOnlyTheApprovedMigrationsMentionARealmRole(): void
     {
-        $allowed = 'src/Migration/' . self::OPERATION_INITIATOR_MIGRATION . '.php';
+        $allowed = array_map(
+            static fn(string $name): string => 'src/Migration/' . $name . '.php',
+            self::INITIATOR_MIGRATIONS,
+        );
         $offenders = [];
 
         foreach ($this->phpFilesIn($this->root() . '/src/Migration') as $relative => $source) {
             // The quoted VALUE, not the English word. `AiOperations`, "operation" in a docblock and
             // `integration_sync_runs` are all ordinary prose; what must not exist is a role literal a
             // row could be written with.
-            if (preg_match('/[\'"]OPERATION[\'"]/', $source) !== 1) {
+            if (preg_match('/[\'"](OPERATION|AGENT)[\'"]/', $source) !== 1) {
                 continue;
             }
 
-            if ($relative !== $allowed) {
+            if (!in_array($relative, $allowed, true)) {
                 $offenders[] = $relative;
             }
         }
 
         self::assertSame([], $offenders, implode("\n", $offenders));
-        self::assertFileExists(
-            $this->root() . '/' . $allowed,
-            'The approved migration is missing; the allowance above would then hide a real regression.',
-        );
+
+        foreach ($allowed as $file) {
+            self::assertFileExists(
+                $this->root() . '/' . $file,
+                'An approved migration is missing; the allowance above would then hide a real regression.',
+            );
+        }
     }
 
     /** The Order Testing module names no agent class and no agent route. */

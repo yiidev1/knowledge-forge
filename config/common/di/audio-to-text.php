@@ -71,6 +71,10 @@ return [
     // is reached by following a link to that module's own pages. See DemoOrderCountReaderInterface.
     App\AudioToText\Domain\DemoOrderCountReaderInterface::class => App\AudioToText\Infrastructure\DbDemoOrderCountReader::class,
 
+    // The topic each source order is practised under, read from the Practice Orders tables by name —
+    // the same arrangement as the demo-order readers above, and for the same reason.
+    App\AudioToText\Domain\TopicAssignmentReaderInterface::class => App\AudioToText\Infrastructure\DbTopicAssignmentReader::class,
+
     // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
     // still on their way in, and the module that imports them answers. Bound here beside its counterpart
     // so both halves of the contract are visible in one place.

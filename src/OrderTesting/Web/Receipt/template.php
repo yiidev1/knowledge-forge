@@ -62,9 +62,10 @@ $this->setParameter('breadcrumbs', [
     ['label' => 'Receipt #' . $demo->demoOrderId],
 ]);
 
-// Literal route names, not constants: those live in `App\AudioToText`, and this module may not name
-// it. A route name is not a namespace, so linking to a page another module serves costs nothing —
-// importing its class would have made this module depend on that one, which a boundary test forbids.
+// Literal route names, not constants: the constants live in the audio module, which this one may not
+// name — not even in a comment, because the boundary test matches the text of the file. A route name
+// is not a namespace, so linking to a page another module serves costs nothing; importing its class
+// would have made this module depend on that one.
 $backUrl = $urlGenerator->generate('order-testing.demo-compare', [
     'sourceId' => $sourceId,
     'sourceOrderId' => $demo->sourceOrderId,

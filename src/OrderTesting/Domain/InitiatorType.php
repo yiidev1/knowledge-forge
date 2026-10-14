@@ -7,9 +7,12 @@ namespace App\OrderTesting\Domain;
 /**
  * Which realm the person who started a test belongs to.
  *
- * **`ADMIN` and `OPERATION`, and that is the whole list** — the database CHECK admits nothing else, so a
- * row claiming another realm cannot be written even by a bug. Agents are still explicitly out of scope:
- * Order Testing has no agent route, and the role policy in the signing-in realm refuses them.
+ * **`ADMIN`, `OPERATION` and `AGENT`, and that is the whole list** — the database CHECK admits nothing
+ * else, so a row claiming another realm cannot be written even by a bug.
+ *
+ * `AGENT` was added when the practice surface opened to Order58 agents. It is reachable from exactly
+ * one place: the agent Practice Orders group, whose middleware resolves the actor. Order Testing itself
+ * still has no agent route, and the role policy in the signing-in realm still refuses agents there.
  *
  * ## Why the realm is stored at all
  *
@@ -17,8 +20,10 @@ namespace App\OrderTesting\Domain;
  * different people, and a schema that recorded only the id would attribute one's work to the other. The
  * pair is what makes an attempt traceable to an actual person.
  *
- * `OPERATION` ids are Order58's own `admin_id` — the value that survives a rebuild of the
- * `order58_agents` mirror — never `order58_agents.id`, which is a local key.
+ * `OPERATION` **and `AGENT`** ids are both Order58's own `admin_id` — the value that survives a rebuild
+ * of the `order58_agents` mirror — never `order58_agents.id`, which is a local key. The two realms
+ * share an id space and are told apart by this column, which is precisely why every join that resolves
+ * a name is conditioned on it as well as on the id.
  *
  * ## The spelling
  *
@@ -30,12 +35,14 @@ enum InitiatorType: string
 {
     case Admin = 'ADMIN';
     case Operation = 'OPERATION';
+    case Agent = 'AGENT';
 
     public function label(): string
     {
         return match ($this) {
             self::Admin => 'Administrator',
             self::Operation => 'Operation',
+            self::Agent => 'Agent',
         };
     }
 }

@@ -77,6 +77,23 @@ $items = [
         'route' => 'order-testing',
         'match' => ['order-testing'],
     ],
+    // Beneath Order Testing, because it is the same source orders seen as training: the same stores,
+    // the same recordings, the same demo results, with a topic attached and a narrower set of actions.
+    // A separate entry rather than a mode of the other, so neither constrains the other's menu.
+    [
+        'label' => 'Practice Orders',
+        'icon' => '🎓',
+        'route' => 'practice-orders',
+        'match' => ['practice-orders'],
+    ],
+    // Curating the topic list is administration, not training, so it sits on its own and is absent
+    // from the operation allow-list below.
+    [
+        'label' => 'Topic Management',
+        'icon' => '🏷',
+        'route' => 'practice.topics',
+        'match' => ['practice.topics'],
+    ],
     // Its own entry rather than a link inside Audio to Text: the page is about Order58 calls, and the
     // prefix covers its two POST routes so they stay highlighted after a redirect.
     // ['label' => 'Order58 calls', 'icon' => '📞', 'route' => 'order58.calls', 'match' => ['order58.calls']],
@@ -112,13 +129,21 @@ foreach ($items as $item) {
     $navItems[] = ['label' => $item['label'], 'icon' => $item['icon'], 'href' => $href, 'active' => $active];
 }
 
-// An operation user sees ONE entry. This is presentation only — every route in this list is also
-// guarded server-side, and the ones absent from it are refused whether or not they are linked. Hiding
-// a link has never been a permission; it is here so the page is honest about what is reachable.
+// An operation user sees only the entries they can actually reach. This is presentation only — every
+// route in this list is also guarded server-side, and the ones absent from it are refused whether or
+// not they are linked. Hiding a link has never been a permission; it is here so the page is honest
+// about what is reachable.
+//
+// An allow-list rather than a single label, because that is now two entries: Order Testing and
+// Practice Orders both sit behind the gate this realm passes. Topic Management deliberately does not —
+// it is in the administrators' group, so linking it here would offer a door that answers with a
+// redirect to a login form they cannot use.
+$operatorMenu = ['Order Testing', 'Practice Orders'];
+
 if ($operator !== null) {
     $navItems = array_values(array_filter(
         $navItems,
-        static fn(array $item): bool => $item['label'] === 'Order Testing',
+        static fn(array $item): bool => in_array($item['label'], $operatorMenu, true),
     ));
 }
 

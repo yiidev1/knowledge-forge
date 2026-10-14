@@ -25,18 +25,26 @@ namespace App\AudioToText\Domain;
  *
  * **The number of queries does not depend on the number of rows.** Implementations batch; a page of
  * twenty groups costs the same as a page of one.
+ *
+ * **The count and the page are narrowed by the same filter, or by neither.** {@see OrderGroupFilter} is
+ * passed to both or to neither; a pager counting rows the page has filtered out is the other half of the
+ * bug the paging contract above exists to prevent.
  */
 interface StoreOrderGroupRepositoryInterface
 {
     /**
      * One page of this store's orders, newest activity first.
      *
+     * @param OrderGroupFilter|null $filter which orders to count as rows; null is every order, which is
+     *                                      what the audio store page and Order Testing ask for, and
+     *                                      leaves the query exactly what it was before filtering existed
+     *
      * @return list<StoreOrderGroup>
      */
-    public function pageFor(int $storeSourceId, int $limit, int $offset = 0): array;
+    public function pageFor(int $storeSourceId, int $limit, int $offset = 0, ?OrderGroupFilter $filter = null): array;
 
-    /** How many orders this store has, for the pager. */
-    public function countFor(int $storeSourceId): int;
+    /** How many orders this store has, for the pager — under the same filter the page used. */
+    public function countFor(int $storeSourceId, ?OrderGroupFilter $filter = null): int;
 
     /**
      * One group of this store's, or null when the key names nothing this store owns.

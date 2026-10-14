@@ -1,9 +1,11 @@
 # Browser tests
 
-These drive a real Chrome against the screens whose behaviour no markup test can reach. Two groups,
+These drive a real Chrome against the screens whose behaviour no markup test can reach. Four groups,
 run separately: **speaker correction** (`run.sh`) against the full page at
-`/audio-to-text/job/{publicId}/review` and the Details dialog on `/audio-to-text/store/{sourceId}`, and
-**order comparison geometry** (`run-compare.sh`) against `/order-testing/store/…/order/…/demo/…`.
+`/audio-to-text/job/{publicId}/review` and the Details dialog on `/audio-to-text/store/{sourceId}`,
+**order comparison geometry** (`run-compare.sh`) against `/order-testing/store/…/order/…/demo/…`, the
+**floating recording player** (`run-practice.sh`, headed), and **topics** (`run-topics.sh`) against
+`/admin/topics` and `/practice-orders/store/{sourceId}`.
 
 They are **not** part of `codecept run`. They need a browser, and the rest of the suite deliberately
 does not.
@@ -24,6 +26,7 @@ Both suites were green throughout. Only a browser found either.
 npm install puppeteer-core          # once, in this directory
 KF_BASE=http://127.0.0.1:8080 ./run.sh            # speaker correction
 KF_BASE=http://127.0.0.1:8080 ./run-compare.sh    # order comparison geometry
+KF_BASE=http://127.0.0.1:8080 ./run-topics.sh     # topics and the practice-orders topic controls
 ```
 
 `run.sh` seeds its own store, conversation and administrator, runs a suite, and seeds again for the
@@ -38,6 +41,25 @@ Nothing outside those fixtures is read or written. The store id is far outside t
 and the administrator is named `__kf_e2e_admin__`.
 
 ## What they cover
+
+`topics.js` — Topic Management and the topic controls on a store's Practice Orders page. Four of its
+checks exist because nothing short of a browser can make them:
+
+- **the Edit dialog's values.** PhpBrowser follows the Edit link, so it only ever saw the
+  server-rendered form. A browser runs the click handler first — and that handler used to open whichever
+  dialog was already on the page, which was the empty Add form. Editing one topic and then another, and
+  comparing both against the fixture, is the assertion that bug would fail.
+- **the filter not applying on change.** "Choosing an option must not navigate" is a statement about a
+  `change` listener; with no browser there is no event and nothing to not happen. It selects an option,
+  waits, and asserts the address and the rows are unmoved — then presses Apply and asserts both change.
+- **a `<dialog>` really opening.** `showModal()` either works or the element paints as a block under
+  the page, and the two are identical in markup. Checked with `:modal`.
+- **headers staying on one line** at 1920, 1440 and a phone width, measured with a `Range` over each
+  header's own text: one client rect is one line. Wrapping is layout, and layout needs a layout engine.
+
+It also pins that the topic name and the Change button open *different* dialogs, that the details one
+carries no form at all, and that a recording whose order was never mirrored offers neither a checkbox
+nor a Set Topic button.
 
 `flows.js` — the Details dialog: edit, history, selection, With previous, With next, move, and the
 ends of a conversation.

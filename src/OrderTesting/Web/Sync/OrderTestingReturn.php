@@ -35,4 +35,10 @@ final class OrderTestingReturn
 
     /** Order58 Call Recordings. Takes the `store`, `load`, `date` and `source` filters it reads. */
     public const CALL_RECORDINGS = 'order58.call-recordings';
+
+    /** The Practice Orders picker, which carries the same button. */
+    public const PRACTICE_PICKER = 'practice-orders';
+
+    /** One store's practice orders. Takes a `sourceId`, like the Order Testing store page. */
+    public const PRACTICE_STORE = 'practice-orders.store';
 }

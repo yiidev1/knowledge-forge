@@ -17,6 +17,7 @@ use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationMode;
+use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
@@ -241,16 +242,20 @@ readonly class Action
             }
         }
 
+        // Null here, and on this page always: see groupFilter() below. Resolved once and handed to both
+        // calls, so the count can never be taken under a different filter than the page.
+        $filter = $this->groupFilter($request);
+
         // Counted and paged as GROUPS: twenty rows means twenty orders, however many recordings they
         // hold between them. Paging conversations and grouping them afterwards would put half an order
         // on one page and the rest on the next.
-        $total = $this->groups->countFor($store->sourceId);
+        $total = $this->groups->countFor($store->sourceId, $filter);
         $pageCount = max(1, (int) ceil($total / self::PER_PAGE));
         $page = min($this->requestedPage($request), $pageCount);
 
         $groups = $this->arriving->merge(
             $store->sourceId,
-            $this->groups->pageFor($store->sourceId, self::PER_PAGE, ($page - 1) * self::PER_PAGE),
+            $this->groups->pageFor($store->sourceId, self::PER_PAGE, ($page - 1) * self::PER_PAGE, $filter),
             $this->clock->now(),
         );
 
@@ -281,6 +286,9 @@ readonly class Action
                 'page' => $page,
                 'pageCount' => $pageCount,
                 'perPage' => self::PER_PAGE,
+                // Null on every surface but Practice Orders. Passed rather than re-parsed in the
+                // template so the rows, the pager and the filter control can only ever show one answer.
+                'groupFilter' => $filter,
                 'worker' => $this->workerHealth->status(),
                 'maxUploadLabel' => $this->settings->transcription->maxUploadLabel(),
                 'maxDurationLabel' => $this->settings->transcription->maxDurationLabel(),
@@ -325,6 +333,22 @@ readonly class Action
     protected function extraTemplateData(int $sourceId, array $orderIds): array
     {
         return [];
+    }
+
+    /**
+     * Which of the store's orders this surface is asking for.
+     *
+     * Null here, and that is the behaviour to preserve: the audio store page and Order Testing list
+     * every order a store has, and with null the two group queries build exactly the SQL they built
+     * before filtering existed. {@see \App\AudioToText\Web\PracticeOrders\StoreAction} overrides it to
+     * read its `?topic=` parameter — the one surface where "which orders" is a question the reader asks.
+     *
+     * A seam rather than a constructor flag, like {@see templatePath()} and {@see extraTemplateData()}:
+     * the surfaces differ by what they override, not by a mode they are configured into.
+     */
+    protected function groupFilter(ServerRequestInterface $request): ?OrderGroupFilter
+    {
+        return null;
     }
 
     /**

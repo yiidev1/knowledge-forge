@@ -47,7 +47,12 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
  * an operator there would move them onto the surface this one exists to keep them off. They come back to
  * the store page, where the row they just added to is waiting.
  */
-final readonly class StoreAction extends AudioStoreAction
+/*
+ * Not `final`: Practice Orders is this same page over the same orders with a topic attached, and it
+ * extends this class to inherit the demo-order column and the route seam rather than restating either.
+ * The same reason `AudioStoreAction` above is not final — see its docblock.
+ */
+readonly class StoreAction extends AudioStoreAction
 {
     /**
      * The parent's dependencies, restated, plus the one this surface adds.
@@ -113,7 +118,38 @@ final readonly class StoreAction extends AudioStoreAction
      */
     protected function extraTemplateData(int $sourceId, array $orderIds): array
     {
-        return ['demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds)];
+        return [
+            'demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds),
+            'routes' => $this->surfaceRoutes(),
+        ];
+    }
+
+    /**
+     * The addresses this surface's page builds its own links from.
+     *
+     * The template is shared with Practice Orders, which is the same table over the same orders with a
+     * topic attached. Everything about *what* a row is stays identical; only where its links go differs,
+     * and that is these nine names. Passing them in rather than printing constants is what lets one
+     * template serve both without either becoming a mode of the other — and without a second copy of
+     * seventeen hundred lines to keep in step.
+     *
+     * Route names, not classes, as everywhere else: a name is not a namespace.
+     *
+     * @return array<string, string>
+     */
+    protected function surfaceRoutes(): array
+    {
+        return [
+            'page' => OrderTestingRoute::PAGE,
+            'pageLabel' => 'Order Testing',
+            'store' => OrderTestingRoute::STORE,
+            'arriving' => OrderTestingRoute::STORE_ARRIVING,
+            'demoUrl' => OrderTestingRoute::DEMO_URL,
+            'recordings' => OrderTestingRoute::STORE_GROUP_RECORDINGS,
+            'transcripts' => OrderTestingRoute::STORE_GROUP_TRANSCRIPTS,
+            'demoOrders' => OrderTestingRoute::DEMO_ORDERS,
+            'syncDemo' => OrderTestingRoute::SYNC_DEMO_ORDERS,
+        ];
     }
 
     protected function storeMissing(): ResponseInterface

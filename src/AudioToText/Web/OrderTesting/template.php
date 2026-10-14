@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use App\AudioToText\Domain\AssignedTopic;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\GroupKey;
+use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\StoreOrderGroup;
@@ -16,7 +18,6 @@ use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextIcons;
 use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\AudioToTextRoute;
-use App\AudioToText\Web\OrderTesting\OrderTestingRoute;
 use App\AudioToText\Web\OrderTesting\OrderTestingAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Audio\RecordingTypeLabels;
@@ -37,7 +38,11 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var array<string, list<string>> $errors
  * @var list<StoreOrderGroup> $groups one row per order, newest activity first
  * @var array<string, \App\Shared\Order58\DemoOrderUrl> $demoLinks keyed by the order id each row shows
+ * @var array<string, string> $routes the addresses this surface builds its links from; see
+ *      StoreAction::surfaceRoutes(). Practice Orders renders this same template with its own.
  * @var array<string, int> $demoOrderCounts demo orders imported per order id, keyed the same way
+ * @var OrderGroupFilter|null $groupFilter which orders were fetched; null is all of them, which is what
+ *      Order Testing always passes. Practice Orders passes what its `?topic=` asked for.
  * @var int $total
  * @var int $page
  * @var int $pageCount
@@ -64,7 +69,7 @@ $this->setTitle($store->name . ' — order testing');
 // whose links go to `/audio-to-text/...`; following it from here would move the reader onto the surface
 // this one exists to keep them off.
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing', 'route' => OrderTestingRoute::PAGE],
+    ['label' => $routes['pageLabel'], 'route' => $routes['page']],
     ['label' => $store->name],
 ]);
 
@@ -72,12 +77,43 @@ $csrfField = (string) $csrf->hiddenInput();
 
 // One per page, not one per row: every Demo URL form on this table posts to the same store-scoped
 // address and names its own order in a hidden field.
-$demoUrlAction = $urlGenerator->generate(OrderTestingRoute::DEMO_URL, ['sourceId' => $store->sourceId]);
-$storeUrl = $urlGenerator->generate(OrderTestingRoute::STORE, ['sourceId' => $store->sourceId]);
+// Practice Orders renders this same template with a topic on every row and two extra columns. Order
+// Testing passes none of this, so it is defaulted off here and the markup below is unchanged for it.
+$practiceMode = ($practiceMode ?? false) === true;
+
+if ($practiceMode) {
+    // Only this surface needs the selection script and the two columns' styling. Registering it here
+    // rather than in the asset above keeps the Order Testing page's payload exactly as it was.
+    $assetManager->register(\App\Practice\Web\PracticeAsset::class);
+}
+
+// Annotated where they are defaulted rather than cast at each of the eight places they are read: the
+// `??` is what loses the type, so this is where it is given back.
+/** @var array<string, AssignedTopic> $topicAssignments keyed by the order id each row shows */
+$topicAssignments = $topicAssignments ?? [];
+
+/** @var list<AssignedTopic> $assignableTopics active topics, the only ones that may be chosen */
+$assignableTopics = $assignableTopics ?? [];
+
+$demoUrlAction = $urlGenerator->generate($routes['demoUrl'], ['sourceId' => $store->sourceId]);
+$storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $store->sourceId]);
 // One endpoint for the whole page. The attribute that uses it is rendered only while something is
 // still being downloaded, so an idle page never asks.
-$arrivingUrl = $urlGenerator->generate(OrderTestingRoute::STORE_ARRIVING, ['sourceId' => $store->sourceId]);
-$pageUrl = static fn(int $p): string => $storeUrl . ($p > 1 ? '?page=' . $p : '');
+$arrivingUrl = $urlGenerator->generate($routes['arriving'], ['sourceId' => $store->sourceId]);
+// Resolved once, from the filter the Action actually queried with rather than from the query string
+// again: the select's chosen option, the pager's links and the hidden field that survives an assignment
+// all read this, so none of them can claim a filter the rows were not fetched under. '' is every order,
+// which is what every surface but Practice Orders always has.
+$topicFilter = $groupFilter?->queryValue() ?? '';
+$pageQuery = $topicFilter === '' ? [] : ['topic' => $topicFilter];
+
+// Unchanged for an unfiltered page: no filter means no query array, so page 1 is the bare store URL and
+// page N is `?page=N`, exactly as before.
+$pageUrl = static function (int $p) use ($storeUrl, $pageQuery): string {
+    $query = $p > 1 ? $pageQuery + ['page' => (string) $p] : $pageQuery;
+
+    return $query === [] ? $storeUrl : $storeUrl . '?' . http_build_query($query);
+};
 
 /**
  * @param list<string> $messages
@@ -428,7 +464,11 @@ $slotCell = static function (
     $groupUrl,
     $statusUrl,
     $transcribeUrl,
-    $globalDefault
+    $globalDefault,
+    // The surface's own addresses: this closure builds the Manage-audio link, and Practice Orders
+    // renders the same template with a different map. A template is function scope, so it has to be
+    // named here rather than simply being in the file.
+    $routes
 ): string {
     if ($slot === null) {
         // Asked for and not here yet. Said plainly, in place of the Add-audio affordance: offering to
@@ -465,7 +505,7 @@ $slotCell = static function (
         }
 
         return '<button class="a2t-slot__add" type="button"'
-            . ' data-a2t-manage="' . Html::encode($groupUrl(OrderTestingRoute::STORE_GROUP_RECORDINGS, $group->key)) . '"'
+            . ' data-a2t-manage="' . Html::encode($groupUrl($routes['recordings'], $group->key)) . '"'
             . ' data-a2t-order="' . Html::encode($group->orderId) . '"'
             . ' data-a2t-manage-focus="' . Html::encode($emptyType->value) . '"'
             . ' aria-label="' . Html::encode('Add ' . $emptyType->label() . ' audio for order ' . $group->orderId) . '">'
@@ -754,15 +794,15 @@ $conversationCell = static function (StoreOrderGroup $group) use (
         // lock on the server, which also holds across two tabs and against the console command.
 ?>
         <form method="post"
-              action="<?= Html::encode($urlGenerator->generate(OrderTestingRoute::SYNC_DEMO_ORDERS)) ?>">
+              action="<?= Html::encode($urlGenerator->generate($routes['syncDemo'])) ?>">
             <?= $csrfField ?>
-            <input type="hidden" name="return" value="<?= Html::encode(OrderTestingRoute::STORE) ?>">
+            <input type="hidden" name="return" value="<?= Html::encode($routes['store']) ?>">
             <input type="hidden" name="sourceId" value="<?= Html::encode((string) $store->sourceId) ?>">
             <button class="btn btn--secondary" type="submit"
                     data-busy-label="Syncing…">Sync demo orders</button>
         </form>
         <?php // Order Testing's own list, not the Order58 picker, whose links go to the audio page.?>
-        <a class="btn" href="<?= Html::encode($urlGenerator->generate(OrderTestingRoute::PAGE)) ?>">All stores</a>
+        <a class="btn" href="<?= Html::encode($urlGenerator->generate($routes['page'])) ?>">All stores</a>
     </div>
 </div>
 
@@ -804,13 +844,71 @@ $conversationCell = static function (StoreOrderGroup $group) use (
 <div class="card a2t-wide">
     <h2 class="card__title">This store's conversions</h2>
 
+    <?php if ($practiceMode): ?>
+        <?php
+        // A plain GET form, outside the table and above the empty state so it is reachable even when the
+        // filter has emptied the list. The filter lives in the address, which is what makes it survive a
+        // reload, a bookmark and the pager without a line of script.
+        //
+        // `page` is deliberately not carried: narrowing the list renumbers it, and page four of a
+        // one-page result is an empty table. Every submission starts at page one.
+        $offeredIds = [];
+
+        foreach ($assignableTopics as $offeredTopic) {
+            $offeredIds[] = $offeredTopic->id;
+        }
+
+        $retiredFilter = $topicFilter !== '' && $topicFilter !== OrderGroupFilter::UNASSIGNED
+            && !in_array((int) $topicFilter, $offeredIds, true);
+        ?>
+        <form class="practice-filter" method="get" action="<?= Html::encode($storeUrl) ?>">
+            <label class="practice-filter__label" for="practice-filter-topic">Topic</label>
+            <?php
+            // No script hook on this select, deliberately. Choosing an option changes only what the
+            // control shows; the list changes when Apply is pressed. A select that navigated on change
+            // would move the page out from under a reader still looking at the options.
+        ?>
+            <select class="field__control" id="practice-filter-topic" name="topic">
+                <option value="" <?= $topicFilter === '' ? 'selected' : '' ?>>All topics</option>
+                <option value="<?= OrderGroupFilter::UNASSIGNED ?>"
+                    <?= $topicFilter === OrderGroupFilter::UNASSIGNED ? 'selected' : '' ?>>Not assigned</option>
+                <?php foreach ($assignableTopics as $topic): ?>
+                    <option value="<?= $topic->id ?>"
+                        <?= $topicFilter === (string) $topic->id ? 'selected' : '' ?>><?= Html::encode($topic->name) ?></option>
+                <?php endforeach; ?>
+                <?php if ($retiredFilter): ?>
+                    <?php
+                // The address names a topic the select no longer offers — retired since the link was
+                // made. It is still what the rows were fetched under, so it is shown rather than
+                // silently replaced by "All topics", which would have the control contradict the table.
+                    ?>
+                    <option value="<?= Html::encode($topicFilter) ?>" selected>
+                        Topic #<?= Html::encode($topicFilter) ?> — no longer offered</option>
+                <?php endif; ?>
+            </select>
+            <button class="btn btn--secondary btn--sm" type="submit">Apply</button>
+            <?php if ($topicFilter !== ''): ?>
+                <a class="btn btn--sm" href="<?= Html::encode($storeUrl) ?>">Clear</a>
+            <?php endif; ?>
+        </form>
+    <?php endif; ?>
+
     <?php if ($groups === []): ?>
         <?php // A short sentence and the one action that changes it, rather than an empty table.?>
         <div class="a2t-empty-state">
-            <p>No audio recordings yet.</p>
-            <?php if ($canUpload): ?>
-                <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
-                   data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+            <?php if ($practiceMode && $topicFilter !== ''): ?>
+                <?php
+                // Not "no recordings": the store may well have plenty, and saying so would send the
+                // reader looking for an upload problem that does not exist.
+                ?>
+                <p>No orders match this topic filter.</p>
+                <a class="btn" href="<?= Html::encode($storeUrl) ?>">Show all orders</a>
+            <?php else: ?>
+                <p>No audio recordings yet.</p>
+                <?php if ($canUpload): ?>
+                    <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
+                       data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
     <?php else: ?>
@@ -834,20 +932,72 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
                 data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
             <?php endif; ?>>
+            <?php if ($practiceMode): ?>
+                <?php
+                // The form the row checkboxes belong to, by `form=` rather than by nesting: a form
+                // cannot wrap table rows without breaking the table, and the checkboxes have to sit in
+                // their own column.
+                //
+                // Hidden until something is selected. A toolbar that is always present but usually
+                // disabled teaches a reader to ignore it.
+                ?>
+                <form id="practice-bulk-form" method="post" class="practice-bulk" hidden
+                      data-practice-bulk
+                      action="<?= Html::encode($urlGenerator->generate(
+                          'practice-orders.topic.bulk',
+                          ['sourceId' => $store->sourceId],
+                      )) ?>">
+                    <?= $csrfField ?>
+                    <?php if ($topicFilter !== ''): ?>
+                        <?php // The filter to return to, as on the single-assign form below.?>
+                        <input type="hidden" name="filter_topic" value="<?= Html::encode($topicFilter) ?>">
+                    <?php endif; ?>
+                    <span class="practice-bulk__count" data-practice-count>0 selected</span>
+                    <label class="util-visually-hidden" for="practice-bulk-topic">Topic</label>
+                    <select class="field__control" id="practice-bulk-topic" name="topic_id">
+                        <?php foreach ($assignableTopics as $topic): ?>
+                            <option value="<?= $topic->id ?>"><?= Html::encode($topic->name) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button class="btn btn--primary btn--sm" type="submit"
+                            <?= $assignableTopics === [] ? 'disabled' : '' ?>>Bulk Set Topic</button>
+                    <span class="practice-bulk__note">
+                        <?= $assignableTopics === []
+                            ? 'No active topics yet — create one in Topic Management.'
+                            : 'Applies to the orders selected on this page.' ?>
+                    </span>
+                </form>
+            <?php endif; ?>
+
             <table class="table a2t-table a2t-orders a2t-conversions ot-orders">
                 <?php
                         // Sized to content, with the one recording column taking the slack: a filename no
                         // longer appears here, so nothing in this table has an unbounded length.
 ?>
                 <colgroup>
+                    <?php // A column, not a cell: its own class, so the width rule cannot be confused
+                          // with the rules that lay out what is inside the cells.?>
+                    <?php if ($practiceMode): ?><col class="practice-col-select"><?php endif; ?>
                     <col class="a2t-col-order">
                     <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
                     <col class="a2t-col-demo">
                     <col class="ot-col-demo-orders">
+                    <?php if ($practiceMode): ?><col class="practice-col-topic"><?php endif; ?>
                 </colgroup>
                 <thead>
                     <tr>
+                        <?php if ($practiceMode): ?>
+                            <?php
+                            // Select-all reaches the rows that were rendered and nothing else. There is
+                            // no server-side "everything matching the filter" selection, so the control
+                            // does not imply one.
+                            ?>
+                            <th class="practice-select">
+                                <input type="checkbox" data-practice-select-all
+                                       aria-label="Select all orders on this page">
+                            </th>
+                        <?php endif; ?>
                         <th>Order No#</th>
                         <?php // One column, because an order is one conversation. The channels it was?>
                         <?php // recorded on are named inside the cell, from the enum rather than typed?>
@@ -858,11 +1008,32 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                         <?php // Immediately after Demo URL, because it is the result of pressing it:?>
                         <?php // the orders a trainee produced from this call, each compared on its own.?>
                         <th>Demo Orders</th>
+                        <?php if ($practiceMode): ?>
+                            <?php // The topic this source order is practised under. One per order.?>
+                            <th>Set Topic</th>
+                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
                 <?php foreach ($groups as $group): ?>
                     <?php $status = $group->aggregateStatus(); ?>
+                    <?php
+                    // Whether this row has a source order that actually exists, decided once and used
+                    // by the checkbox, the Set Topic button and the Demo URL cell alike.
+                    //
+                    // The demo-link reader has already answered it for the whole page: it looks the
+                    // order up by `(account_id, source_order_id)` and reports `OrderNotFound` when
+                    // there is no such row. Every other status means the order WAS found and something
+                    // else is missing, so reusing it costs no query and cannot disagree with the
+                    // "Order not found" the next cell prints.
+                    $rowOrderId = $group->orderId ?? '';
+                    $rowLinkStatus = $rowOrderId !== '' && isset($demoLinks[$rowOrderId])
+                        ? $demoLinks[$rowOrderId]->status
+                        : DemoLinkStatus::NoOrderId;
+                    $rowHasSourceOrder = $rowOrderId !== ''
+                        && $rowLinkStatus !== DemoLinkStatus::NoOrderId
+                        && $rowLinkStatus !== DemoLinkStatus::OrderNotFound;
+                    ?>
                     <?php
                     // Read by the review dialog's Original transcript button, which is opened from this
                     // row and has no other way to know which order it is looking at. A deliberately
@@ -875,9 +1046,28 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 ? ' data-a2t-arriving-call="' . Html::encode($group->arriving->callSessionId) . '"'
                 : '' ?><?= $group->hasAnyTranscript()
                 ? ' data-a2t-row-transcripts="' . Html::encode(
-                    $groupUrl(OrderTestingRoute::STORE_GROUP_TRANSCRIPTS, $group->key),
+                    $groupUrl($routes['transcripts'], $group->key),
                 ) . '"'
                 : '' ?>>
+                        <?php if ($practiceMode): ?>
+                            <?php
+                            // Only a row whose source order really exists can carry a topic: the
+                            // assignment keys on `(store, order)` and the service refuses a pair that
+                            // is not this store's, so a checkbox here would offer a selection the
+                            // server would reject — and reject the whole batch with it, since a bulk
+                            // assignment is all-or-nothing. Such a row keeps its place in the table and
+                            // simply offers no checkbox.
+                            ?>
+                            <td class="practice-select">
+                                <?php if ($rowHasSourceOrder): ?>
+                                    <input type="checkbox" form="practice-bulk-form"
+                                           name="source_order_ids[]"
+                                           value="<?= Html::encode($rowOrderId) ?>"
+                                           data-practice-select
+                                           aria-label="Select order <?= Html::encode($rowOrderId) ?>">
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                         <td>
                             <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
                                 <?php // One way in to every recording of this call. The channels it?>
@@ -1092,13 +1282,70 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     ?>
                             <?php if ($orderKey !== '' && $demoCount > 0): ?>
                                 <a href="<?= Html::encode($urlGenerator->generate(
-                                    OrderTestingRoute::DEMO_ORDERS,
+                                    $routes['demoOrders'],
                                     ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
                                 )) ?>">View (<?= Html::encode((string) $demoCount) ?>)</a>
                             <?php else: ?>
                                 <span class="util-muted">&mdash;</span>
                             <?php endif; ?>
                         </td>
+                        <?php if ($practiceMode): ?>
+                            <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
+                            <td class="practice-topic-cell">
+                                <?php
+                                            // One stack for every shape this cell takes: what the topic is, a
+                                            // badge when it is no longer offered, and the one button. Laid out in
+                                            // a column so the button sits in the same place on every row —
+                                            // beside the name on one row and under it on the next reads as a
+                                            // mistake rather than as a difference.
+                            ?>
+                                <div class="practice-topic-cell__stack">
+                                <?php if (!$rowHasSourceOrder): ?>
+                                    <?php
+                                                                    // No source order behind this recording, so there is nothing to
+                                                                    // practise. Said plainly and with the reason, rather than offering
+                                                                    // a button the server would refuse. The recording itself is still
+                                                                    // fully reachable from the cells to the left.
+                                    ?>
+                                    <span class="util-muted">&mdash;</span>
+                                    <div class="field__hint">
+                                        <?= $orderKey === '' ? 'No order on this recording' : 'No matching source order' ?>
+                                    </div>
+                                <?php else: ?>
+                                    <?php if ($assigned === null): ?>
+                                        <span class="practice-unassigned">Not Assigned</span>
+                                    <?php else: ?>
+                                        <?php
+                                        // The name opens the topic's details; the button opens the
+                                        // picker. Two actions, two controls — everything the details
+                                        // dialog shows is already here, so it costs no request.
+                                        ?>
+                                        <button class="practice-topic__name" type="button"
+                                                data-practice-topic-details
+                                                data-practice-topic-name="<?= Html::encode($assigned->name) ?>"
+                                                data-practice-topic-description="<?= Html::encode($assigned->description ?? '') ?>"
+                                                data-practice-topic-status="<?= Html::encode($assigned->statusLabel()) ?>"
+                                                data-practice-topic-note="<?= Html::encode($assigned->unavailableNote()) ?>"
+                                                title="View topic details"><?= Html::encode($assigned->name) ?></button>
+                                        <?php if (!$assigned->isAssignable()): ?>
+                                            <?php
+                                            // A badge, not a sentence: which of the two states it is,
+                                            // in the width a table column actually has. The dialog the
+                                            // name opens says what it means in full.
+                                            ?>
+                                            <span class="badge badge--muted"><?= Html::encode($assigned->statusLabel()) ?></span>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                    <button class="btn btn--sm <?= $assigned === null ? 'btn--primary' : 'btn--outline-primary' ?>"
+                                            type="button"
+                                            data-practice-set-topic="<?= Html::encode($orderKey) ?>"
+                                            data-practice-current="<?= $assigned === null ? '' : $assigned->id ?>">
+                                        <?= $assigned === null ? 'Set Topic' : 'Change' ?>
+                                    </button>
+                                <?php endif; ?>
+                                </div>
+                            </td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -1106,7 +1353,13 @@ $conversationCell = static function (StoreOrderGroup $group) use (
         </div>
 
         <?php if ($pageCount > 1): ?>
-            <?= $this->render(dirname(__DIR__, 4) . '/Web/Shared/_partial/pager', [
+            <?php
+                // Three, not four: this template sits at `src/AudioToText/Web/OrderTesting`, one level
+                // shallower than the audio pages at `.../Web/Job/Store` that this was copied from. At
+                // four it resolved above `src/` and the page died — but only for a store with more
+                // than one page of orders, which is why it stood for so long.
+            ?>
+            <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
                 'page' => $page,
                 'pageCount' => $pageCount,
                 'pageUrl' => $pageUrl,
@@ -1795,3 +2048,73 @@ $last = min($page * $perPage, $total);
     </div>
     <div class="source-modal__body" data-a2t-history-body></div>
 </dialog>
+
+<?php if ($practiceMode): ?>
+    <?php
+    // One dialog for every row, retargeted by the button that opens it. Rendering one per row would be
+    // a dialog and a form per order on the page for a control that is used once at a time.
+    //
+    // Rendered closed and opened by script. Unlike Topic Management this one has no URL state: the
+    // store page already carries filters and a page number, and a `?topic=` on top of those would be a
+    // fourth axis to keep correct for a control that changes one row.
+    ?>
+    <?php
+    // Shared with Topic Management, which opens the same dialog from its own list. It is filled from
+    // the trigger that was clicked, so it needs nothing from here.
+    ?>
+    <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/topic-details-dialog') ?>
+
+    <dialog class="source-modal practice-dialog" id="practice-assign-dialog" data-practice-dialog
+            aria-labelledby="practice-assign-title">
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="practice-assign-title">Set topic</h2>
+            <button class="source-modal__close" type="button" data-practice-dialog-close
+                    title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div class="source-modal__body">
+            <form method="post" data-practice-assign-form
+                  action="<?= Html::encode($urlGenerator->generate(
+                      'practice-orders.topic.assign',
+                      ['sourceId' => $store->sourceId],
+                  )) ?>">
+                <?= $csrfField ?>
+                <input type="hidden" name="source_order_id" data-practice-assign-order value="">
+                <?php if ($topicFilter !== ''): ?>
+                    <?php
+                    // Which filter to come back to. Without it, setting a topic while looking at "Not
+                    // assigned" would drop the reader back into every order on the store — losing the
+                    // list they were working through, one row at a time.
+                    ?>
+                    <input type="hidden" name="filter_topic" value="<?= Html::encode($topicFilter) ?>">
+                <?php endif; ?>
+
+                <div class="field">
+                    <div class="field__label">Order</div>
+                    <div class="practice-topic__name" data-practice-assign-label>&mdash;</div>
+                </div>
+
+                <div class="field">
+                    <label class="field__label" for="practice-assign-topic">Topic</label>
+                    <select class="field__control" id="practice-assign-topic" name="topic_id"
+                            data-practice-assign-topic>
+                        <?php // The empty choice is how a topic is taken off an order.?>
+                        <option value="">No topic</option>
+                        <?php foreach ($assignableTopics as $topic): ?>
+                            <option value="<?= $topic->id ?>"><?= Html::encode($topic->name) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if ($assignableTopics === []): ?>
+                        <div class="field__hint">
+                            No active topics yet. Create one in Topic Management, then assign it here.
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <div class="a2t-confirm__actions">
+                    <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
+                    <button class="btn btn--primary btn--sm" type="submit">Save</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+<?php endif; ?>

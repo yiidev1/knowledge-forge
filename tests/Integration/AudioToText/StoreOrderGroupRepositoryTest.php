@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Domain\GroupKey;
+use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\ConversationStatus;
@@ -20,6 +21,7 @@ use function bin2hex;
 use function gmdate;
 use function sprintf;
 use function str_pad;
+use function strtolower;
 use function random_bytes;
 
 use const STR_PAD_LEFT;
@@ -60,6 +62,12 @@ final class StoreOrderGroupRepositoryTest extends Unit
     /** @var list<string> */
     private array $createdUsernames = [];
 
+    /** @var list<string> topic names written by {@see topic()} */
+    private array $createdTopics = [];
+
+    /** @var list<array{int, string}> store id and order id of every assignment written */
+    private array $assignedOrders = [];
+
     protected function _before(): void
     {
         $this->connection = IntegrationDb::connectOrSkip();
@@ -76,6 +84,22 @@ final class StoreOrderGroupRepositoryTest extends Unit
 
     protected function _after(): void
     {
+        // Assignments before topics: the foreign key is RESTRICT, so a topic cannot go while a row
+        // still points at it — which is the behaviour the Practice suite pins, and this relies on.
+        foreach ($this->assignedOrders as [$store, $orderId]) {
+            IntegrationDb::cleanup($this->connection, '{{%practice_order_topics}}', [
+                'store_source_id' => $store,
+                'source_order_id' => $orderId,
+            ]);
+        }
+
+        foreach ($this->createdTopics as $name) {
+            IntegrationDb::cleanup($this->connection, '{{%practice_topics}}', ['name' => $name]);
+        }
+
+        $this->assignedOrders = [];
+        $this->createdTopics = [];
+
         foreach ($this->createdJobs as $publicId) {
             IntegrationDb::cleanup($this->connection, '{{%audio_transcription_jobs}}', ['public_id' => $publicId]);
         }
@@ -446,6 +470,159 @@ final class StoreOrderGroupRepositoryTest extends Unit
         self::assertNull($this->repository->groupFor(self::STORE, GroupKey::forOrder('404040')));
     }
 
+    // ------------------------------------------------------------------ the topic filter
+
+    /**
+     * Null changes nothing — the property every other surface depends on.
+     *
+     * Order Testing and the audio store page pass no filter, so a page fetched with null must be the
+     * same page it was before filtering existed, topics in the database or not.
+     */
+    public function testNoFilterReturnsEveryOrderEvenWhenTopicsExist(): void
+    {
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, null);
+        $this->assignTopic('16513791', $this->topic('ZZ Groups Filter A'));
+
+        self::assertCount(3, $this->repository->pageFor(self::STORE, 20));
+        self::assertCount(3, $this->repository->pageFor(self::STORE, 20, 0, null));
+        self::assertSame(3, $this->repository->countFor(self::STORE));
+        self::assertSame(3, $this->repository->countFor(self::STORE, null));
+    }
+
+    public function testFilteringByTopicReturnsOnlyThatTopicsOrders(): void
+    {
+        $wanted = $this->topic('ZZ Groups Filter A');
+        $other = $this->topic('ZZ Groups Filter B');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, '16513793');
+
+        $this->assignTopic('16513791', $wanted);
+        $this->assignTopic('16513792', $other);
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($wanted));
+
+        self::assertCount(1, $groups);
+        self::assertSame('16513791', $groups[0]->orderId);
+    }
+
+    /**
+     * The count and the page answer the same question.
+     *
+     * A pager built from an unfiltered count offers pages the filtered list cannot fill, which is the
+     * other half of the paging bug this repository exists to prevent.
+     */
+    public function testTheCountAgreesWithThePageUnderTheSameFilter(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->upload(RecordingType::Mixed, '16513793');
+        $this->assignTopic('16513791', $topic);
+        $this->assignTopic('16513792', $topic);
+
+        $filter = OrderGroupFilter::forTopic($topic);
+
+        self::assertSame(2, $this->repository->countFor(self::STORE, $filter));
+        self::assertCount(2, $this->repository->pageFor(self::STORE, 20, 0, $filter));
+    }
+
+    /** Several recordings of one order are still one row when the filter is on. */
+    public function testFilteringStillGroupsByOrder(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Caller, '16513791');
+        $this->upload(RecordingType::Callee, '16513791');
+        $this->assignTopic('16513791', $topic);
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($topic));
+
+        self::assertCount(1, $groups);
+        self::assertSame(3, $groups[0]->recordingCount());
+        self::assertSame(1, $this->repository->countFor(self::STORE, OrderGroupFilter::forTopic($topic)));
+    }
+
+    public function testUnassignedReturnsOrdersThatCarryNoTopic(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->upload(RecordingType::Mixed, '16513792');
+        $this->assignTopic('16513791', $topic);
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned());
+
+        self::assertCount(1, $groups);
+        self::assertSame('16513792', $groups[0]->orderId);
+        self::assertSame(1, $this->repository->countFor(self::STORE, OrderGroupFilter::unassigned()));
+    }
+
+    /**
+     * An upload that named no order is not "unassigned" — it is unassignable.
+     *
+     * It groups under its own conversation key and no topic row can ever reference it, so a filter whose
+     * purpose is "what still needs a topic" must not list it. It stays visible unfiltered, which the
+     * no-filter test above pins.
+     */
+    public function testUnassignedExcludesUploadsWithNoOrderAtAll(): void
+    {
+        $this->upload(RecordingType::Mixed, null);
+        $this->upload(RecordingType::Mixed, '16513792');
+
+        $groups = $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned());
+
+        self::assertCount(1, $groups);
+        self::assertSame('16513792', $groups[0]->orderId);
+    }
+
+    /**
+     * **The collision case the correlation exists for.**
+     *
+     * `source_order_id` is unique only within a store. Another store's topic row for the same order
+     * number must not make this store's identically numbered order match.
+     */
+    public function testAnotherStoresTopicRowDoesNotMatchThisStoresOrder(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        $this->upload(RecordingType::Mixed, '16513791');
+        $this->assignTopic('16513791', $topic, self::OTHER_STORE);
+
+        self::assertCount(
+            0,
+            $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::forTopic($topic)),
+            'The topic row belongs to another store and must not match here.',
+        );
+        self::assertCount(
+            1,
+            $this->repository->pageFor(self::STORE, 20, 0, OrderGroupFilter::unassigned()),
+            'And this store\'s order is still untopicked.',
+        );
+    }
+
+    public function testFilteringPagesByGroupLikeTheUnfilteredQuery(): void
+    {
+        $topic = $this->topic('ZZ Groups Filter A');
+
+        foreach (['16513791', '16513792', '16513793'] as $orderId) {
+            $this->upload(RecordingType::Mixed, $orderId);
+            $this->upload(RecordingType::Caller, $orderId);
+            $this->assignTopic($orderId, $topic);
+        }
+
+        $filter = OrderGroupFilter::forTopic($topic);
+
+        self::assertCount(2, $this->repository->pageFor(self::STORE, 2, 0, $filter));
+        self::assertCount(1, $this->repository->pageFor(self::STORE, 2, 2, $filter));
+        self::assertSame(3, $this->repository->countFor(self::STORE, $filter));
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /**
@@ -562,6 +739,43 @@ final class StoreOrderGroupRepositoryTest extends Unit
         ])->execute();
 
         return $publicId;
+    }
+
+    /**
+     * A topic to filter by, written straight to the table.
+     *
+     * Deliberately not through `App\Practice`: this suite tests the AudioToText query, and reaching for
+     * the other module's service here would make a filter test fail when that service changed. The name
+     * is prefixed so `_after` can find it and nothing in the live table matches it.
+     */
+    private function topic(string $name): int
+    {
+        $this->createdTopics[] = $name;
+
+        $this->connection->createCommand()->insert('{{%practice_topics}}', [
+            'name' => $name,
+            'name_key' => strtolower($name),
+            'status' => 'ACTIVE',
+            'created_at' => gmdate('Y-m-d H:i:s'),
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ])->execute();
+
+        return (int) $this->connection->getLastInsertID();
+    }
+
+    private function assignTopic(string $sourceOrderId, int $topicId, int $store = self::STORE): void
+    {
+        $this->assignedOrders[] = [$store, $sourceOrderId];
+
+        $this->connection->createCommand()->insert('{{%practice_order_topics}}', [
+            'store_source_id' => $store,
+            'source_order_id' => $sourceOrderId,
+            'topic_id' => $topicId,
+            'assigned_by_type' => 'ADMIN',
+            'assigned_by_id' => $this->adminId,
+            'created_at' => gmdate('Y-m-d H:i:s'),
+            'updated_at' => gmdate('Y-m-d H:i:s'),
+        ])->execute();
     }
 
     private function job(string $conversationPublicId, SourceRole $role, string $status = 'COMPLETED'): string

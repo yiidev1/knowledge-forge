@@ -7,6 +7,7 @@ namespace App\AudioToText\Infrastructure;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\JobStatus;
+use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\StoreOrderGroup;
@@ -67,21 +68,33 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
     private const CONVERSATIONS = '{{%audio_conversations}}';
     private const JOBS = '{{%audio_transcription_jobs}}';
 
+    /**
+     * Named, not joined, and read by nothing else here.
+     *
+     * The topic a source order is practised under belongs to another module. This repository does not
+     * depend on it: it narrows its own rows with a correlated `EXISTS` against the table by name, the
+     * same way {@see DbTopicAssignmentReader} and {@see DbDemoOrderCountReader} read across. A join
+     * would also multiply rows per order, which is the one thing a group query must not do.
+     */
+    private const TOPIC_ASSIGNMENTS = '`practice_order_topics`';
+
     public function __construct(
         private ConnectionInterface $connection,
         private TtsRenditionRepositoryInterface $renditions,
     ) {}
 
-    public function pageFor(int $storeSourceId, int $limit, int $offset = 0): array
+    public function pageFor(int $storeSourceId, int $limit, int $offset = 0, ?OrderGroupFilter $filter = null): array
     {
-        /** @var list<array<string, mixed>> $keyRows */
-        $keyRows = (new Query($this->connection))
+        $query = (new Query($this->connection))
             ->select([
                 'group_key' => new Expression(GroupKey::sqlExpression('c')),
                 'latest_id' => new Expression('MAX(c.id)'),
             ])
             ->from(['c' => self::CONVERSATIONS])
-            ->where(['c.store_source_id' => $storeSourceId])
+            ->where(['c.store_source_id' => $storeSourceId]);
+
+        /** @var list<array<string, mixed>> $keyRows */
+        $keyRows = $this->narrow($query, $filter)
             ->groupBy(new Expression(GroupKey::sqlExpression('c')))
             // By the newest conversation in each group, so an order rises when anything is added to it.
             ->orderBy(['latest_id' => SORT_DESC])
@@ -99,12 +112,53 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
         return $this->build($storeSourceId, $keys);
     }
 
-    public function countFor(int $storeSourceId): int
+    public function countFor(int $storeSourceId, ?OrderGroupFilter $filter = null): int
     {
-        return (int) (new Query($this->connection))
+        $query = (new Query($this->connection))
             ->from(['c' => self::CONVERSATIONS])
-            ->where(['c.store_source_id' => $storeSourceId])
+            ->where(['c.store_source_id' => $storeSourceId]);
+
+        return (int) $this->narrow($query, $filter)
             ->count('DISTINCT ' . GroupKey::sqlExpression('c'));
+    }
+
+    /**
+     * The filter, applied to whichever of the two queries above is asking.
+     *
+     * One method because the page and its pager must agree: a count taken without the filter the page
+     * was fetched with reports orders the reader cannot see, and the pager then offers pages that come
+     * back empty. Null is returned untouched, so an unfiltered call builds the SQL it always built.
+     *
+     * The correlation carries `store_source_id` as well as the order id, and that is not decoration:
+     * `source_order_id` is unique only *within* a store (see the `order58_orders` migration), so
+     * without it one merchant's topic row would match another merchant's identically numbered order.
+     * The digits guard is the same one every other reader of this free-text column uses before casting.
+     */
+    private function narrow(Query $query, ?OrderGroupFilter $filter): Query
+    {
+        if ($filter === null) {
+            return $query;
+        }
+
+        $correlation = 'p.store_source_id = c.store_source_id'
+            . ' AND p.source_order_id = CAST(c.order_id AS UNSIGNED)';
+        $numeric = "c.order_id REGEXP '^[1-9][0-9]{0,18}$'";
+
+        if ($filter->onlyUnassigned) {
+            return $query
+                ->andWhere(new Expression($numeric))
+                ->andWhere(new Expression(
+                    'NOT EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p WHERE ' . $correlation . ')',
+                ));
+        }
+
+        return $query
+            ->andWhere(new Expression($numeric))
+            ->andWhere(new Expression(
+                'EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
+                    . ' WHERE ' . $correlation . ' AND p.topic_id = :topicId)',
+                [':topicId' => $filter->topicId],
+            ));
     }
 
     public function groupFor(int $storeSourceId, GroupKey $key): ?StoreOrderGroup

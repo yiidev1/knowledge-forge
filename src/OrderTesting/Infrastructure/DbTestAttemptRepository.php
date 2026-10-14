@@ -13,6 +13,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use RuntimeException;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
 
 use function bin2hex;
@@ -42,10 +43,51 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
     private const TABLE = '{{%order_testing_attempts}}';
     private const ADMINS = '{{%admin_users}}';
 
+    /**
+     * Where the other two realms' names live.
+     *
+     * Order58's mirror, keyed by `admin_id` — the identity that survives a rebuild of the mirror, and
+     * the same value {@see \App\OrderTesting\Domain\InitiatorType} documents as what an OPERATION or
+     * AGENT row stores. Read by table name, like every other cross-module read in this module.
+     */
+    private const OPERATORS = '{{%order58_agents}}';
+
     /** The two statuses that still hold the slot. See {@see AttemptStatus::isOpen()}. */
     private const OPEN = [AttemptStatus::Started->value, AttemptStatus::Matched->value];
 
     public function __construct(private ConnectionInterface $connection) {}
+
+    /**
+     * The name behind an attempt, joined on the realm as well as the id.
+     *
+     * **`initiated_by_id` is one polymorphic column, not a pair.** The realms number their users
+     * separately — `admin_users.id = 7` and Order58's `admin_id = 7` are different people — so a join
+     * on the id alone renders whichever of them happens to exist, and an operation user's work appears
+     * under an administrator's name. That was live behaviour before this was qualified; adding a third
+     * realm would have multiplied it rather than caused it.
+     *
+     * Two LEFT joins and a COALESCE, exactly as `DbSegmentRevisionRepository` already does for the same
+     * shape of column. LEFT so an attempt outlives the account that made it and still reports its own
+     * existence rather than vanishing from the page.
+     */
+    private function withActorName(Query $query): Query
+    {
+        $admin = InitiatorType::Admin->value;
+        $operation = InitiatorType::Operation->value;
+        $agent = InitiatorType::Agent->value;
+
+        return $query
+            ->select(['a.*', 'admin_username' => new Expression('COALESCE(u.username, oa.username)')])
+            ->leftJoin(
+                ['u' => self::ADMINS],
+                "u.id = a.initiated_by_id AND a.initiated_by_type = '" . $admin . "'",
+            )
+            ->leftJoin(
+                ['oa' => self::OPERATORS],
+                "oa.admin_id = a.initiated_by_id AND a.initiated_by_type IN ('"
+                    . $operation . "', '" . $agent . "')",
+            );
+    }
 
     public function openFor(int $storeSourceId, int $sourceOrderId, DateTimeImmutable $now): ?TestAttempt
     {
@@ -141,12 +183,7 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
             return [];
         }
 
-        $rows = (new Query($this->connection))
-            ->select(['a.*', 'admin_username' => 'u.username'])
-            ->from(['a' => self::TABLE])
-            // LEFT, so an attempt outlives the account that made it and still reports its own existence
-            // rather than disappearing from the page.
-            ->leftJoin(['u' => self::ADMINS], 'u.id = a.initiated_by_id')
+        $rows = $this->withActorName((new Query($this->connection))->from(['a' => self::TABLE]))
             ->where(['a.id' => $ids])
             ->all();
 
@@ -164,10 +201,7 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
 
     private function openQuery(int $storeSourceId, int $sourceOrderId, DateTimeImmutable $now): Query
     {
-        return (new Query($this->connection))
-            ->select(['a.*', 'admin_username' => 'u.username'])
-            ->from(['a' => self::TABLE])
-            ->leftJoin(['u' => self::ADMINS], 'u.id = a.initiated_by_id')
+        return $this->withActorName((new Query($this->connection))->from(['a' => self::TABLE]))
             ->where([
                 'and',
                 ['a.store_source_id' => $storeSourceId, 'a.source_order_id' => $sourceOrderId],

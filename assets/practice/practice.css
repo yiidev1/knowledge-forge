@@ -1,0 +1,368 @@
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * Topic Management and Practice Orders.
+ *
+ * Deliberately thin. Everything structural — the card, the table, the fields, the dialog shell, the
+ * chips, the pager — is already in the shared admin stylesheet, and these pages use it. What is here
+ * is only what those pages need and nothing else has: the topic table's own columns, the action
+ * cluster, and the two small pieces of the Practice Orders toolbar.
+ * ---------------------------------------------------------------------------------------------------
+ */
+
+/* ---- Topic Management ---------------------------------------------------------------------------- */
+
+.practice-topic__name {
+    font-weight: 600;
+}
+
+/*
+ * Both tables make the topic name a button, because clicking it opens the details dialog — but it is
+ * read as a name, so it is stripped back to one and marked clickable the way a link is. Defined once
+ * for both, rather than per table.
+ */
+.practice-topics .practice-topic__name,
+.practice-topic-cell .practice-topic__name {
+    display: inline-block;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: var(--primary);
+    text-align: left;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+.practice-topics .practice-topic__name:hover,
+.practice-topics .practice-topic__name:focus-visible,
+.practice-topic-cell .practice-topic__name:hover,
+.practice-topic-cell .practice-topic__name:focus-visible {
+    text-decoration-style: solid;
+}
+
+/* The topic table's own columns and its action cluster are defined once, further down. */
+
+.practice-dialog {
+    width: min(94vw, 34rem);
+}
+
+/* ---- Practice Orders: the assignment toolbar ------------------------------------------------------ */
+
+/*
+ * Appears only once something is selected. A toolbar that is always there but usually disabled teaches
+ * a reader to ignore it; one that arrives when it becomes usable does not.
+ */
+.practice-bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.9rem;
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--border, #2a2d34);
+    border-radius: 0.5rem;
+    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.practice-bulk[hidden] {
+    display: none;
+}
+
+.practice-bulk__count {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.practice-bulk__note {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: var(--text-muted, #8a8f98);
+}
+
+/* ---- Practice Orders: the two new columns -------------------------------------------------------- */
+
+/* The two columns this surface adds, sized once in the table's colgroup. */
+.practice-col-select {
+    width: 2.75rem;
+}
+
+.practice-col-topic {
+    width: 13rem;
+}
+
+.practice-select {
+    text-align: center;
+}
+
+.practice-topic-cell {
+    vertical-align: middle;
+}
+
+/*
+ * Every row's cell is the same stack: what the topic is, a badge if it is no longer offered, and the
+ * one button. A column, so the button lands in the same place on every row — inline beside the name on
+ * one row and wrapped beneath it on the next reads as a bug rather than as a difference. Items are
+ * start-aligned so the names, badges and buttons all share one left edge.
+ */
+.practice-topic-cell__stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+
+/* Sized to the cell rather than to the word, so Set Topic and Change occupy the same footprint. */
+.practice-topic-cell__stack .btn {
+    width: 100%;
+    justify-content: center;
+}
+
+.practice-unassigned {
+    color: var(--text-muted, #8a8f98);
+}
+
+/* The name can be longer than the column; it wraps rather than widening the table. */
+.practice-topic-cell .practice-topic__name {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* The cell's own hint — "No matching source order" — reads as a note, not as a second line of data. */
+.practice-topic-cell .field__hint {
+    margin: 0;
+}
+
+
+
+/* ---- The two button variants admin.css has no token for ------------------------------------------
+ *
+ * `btn--primary`, `btn--secondary`, `btn--danger` and `btn--ghost` are defined globally; activating and
+ * deactivating need a success and a warning, and an assigned row needs an outlined primary so Change
+ * reads as secondary to Set Topic without reading as disabled. Defined here, from the same tokens the
+ * global badges and alerts already use, rather than in admin.css — these are the only pages that use
+ * them, and a global addition would change buttons on pages nobody reviewed.
+ *
+ * ## Why the state tokens come in threes, and why all three are used
+ *
+ * `--success-text` is a DARK green in the light theme and a LIGHT mint in the dark one — it is a
+ * foreground colour, and painting it as a background with white text on top produced an Activate
+ * button whose label was invisible in dark mode. Each state therefore uses its whole trio, exactly as
+ * `.badge--success` and `.alert--success` already do: `-bg` behind, `-text` on top, `-border` around.
+ * That pairing is contrast-correct in both themes by construction, with no media query here to keep in
+ * step with the one in admin.css.
+ *
+ * The result is a tinted, bordered button rather than a solid block — the same shape `btn--secondary`
+ * already has next to it, so the three actions read as one set.
+ */
+
+.btn--success {
+    background: var(--success-bg);
+    border-color: var(--success-border);
+    color: var(--success-text);
+    font-weight: 600;
+}
+
+.btn--success:hover {
+    background: var(--success-border);
+    color: var(--success-text);
+}
+
+.btn--warning {
+    background: var(--warning-bg);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+    font-weight: 600;
+}
+
+.btn--warning:hover {
+    background: var(--warning-border);
+    color: var(--warning-text);
+}
+
+/*
+ * Delete, scoped to this row only.
+ *
+ * The global `.btn--danger` paints `--error-text` as a background with white on top, and has the same
+ * problem for the same reason — in dark mode that token is a pale red. It is used on pages outside this
+ * feature, so it is not changed here; this override puts the Delete button in the same readable,
+ * tinted form as the two beside it and leaves every other danger button exactly as it was.
+ */
+.practice-actions .btn--danger {
+    background: var(--error-bg);
+    border-color: var(--error-border);
+    color: var(--error-text);
+    font-weight: 600;
+}
+
+.practice-actions .btn--danger:hover {
+    background: var(--error-border);
+    color: var(--error-text);
+}
+
+.btn--outline-primary {
+    background: transparent;
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.btn--outline-primary:hover {
+    background: var(--primary);
+    color: var(--primary-contrast, #fff);
+}
+
+/* ---- Topic Management: the table ----------------------------------------------------------------
+ *
+ * Column widths live in a `<colgroup>`, the way the order tables in this application already do it:
+ * declared once, in one place, instead of being inferred from whatever the widest cell happens to hold
+ * this week. Four columns are sized to the longest thing they can contain — a status word, a count, a
+ * date, three buttons — and the name takes everything left over, because it is the one column whose
+ * content has no bound and the only one carrying a wrapped description beneath it.
+ *
+ * Giving the actions column a real width is what keeps its three buttons on one line: when it was
+ * sized to its content the cell was squeezed to nothing and the row wrapped into a stack.
+ *
+ * The desktop alignment is the one worth keeping, so a narrow viewport scrolls this table rather than
+ * breaking it.
+ */
+
+.practice-topics-scroll {
+    overflow-x: auto;
+}
+
+.practice-topics {
+    width: 100%;
+    /* Fixed, so the colgroup is obeyed rather than treated as a suggestion the content can outvote. */
+    table-layout: fixed;
+}
+
+.practice-col-name {
+    width: auto;
+}
+
+.practice-col-status {
+    width: 8rem;
+}
+
+.practice-col-count {
+    width: 9rem;
+}
+
+/* Wide enough for the full timestamp on one line; it is one value, not two. */
+.practice-col-created {
+    width: 12rem;
+}
+
+/* Three buttons and two gaps, with room for the longest labels: Edit, Deactivate, Delete. */
+.practice-col-actions {
+    width: 19rem;
+}
+
+.practice-topics td,
+.practice-topics th {
+    padding: 0.7rem 0.9rem;
+    vertical-align: middle;
+}
+
+/*
+ * Nothing wraps except the name. Headers, a status word, a count, a timestamp and a row of buttons are
+ * each one line by nature, and the colgroup above is what makes that possible without a scrollbar.
+ */
+.practice-topics th,
+.practice-topics td {
+    white-space: nowrap;
+}
+
+/* The one column with unbounded content: a name and the description beneath it both wrap. */
+.practice-topics td:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.practice-topics .field__hint {
+    margin-top: 0.15rem;
+    white-space: normal;
+}
+
+/* The count reads as a number — right-aligned, and its header with it, so the two line up. */
+.practice-topics .practice-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/*
+ * One line, always: `nowrap` rather than the default, because each button is its own form and a
+ * wrapping row turns three actions into a three-storey cell. Left-aligned, so they sit under the
+ * ACTIONS label rather than drifting to the far edge away from it.
+ */
+.practice-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.4rem;
+}
+
+/* Each action is its own form; they must not stretch the row or break the alignment. */
+.practice-actions form {
+    margin: 0;
+    flex: 0 0 auto;
+}
+
+.practice-actions .btn {
+    white-space: nowrap;
+}
+
+/* ---- The read-only topic details ----------------------------------------------------------------- */
+
+.practice-details {
+    display: grid;
+    grid-template-columns: minmax(7rem, max-content) 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0;
+}
+
+.practice-details dt {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted, #8a8f98);
+}
+
+.practice-details dd {
+    margin: 0;
+}
+
+/* A description is free text an operator typed, so it wraps and breaks rather than widening the modal. */
+.practice-details__description {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* ---- Practice Orders: the topic filter ----------------------------------------------------------- */
+
+/*
+ * A GET form, so it sits above the table rather than inside it and stays reachable when the filter has
+ * emptied the list. Laid out in a row that wraps, like the bulk toolbar above it.
+ */
+.practice-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0 0 0.9rem;
+}
+
+.practice-filter__label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted, #8a8f98);
+}
+
+.practice-filter .field__control {
+    width: auto;
+    min-width: 13rem;
+}

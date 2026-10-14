@@ -25,10 +25,12 @@ use App\Document\Web as Doc;
 use App\KnowledgeBase\Web as Kb;
 use App\Order58\Web\Agents as Order58Agents;
 use App\OrderTesting\Web as OrderTestingModule;
+use App\Practice\Web as Practice;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\CallHistory as Order58CallHistory;
 use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
+use App\AudioToText\Web\PracticeOrders as PracticeOrdersSurface;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\OrderItems as Order58OrderItems;
@@ -451,6 +453,31 @@ return [
                 ->action(AudioToText\Action::class)
                 ->name(AudioToTextRoute::PAGE),
 
+            // ---------------------------------------------------------------------------------------
+            // Topic Management: the training topics a practice order can be assigned to.
+            //
+            // Administrators only, and here is the whole of that rule — it is declared inside this
+            // group, exactly as the global transcription setting below is. Operation users run the
+            // Practice Orders workflow and assign topics; curating the list itself is not theirs,
+            // for the same reason the transcription default is not.
+            // ---------------------------------------------------------------------------------------
+            Route::get('/admin/topics')
+                ->action(Practice\Topics\Action::class)
+                ->name('practice.topics'),
+            Route::post('/admin/topics')
+                ->action(Practice\Topics\StoreAction::class)
+                ->name('practice.topics.store'),
+            Route::post('/admin/topics/{id:\d+}')
+                ->action(Practice\Topics\UpdateAction::class)
+                ->name('practice.topics.update'),
+            Route::post('/admin/topics/{id:\d+}/status')
+                ->action(Practice\Topics\StatusAction::class)
+                ->name('practice.topics.status'),
+            // Delete, which keeps the row and every assignment made under it. See TopicService::delete().
+            Route::post('/admin/topics/{id:\d+}/delete')
+                ->action(Practice\Topics\DeleteAction::class)
+                ->name('practice.topics.delete'),
+
             // The one global transcription setting, saved from this surface's own picker so that saving
             // returns the operator here. The setting itself is shared; only the redirect differs.
             Route::post('/order-testing/settings/default-provider')
@@ -639,6 +666,31 @@ return [
             // page already prints in plain sight — not local row ids. There is nothing to hide behind a
             // public id, and every lookup is bounded by all the ids in the path, so changing one
             // reaches another merchant's data no more than inventing one does.
+            // ---------------------------------------------------------------------------------------
+            // Practice Orders: the same source orders, recordings and demo results as Order Testing,
+            // with a training topic attached. Administrators and operation users both reach it, which
+            // is why it is in this group rather than the administrators' one.
+            //
+            // Its group- and job-scoped endpoints are deliberately absent: the page renders the Order
+            // Testing template, whose dialogs address those by the names already mounted above. Both
+            // realms that reach this page reach those too, so a second copy answering identically
+            // would be four more things to keep in step.
+            // ---------------------------------------------------------------------------------------
+            Route::get('/practice-orders')
+                ->action(Order58StoreAudio\PracticeOrdersAction::class)
+                ->name('practice-orders'),
+            Route::methods([Method::GET, Method::POST], '/practice-orders/store/{sourceId:\d+}')
+                ->action(PracticeOrdersSurface\StoreAction::class)
+                ->name('practice-orders.store'),
+
+            // Assigning a topic. The store id is in the path because that is the only place it may
+            // come from — a posted store id would let one store's page write onto another's orders.
+            Route::post('/practice-orders/store/{sourceId:\d+}/topic')
+                ->action(Practice\Assign\AssignAction::class)
+                ->name('practice-orders.topic.assign'),
+            Route::post('/practice-orders/store/{sourceId:\d+}/topic/bulk')
+                ->action(Practice\Assign\BulkAssignAction::class)
+                ->name('practice-orders.topic.bulk'),
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
                 ->action(OrderTestingModule\DemoOrders\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),

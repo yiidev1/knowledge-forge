@@ -158,8 +158,8 @@ final readonly class Action
      * somebody to a site that looks like this one. Route NAMES cannot express an off-site target at
      * all, so the worst a crafted value can do here is land on the picker.
      *
-     * The three pages are the three that carry the button. Each names only the arguments its own route
-     * actually takes, so a value for one page cannot be smuggled onto another.
+     * The pages that carry the button. Each names only the arguments its own route actually takes, so
+     * a value for one page cannot be smuggled onto another.
      *
      * The picker deliberately posts **no** `return` field: its button predates this, and the default
      * keeps its behaviour — and its test — exactly as it was.
@@ -179,6 +179,23 @@ final readonly class Action
             if ($sourceId !== null) {
                 return [OrderTestingReturn::STORE, ['sourceId' => $sourceId]];
             }
+        }
+
+        // The Practice Orders store page, which takes the same single argument as the Order Testing
+        // one. Kept as its own branch rather than folded in with STORE, so each name still declares
+        // the arguments its own route accepts.
+        if ($requested === OrderTestingReturn::PRACTICE_STORE) {
+            $sourceId = $this->positiveInt($form->string('sourceId'));
+
+            if ($sourceId !== null) {
+                return [OrderTestingReturn::PRACTICE_STORE, ['sourceId' => $sourceId]];
+            }
+
+            return [OrderTestingReturn::PRACTICE_PICKER, []];
+        }
+
+        if ($requested === OrderTestingReturn::PRACTICE_PICKER) {
+            return [OrderTestingReturn::PRACTICE_PICKER, []];
         }
 
         if ($requested === OrderTestingReturn::CALL_RECORDINGS) {
