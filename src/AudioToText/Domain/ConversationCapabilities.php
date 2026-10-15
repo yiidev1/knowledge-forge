@@ -48,12 +48,22 @@ final readonly class ConversationCapabilities
         public bool $canSyncDemoOrders,
         /** Put a practice topic on an order. */
         public bool $canAssignTopics,
+        /**
+         * Whether this reader may mark an order as checked over.
+         *
+         * True wherever a reader may change what the page says about an order, which is the same
+         * answer as assignment: Order Testing yes, the read-only practice surfaces no. The template
+         * also requires the surface to be a practice one, so the Audio-to-Text store page — which is
+         * about recordings rather than orders — never renders the column despite holding every other
+         * permission.
+         */
+        public bool $canVerifyOrders,
     ) {}
 
     /** Everything — what this page has always offered, and still offers unchanged. */
     public static function full(): self
     {
-        return new self(true, true, true, true, true, true, true, true);
+        return new self(true, true, true, true, true, true, true, true, true);
     }
 
     /**
@@ -65,6 +75,6 @@ final readonly class ConversationCapabilities
      */
     public static function readOnly(): self
     {
-        return new self(false, false, false, false, false, false, false, false);
+        return new self(false, false, false, false, false, false, false, false, false);
     }
 }

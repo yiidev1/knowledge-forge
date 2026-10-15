@@ -41,6 +41,13 @@ return [
     OriginalItemsReaderInterface::class => DbOriginalItemsReader::class,
     StoreReaderInterface::class => DbStoreReader::class,
 
+    // Whether a source order has been checked over, and the history of who changed that. Two tables,
+    // one repository, written in one transaction — see the migration for why the history is separate.
+    App\OrderTesting\Domain\OrderVerificationRepositoryInterface::class
+        => App\OrderTesting\Infrastructure\DbOrderVerificationRepository::class,
+    App\OrderTesting\Domain\SourceOrderExistenceInterface::class
+        => App\OrderTesting\Infrastructure\DbSourceOrderExistence::class,
+
     DemoOrderDirectory::class => [
         '__construct()' => [
             // `@runtime/...` is an alias and cannot be resolved until the container exists, so the

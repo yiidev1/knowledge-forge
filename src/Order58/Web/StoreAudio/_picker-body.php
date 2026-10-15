@@ -7,7 +7,6 @@ use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
 use App\Order58\Domain\StoreSourceStatusFilter;
-use App\Shared\Audio\RecordingTypeLabels;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -34,6 +33,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var array<int, int> $topicCounts how many of each store's orders carry a topic; absent means none
  * @var string $base the surface's own landing address, which the search form posts back to
  * @var callable(array): string $dirUrl builds a URL carrying the current filters
  * @var string $storeRoute route NAME a card links to; a name is not a namespace, so isolation holds
@@ -120,10 +120,6 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
             // Absent key and zero mean the same thing, which is why the reader omits empty stores.
             $breakdown = $audioCounts[$store->sourceId] ?? StoreAudioBreakdown::none();
             $conversions = $breakdown->total;
-            // CSS cannot match on a number's value, so the zero state is a class from here.
-            $audioValue = static fn(int $n): string => 'store-card__audio-value'
-                . ($n === 0 ? ' store-card__audio-value--zero' : '');
-
             // Knowledge is not a gate here — a store with no documents can still have a recording
             // transcribed — but source-active is: a store Order58 reports as inactive is not
             // somewhere new recordings should be sent. Disabled the same way Store chat disables an
@@ -142,11 +138,11 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                 <div class="store-card__body">
                     <div class="store-card__head">
                         <h2 class="store-card__name"><?= Html::encode($store->name) ?></h2>
-                        <?php // Conversions, not jobs: a separate Customer + Agent upload is one.?>
-                        <span
-                            class="store-card__kb-count<?= $conversions > 0 ? ' store-card__kb-count--ok' : '' ?>"
-                            title="<?= $conversions ?> conversion<?= $conversions === 1 ? '' : 's' ?> uploaded for this store"
-                        >🎙 <?= $conversions ?></span>
+                        <?php
+                        // The audio total used to be a badge here as well as a strip of four numbers
+                        // below. It is now one of the two metrics at the foot of the card and nowhere
+                        // else: the same number in two places is two places that can disagree.
+            ?>
                     </div>
                     <?php if ($store->company !== null): ?>
                         <div class="store-card__meta"><?= Html::encode($store->company) ?></div>
@@ -156,61 +152,37 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                     <?php endif; ?>
                     <div class="store-card__meta util-mono util-muted">Store #<?= $store->sourceId ?></div>
                     <?php
-                    // How the total above splits by recording type. Total is NOT repeated here — it is
-                    // the badge beside the name, and the same number in two places is two places that
-                    // can disagree.
+                    // Two numbers, because two are what this directory is actually asked for: how much
+                    // audio a store has, and how much of its training is covered.
                     //
-                    // Always rendered, zeros included, so every card is the same height and a page of
-                    // 36 does not jag as the counts change. The four cells share one width for the same
-                    // reason: the numbers line up down the grid and can be compared by eye.
-            ?>
-                    <?php
-                    // The same three names the Audio-to-Text pages use, read from the shared map rather
-                    // than typed out again here. This page may not name that module at all (see
-                    // RecordingTypeLabels), and three counts labelled one way on this card and another
-                    // on the page they link to is exactly the confusion the shared map prevents.
+                    // It used to show the audio total split four ways — Mix, Customer, Agent, Other.
+                    // That split made sense when a recording arrived one channel at a time and the
+                    // question was which channels were still missing. Synchronisation now brings a
+                    // call's channels together, so the split says the same thing on every card and the
+                    // card is the wrong place to ask it; the store page still breaks it down per order.
                     //
-                    // The SHORT form, because this strip gives each label a quarter of a card and the
-                    // labels are `white-space: nowrap`: "Mix / Common" was wider than its column and so
-                    // drew over "Customer" beside it rather than wrapping or clipping. Only that one
-                    // differs; the other two are the same single words either way.
-                    $typeLabel = static fn(string $stored): string
-                        => RecordingTypeLabels::shortForStorageValue($stored) ?? $stored;
-
-            // The full wording on hover, but only where shortening actually dropped something.
-            // A tooltip on "Customer" that reads "Customer" is noise; one on "Mix" that reads
-            // "Mix / Common" is the word this cell had to give up to fit, and it is the word
-            // that explains why uploads made before recording types existed are counted here.
-            $typeTitle = static function (string $stored): string {
-                $full = RecordingTypeLabels::forStorageValue($stored);
-
-                return $full === null || $full === RecordingTypeLabels::shortForStorageValue($stored)
-                    ? ''
-                    : ' title="' . Html::encode($full) . '"';
-            };
+                    // Both values are counted for the whole page before rendering, so a directory of
+                    // 200 stores is two queries rather than 400.
+                    $topics = $topicCounts[$store->sourceId] ?? 0;
             ?>
-                    <dl class="store-card__audio" aria-label="Recordings by type">
-                        <div class="store-card__audio-cell"<?= $typeTitle('MIXED') ?>>
-                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('MIXED')) ?></dt>
-                            <dd class="<?= $audioValue($breakdown->mixed) ?>"><?= $breakdown->mixed ?></dd>
+                    <dl class="store-card__metrics">
+                        <div class="store-card__metric">
+                            <dd class="store-card__metric-value<?= $conversions === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
+                                $conversions ?></dd>
+                            <dt class="store-card__metric-label">Audio Recordings</dt>
                         </div>
-                        <div class="store-card__audio-cell"<?= $typeTitle('CALLER') ?>>
-                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLER')) ?></dt>
-                            <dd class="<?= $audioValue($breakdown->caller) ?>"><?= $breakdown->caller ?></dd>
-                        </div>
-                        <div class="store-card__audio-cell"<?= $typeTitle('CALLEE') ?>>
-                            <dt class="store-card__audio-label"><?= Html::encode($typeLabel('CALLEE')) ?></dt>
-                            <dd class="<?= $audioValue($breakdown->callee) ?>"><?= $breakdown->callee ?></dd>
-                        </div>
-                        <?php
-                // `recording_type` is nullable, so these three do not add up to the total.
-                // What is left over is reported honestly rather than folded into Mixed, which
-                // would claim a channel the uploader never stated.
+                        <div class="store-card__metric">
+                            <dd class="store-card__metric-value<?= $topics === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
+                                $topics ?></dd>
+                            <?php
+                            // "Topics Assigned" over "Orders with topics": the label is what the number
+                            // is called, the line under it is what the number counts. Said here because
+                            // the two are easy to confuse — the first version of this counted distinct
+                            // topics and a store with three orders under one topic read as 1.
             ?>
-                        <div class="store-card__audio-cell"
-                             title="Other includes recordings that named no type at all, including older recordings and separate uploads. The stored types are MIXED, CALLER and CALLEE.">
-                            <dt class="store-card__audio-label">Other</dt>
-                            <dd class="<?= $audioValue($breakdown->other()) ?>"><?= $breakdown->other() ?></dd>
+                            <dt class="store-card__metric-label">Topics Assigned
+                                <span class="store-card__metric-note">Orders with topics</span>
+                            </dt>
                         </div>
                     </dl>
                     <div class="store-card__badges">

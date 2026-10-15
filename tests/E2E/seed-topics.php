@@ -229,6 +229,7 @@ echo json_encode([
     'admin' => ADMIN,
     'password' => PASSWORD,
     'store' => STORE,
+    'storeName' => 'KF E2E Topics Store',
     'assignedOrder' => ASSIGNED_ORDER,
     'freeOrder' => FREE_ORDER,
     'orphanOrder' => ORPHAN_ORDER,

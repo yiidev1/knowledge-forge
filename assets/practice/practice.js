@@ -435,6 +435,70 @@
 
     document.addEventListener('DOMContentLoaded', refreshFilterSummary);
 
+    /**
+     * Closing the picker, which the browser will not do on its own.
+     *
+     * A `<details>` is a disclosure in a document: it stays open until its own summary is pressed
+     * again, and "outside" means nothing to it. That is right for a paragraph of detail and wrong for
+     * a panel floating over a table — every other menu on this page closes when the reader moves on,
+     * and this one sat there until it was clicked a second time.
+     *
+     * So the close is added here and nowhere else. The open, the toggle and the keyboard behaviour of
+     * the summary stay the browser's, which is the reason the control is a `<details>` at all.
+     *
+     * **Clicks inside it must not close it.** Ticking three topics is the ordinary use of a
+     * multi-select, and a panel that shut on the first tick could not be used for what it is for. One
+     * `contains()` check is the whole rule: the summary, the checkboxes, their labels and the search
+     * box are all inside, and everything else is out.
+     */
+    function openFilterPicker() {
+        return document.querySelector('[data-practice-filter-picker][open]');
+    }
+
+    document.addEventListener('click', function (event) {
+        var picker = openFilterPicker();
+
+        if (picker === null || picker.contains(event.target)) {
+            return;
+        }
+
+        picker.removeAttribute('open');
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape' && event.key !== 'Esc') {
+            return;
+        }
+
+        var picker = openFilterPicker();
+
+        if (picker === null) {
+            return;
+        }
+
+        picker.removeAttribute('open');
+
+        // Focus goes back to what opened it, or it would be left on an element that is now hidden and
+        // the next Tab would start from the top of the document.
+        var summary = picker.querySelector('summary');
+
+        if (summary !== null) {
+            summary.focus();
+        }
+    });
+
+    // Tabbing out of it is leaving it too. `focusin` rather than `blur`, because focus moving between
+    // two checkboxes inside the panel must not count as leaving.
+    document.addEventListener('focusin', function (event) {
+        var picker = openFilterPicker();
+
+        if (picker === null || picker.contains(event.target)) {
+            return;
+        }
+
+        picker.removeAttribute('open');
+    });
+
     // ---- Practice Orders: the read-only topic details ---------------------------------------------
     //
     // Everything shown here is already on the row that was clicked — the server put it in the trigger's
@@ -517,4 +581,263 @@
     });
 
     document.addEventListener('DOMContentLoaded', refreshSelection);
+
+    // ---- Order Testing: verifying an order --------------------------------------------------------
+    //
+    // The control in the table is an ordinary form that posts to an ordinary endpoint, so a browser
+    // with no script verifies an order by pressing it. What this adds is the confirmation in between,
+    // and the ability to answer without reloading the page — which is also what lets the conversation
+    // dialog carry the same control without owning a second copy of the state.
+    //
+    // There is exactly one piece of state per order on this page: the row's form. The dialog's button
+    // reads it and writes through it, so the two cannot disagree and nothing has to be kept in step.
+
+    var verifyRow = null;      // the row form the open conversation dialog is about, or null
+    var verifyPending = null;  // the row form waiting on a confirmation, or null
+
+    /** The page's own notice line, which is where an action that did not reload says what happened. */
+    function verifyAnnounce(message, kind) {
+        var notice = document.querySelector('[data-a2t-notice]');
+
+        if (notice === null) {
+            return;
+        }
+
+        notice.className = 'a2t-notice alert alert--' + kind;
+        notice.textContent = message;
+        notice.hidden = false;
+    }
+
+    function verifyIsOn(form) {
+        return form.getAttribute('data-ot-verified') === '1';
+    }
+
+    /**
+     * Put one row's control into the state the server just reported.
+     *
+     * The whole cell is rewritten rather than toggling a class: the two states are different elements —
+     * a button and a badge — because they mean different things to a screen reader as well as to an
+     * eye, and a badge pretending to be a button was the alternative.
+     */
+    function verifyPaintRow(form, state) {
+        var button = form.querySelector('[data-ot-verify-button]');
+        var version = form.querySelector('[data-ot-version]');
+        var decision = form.querySelector('[data-ot-decision]');
+
+        form.setAttribute('data-ot-verified', state.verified ? '1' : '0');
+
+        if (version !== null) {
+            version.value = String(state.version);
+        }
+
+        if (decision !== null) {
+            decision.value = state.verified ? 'unverified' : 'verified';
+        }
+
+        if (button !== null) {
+            if (state.verified) {
+                button.className = 'badge badge--success ot-verify__badge';
+                button.innerHTML = '<span aria-hidden="true">&check;</span> Verified';
+            } else {
+                button.className = 'btn btn--sm ot-verify__button';
+                button.textContent = 'Verify';
+            }
+        }
+
+        verifyPaintDialogButton();
+    }
+
+    /** The dialog's copy of the control, which exists only while a dialog is open on an order. */
+    function verifyPaintDialogButton() {
+        var button = document.querySelector('[data-ot-verify-dialog]');
+
+        if (button === null) {
+            return;
+        }
+
+        if (verifyRow === null) {
+            button.hidden = true;
+            button.textContent = '';
+
+            return;
+        }
+
+        var verified = verifyIsOn(verifyRow);
+
+        button.hidden = false;
+        // The same two classes the table's control carries, so the dialog's copy is the same control
+        // rather than one that merely does the same thing. It was a plain `btn btn--sm`, which is the
+        // neutral button — the one an action must not look like.
+        button.className = verified
+            ? 'badge badge--success ot-verify__badge'
+            : 'btn btn--sm ot-verify__button';
+        button.innerHTML = verified ? '<span aria-hidden="true">&check;</span> Verified' : 'Verify';
+    }
+
+    function verifyOpenConfirm(form) {
+        var dialog = dialogById('ot-verify-dialog');
+
+        if (dialog === null) {
+            // No dialog to confirm in: let the form post the ordinary way rather than losing the click.
+            form.submit();
+
+            return;
+        }
+
+        var verified = verifyIsOn(form);
+        var title = dialog.querySelector('[data-ot-verify-title]');
+        var order = dialog.querySelector('[data-ot-verify-order]');
+        var message = dialog.querySelector('[data-ot-verify-message]');
+        var confirm = dialog.querySelector('[data-ot-verify-confirm]');
+
+        if (title !== null) {
+            title.textContent = verified ? 'Unverify Order' : 'Verify Order';
+        }
+
+        if (order !== null) {
+            order.textContent = '#' + (form.getAttribute('data-ot-order') || '');
+        }
+
+        if (message !== null) {
+            message.textContent = verified
+                ? 'This order is currently verified. Are you sure you want to remove its verification '
+                    + 'status?'
+                : 'Have you fully reviewed and checked this order? Confirming will mark this order as '
+                    + 'verified.';
+        }
+
+        if (confirm !== null) {
+            confirm.textContent = verified ? 'Confirm Unverify' : 'Confirm Verification';
+            confirm.className = verified ? 'btn btn--danger btn--sm' : 'btn btn--primary btn--sm';
+        }
+
+        verifyPending = form;
+
+        if (!open(dialog)) {
+            // No <dialog> support: the confirmation cannot be shown, so the ordinary form post is
+            // the honest fallback rather than a click that silently does nothing.
+            verifyPending = null;
+            form.submit();
+        }
+    }
+
+    /**
+     * Send the decision, and let the server say what the state now is.
+     *
+     * The body is the form's own fields — including its CSRF token, so this post is protected by the
+     * same middleware the no-script one is. `X-Requested-With` is what asks for JSON; the endpoint
+     * decides the shape of its answer from headers alone and reads nothing about it from the body.
+     */
+    function verifySend(form) {
+        var button = form.querySelector('[data-ot-verify-button]');
+
+        if (button !== null) {
+            button.disabled = true;
+        }
+
+        // The attribute, not the property: a form's named controls shadow its own properties, and
+        // this form carries several. The attribute is always the URL that was rendered.
+        fetch(form.getAttribute('action'), {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+            body: new FormData(form),
+            credentials: 'same-origin',
+            cache: 'no-store'
+        }).then(function (response) {
+            return response.json().then(function (data) {
+                return { ok: response.ok, status: response.status, data: data };
+            });
+        }).then(function (result) {
+            // A conflict still carries the current state: somebody else moved this order on, and the
+            // useful answer is what it says now rather than a refusal on its own.
+            if (typeof result.data.verified === 'boolean') {
+                verifyPaintRow(form, result.data);
+            }
+
+            if (result.ok) {
+                verifyAnnounce(result.data.message || 'Saved.', 'success');
+            } else {
+                verifyAnnounce(result.data.error || 'That could not be saved.', 'error');
+            }
+        }).catch(function () {
+            verifyAnnounce('That could not be saved. Check your connection and try again.', 'error');
+        }).then(function () {
+            if (button !== null) {
+                button.disabled = false;
+            }
+        });
+    }
+
+    // The row control, and the dialog's copy of it. Both end in the same confirmation.
+    document.addEventListener('submit', function (event) {
+        var form = event.target.closest('[data-ot-verify]');
+
+        if (form === null) {
+            return;
+        }
+
+        event.preventDefault();
+        verifyOpenConfirm(form);
+    });
+
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('[data-ot-verify-dialog]') !== null && verifyRow !== null) {
+            verifyOpenConfirm(verifyRow);
+
+            return;
+        }
+
+        if (event.target.closest('[data-ot-verify-confirm]') !== null) {
+            var form = verifyPending;
+
+            // Cleared first, so a second click finds nothing pending and cannot send twice.
+            verifyPending = null;
+
+            var dialog = dialogById('ot-verify-dialog');
+
+            if (dialog !== null && dialog.open) {
+                dialog.close();
+            }
+
+            if (form !== null) {
+                verifySend(form);
+            }
+
+            return;
+        }
+
+        // Which order the conversation dialog is about. Only the whole-call opener carries one: a
+        // single channel's Details dialog is about a recording, and an order-level decision does not
+        // belong on it.
+        var opener = event.target.closest('[data-a2t-order-open]');
+
+        if (opener !== null) {
+            var row = opener.closest('tr');
+
+            verifyRow = row === null ? null : row.querySelector('[data-ot-verify]');
+            verifyPaintDialogButton();
+
+            return;
+        }
+
+        if (event.target.closest('[data-a2t-details]') !== null) {
+            verifyRow = null;
+            verifyPaintDialogButton();
+        }
+    });
+
+    // The dialog closing ends the order it was about, whichever way it was closed.
+    document.addEventListener('DOMContentLoaded', function () {
+        var review = document.getElementById('a2t-review-dialog');
+
+        if (review === null) {
+            return;
+        }
+
+        review.addEventListener('close', function () {
+            verifyRow = null;
+            verifyPaintDialogButton();
+        });
+    });
 })();
+

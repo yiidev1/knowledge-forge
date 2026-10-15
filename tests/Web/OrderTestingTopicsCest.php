@@ -133,6 +133,49 @@ final class OrderTestingTopicsCest
         );
     }
 
+    /**
+     * The control shows what is STORED, so a column of them can be read at a glance.
+     *
+     * Rendered by the server from the saved assignment rather than driven by the selected option, so
+     * choosing a different topic cannot make a row look saved before it is. Cancel therefore has
+     * nothing to restore, and a refused save leaves the row describing itself correctly.
+     */
+    public function anAssignedDropdownIsMarkedApartFromAnEmptyOne(WebTester $I): void
+    {
+        $topicId = $this->seedTopic();
+        $this->assignDirectly($topicId, self::ORDER);
+
+        $I->amOnPage(self::STORE_URL);
+
+        $I->seeElement(
+            '#practice-topic-' . self::ORDER . '.practice-assign__select--assigned',
+        );
+        // The order with nothing on it keeps the neutral control.
+        $I->dontSeeElement(
+            '#practice-topic-' . self::ORDER_B . '.practice-assign__select--assigned',
+        );
+        $I->dontSeeElement(
+            '#practice-topic-' . self::ORDER_B . '.practice-assign__select--historical',
+        );
+    }
+
+    /** A topic that is no longer offered is marked apart from a live one, and stays on its order. */
+    public function aHistoricalAssignmentIsMarkedApartFromALiveOne(WebTester $I): void
+    {
+        $topicId = $this->seedTopic();
+        $this->assignDirectly($topicId, self::ORDER);
+        $this->archiveTopic($topicId);
+
+        $I->amOnPage(self::STORE_URL);
+
+        $I->seeElement(
+            '#practice-topic-' . self::ORDER . '.practice-assign__select--historical',
+        );
+        $I->dontSeeElement(
+            '#practice-topic-' . self::ORDER . '.practice-assign__select--assigned',
+        );
+    }
+
     public function theDropdownOpensOnTheAssignedTopic(WebTester $I): void
     {
         $topicId = $this->seedTopic();
@@ -408,6 +451,14 @@ final class OrderTestingTopicsCest
         ])->execute();
 
         return (int) $this->connection->getLastInsertID();
+    }
+
+    /** Soft-deletes a topic the way Topic Management does, leaving its assignments alone. */
+    private function archiveTopic(int $topicId): void
+    {
+        $this->connection->createCommand()
+            ->update('{{%practice_topics}}', ['status' => 'ARCHIVED'], ['id' => $topicId])
+            ->execute();
     }
 
     private function assignDirectly(int $topicId, int $orderId = self::ORDER): void

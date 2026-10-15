@@ -18,6 +18,7 @@ use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\DemoOrderCountReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\OrderVerificationReaderInterface;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TopicAssignmentReaderInterface;
 use App\AudioToText\Web\AudioToTextRoute;
@@ -96,6 +97,14 @@ readonly class StoreAction extends AudioStoreAction
          * page and nowhere else.
          */
         private TopicAssignmentReaderInterface $topics,
+        /**
+         * Which orders on this page have been checked over.
+         *
+         * Asked only where the column is actually rendered — see {@see extraTemplateData()}. The
+         * practice surfaces inherit this constructor and do not show verification, so they must not
+         * pay a query for it.
+         */
+        private OrderVerificationReaderInterface $verifications,
     ) {
         parent::__construct(
             $viewRenderer,
@@ -137,6 +146,11 @@ readonly class StoreAction extends AudioStoreAction
             // shown, and the assignable topics once.
             'topicAssignments' => $this->topics->forOrders($sourceId, $orderIds),
             'assignableTopics' => $this->topics->assignableTopics(),
+            // One query for the whole page, and only on the surface that renders the column: an order
+            // with no row is unverified, which the template already knows how to say.
+            'orderVerifications' => $this->capabilities()->canVerifyOrders
+                ? $this->verifications->forOrders($sourceId, $orderIds)
+                : [],
             // The template renders the topic column when this is true; whether that column can be
             // *used* is a separate question, answered by the capabilities.
             'practiceMode' => true,
@@ -172,7 +186,7 @@ readonly class StoreAction extends AudioStoreAction
     {
         return [
             'page' => OrderTestingRoute::PAGE,
-            'pageLabel' => 'Order Testing',
+            'pageLabel' => 'Manage Orders',
             'store' => OrderTestingRoute::STORE,
             'arriving' => OrderTestingRoute::STORE_ARRIVING,
             'demoUrl' => OrderTestingRoute::DEMO_URL,
@@ -185,6 +199,10 @@ readonly class StoreAction extends AudioStoreAction
             // them, and their own route groups do not mount them.
             'topicAssign' => OrderTestingRoute::TOPIC_ASSIGN,
             'topicBulk' => OrderTestingRoute::TOPIC_BULK,
+            // Where an order is marked as checked over. Named here like the two above, and mounted in
+            // only this surface's route group, so a practice page that somehow rendered the control
+            // would still have nothing to post to.
+            'verification' => OrderTestingRoute::VERIFICATION,
 
             // The job-scoped addresses the row controls and the conversation dialog fetch. Here rather
             // than printed from the audio module's constants, because each surface mounts them at its

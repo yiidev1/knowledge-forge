@@ -6,6 +6,7 @@ namespace App\Order58\Web\StoreAudio;
 
 use App\Order58\Domain\AudioProviderDefaultInterface;
 use App\Order58\Domain\StoreAudioCountsInterface;
+use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
 use App\Order58\Domain\StoreDirectoryItem;
@@ -57,6 +58,12 @@ readonly class Action
         private WebViewRenderer $viewRenderer,
         private StoreDirectoryReaderInterface $reader,
         private StoreAudioCountsInterface $audioCounts,
+        /**
+         * The store cards' second number: how many of this store's orders carry a topic.
+         *
+         * Batched like the audio counts beside it: one query for the page, never one per card.
+         */
+        private StoreTopicAssignmentCountsInterface $topicCounts,
         private AudioProviderDefaultInterface $providerDefault,
     ) {}
 
@@ -119,10 +126,9 @@ readonly class Action
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
                 // One query for the whole page, not one per card.
-                'audioCounts' => $this->audioCounts->countsFor(array_map(
-                    static fn(StoreDirectoryItem $item): int => $item->sourceId,
-                    $result->items,
-                )),
+                'audioCounts' => $this->audioCounts->countsFor($this->shownIds($result->items)),
+                // The second card metric, asked the same way and for the same reason.
+                'topicCounts' => $this->topicCounts->assignedOrdersFor($this->shownIds($result->items)),
                 // The transcription default, shown here because this is where an administrator already
                 // is when they think about store audio. Read through this module's own port and posted
                 // to the owning module by route name — see AudioProviderDefaultInterface.
@@ -134,6 +140,18 @@ readonly class Action
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
             ]);
+    }
+
+    /**
+     * The store ids on this page, which is what both count readers are asked about.
+     *
+     * @param list<StoreDirectoryItem> $items
+     *
+     * @return list<int>
+     */
+    private function shownIds(array $items): array
+    {
+        return array_map(static fn(StoreDirectoryItem $item): int => $item->sourceId, $items);
     }
 
     /** The template this surface renders. Everything above it is the same question on both. */

@@ -146,6 +146,13 @@ final class PracticeOrdersCest
         $I->dontSeeElement('#practice-bulk-form');
         $I->dontSeeElement('#practice-confirm-dialog');
 
+        // Verification. An order is signed off where it is managed, which is Order Testing; a training
+        // surface shows what a call was about and says nothing about whether somebody has checked it.
+        $I->dontSeeElement('[data-ot-verify]');
+        $I->dontSeeElement('[data-ot-verify-dialog]');
+        $I->dontSeeElement('#ot-verify-dialog');
+        $I->dontSee('Verification', 'thead');
+
         // Audio and transcript management.
         $I->dontSeeElement('[data-a2t-open="a2t-upload-dialog"]');
         $I->dontSeeElement('#a2t-upload-dialog');
@@ -174,7 +181,7 @@ final class PracticeOrdersCest
         $I->see('Demo Orders', 'thead');
         $I->seeElement('[data-a2t-play]');
         $I->seeElement('[data-a2t-details]');
-        $I->seeElement('.practice-topic-cell [data-practice-topic-details]');
+        $I->seeElement('.practice-topic-cell .practice-topic__value');
         $I->seeElement('.practice-filter');
     }
 
@@ -190,7 +197,10 @@ final class PracticeOrdersCest
         $I->seeElement('[data-practice-select-all]');
         $I->seeElement('#practice-bulk-form');
         $I->seeElement('#practice-confirm-dialog');
+        $I->seeElement('[data-ot-verify]');
+        $I->seeElement('#ot-verify-dialog');
         $I->see('Set Topic', 'thead');
+        $I->see('Verification', 'thead');
         $I->see('Sync demo orders');
         $I->see('Add Audio');
     }
@@ -334,7 +344,15 @@ final class PracticeOrdersCest
         $I->see('No matching source order', '.practice-topic-cell');
     }
 
-    public function theAssignedTopicNameOpensItsDetails(WebTester $I): void
+    /**
+     * The topic is a value in a column of orders, and nothing more.
+     *
+     * It used to be a button that opened the topic's own details. The details are about the topic, not
+     * about the order the reader is looking at, and a name that looks like a link in a table of orders
+     * promises something about the order. Topic Management still has the dialog, where a topic is the
+     * subject of the page; here the name is set like every other identifying value in the row.
+     */
+    public function theAssignedTopicNameIsPlainText(WebTester $I): void
     {
         $topicId = $this->seedTopic();
         $this->describeTopic($topicId, 'What this topic is for.');
@@ -342,28 +360,27 @@ final class PracticeOrdersCest
 
         $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
-        // The name is its own control, carrying everything the dialog shows — so opening it needs no
-        // request, and there is no endpoint to authorise separately.
-        $I->seeElement('.practice-topic-cell [data-practice-topic-details]');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-name="' . self::TOPIC . '"]');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-description="What this topic is for."]');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-status="Active"]');
+        $I->see(self::TOPIC, '.practice-topic-cell .practice-topic__value');
 
-        // And the dialog it fills is present, read-only, with no form in it.
-        $I->seeElement('#practice-topic-details-dialog');
-        $I->dontSeeElement('#practice-topic-details-dialog form');
-        $I->see('Topic Details', '#practice-topic-details-dialog .source-modal__title');
+        // Not a control, and not carrying the dialog's payload in its attributes either.
+        $I->dontSeeElement('.practice-topic-cell [data-practice-topic-details]');
+        $I->dontSeeElement('.practice-topic-cell button');
+        $I->dontSeeElement('.practice-topic-cell a');
+
+        // The dialog itself is no longer rendered on this page: nothing here opens it.
+        $I->dontSeeElement('#practice-topic-details-dialog');
     }
 
-    /** An empty description is carried as empty; the dialog is what says "none provided". */
-    public function aTopicWithNoDescriptionCarriesAnEmptyOne(WebTester $I): void
+    /** A topic's description belongs to the topic, and is not published into a table of orders. */
+    public function theTopicDescriptionIsNotCarriedIntoTheRow(WebTester $I): void
     {
         $topicId = $this->seedTopic();
+        $this->describeTopic($topicId, 'What this topic is for.');
         $this->assignDirectly($topicId);
 
         $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-description=""]');
+        $I->dontSee('What this topic is for.');
     }
 
     /** An active topic must never be labelled as no longer offered. */
@@ -375,7 +392,7 @@ final class PracticeOrdersCest
         $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
         $I->dontSeeElement('.practice-topic-cell .badge--muted');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-note=""]');
+        $I->see(self::TOPIC, '.practice-topic-cell .practice-topic__value');
     }
 
     /** A deleted topic stays on the order that carries it, and says which of the two it is. */
@@ -390,7 +407,7 @@ final class PracticeOrdersCest
         $I->see(self::TOPIC, '.practice-topic-cell');
         // A badge in the column; the sentence that explains it lives in the details dialog.
         $I->see('Deleted', '.practice-topic-cell .badge--muted');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-status="Deleted"]');
+        $I->see(self::TOPIC, '.practice-topic-cell .practice-topic__value');
         // And it is no longer a choice anywhere.
         $I->dontSeeElement('#practice-bulk-topic option[value="' . $topicId . '"]');
     }
@@ -403,7 +420,7 @@ final class PracticeOrdersCest
         $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
 
         $I->see('Inactive', '.practice-topic-cell .badge--muted');
-        $I->seeElement('[data-practice-topic-details][data-practice-topic-status="Inactive"]');
+        $I->see(self::TOPIC, '.practice-topic-cell .practice-topic__value');
     }
 
 

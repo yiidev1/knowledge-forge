@@ -75,6 +75,10 @@ return [
     // the same arrangement as the demo-order readers above, and for the same reason.
     App\AudioToText\Domain\TopicAssignmentReaderInterface::class => App\AudioToText\Infrastructure\DbTopicAssignmentReader::class,
 
+    // Verification state for the orders on a page. Read by name from the table the Order Testing
+    // module owns, like the topic and demo-order readers beside it.
+    App\AudioToText\Domain\OrderVerificationReaderInterface::class => App\AudioToText\Infrastructure\DbOrderVerificationReader::class,
+
     // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
     // still on their way in, and the module that imports them answers. Bound here beside its counterpart
     // so both halves of the contract are visible in one place.

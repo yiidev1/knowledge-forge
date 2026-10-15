@@ -704,6 +704,12 @@ return [
             Route::post('/order-testing/store/{sourceId:\d+}/topic/bulk')
                 ->action(Practice\Assign\BulkAssignAction::class)
                 ->name(OrderTestingRoute::TOPIC_BULK),
+            // Marking one source order as checked over, and taking that back. In this group, so the
+            // same gate that decides who may see an order decides who may verify one; the action then
+            // checks the order really belongs to the store in the path before writing anything.
+            Route::post('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/verification')
+                ->action(OrderTestingModule\Verification\Action::class)
+                ->name(OrderTestingRoute::VERIFICATION),
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
                 ->action(OrderTestingModule\DemoOrders\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),

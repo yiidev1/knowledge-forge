@@ -53,6 +53,11 @@ final class AgentPracticeRouteTableTest extends TestCase
      */
     private const FORBIDDEN = [
         'agent.practice-orders.topic.assign',
+        // Verification is a judgement an administrator or an operation user makes about an order. An
+        // agent practises against the order; they do not sign it off, and the route exists only in
+        // the Order Testing group.
+        'agent.practice-orders.order.verification',
+        'agent.practice-orders.verification',
         'agent.practice-orders.topic.bulk',
         'agent.practice-orders.store.group.replace',
         'agent.practice-orders.store.group.tts-options',

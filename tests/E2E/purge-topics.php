@@ -35,6 +35,10 @@ $c->createCommand()->delete('{{%audio_conversations}}', ['store_source_id' => ST
 $c->createCommand()->delete('{{%practice_order_topics}}', ['store_source_id' => STORE])->execute();
 $c->createCommand()->delete('{{%practice_topics}}', ['name' => [TOPIC_A, TOPIC_B]])->execute();
 
+// Verification state and its history, before the orders they are about.
+$c->createCommand()->delete('{{%order_testing_verification_events}}', ['store_source_id' => STORE])->execute();
+$c->createCommand()->delete('{{%order_testing_order_verifications}}', ['store_source_id' => STORE])->execute();
+
 $c->createCommand()->delete('{{%order58_orders}}', ['account_id' => STORE])->execute();
 $c->createCommand()->delete('{{%order58_stores}}', ['source_id' => STORE])->execute();
 $c->createCommand()->delete('{{%knowledge_bases}}', ['slug' => SLUG])->execute();

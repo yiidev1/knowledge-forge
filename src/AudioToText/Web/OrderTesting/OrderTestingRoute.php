@@ -96,4 +96,12 @@ final class OrderTestingRoute
     public const TOPIC_ASSIGN = 'order-testing.topic.assign';
 
     public const TOPIC_BULK = 'order-testing.topic.bulk';
+
+    /**
+     * Where an order is marked as checked over, or that is taken back.
+     *
+     * Order-scoped rather than store-scoped: the thing being verified is one source order, and the
+     * pair in the path is the identity the whole application uses for one.
+     */
+    public const VERIFICATION = 'order-testing.order.verification';
 }

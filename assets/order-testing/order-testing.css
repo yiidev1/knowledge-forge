@@ -193,3 +193,199 @@
 .ot-pip audio {
     display: none;
 }
+
+/* ---- Verification --------------------------------------------------------------------------------
+ *
+ * One column, two states. The width is set here so the heading and the longer of the two controls
+ * ("✓ Verified") sit on one line without the column stretching when a row is verified — a table whose
+ * columns move as rows change state is a table that is hard to read down.
+ */
+
+.ot-col-verification {
+    width: 9.5rem;
+}
+
+.ot-verify {
+    display: flex;
+    align-items: center;
+    margin: 0;
+}
+
+/* The verified state is a badge, and a badge is not a button — but this one is pressable, because
+ * pressing it is how verification is taken back. The pointer and the focus ring say so; the colours
+ * are the design system's own success trio, so it reads as the same thing the badges elsewhere are. */
+.ot-verify__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.28rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--success-border);
+    background: var(--success-bg);
+    color: var(--success-text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+.ot-verify__badge:hover {
+    filter: brightness(1.08);
+}
+
+/*
+ * The unverified state is an invitation, so it is drawn as one — in both themes.
+ *
+ * It was the neutral button, which is the same grey as a disabled control: the one thing an action
+ * must never look like. The tinted outline that replaced it was written against the dark theme and
+ * took its text colour from `--primary-strong`, a token this application has never defined — so every
+ * reader got the hard-coded fallback, a pale lavender meant for a dark surface. On the light theme
+ * that pale text sat on a 12%-indigo-over-white chip and washed out into exactly the disabled look
+ * the change existed to remove.
+ *
+ * So the three colours are tokens of this rule's own, and the dark theme restates them. A filled
+ * control on the light theme, where a tint over white has nowhere to go; a tint on the dark theme,
+ * where a filled indigo would shout louder than the page's primary actions. The values flip with
+ * `prefers-color-scheme`, which is the only theme mechanism this application has.
+ */
+.ot-verify__button {
+    --ot-verify-bg: var(--primary);
+    --ot-verify-bg-hover: color-mix(in srgb, var(--primary) 82%, #000);
+    --ot-verify-fg: #fff;
+    --ot-verify-border: var(--primary);
+
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.28rem 0.7rem;
+    border: 1px solid var(--ot-verify-border);
+    border-radius: 999px;
+    background: var(--ot-verify-bg);
+    color: var(--ot-verify-fg);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+    .ot-verify__button {
+        --ot-verify-bg: color-mix(in srgb, var(--primary) 16%, transparent);
+        --ot-verify-bg-hover: color-mix(in srgb, var(--primary) 28%, transparent);
+        /* Mixed toward the page's own foreground rather than a fixed light value, so it stays legible
+           if the dark surface is ever retuned. */
+        --ot-verify-fg: color-mix(in srgb, var(--primary) 25%, var(--text));
+        /* The accent itself, not a wash of it: at 65% over this surface the edge measured 2.36:1
+           against what it sits on, under the 3:1 a control's boundary needs to be seen. */
+        --ot-verify-border: var(--primary);
+    }
+}
+
+.ot-verify__button:hover {
+    border-color: var(--primary);
+    background: var(--ot-verify-bg-hover);
+}
+
+.ot-verify__badge:focus-visible,
+.ot-verify__button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.ot-verify__badge[disabled],
+.ot-verify__button[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+/* In the conversation dialog's header the same badge sits among buttons, so it carries their height
+ * rather than the table's. */
+.a2t-dialog__actions .ot-verify__badge {
+    padding: 0.35rem 0.7rem;
+}
+
+/* ---- Links that are links, and the two cells that hold them ---------------------------------------
+ *
+ * Demo URL is a <button> wearing a link's clothes (see the note at the top of this file). It was
+ * taking its colour from `--link`, which on this dark theme is close enough to the muted text beside
+ * it that an operator could not tell the live control from the "Order not found" sentence in the same
+ * column. The accent is the one the rest of the application uses for a thing you can press.
+ */
+
+.ot-linkbutton {
+    color: var(--primary, #6b7cff);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary, #6b7cff) 45%, transparent);
+    text-underline-offset: 3px;
+}
+
+/*
+ * Mixed toward the page's own foreground rather than naming a "strong primary" token, which this
+ * application does not have: in the light theme that darkens the accent against white, in the dark one
+ * it lightens it, and neither needs a second rule.
+ */
+.ot-linkbutton:hover {
+    color: color-mix(in srgb, var(--primary) 80%, var(--text));
+    text-decoration-color: currentColor;
+}
+
+.ot-linkbutton:focus-visible {
+    outline: 2px solid var(--primary, #6b7cff);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* ---- Demo Orders: one link, with its count inside it ----------------------------------------------
+ *
+ * "View (4)" put the number in the middle of the link text, where it read as part of a sentence. The
+ * count is a quantity, so it is set as one — a small pill at the end of the same anchor. Inside the
+ * anchor, not beside it: two targets to the same page is one target too many, and a badge that is its
+ * own button is a second thing to tab to for no gain.
+ */
+
+.ot-demo-orders {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--primary, #6b7cff);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.ot-demo-orders__label {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary, #6b7cff) 45%, transparent);
+    text-underline-offset: 3px;
+}
+
+.ot-demo-orders:hover .ot-demo-orders__label {
+    text-decoration-color: currentColor;
+}
+
+.ot-demo-orders__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.35rem;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--border-strong, #2a2d34);
+    border-radius: 999px;
+    background: var(--surface-2, rgba(255, 255, 255, 0.06));
+    color: var(--text, #e6e8ee);
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.4;
+    /* Tabular figures, so 1 and 4 occupy the same width and a column of them does not jitter. */
+    font-variant-numeric: tabular-nums;
+}
+
+.ot-demo-orders:hover .ot-demo-orders__count {
+    border-color: var(--primary, #6b7cff);
+}
+
+.ot-demo-orders:focus-visible {
+    outline: 2px solid var(--primary, #6b7cff);
+    outline-offset: 2px;
+    border-radius: 6px;
+}

@@ -17,7 +17,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
 
 $this->setTitle('Opening Order58');
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing', 'route' => 'order-testing'],
+    ['label' => 'Manage Orders', 'route' => 'order-testing'],
     ['label' => 'Opening Order58'],
 ]);
 
@@ -49,7 +49,7 @@ $storeUrl = $urlGenerator->generate('order-testing.store', ['sourceId' => $sourc
     <p>
         <a class="btn btn--primary" href="<?= Html::encode($url) ?>"
            target="_blank" rel="noopener noreferrer">Open the Order58 demo page</a>
-        <a class="btn" href="<?= Html::encode($storeUrl) ?>">Back to Order Testing</a>
+        <a class="btn" href="<?= Html::encode($storeUrl) ?>">Back to Manage Orders</a>
     </p>
     <p class="util-muted">
         One test at a time can be attributed to a person, so this order is held for you until your

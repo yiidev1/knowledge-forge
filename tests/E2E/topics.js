@@ -515,7 +515,9 @@ async function run() {
             manage: document.querySelectorAll('#a2t-manage-dialog').length,
             fullEditor: document.querySelectorAll('[data-a2t-full-editor]').length,
             filter: document.querySelectorAll('.practice-filter').length,
-            topicNames: document.querySelectorAll('[data-practice-topic-details]').length,
+            topicValues: document.querySelectorAll('.practice-topic__value').length,
+            topicTriggers: document.querySelectorAll('[data-practice-topic-details]').length,
+            detailsDialog: document.querySelectorAll('#practice-topic-details-dialog').length,
             players: document.querySelectorAll('[data-a2t-play]').length,
         }));
 
@@ -526,26 +528,39 @@ async function run() {
             readOnly.upload === 0 && readOnly.manage === 0 && readOnly.fullEditor === 0,
             JSON.stringify(readOnly));
         check('while keeping the filter, the topic names and the players',
-            readOnly.filter === 1 && readOnly.topicNames > 0 && readOnly.players > 0,
+            readOnly.filter === 1 && readOnly.topicValues > 0 && readOnly.players > 0,
             JSON.stringify(readOnly));
 
-        // ---------------------------------------------------------------- the details dialog
-        await page.click('.practice-topic-cell [data-practice-topic-details]');
-        await sleep(200);
+        // ---------------------------------------------------------------- the topic is not a control
+        //
+        // It used to open the topic's details. A table of orders is not where a topic is read about,
+        // and a name that looks like a link promises something about the row it sits in.
+        check('the topic name is not a trigger any more', readOnly.topicTriggers === 0,
+            JSON.stringify(readOnly));
+        check('and the details dialog is not even rendered here', readOnly.detailsDialog === 0,
+            JSON.stringify(readOnly));
 
-        const details = await page.evaluate(() => {
-            const dialog = document.querySelector('#practice-topic-details-dialog');
+        const topicLook = await page.evaluate(() => {
+            const value = document.querySelector('.practice-topic__value');
+
+            if (value === null) {
+                return { present: false };
+            }
+
+            const style = getComputedStyle(value);
 
             return {
-                modal: dialog.matches(':modal'),
-                name: dialog.querySelector('[data-practice-details-name]').textContent.trim(),
-                forms: dialog.querySelectorAll('form').length,
+                present: true,
+                text: value.textContent.trim(),
+                tag: value.tagName.toLowerCase(),
+                underlined: style.textDecorationLine.indexOf('underline') !== -1,
+                pointer: style.cursor === 'pointer',
             };
         });
 
-        check('the topic name still opens its details', details.modal);
-        check('read-only: no form in it', details.forms === 0, String(details.forms));
-        check('and it names a topic', details.name !== '', details.name);
+        check('it is plain text', topicLook.present && topicLook.tag === 'span', JSON.stringify(topicLook));
+        check('with no underline and no pointer',
+            topicLook.underlined === false && topicLook.pointer === false, JSON.stringify(topicLook));
 
         // ---------------------------------------------------------------- nothing broke quietly
         const csp = await page.evaluate(() => window.__csp || []);

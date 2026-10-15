@@ -16,12 +16,14 @@
 }
 
 /*
- * Both tables make the topic name a button, because clicking it opens the details dialog — but it is
- * read as a name, so it is stripped back to one and marked clickable the way a link is. Defined once
- * for both, rather than per table.
+ * Topic Management makes the name a button, because there clicking it opens the topic's details and
+ * the topic is what the page is about. It is read as a name, so it is stripped back to one and marked
+ * clickable the way a link is.
+ *
+ * The order tables no longer do this — see `.practice-topic__value` below — so the rule is scoped to
+ * the management table rather than shared with them.
  */
-.practice-topics .practice-topic__name,
-.practice-topic-cell .practice-topic__name {
+.practice-topics .practice-topic__name {
     display: inline-block;
     padding: 0;
     border: 0;
@@ -37,10 +39,25 @@
 }
 
 .practice-topics .practice-topic__name:hover,
-.practice-topics .practice-topic__name:focus-visible,
-.practice-topic-cell .practice-topic__name:hover,
-.practice-topic-cell .practice-topic__name:focus-visible {
+.practice-topics .practice-topic__name:focus-visible {
     text-decoration-style: solid;
+}
+
+/*
+ * The topic as it appears in a table of ORDERS: a fact about the row, not a way in to anything.
+ *
+ * No underline, no pointer, no accent colour — all three said "press me", and pressing it opened a
+ * dialog about the topic rather than about the order the reader was looking at. It is the body colour
+ * at the weight a value gets, which is how every other identifying value in these tables is set.
+ *
+ * A long topic name is allowed to wrap inside its cell rather than widen the column; `break-word`
+ * rather than an ellipsis, because a truncated topic name is indistinguishable from a different topic
+ * with the same prefix.
+ */
+.practice-topic__value {
+    font-weight: 600;
+    color: var(--text, #e6e8ee);
+    overflow-wrap: anywhere;
 }
 
 /* The topic table's own columns and its action cluster are defined once, further down. */
@@ -182,11 +199,11 @@
     color: var(--text-muted, #8a8f98);
 }
 
-/* The name can be longer than the column; it wraps rather than widening the table. */
-.practice-topic-cell .practice-topic__name {
+/* The value can be longer than the column; it wraps rather than widening the table. */
+.practice-topic-cell .practice-topic__value {
+    display: inline-block;
     max-width: 100%;
     white-space: normal;
-    overflow-wrap: anywhere;
 }
 
 /* The cell's own hint — "No matching source order" — reads as a note, not as a second line of data. */
@@ -563,4 +580,80 @@
         min-width: 0;
         max-width: none;
     }
+}
+
+/* ---- The assignment control says what is STORED ---------------------------------------------------
+ *
+ * Assigned and unassigned rows were the same dark grey, so a column of them answered "which of these
+ * orders already has a topic" only by reading every option one at a time.
+ *
+ * The state is rendered by the server from the saved assignment — see the template — so these rules
+ * describe what IS, never what is currently selected. Choosing a different topic changes the option
+ * showing in the control and leaves its colour alone until a confirmed save has reloaded the page;
+ * Cancel therefore has nothing to restore, and a refused save cannot leave a row looking saved.
+ *
+ * A tint and a border rather than a filled control: a solid accent on twenty rows would turn the
+ * column into a block of colour, and the thing being marked is "this one is done", not "look here".
+ * Colour is also not the only signal — the control shows the topic's name either way.
+ */
+
+/*
+ * The tint is mixed with the control's own surface, NOT with `transparent`.
+ *
+ * A native option list carries no background of its own — it is painted with the SELECT's
+ * `background-color`. Mixed with `transparent` that colour was 90% see-through, so Chrome composited
+ * it over the platform's own popup base, which is light: the list opened nearly white while its text
+ * kept the light colour inherited from the control, and the names were invisible until the hover
+ * highlight painted something behind them. Measured at `color(srgb 0.39 0.4 0.95 / 0.1)`.
+ *
+ * Mixing with `--surface` gives the same tint on the closed control — that surface is what was behind
+ * it anyway — and an opaque colour for the list.
+ */
+.practice-assign__select--assigned {
+    border-color: color-mix(in srgb, var(--primary, #6b7cff) 50%, var(--border-strong, #2a2d34));
+    background-color: color-mix(in srgb, var(--primary, #6b7cff) 10%, var(--surface, #181b24));
+    color: var(--text, #e6e8ee);
+}
+
+.practice-assign__select--assigned:hover {
+    border-color: var(--primary, #6b7cff);
+}
+
+/*
+ * A topic that is no longer offered, still on the order that carries it.
+ *
+ * Marked apart from a live assignment rather than dressed as one: it is history, and the reason the
+ * row cannot simply be re-saved as it stands. Muted rather than coloured as a warning — nothing is
+ * wrong with it, and the option text already says "(Deleted)".
+ */
+.practice-assign__select--historical {
+    border-color: var(--border-strong, #2a2d34);
+    background-color: color-mix(in srgb, var(--text-muted, #8a8f98) 12%, var(--surface, #181b24));
+    color: var(--text-muted, #8a8f98);
+    font-style: italic;
+}
+
+.practice-assign__select--assigned:focus-visible,
+.practice-assign__select--historical:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+/*
+ * The open list, stated rather than inherited.
+ *
+ * Every option above takes its colours from whatever the control happens to carry, which is how one
+ * translucent background made a whole list unreadable. Saying it here means the names stay legible
+ * however the closed control is tinted later — including the historical control, whose muted italic
+ * treatment belongs to the control and not to the names inside it.
+ *
+ * `color-scheme` is deliberately NOT forced to dark here: the root declares `light dark`, so the
+ * browser draws the popup's own chrome to match the reader's theme, and pinning it would give a light
+ * reader a dark scrollbar on a light list.
+ */
+.practice-assign__select option,
+.practice-bulk__select option {
+    background-color: var(--surface, #181b24);
+    color: var(--text, #e6e8ee);
+    font-style: normal;
 }

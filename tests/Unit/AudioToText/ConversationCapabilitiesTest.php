@@ -55,6 +55,7 @@ final class ConversationCapabilitiesTest extends TestCase
             'canOpenFullEditor',
             'canSyncDemoOrders',
             'canAssignTopics',
+            'canVerifyOrders',
         ], array_keys(get_object_vars(ConversationCapabilities::full())));
     }
 

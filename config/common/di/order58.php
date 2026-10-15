@@ -75,6 +75,10 @@ return [
     CallImportRepositoryInterface::class => DbCallImportRepository::class,
     Order58OrderRepositoryInterface::class => DbOrder58OrderRepository::class,
     StoreAudioCountsInterface::class => DbStoreAudioCounts::class,
+
+    // Orders carrying a topic, per store, for the second number on a store card.
+    App\Order58\Domain\StoreTopicAssignmentCountsInterface::class
+        => App\Order58\Infrastructure\DbStoreTopicAssignmentCounts::class,
     AudioProviderDefaultInterface::class => DbAudioProviderDefault::class,
 
     // The recording importer. The lock file is its own — sharing the transcription worker's would make

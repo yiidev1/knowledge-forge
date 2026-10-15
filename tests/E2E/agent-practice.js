@@ -171,6 +171,33 @@ async function run() {
         check('Clear removes every restriction',
             page.url() === storeUrl && (await rows()).length === before, page.url());
 
+        // ---------------------------------------------------------------- the same two UI rules here
+        //
+        // The agent reads this page through the same template and the same script as the other two
+        // realms, so the two changes made for them have to be true here as well — and "it is the same
+        // file" is an argument, not a measurement.
+        check('the topic is plain text on the agent surface too', await page.evaluate(() => {
+            const value = document.querySelector('.practice-topic__value');
+
+            return value !== null
+                && document.querySelector('[data-practice-topic-details]') === null
+                && getComputedStyle(value).cursor !== 'pointer';
+        }));
+
+        const agentPicker = '[data-practice-filter-picker]';
+
+        await page.click(agentPicker + ' summary');
+        await sleep(200);
+        check('the agent filter opens', await page.evaluate(
+            (sel) => document.querySelector(sel).open, agentPicker,
+        ));
+
+        await page.click('h1');
+        await sleep(200);
+        check('and closes when the agent clicks outside it', await page.evaluate(
+            (sel) => document.querySelector(sel).open === false, agentPicker,
+        ));
+
         // ---------------------------------------------------------------- the conversation dialog
         // "View conversation" — the control an agent actually uses, and the only one in the row that is
         // unconditionally visible. The per-channel Details buttons sit inside a collapsed group, and

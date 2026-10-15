@@ -125,7 +125,7 @@ readonly class Action
     {
         return [
             'page' => 'order-testing',
-            'pageLabel' => 'Order Testing',
+            'pageLabel' => 'Manage Orders',
             'store' => 'order-testing.store',
             'demoOrders' => 'order-testing.demo-orders',
             'demoCompare' => 'order-testing.demo-compare',

@@ -25,16 +25,17 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts store source id => conversion breakdown,
  *      absent when the store has none. `total` is the same conversation count it always was.
+ * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  * @var string $providerDefault storage value of the current default transcription provider
  * @var array<string, string> $providerChoices storage value => label, in offer order
  * @var bool $settingsOpen render the settings dialog already open (the no-JavaScript path)
  */
 
-$this->setTitle('Order Testing');
+$this->setTitle('Manage Orders');
 // Its own trail. The audio picker's returns through Order58 Data Management; this page is reached from
 // the Order Testing entry in the menu and belongs under that name.
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Order Testing'],
+    ['label' => 'Manage Orders'],
 ]);
 
 // Every filter, the search and the pager post back to this page, not to the audio picker. One line, and
@@ -95,8 +96,8 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
 ?>
 <div class="page-header">
     <div>
-        <h1 class="page-header__title">Order Testing</h1>
-        <p class="page-header__subtitle">Pick a store to test orders against. Every conversion belongs to the store you choose here.</p>
+        <h1 class="page-header__title">Manage Orders</h1>
+        <p class="page-header__subtitle">Pick a store to manage its orders, recordings and conversations.</p>
     </div>
     <?php
     // A route name again, for the same reason the cards use one: this page may not name the module it
@@ -206,6 +207,7 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    'topicCounts' => $topicCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'order-testing.store',

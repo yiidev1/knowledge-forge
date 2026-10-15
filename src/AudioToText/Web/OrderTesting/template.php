@@ -9,6 +9,7 @@ use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\OrderId;
+use App\AudioToText\Domain\OrderVerificationStatus;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\StoreOrderGroup;
 use App\Shared\Order58\DemoLinkStatus;
@@ -65,7 +66,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 
 $assetManager->register(OrderTestingAsset::class);
 
-$this->setTitle($store->name . ' — order testing');
+$this->setTitle($store->name . ' — manage orders');
 // Its own trail, back to its own landing. The audio page's breadcrumb returns to the Order58 picker,
 // whose links go to `/audio-to-text/...`; following it from here would move the reader onto the surface
 // this one exists to keep them off.
@@ -117,6 +118,13 @@ $capabilities = $capabilities ?? ConversationCapabilities::full();
 // filter travel with `$practiceMode`; the checkbox, the buttons, the bulk toolbar and the picker
 // travel with this.
 $canAssignTopics = $practiceMode && $capabilities->canAssignTopics;
+
+// Verification is Order Testing's own. `$practiceMode` is true on the read-only practice surfaces as
+// well, and `$capabilities` is permissive on the Audio-to-Text store page, so neither answers this on
+// its own: the column exists only where both are true, which is this one page.
+$canVerifyOrders = $practiceMode && $capabilities->canVerifyOrders;
+/** @var array<string, OrderVerificationStatus> $orderVerifications */
+$orderVerifications = $orderVerifications ?? [];
 
 // The store being active is a fact about the store; being allowed to upload is a fact about the
 // reader. Both must hold, and ANDing them means the upload dialog, both Add Audio buttons and the
@@ -856,7 +864,8 @@ $conversationCell = static function (StoreOrderGroup $group) use (
     <div>
         <h1 class="page-header__title"><?= Html::encode($store->name) ?></h1>
         <p class="page-header__subtitle">
-            Order testing for this store. Call recordings grouped by the order they belong to.
+            Manage this store's orders, recordings and conversations. Call recordings are grouped
+            by the order they belong to.
         </p>
     </div>
     <div class="page-header__actions">
@@ -1139,6 +1148,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     <col class="a2t-col-order">
                     <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
+                    <?php if ($canVerifyOrders): ?><col class="ot-col-verification"><?php endif; ?>
                     <col class="a2t-col-demo">
                     <col class="ot-col-demo-orders">
                     <?php if ($practiceMode): ?><col class="practice-col-topic"><?php endif; ?>
@@ -1162,6 +1172,12 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                         <?php // out here, and the dialog it opens gives each of them a tab.?>
                         <th>Recording / Conversation</th>
                         <th>Status</th>
+                        <?php if ($canVerifyOrders): ?>
+                            <?php // Beside Status, because the two answer the same kind of question?>
+                            <?php // about an order: what the machine made of it, and what a person?>
+                            <?php // made of it. The actions that change an order stay further right.?>
+                            <th>Verification</th>
+                        <?php endif; ?>
                         <th>Demo URL</th>
                         <?php // Immediately after Demo URL, because it is the result of pressing it:?>
                         <?php // the orders a trainee produced from this call, each compared on its own.?>
@@ -1381,6 +1397,72 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 </span>
                             <?php endif; ?>
                         </td>
+                        <?php if ($canVerifyOrders): ?>
+                            <td class="ot-verify-cell">
+                                <?php
+                                $verification = $rowOrderId === ''
+                                    ? null
+                                    : ($orderVerifications[$rowOrderId] ?? OrderVerificationStatus::none());
+                            ?>
+                                <?php if (!$rowHasSourceOrder || $verification === null): ?>
+                                    <?php
+                                // Nothing to verify. The same rule the Set Topic cell applies, from
+                                // the same answer: a recording whose order was never mirrored is not
+                                // an order anybody can make a statement about.
+                                    ?>
+                                    <span class="util-muted">&mdash;</span>
+                                <?php else: ?>
+                                    <?php
+                                    // A real form, posting to a real endpoint. The script turns the
+                                    // click into a confirmation and sends it by fetch; with no script
+                                    // it submits directly and the server answers with a redirect. The
+                                    // control is the same element either way, so there is nothing the
+                                    // script has to hide once it loads — and therefore nothing that can
+                                    // be seen for a moment before it does.
+                                    ?>
+                                    <form class="ot-verify" method="post"
+                                          data-ot-verify
+                                          data-ot-order="<?= Html::encode($rowOrderId) ?>"
+                                          data-ot-verified="<?= $verification->isVerified ? '1' : '0' ?>"
+                                          action="<?= Html::encode($urlGenerator->generate(
+                                              $routes['verification'],
+                                              [
+                                                  'sourceId' => $store->sourceId,
+                                                  'sourceOrderId' => $rowOrderId,
+                                              ],
+                                          )) ?>">
+                                        <?= $csrfField ?>
+                                        <?php
+                                        // The state this control was rendered from. The endpoint
+                                        // refuses a write whose version has moved on, so a tab left
+                                        // open across somebody else's change cannot silently undo it.
+                                    ?>
+                                        <input type="hidden" name="version"
+                                               value="<?= $verification->version ?>" data-ot-version>
+                                        <?php
+                                        // `decision`, not `action`: a control named `action` becomes a
+                                        // property of its own form element and shadows `form.action`,
+                                        // so the script would read an <input> where the URL should be
+                                        // and post to it. It did, once.
+                                    ?>
+                                        <input type="hidden" name="decision" data-ot-decision
+                                               value="<?= $verification->isVerified ? 'unverified' : 'verified' ?>">
+                                        <?php if ($verification->isVerified): ?>
+                                            <button class="badge badge--success ot-verify__badge"
+                                                    type="submit" data-ot-verify-button
+                                                    title="<?= Html::encode(
+                                                        $verification->verifiedLine ?? 'Verified.',
+                                                    ) ?>">
+                                                <span aria-hidden="true">&check;</span> Verified
+                                            </button>
+                                        <?php else: ?>
+                                            <button class="btn btn--sm ot-verify__button"
+                                                    type="submit" data-ot-verify-button>Verify</button>
+                                        <?php endif; ?>
+                                    </form>
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                         <td class="a2t-cell-tight">
                             <?php
             // Resolved for the whole page in one query before rendering; this cell only prints the
@@ -1440,10 +1522,25 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 $demoCount = $demoOrderCounts[$orderKey] ?? 0;
                     ?>
                             <?php if ($orderKey !== '' && $demoCount > 0): ?>
-                                <a href="<?= Html::encode($urlGenerator->generate(
-                                    $routes['demoOrders'],
-                                    ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
-                                )) ?>">View (<?= Html::encode((string) $demoCount) ?>)</a>
+                                <?php
+                                // One link, two parts: the word that says what pressing it does, and a
+                                // count that says how much is behind it. The count is inside the
+                                // anchor rather than beside it, so there is one target to click and
+                                // one thing for a keyboard to land on — a badge that was its own
+                                // control would be a second way to the same page.
+                                //
+                                // The visible text is "View 4"; the accessible name says what the 4
+                                // counts, which the eye gets from the column heading and a screen
+                                // reader does not.
+                                ?>
+                                <a class="ot-demo-orders" aria-label="View <?= $demoCount ?> demo order<?=
+                                    $demoCount === 1 ? '' : 's' ?> for this order"
+                                   href="<?= Html::encode($urlGenerator->generate(
+                                       $routes['demoOrders'],
+                                       ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
+                                   )) ?>"><span class="ot-demo-orders__label">View</span><span
+                                        class="ot-demo-orders__count" aria-hidden="true"><?=
+                                        Html::encode((string) $demoCount) ?></span></a>
                             <?php else: ?>
                                 <span class="util-muted">&mdash;</span>
                             <?php endif; ?>
@@ -1452,10 +1549,10 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
                             <td class="practice-topic-cell">
                                 <?php
-                                                        // One row for every shape this cell takes: the topic's name, a badge
-                                                        // when it is no longer offered, and the control that changes it, all on
-                                                        // one line. It wraps rather than overflows, so a long topic name pushes
-                                                        // the control down instead of widening the table.
+                                                                                // One row for every shape this cell takes: the topic's name, a badge
+                                                                                // when it is no longer offered, and the control that changes it, all on
+                                                                                // one line. It wraps rather than overflows, so a long topic name pushes
+                                                                                // the control down instead of widening the table.
                             ?>
                                 <div class="practice-topic-cell__stack">
                                 <?php if (!$rowHasSourceOrder): ?>
@@ -1470,47 +1567,56 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                         <?= $orderKey === '' ? 'No order on this recording' : 'No matching source order' ?>
                                     </div>
                                 <?php else: ?>
-                                    <div class="practice-topic-cell__name">
-                                    <?php if ($assigned === null): ?>
-                                        <span class="practice-unassigned">Not Assigned</span>
-                                    <?php else: ?>
+                                    <?php if (!$canAssignTopics): ?>
                                         <?php
-                                        // The name opens the topic's details; the button opens the
-                                        // picker. Two actions, two controls — everything the details
-                                        // dialog shows is already here, so it costs no request.
+                                        // Read-only surfaces say what the topic is, and nothing more.
+                                        //
+                                        // It used to be a button that opened the topic's details. The
+                                        // details are a topic's own information, not this order's, and
+                                        // a name that looks like a link in a table of orders reads as
+                                        // "this will take me somewhere about the order". Topic
+                                        // Management still has the dialog, where a topic is the subject
+                                        // rather than a column.
                                         ?>
-                                        <button class="practice-topic__name" type="button"
-                                                data-practice-topic-details
-                                                data-practice-topic-name="<?= Html::encode($assigned->name) ?>"
-                                                data-practice-topic-description="<?= Html::encode($assigned->description ?? '') ?>"
-                                                data-practice-topic-status="<?= Html::encode($assigned->statusLabel()) ?>"
-                                                data-practice-topic-note="<?= Html::encode($assigned->unavailableNote()) ?>"
-                                                title="View topic details"><?= Html::encode($assigned->name) ?></button>
-                                        <?php if (!$assigned->isAssignable()): ?>
-                                            <?php
-                                            // A badge, not a sentence: which of the two states it is,
-                                            // in the width a table column actually has. The dialog the
-                                            // name opens says what it means in full.
-                                            ?>
-                                            <span class="badge badge--muted"><?= Html::encode($assigned->statusLabel()) ?></span>
+                                        <div class="practice-topic-cell__name">
+                                        <?php if ($assigned === null): ?>
+                                            <span class="practice-unassigned">Not Assigned</span>
+                                        <?php else: ?>
+                                            <span class="practice-topic__value"><?=
+                                                Html::encode($assigned->name) ?></span>
+                                            <?php if (!$assigned->isAssignable()): ?>
+                                                <?php
+                                                // Which of the two states it is, in the width a table
+                                                // column actually has. The assignment itself stays:
+                                                // this is history, not a mistake to clean up.
+                                                ?>
+                                                <span class="badge badge--muted"><?=
+                                                    Html::encode($assigned->statusLabel()) ?></span>
+                                            <?php endif; ?>
                                         <?php endif; ?>
+                                        </div>
                                     <?php endif; ?>
-                                    </div>
+                                    <?php
+                                    // Where topics are assigned, the control IS the answer: the select
+                                    // below already shows the current topic as its selected option, and
+                                    // printing the same name beside it was the same fact twice in a
+                                    // column that has room for one.
+                    ?>
                                     <?php if ($canAssignTopics): ?>
                                         <?php
-                                        // One control, inline, instead of a button that opens a picker.
-                                        //
-                                        // Its own form per row, posting to the same endpoint the bulk
-                                        // toolbar uses. The script turns a change into a confirmation
-                                        // and submits only when the reader confirms; with no script the
-                                        // Save below submits directly, so the page still works and the
-                                        // server is the only thing that ever decides.
-                                        //
-                                        // The currently assigned topic is an option even when it is no
-                                        // longer offered — otherwise initialising the control would
-                                        // silently propose unassigning a historical topic, and the
-                                        // first stray click would carry it out.
-                                        $currentValue = $assigned === null ? null : (string) $assigned->id;
+                        // One control, inline, instead of a button that opens a picker.
+                        //
+                        // Its own form per row, posting to the same endpoint the bulk
+                        // toolbar uses. The script turns a change into a confirmation
+                        // and submits only when the reader confirms; with no script the
+                        // Save below submits directly, so the page still works and the
+                        // server is the only thing that ever decides.
+                        //
+                        // The currently assigned topic is an option even when it is no
+                        // longer offered — otherwise initialising the control would
+                        // silently propose unassigning a historical topic, and the
+                        // first stray click would carry it out.
+                        $currentValue = $assigned === null ? null : (string) $assigned->id;
                                         $currentOffered = $assigned !== null && $assigned->isAssignable();
                                         ?>
                                         <form class="practice-assign" method="post"
@@ -1529,39 +1635,55 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                                        value="<?= Html::encode($choice) ?>">
                                             <?php endforeach; ?>
 
-                                            <select class="field__control practice-assign__select"
+                                            <?php
+                                            // What the control looks like is decided by what is
+                                            // STORED, not by what is selected. The class is rendered
+                                            // by the server from the saved assignment, so choosing a
+                                            // different topic changes the selected option and nothing
+                                            // else: the row keeps saying what it currently is until a
+                                            // confirmed save reloads the page. Cancel therefore has
+                                            // nothing to undo, and a failed save cannot leave the row
+                                            // looking like something it is not.
+                                            $assignedClass = $assigned === null
+                                                ? ''
+                                                : ($assigned->isAssignable()
+                                                    ? ' practice-assign__select--assigned'
+                                                    : ' practice-assign__select--historical');
+                                        ?>
+                                            <select class="field__control practice-assign__select<?=
+                                            $assignedClass ?>"
                                                     id="practice-topic-<?= Html::encode($orderKey) ?>"
                                                     name="topic_id"
                                                     aria-label="Topic for order <?= Html::encode($orderKey) ?>"
                                                     data-practice-assign-select
                                                     data-practice-saved="<?= Html::encode($currentValue ?? '') ?>">
                                                 <option value=""<?= $currentValue === null ? ' selected' : '' ?>><?=
-                                                    $currentValue === null ? 'Select Topic' : 'Unassign' ?></option>
+                                                $currentValue === null ? 'Select Topic' : 'Unassign' ?></option>
                                                 <?php if ($assigned !== null && !$currentOffered): ?>
                                                     <option value="<?= $assigned->id ?>" selected><?=
-                                                        Html::encode($assigned->name) ?> (<?=
-                                                        Html::encode($assigned->statusLabel()) ?>)</option>
+                                                    Html::encode($assigned->name) ?> (<?=
+                                                    Html::encode($assigned->statusLabel()) ?>)</option>
                                                 <?php endif; ?>
                                                 <?php foreach ($assignableTopics as $topic): ?>
                                                     <option value="<?= $topic->id ?>"<?=
-                                                        $currentValue === (string) $topic->id ? ' selected' : '' ?>><?=
-                                                        Html::encode($topic->name) ?></option>
+                                                    $currentValue === (string) $topic->id ? ' selected' : '' ?>><?=
+                                                    Html::encode($topic->name) ?></option>
                                                 <?php endforeach; ?>
                                             </select>
                                             <?php
-                                            // The no-script path, and nothing else.
-                                            //
-                                            // Inside <noscript> rather than rendered and then hidden
-                                            // by the script. A browser with scripting on does not
-                                            // build this element at all, so the first paint is already
-                                            // the final one. Rendered-then-hidden meant every Save on
-                                            // the page was on screen from the first paint until the
-                                            // script got to it — and this page loads a great deal of
-                                            // audio behaviour first, so "until" was long enough to
-                                            // watch them disappear. The CSP forbids inline scripts and
-                                            // inline styles, so the parser is the earliest hook there
-                                            // is; the correction page's fallback is the same shape for
-                                            // the same reason.
+                                        // The no-script path, and nothing else.
+                                        //
+                                        // Inside <noscript> rather than rendered and then hidden
+                                        // by the script. A browser with scripting on does not
+                                        // build this element at all, so the first paint is already
+                                        // the final one. Rendered-then-hidden meant every Save on
+                                        // the page was on screen from the first paint until the
+                                        // script got to it — and this page loads a great deal of
+                                        // audio behaviour first, so "until" was long enough to
+                                        // watch them disappear. The CSP forbids inline scripts and
+                                        // inline styles, so the parser is the earliest hook there
+                                        // is; the correction page's fallback is the same shape for
+                                        // the same reason.
                                         ?>
                                             <noscript>
                                                 <button class="btn btn--primary btn--sm practice-assign__save"
@@ -1806,6 +1928,20 @@ $last = min($page * $perPage, $total);
             // neither gets neither element — so there is nothing for the script to fill, and nothing
             // to click.
 ?>
+            <?php if ($canVerifyOrders): ?>
+                <?php
+                // The same decision the column offers, in the place a reader reaches it: they have just
+                // listened to the call and read the conversation, which is when somebody actually
+                // decides an order has been checked.
+                //
+                // It owns no state. The click is handed to that row's own form in the table, so the two
+                // controls cannot disagree and there is no second record of anything. Hidden until the
+                // dialog is opened on an ORDER — opened on a single recording there is nothing to make
+                // a statement about, and the script leaves it as it found it. Hidden in the markup
+                // rather than revealed-then-hidden, so it cannot appear for a moment on the way in.
+                ?>
+                <button class="btn btn--sm" type="button" data-ot-verify-dialog hidden></button>
+            <?php endif; ?>
             <?php if ($capabilities->canReplaceAudio || $capabilities->canGenerateTts): ?>
                 <div class="a2t-dialog__acts" data-a2t-review-actions></div>
             <?php endif; ?>
@@ -2305,11 +2441,13 @@ $last = min($page * $perPage, $total);
 <?php endif; ?>
 
 <?php
-// Shared with Topic Management, which opens the same dialog from its own list. It is filled from
-// the trigger that was clicked, so it needs nothing from here — and every surface that shows a
-// topic name renders it, because reading what a topic says is not a management action.
+// The topic-details dialog is NOT rendered here any more.
+//
+// Nothing on this page opens it: a topic's name is information in a column of orders, not a way in
+// to the topic itself. Topic Management still renders the same shared partial, where a topic is the
+// subject of the page rather than one of its facts — so the dialog, its script and its markup all
+// still exist, and only the trigger that did not belong here is gone.
 ?>
-<?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/topic-details-dialog') ?>
 
 <?php if ($canAssignTopics): ?>
     <?php
@@ -2349,6 +2487,32 @@ $last = min($page * $perPage, $total);
             <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
             <button class="btn btn--primary btn--sm" type="button"
                     data-practice-confirm-submit>Confirm assignment</button>
+        </div>
+    </dialog>
+
+    <?php
+    // One dialog for both directions. Verify and Unverify ask different questions and carry different
+    // weight, but they are the same decision about the same order, and two dialogs would be two places
+    // to keep the order number, the wording and the button labels in step. The script fills all three.
+    ?>
+    <dialog class="source-modal practice-dialog" id="ot-verify-dialog" data-practice-dialog
+            aria-labelledby="ot-verify-title">
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="ot-verify-title" data-ot-verify-title>Verify Order</h2>
+            <button class="source-modal__close" type="button" data-practice-dialog-close
+                    title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div class="source-modal__body">
+            <dl class="practice-details">
+                <dt>Order</dt>
+                <dd class="util-mono" data-ot-verify-order></dd>
+            </dl>
+            <p data-ot-verify-message></p>
+        </div>
+        <div class="a2t-confirm__actions">
+            <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
+            <button class="btn btn--primary btn--sm" type="button"
+                    data-ot-verify-confirm>Confirm Verification</button>
         </div>
     </dialog>
 

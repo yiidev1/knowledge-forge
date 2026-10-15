@@ -8,7 +8,6 @@ use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
-use App\Shared\Audio\RecordingTypeLabels;
 use App\Tests\Support\WebTester;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -138,10 +137,13 @@ final class OrderTestingCest
         }
 
         Assert::assertNotNull($audio, 'The Audio to Text entry must still exist: ' . implode(' | ', $labels));
+        // "Manage Orders" on screen, `/order-testing` in the address bar: the feature was renamed for
+        // the people who use it, and renaming the routes, modules and tables underneath it would have
+        // been a different and much larger change with no benefit to them.
         Assert::assertStringContainsString(
-            'Order Testing',
+            'Manage Orders',
             $labels[$audio + 1] ?? '',
-            'Order Testing belongs directly under Audio to Text. Menu was: ' . implode(' | ', $labels),
+            'Manage Orders belongs directly under Audio to Text. Menu was: ' . implode(' | ', $labels),
         );
     }
 
@@ -191,14 +193,19 @@ final class OrderTestingCest
         $I->see(self::STORE_NAME);
         $I->see('Store #' . self::STORE_ID);
 
-        // The per-channel counts, which is what the table this replaced had no room for. The card uses
-        // the SHORT labels — the same map, shortened — so this reads them the way the card does rather
-        // than hard-coding four words that a client rename would leave behind.
-        foreach (['MIXED', 'CALLER', 'CALLEE'] as $stored) {
-            $I->see(RecordingTypeLabels::shortForStorageValue($stored) ?? $stored);
-        }
+        // Two metrics, not four channel counts. The split by recording type told an operator which
+        // channels were still missing, which mattered when channels arrived one at a time; the card
+        // now answers the two questions a directory is actually scanned for.
+        $I->see('Audio Recordings', '.store-card__metric-label');
+        // "Topics Assigned" over "Orders with topics": the label names the number, the line under it
+        // says what the number counts. The first version of this metric counted distinct topics and a
+        // store with three orders under one topic read as 1.
+        $I->see('Topics Assigned', '.store-card__metric-label');
+        $I->see('Orders with topics', '.store-card__metric-note');
+        $I->dontSeeElement('.store-card__kb-count');
+        $I->dontSeeElement('.store-card__audio');
 
-        // And it links on to Order Testing's own store page.
+        // And it links on to this surface's own store page.
         $I->seeElement('a[href="/order-testing/store/' . self::STORE_ID . '"]');
     }
 
@@ -697,9 +704,10 @@ final class OrderTestingCest
 
         // What remains, and the `<col>`s that size them — one per header, or the table drifts.
         //
-        // Seven now, not five: this is where topics are assigned, so the table carries a selection
-        // checkbox and the Set Topic control beside the five that have always been here. Both are
-        // management, which is why they are on this page and not on Practice Orders.
+        // Eight now, not five: this is where an order is *managed*, so the table carries a selection
+        // checkbox, the Set Topic control and the Verification column beside the five that have always
+        // been here. All three are management, which is why they are on this page and not on Practice
+        // Orders — a point `PracticeOrdersCest` asserts from the other side.
         foreach ([
             'Order No#',
             'Recording / Conversation',
@@ -707,14 +715,15 @@ final class OrderTestingCest
             'Demo URL',
             'Demo Orders',
             'Set Topic',
+            'Verification',
         ] as $header) {
             $I->see($header, 'th');
         }
 
         Assert::assertSame(
-            7,
+            8,
             substr_count($I->grabPageSource(), '<col class='),
-            'The colgroup and the headers must describe the same seven columns.',
+            'The colgroup and the headers must describe the same eight columns.',
         );
     }
 

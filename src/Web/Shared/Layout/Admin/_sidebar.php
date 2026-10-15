@@ -64,7 +64,7 @@ $items = [
     // is a mode of the other. The match covers the whole namespace, so the entry stays lit on the store
     // page and its group endpoints as well as the landing list.
     [
-        'label' => 'Order Testing',
+        'label' => 'Manage Orders',
         'icon' => '🧪',
         // The route name as a literal, like every other entry here. This file is outside
         // `src/AudioToText/`, and ModuleIsolationTest forbids any file there from naming that module —
@@ -138,7 +138,7 @@ foreach ($items as $item) {
 // Practice Orders both sit behind the gate this realm passes. Topic Management deliberately does not —
 // it is in the administrators' group, so linking it here would offer a door that answers with a
 // redirect to a login form they cannot use.
-$operatorMenu = ['Order Testing', 'Practice Orders'];
+$operatorMenu = ['Manage Orders', 'Practice Orders'];
 
 if ($operator !== null) {
     $navItems = array_values(array_filter(

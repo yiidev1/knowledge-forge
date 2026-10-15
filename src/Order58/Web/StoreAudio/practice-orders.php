@@ -34,6 +34,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  */
 
 $this->setTitle('Practice Orders');
@@ -126,6 +127,7 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    'topicCounts' => $topicCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'practice-orders.store',
