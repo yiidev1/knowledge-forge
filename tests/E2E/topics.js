@@ -356,14 +356,55 @@ async function run() {
 
         const selectFor = (order) => '#practice-topic-' + order;
 
-        // The inline Save is removed once the script runs, so the confirmation is the only path.
-        check('the inline Save is withdrawn when the script is running', await page.evaluate(
+        // The inline Save never exists for a reader with scripting on — it is inside <noscript>, so the
+        // parser hands it over as text and it is never built, never painted and never hidden later.
+        // The weaker form of this check (rendered, then hidden by the script) passed while every Save
+        // on the page was visibly on screen until the script caught up.
+        check('no inline Save is ever built when the script is running', await page.evaluate(
+            () => document.querySelector('[data-practice-assign-save]') === null,
+        ));
+        check('and the one in <noscript> was never parsed into elements', await page.evaluate(
             () => {
-                const save = document.querySelector('[data-practice-assign-save]');
+                const tag = document.querySelector('.practice-assign noscript');
 
-                return save !== null && save.hidden === true;
+                return tag !== null && tag.children.length === 0
+                    && /data-practice-assign-save/.test(tag.textContent);
             },
         ));
+
+        // The other half of the same claim: with scripting off, that fallback is a real button a
+        // reader can press. Hiding the flash is only correct if it did not quietly remove the
+        // no-script path along with it. Same browser, so the session cookie carries over.
+        const plain = await page.browser().newPage();
+
+        try {
+            await plain.setJavaScriptEnabled(false);
+            await plain.goto(otUrl, { waitUntil: 'domcontentloaded' });
+
+            const fallback = await plain.evaluate(() => {
+                const save = document.querySelector('[data-practice-assign-save]');
+
+                if (save === null) {
+                    return { present: false };
+                }
+
+                const box = save.getBoundingClientRect();
+
+                return {
+                    present: true,
+                    visible: box.width > 0 && box.height > 0,
+                    type: save.getAttribute('type'),
+                    inForm: save.closest('form[data-practice-assign-row]') !== null,
+                };
+            });
+
+            check('with scripting off the Save is a real, visible button',
+                fallback.present && fallback.visible === true, JSON.stringify(fallback));
+            check('and it submits its own row\'s form',
+                fallback.type === 'submit' && fallback.inForm === true, JSON.stringify(fallback));
+        } finally {
+            await plain.close();
+        }
 
         // **Choosing does not save.** Pick a topic and wait; nothing may be written.
         await page.select(selectFor(fx.assignedOrder), String(fx.topicB.id));

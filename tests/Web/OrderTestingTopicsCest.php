@@ -15,6 +15,7 @@ use Yiisoft\Db\Query\Query;
 
 use function dechex;
 use function gmdate;
+use function preg_replace;
 use function str_pad;
 use function str_repeat;
 
@@ -98,6 +99,40 @@ final class OrderTestingTopicsCest
      *
      * Initialising it anywhere else is how a control silently proposes a change nobody asked for.
      */
+    /**
+     * The inline Save ships inside `<noscript>`, which is what stops it being seen at all.
+     *
+     * It used to be rendered plainly and hidden by the script on DOMContentLoaded. That is correct in
+     * the end state and wrong on the way to it: the button is painted as soon as the row is parsed and
+     * stays on screen until the script runs, which on this page is after a great deal of other
+     * behaviour has loaded. The fix is in the markup, so the guard has to be on the markup — asserted
+     * on the raw response, because whether a parser builds `<noscript>` children depends on whether it
+     * thinks scripting is on, and the property here is about the bytes, not the tree.
+     */
+    public function theInlineSaveIsOnlyEverRenderedInsideNoscript(WebTester $I): void
+    {
+        $this->seedTopic();
+
+        $I->amOnPage(self::STORE_URL);
+        $I->seeResponseCodeIs(200);
+
+        $source = $I->grabPageSource();
+
+        Assert::assertStringContainsString(
+            'data-practice-assign-save',
+            $source,
+            'the no-script fallback disappeared entirely; a reader without JavaScript cannot save',
+        );
+
+        $outsideNoscript = (string) preg_replace('#<noscript\b[^>]*>.*?</noscript>#s', '', $source);
+
+        Assert::assertStringNotContainsString(
+            'data-practice-assign-save',
+            $outsideNoscript,
+            'a Save button is rendered outside <noscript>, so it paints before the script hides it',
+        );
+    }
+
     public function theDropdownOpensOnTheAssignedTopic(WebTester $I): void
     {
         $topicId = $this->seedTopic();

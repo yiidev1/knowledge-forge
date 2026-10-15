@@ -1452,10 +1452,10 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
                             <td class="practice-topic-cell">
                                 <?php
-                                            // One row for every shape this cell takes: the topic's name, a badge
-                                            // when it is no longer offered, and the control that changes it, all on
-                                            // one line. It wraps rather than overflows, so a long topic name pushes
-                                            // the control down instead of widening the table.
+                                                        // One row for every shape this cell takes: the topic's name, a badge
+                                                        // when it is no longer offered, and the control that changes it, all on
+                                                        // one line. It wraps rather than overflows, so a long topic name pushes
+                                                        // the control down instead of widening the table.
                             ?>
                                 <div class="practice-topic-cell__stack">
                                 <?php if (!$rowHasSourceOrder): ?>
@@ -1503,8 +1503,8 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                         // Its own form per row, posting to the same endpoint the bulk
                                         // toolbar uses. The script turns a change into a confirmation
                                         // and submits only when the reader confirms; with no script the
-                                        // Save beside it submits directly, so the page still works and
-                                        // the server is the only thing that ever decides.
+                                        // Save below submits directly, so the page still works and the
+                                        // server is the only thing that ever decides.
                                         //
                                         // The currently assigned topic is an option even when it is no
                                         // longer offered — otherwise initialising the control would
@@ -1548,8 +1548,25 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                                         Html::encode($topic->name) ?></option>
                                                 <?php endforeach; ?>
                                             </select>
-                                            <button class="btn btn--primary btn--sm practice-assign__save"
-                                                    type="submit" data-practice-assign-save>Save</button>
+                                            <?php
+                                            // The no-script path, and nothing else.
+                                            //
+                                            // Inside <noscript> rather than rendered and then hidden
+                                            // by the script. A browser with scripting on does not
+                                            // build this element at all, so the first paint is already
+                                            // the final one. Rendered-then-hidden meant every Save on
+                                            // the page was on screen from the first paint until the
+                                            // script got to it — and this page loads a great deal of
+                                            // audio behaviour first, so "until" was long enough to
+                                            // watch them disappear. The CSP forbids inline scripts and
+                                            // inline styles, so the parser is the earliest hook there
+                                            // is; the correction page's fallback is the same shape for
+                                            // the same reason.
+                                        ?>
+                                            <noscript>
+                                                <button class="btn btn--primary btn--sm practice-assign__save"
+                                                        type="submit" data-practice-assign-save>Save</button>
+                                            </noscript>
                                         </form>
                                     <?php endif; ?>
                                 <?php endif; ?>
