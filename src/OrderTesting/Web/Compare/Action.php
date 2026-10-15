@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\OrderTesting\Web\Compare;
 
+use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Application\Comparison\DemoOrderNormalizer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
@@ -41,11 +42,12 @@ use Yiisoft\Yii\View\Renderer\WebViewRenderer;
  * error — the page says the mirror does not hold it and still shows the trainee's work in full. See
  * {@see OrderComparator}.
  *
- * ## No score
+ * ## The score reads the comparison, and is computed here rather than stored
  *
- * This page renders an {@see \App\OrderTesting\Domain\Comparison\OrderComparison}: two values and a
- * status per field, and nothing that adds them up. Scoring is a separate, separately specified piece of
- * work and will read that object rather than this template.
+ * {@see ComparisonScorer} is handed the same {@see \App\OrderTesting\Domain\Comparison\OrderComparison}
+ * this page renders, so the number beside a section can only ever agree with the rows beneath it. It is
+ * derived per render and persisted nowhere: both documents can change — items resync, a demo order is
+ * re-imported — and a stored score would be a stale claim about a comparison that no longer exists.
  */
 /*
  * Not `final`: the agent practice surface renders this same page from its own route group, and
@@ -62,6 +64,7 @@ readonly class Action
         private StoreReaderInterface $stores,
         private DemoOrderNormalizer $demoNormalizer,
         private OrderComparator $comparator,
+        private ComparisonScorer $scorer,
     ) {}
 
     public function __invoke(
@@ -91,6 +94,14 @@ readonly class Action
             ? null
             : ($this->attempts->byIds([$demo->matchedAttemptId])[$demo->matchedAttemptId] ?? null);
 
+        $comparison = $this->comparator->compare(
+            $this->sourceOrders->find($sourceId, $sourceOrderId),
+            $this->demoNormalizer->normalize($demo),
+            // Local tables only, and two bounded queries. Rendering a comparison never calls the
+            // provider: the item fetch is a deliberate action with its own lock and lease.
+            $this->originalItems->read($sourceId, $sourceOrderId),
+        );
+
         return $this->viewRenderer
             ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/template', [
@@ -100,13 +111,9 @@ readonly class Action
                 'storeName' => $storeName,
                 'demo' => $demo,
                 'attempt' => $attempt,
-                'comparison' => $this->comparator->compare(
-                    $this->sourceOrders->find($sourceId, $sourceOrderId),
-                    $this->demoNormalizer->normalize($demo),
-                    // Local tables only, and two bounded queries. Rendering a comparison never calls
-                    // the provider: the item fetch is a deliberate action with its own lock and lease.
-                    $this->originalItems->read($sourceId, $sourceOrderId),
-                ),
+                'comparison' => $comparison,
+                // One comparison, one score, both realms. Nothing about the reader enters this.
+                'score' => $this->scorer->score($comparison),
             ]);
     }
 

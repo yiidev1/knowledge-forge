@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\OrderTesting\Domain\Comparison\ComparisonScore;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
 use App\OrderTesting\Domain\Comparison\ComparisonStatus;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
@@ -10,6 +11,7 @@ use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\Comparison\OrderComparison;
+use App\OrderTesting\Domain\Comparison\SectionScore;
 use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\TestAttempt;
 use App\OrderTesting\Web\DemoOrdersAsset;
@@ -46,6 +48,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var DemoOrder $demo
  * @var TestAttempt|null $attempt
  * @var OrderComparison $comparison
+ * @var ComparisonScore $score how closely the demo reproduced the original, section by section
  * @var array<string, string> $routes the addresses this surface builds its links from
  * @var bool $canSyncItems whether this surface offers the item re-import
  */
@@ -123,6 +126,94 @@ $verdict = static function (FieldComparison|ItemComparison $c): string {
         . '<span class="ot-mark__glyph" aria-hidden="true">' . $glyph . '</span>'
         . Html::encode($label) . '</span>';
 };
+
+/**
+ * A section's score, drawn beside its heading on the demo panel.
+ *
+ * Only on the demo panel, because the number is a statement about what the trainee entered — the same
+ * reason the per-field verdicts are only on that side. Side by side the two panels share one row track
+ * per element, so a heading that grows for the badge grows on both sides and the invoices stay level
+ * (see the subgrid block in `demo-orders.css`); stacked, there is nothing to stay level with.
+ *
+ * The coverage line is not decoration. A reader must be able to count the rows below the heading and
+ * arrive at this number, so the denominator says how many of the rows they can see were scored — and
+ * `--thin` says so louder when the number rests on less than half of them.
+ */
+$sectionScore = static function (?SectionScore $section): string {
+    if ($section === null) {
+        return '';
+    }
+
+    if (!$section->isScored()) {
+        // Shown, never scored, and the reason differs: Delivery address is redacted out of both
+        // documents by policy, everything else here simply had nothing comparable in it.
+        $why = $section->informationalOnly
+            ? 'Shown for reference. Not scored: the street line is redacted from both documents.'
+            : 'Nothing in this section could be compared, so it is left out of the overall score.';
+
+        return '<span class="ot-sscore ot-sscore--none" title="' . Html::encode($why) . '">'
+            . '<span class="ot-sscore__value">' . ($section->informationalOnly ? 'Not scored' : 'N/A')
+            . '</span></span>';
+    }
+
+    $percent = $section->displayPercent() ?? 0;
+    $tone = $percent >= 90 ? 'good' : ($percent >= 70 ? 'fair' : 'poor');
+    $unit = $section->scoredUnits === 1 ? $section->unit : $section->unit . 's';
+
+    $title = $section->weight > 0
+        ? 'Worth ' . number_format($section->weight, 2) . '% of the overall score.'
+        : 'Not counted towards the overall score.';
+
+    return '<span class="ot-sscore ot-sscore--' . $tone . '" title="' . Html::encode($title) . '">'
+        . '<span class="ot-sscore__value">' . $percent . '%</span>'
+        . '<span class="ot-sscore__meta' . ($section->hasLowCoverage() ? ' ot-sscore__meta--thin' : '') . '">'
+        . Html::encode($section->scoredUnits . ' of ' . $section->visibleUnits . ' ' . $unit) . '</span>'
+        . '</span>';
+};
+
+/*
+ * The overall figure's own explanation, built from what the sections already carry.
+ *
+ * The weighting is not restated here: each section brought its own weight, so there is exactly one
+ * table of weights in the application and this is a reader of it. A section that could not be scored
+ * is absent from the breakdown rather than shown as a zero, because that is how it was treated.
+ */
+$overallParts = [];
+
+foreach ($score->sections as $scored) {
+    $scoredPercent = $scored->displayPercent();
+
+    if ($scored->weight > 0 && $scoredPercent !== null) {
+        $overallParts[] = $scored->title . ' ' . $scoredPercent . '% at '
+            . number_format($scored->weight, 2) . '%';
+    }
+}
+
+$overallTitle = $score->isAvailable()
+    ? 'Weighted across the sections that could be scored: ' . implode(', ', $overallParts)
+        . '. This demo order against its original — not an average over the call.'
+    : ($score->unavailableReason ?? 'Nothing in this comparison could be scored.');
+
+/*
+ * The weighting, in words, from the same place the arithmetic took it. A reader who wants to check the
+ * figure needs the weights; restating them as prose would have been a second copy to keep in step.
+ *
+ * The whole table rather than this order's applicable part: it is the policy, and it is the same on
+ * every comparison. What this particular order's figure was made of is on the card's own tooltip,
+ * where a section that could not be scored is simply absent.
+ */
+$weightNote = [];
+
+foreach ($score->weighting as $weighted => $share) {
+    $weightNote[] = $weighted . ' ' . number_format($share, 2) . '%';
+}
+
+$weightTotal = number_format(array_sum($score->weighting), 2);
+
+$overallPercent = $score->displayPercent();
+$overallTone = $overallPercent === null
+    ? 'unknown'
+    : ($overallPercent >= 90 ? 'good' : ($overallPercent >= 70 ? 'fair' : 'poor'));
 
 /**
  * The item-synchronisation state, in words an administrator can act on.
@@ -252,6 +343,8 @@ $panel = static function (
     $value,
     $verdict,
     $itemTitle,
+    $score,
+    $sectionScore,
 ): string {
     $isDemo = $side === 'demo';
     $pick = static fn(FieldComparison $f): ?string => $isDemo ? $f->demo : $f->original;
@@ -282,7 +375,9 @@ $panel = static function (
 
     foreach ($leadingSections as $section) {
         $out .= '<div class="ot-book__section"><h3 class="ot-book__section-title">'
-            . Html::encode($section['title']) . '</h3><dl class="ot-book__lines">';
+            . Html::encode($section['title'])
+            . ($isDemo ? $sectionScore($score->section($section['title'])) : '')
+            . '</h3><dl class="ot-book__lines">';
 
         foreach ($section['fields'] as $field) {
             $out .= $line($field->label, $value($pick($field)), $mark($field));
@@ -293,7 +388,9 @@ $panel = static function (
 
     // ---- the lines themselves -------------------------------------------------------------------
     $out .= '<div class="ot-book__section ot-book__section--items"><h3 class="ot-book__section-title">'
-        . 'Order items</h3>';
+        . 'Order items'
+        . ($isDemo ? $sectionScore($score->section('Order items')) : '')
+        . '</h3>';
 
     if ($comparison->items === []) {
         $out .= '<p class="util-muted">'
@@ -355,8 +452,9 @@ $panel = static function (
     // ---- totals close the invoice ----------------------------------------------------------------
     foreach ($totalsSections as $section) {
         $out .= '<div class="ot-book__section ot-book__section--totals">'
-            . '<h3 class="ot-book__section-title">' . Html::encode($section['title']) . '</h3>'
-            . '<dl class="ot-book__lines">';
+            . '<h3 class="ot-book__section-title">' . Html::encode($section['title'])
+            . ($isDemo ? $sectionScore($score->section($section['title'])) : '')
+            . '</h3><dl class="ot-book__lines">';
 
         $last = array_key_last($section['fields']);
 
@@ -386,7 +484,21 @@ $panel = static function (
             &mdash; what the call actually ordered, beside what the trainee entered in Order58.
         </p>
     </div>
-    <div class="page-header__actions">
+</div>
+
+<?php
+// A row of its own, rather than the shared header's action slot.
+//
+// `.page-header` lays its title and its actions out with `space-between` and lets them wrap. This
+// page's subtitle is a sentence, so the row always wrapped — and a wrapped row has no second item to
+// be spaced against, which left the controls huddled at one end with the width unused. Worse, where
+// they ended up depended on how long the subtitle happened to be.
+//
+// So the controls get their own full-width row: the three actions at the left, the score at the right,
+// and nothing about the heading above can move either of them.
+?>
+<div class="ot-toolbar">
+    <div class="ot-toolbar__actions">
         <?php
         // Re-importing the original order's items talks to Order58 and rewrites mirrored rows. It is
         // management, so it is offered only where this page is a management surface — the endpoint is
@@ -405,10 +517,44 @@ $panel = static function (
                         data-busy-label="Syncing…">Sync Original Order Items</button>
             </form>
         <?php endif; ?>
-        <a class="btn" href="<?= Html::encode($listUrl) ?>">All demo orders for this call</a>
+        <?php
+// `btn` alone draws no box — the base class is layout and typography, and a variant supplies
+// the surface. Without one this sat in a row of buttons as bare link text. `btn--secondary` is
+// the same variant View Receipt uses, so the three controls now read as one set.
+//
+// The visible label is shortened and the accessible name keeps the whole sentence, which still
+// contains it — a screen reader is told which call, and the toolbar does not grow to say so.
+?>
+        <a class="btn btn--secondary" href="<?= Html::encode($listUrl) ?>"
+           aria-label="All demo orders for this call">
+            <span aria-hidden="true">📋</span> All Demo Orders
+        </a>
         <a class="btn btn--secondary" href="<?= Html::encode($receiptUrl) ?>">
             <span aria-hidden="true">🧾</span> View Receipt
         </a>
+    </div>
+
+    <?php
+    // Not an action, so it is not in the action group: nothing here is pressed. It is the one figure
+    // the page exists to produce, captioned with its scope — this demo order against this original,
+    // and nothing wider. An uncaptioned percentage on a page about a trainee's work becomes a figure
+    // about the trainee.
+    //
+    // Unavailable prints as unavailable rather than as 0%. The reason is already on this page — the
+    // mirror notice above, or the item-synchronisation alert below — so it is not repeated here.
+?>
+    <div class="ot-score ot-score--<?= Html::encode($overallTone) ?>"
+         title="<?= Html::encode($overallTitle) ?>">
+        <span class="ot-score__label">Overall match score</span>
+        <?php // `!== null` rather than `isAvailable()`: the same question, but it narrows the type.?>
+        <span class="ot-score__value<?= $overallPercent === null ? ' ot-score__value--unavailable' : '' ?>">
+            <?= $overallPercent === null
+            ? 'Not scored'
+            : Html::encode($overallPercent . '%') ?>
+        </span>
+        <span class="ot-score__scope">
+            <?= $score->isAvailable() ? 'this demo order' : 'see the note below' ?>
+        </span>
     </div>
 </div>
 
@@ -461,10 +607,10 @@ $panel = static function (
 
 <?php if ($comparison->itemNote() !== ''): ?>
     <?php
-    // Why the line items below read as they do. Two different kinds of message share this one place:
-    // "these cannot be compared" and "these are from an earlier fetch". Both are statements about the
-    // synchronisation, and neither is a statement about the trainee — which is exactly what the old
-    // behaviour got wrong when it reported every demo line as invented.
+// Why the line items below read as they do. Two different kinds of message share this one place:
+// "these cannot be compared" and "these are from an earlier fetch". Both are statements about the
+// synchronisation, and neither is a statement about the trainee — which is exactly what the old
+// behaviour got wrong when it reported every demo line as invented.
     ?>
     <div class="alert alert--<?= Html::encode($comparison->itemAvailability->modifier()) ?>" role="status">
         <?= Html::encode($comparison->itemNote()) ?>
@@ -479,8 +625,29 @@ $panel = static function (
     <?= $panel('demo', 'Demo / test order', $demo->demoOrderId, $comparison->demo) ?>
 </div>
 
+<?php
+// How the figures above were arrived at, in the same place as the figures.
+//
+// Not a nicety: the score is only defensible if a reader can count the rows on this page and reach the
+// same number. So every rule that moves it is stated — including the two that make a row count for
+// nothing and the one that makes a row count for nothing at all — and the weights are printed from the
+// same table the arithmetic used rather than retyped here.
+?>
 <p class="util-muted ot-books__note">
-    These are differences, not a score. No accuracy percentage,
-    weighting or pass mark is calculated here; a later scoring pass reads the same comparison this page
-    renders.
+    <strong>How this is scored.</strong>
+    Each section counts the rows shown above it: a row that agrees counts in full, one that differs or
+    is missing counts as nothing. A field both orders left empty is not shown and not counted &mdash;
+    silence is not agreement. A value only the demo order has is shown but is not counted against it
+    here, because the mirror frequently holds no name or email to compare; on the line items it <em>is</em>
+    counted, because the provider states which lines the order had. A line the demo missed, or one it
+    added, counts once and for nothing &mdash; once, not once per field, so a single mistake is charged
+    a single time. Within a matched line, quantity and unit price count double, and the Options row is
+    not counted on its own because it repeats Additions and Combinations. Within Totals, the grand
+    total counts triple. Delivery address is shown and never scored: its street line is redacted from
+    both documents. Figures are rounded to whole percentages, except that a section short of complete
+    never prints 100 and one short of nothing never prints 0.
+    Weighting &mdash; <?= Html::encode(implode(', ', $weightNote)) ?>,
+    <?= Html::encode($weightTotal) ?>% in all.
+    The figure is this demo order measured against this original, and nothing wider: not the trainee,
+    not the call, not the store.
 </p>

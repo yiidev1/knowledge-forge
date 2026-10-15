@@ -447,3 +447,256 @@
         letter-spacing: 0.04em;
     }
 }
+
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * The toolbar, and how closely the demo reproduced the original
+ *
+ * Colour comes from the status token triplets this application already defines — `--success-*`,
+ * `--info-*`, `--warning-*` — and never from values chosen here. Each triplet carries a surface, a
+ * border and a text colour, and each is redeclared for the dark theme, so a card cannot end up as a
+ * light panel in a dark page. An earlier version of this block asked for `var(--muted, …)`, which this
+ * application does not define: the fallback measured 3.25:1 on a white surface. A token that exists is
+ * the whole fix.
+ *
+ * Colour is a second channel only. The percentage is stated in text at full contrast, so the bands
+ * below are a cue and never the answer — and they are a presentation threshold, not a grade: nothing
+ * here passes, fails or weights anything.
+ *
+ *   90–100%  agreed almost everywhere   success
+ *   70–89%   mostly agreed              info
+ *   below    worth looking at           warning
+ *   no score not measured               the page's own neutral surface
+ * ---------------------------------------------------------------------------------------------------
+ */
+
+/*
+ * Actions at one end, the figure at the other, across the full reading width.
+ *
+ * Its own row rather than the page header's action slot: this page's subtitle is a sentence, so that
+ * slot always wrapped onto a line of its own, and a wrapped flex line has nothing left to be spaced
+ * against — the controls bunched at one end and the width went unused. Here the two groups are the
+ * row's only children, so the space between them is the row's own, and the heading above can be any
+ * length without moving either.
+ */
+.ot-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+}
+
+.ot-toolbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* The form is a button in this row like any other; its margin is the only thing in the way. */
+.ot-toolbar__actions form {
+    margin: 0;
+}
+
+/* ---- the overall figure ------------------------------------------------------------------------ */
+
+.ot-score {
+    /*
+     * The row's own `space-between` puts it at the right while both groups share a line. Once the
+     * buttons grow past the width — a laptop at 1024px is already there — the figure wraps onto a line
+     * of its own, and a line with one item on it has no space to be "between". Measured at 1024 and
+     * 768 it landed hard against the left margin; `margin-left: auto` is what keeps the right edge the
+     * right edge at every width.
+     */
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    min-width: 10.5rem;
+    padding: 0.6rem 1.1rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    line-height: 1.1;
+    /* Information, not a control: nothing here is pressed, and the cursor should not suggest it is. */
+    cursor: default;
+}
+
+.ot-score__label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+/* The figure, and the largest thing on the row: it is what the card exists to say. */
+.ot-score__value {
+    font-size: 2rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+/* "Not scored" is words, not a number, and must not be set at a number's size. */
+.ot-score__value--unavailable {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+/* The scope, never optional: a percentage with no stated subject reads as a figure about the person
+   rather than about this one pair of documents. */
+.ot-score__scope {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.ot-score--good {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+}
+
+.ot-score--good .ot-score__value {
+    color: var(--success-text);
+}
+
+.ot-score--fair {
+    border-color: var(--info-border);
+    background: var(--info-bg);
+}
+
+.ot-score--fair .ot-score__value {
+    color: var(--info-text);
+}
+
+.ot-score--poor {
+    border-color: var(--warning-border);
+    background: var(--warning-bg);
+}
+
+.ot-score--poor .ot-score__value {
+    color: var(--warning-text);
+}
+
+.ot-score--unknown .ot-score__value {
+    color: var(--text-muted);
+}
+
+/* ---- a section's own score, beside its heading ------------------------------------------------- */
+
+/*
+ * The heading holds its name and its score at opposite ends, and wraps rather than squeezing.
+ *
+ * Only the demo panel carries one: the figure is a statement about what the trainee entered, like the
+ * per-row verdicts beside it. Side by side the two panels share one row track per element, so this
+ * heading and its opposite number are the same track and grow together — the alignment is the grid's,
+ * not a measurement repeated on the other side, which is why a taller card cannot pull the invoices
+ * apart. See the subgrid block above.
+ */
+.ot-book__section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    /* The card is taller than the label it sits beside; the heading keeps its own breathing room. */
+    padding-top: 0.75rem;
+    padding-bottom: 0.4rem;
+}
+
+/*
+ * The card. A fixed width so all four line up on one right-hand edge and 9%, 50% and 100% occupy the
+ * same box — a badge that resized with the digit count stepped in and out down the page.
+ */
+.ot-sscore {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.05rem;
+    flex: 0 0 auto;
+    width: 6.25rem;
+    min-height: 3rem;
+    padding: 0.3rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    line-height: 1.15;
+    /* The heading is uppercase and tracked out; a number should not be. */
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.ot-sscore__value {
+    font-size: 1.15rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
+/* The denominator, so a reader can count the rows below and arrive at the number above. */
+.ot-sscore__meta {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Said louder when the figure rests on less than half the rows on screen. The percentage itself is
+   left alone — moving it would be reporting a measurement nobody took. */
+.ot-sscore__meta--thin {
+    color: var(--warning-text);
+}
+
+.ot-sscore--good {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+}
+
+.ot-sscore--good .ot-sscore__value {
+    color: var(--success-text);
+}
+
+.ot-sscore--fair {
+    border-color: var(--info-border);
+    background: var(--info-bg);
+}
+
+.ot-sscore--fair .ot-sscore__value {
+    color: var(--info-text);
+}
+
+.ot-sscore--poor {
+    border-color: var(--warning-border);
+    background: var(--warning-bg);
+}
+
+.ot-sscore--poor .ot-sscore__value {
+    color: var(--warning-text);
+}
+
+/* Not a number, so not a number's size: it keeps the neutral surface and says what it is. */
+.ot-sscore--none .ot-sscore__value {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+    /* One card and three buttons do not share a phone's width, so the figure takes its own line. */
+    .ot-toolbar {
+        align-items: stretch;
+    }
+
+    .ot-toolbar__actions,
+    .ot-score {
+        width: 100%;
+    }
+}

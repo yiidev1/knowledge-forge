@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\OrderTesting;
 
 use App\Order58\Application\Orders\OrderMapper;
+use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Domain\InitiatorType;
 use App\Shared\Order58\PaymentSecretRedactor;
 use PHPUnit\Framework\TestCase;
@@ -243,18 +244,127 @@ final class OrderTestingBoundariesTest extends TestCase
         self::assertSame([], $offenders, implode("\n", $offenders));
     }
 
-    /** No scoring, anywhere in the feature, in this phase. */
-    public function testNoScoringExistsYet(): void
+    /**
+     * Scoring exists now, and these are the terms it was allowed on.
+     *
+     * The guard this replaces forbade scoring outright, for a stated reason: a number that adds up a
+     * comparison is a business decision, and nobody had taken it. It has now been taken and specified,
+     * so the test's job changes from "none of this exists" to "it exists in exactly one place, derived
+     * from what the page shows, and it is not a verdict". Each clause below is one of the conditions
+     * the specification set.
+     */
+    public function testScoringLivesInOneDerivedPlaceAndIsNotAVerdict(): void
     {
+        // A score is a measurement of two documents' agreement. The moment it has a pass mark it is a
+        // judgement about a person, which is a different feature with different consequences and was
+        // not what was approved.
+        $verdicts = ['passMark', 'accuracyPercent', 'totalScore', 'isPass', 'grade'];
+
+        // Where a score may be named at all: the one service that computes it, the two value objects
+        // it returns, and the page that prints them. A sixth file naming a score would be a second
+        // opinion about the same two documents, which is exactly what one service prevents.
+        $mayScore = [
+            'src/OrderTesting/Application/Comparison/ComparisonScorer.php',
+            'src/OrderTesting/Domain/Comparison/ComparisonScore.php',
+            'src/OrderTesting/Domain/Comparison/SectionScore.php',
+            'src/OrderTesting/Web/Compare/Action.php',
+            'src/OrderTesting/Web/Compare/template.php',
+        ];
+
         $offenders = [];
 
         foreach ($this->phpFilesIn($this->root() . '/src/OrderTesting') as $relative => $source) {
-            // Identifiers, not English. The comparison page says in prose that it calculates no
-            // weighting or pass mark, and a test that banned the words would ban saying so. What must
-            // not exist is a property or method that produces a verdict.
-            foreach (['$score', '->score', 'accuracyPercent', 'totalScore', 'passMark'] as $forbidden) {
+            foreach ($verdicts as $forbidden) {
                 if (str_contains($source, $forbidden)) {
                     $offenders[] = $relative . ' contains ' . $forbidden;
+                }
+            }
+
+            if (in_array($relative, $mayScore, true)) {
+                continue;
+            }
+
+            // Identifiers, not English: several files explain in prose what the score is computed
+            // from, and a test that banned the words would ban explaining it. `ComparisonScorer` is
+            // likewise allowed to be pointed at — what must not spread is the score itself, so the
+            // class names are matched on a word boundary rather than as substrings.
+            $forbidden = [
+                '/\$score\b/' => '$score',
+                '/->score\(/' => '->score()',
+                '/\bComparisonScore(?![A-Za-z])/' => 'ComparisonScore',
+                '/\bSectionScore(?![A-Za-z])/' => 'SectionScore',
+            ];
+
+            foreach ($forbidden as $pattern => $name) {
+                if (preg_match($pattern, $source) === 1) {
+                    $offenders[] = $relative . ' names a score (' . $name . ')';
+                }
+            }
+        }
+
+        self::assertSame([], $offenders, implode("\n", $offenders));
+    }
+
+    /**
+     * One table of weights, in the service that owns it.
+     *
+     * The page shows how the overall was made, and it would have been easy to restate the weights in
+     * the template to do that. Then two numbers would claim to be the same weighting and a change to
+     * one would quietly contradict the other, so the sections carry their own weight instead and the
+     * template is only a reader of it.
+     */
+    public function testTheWeightingIsDeclaredOnlyInTheScorer(): void
+    {
+        $offenders = [];
+
+        foreach ($this->phpFilesIn($this->root() . '/src') as $relative => $source) {
+            if ($relative === 'src/OrderTesting/Application/Comparison/ComparisonScorer.php') {
+                continue;
+            }
+
+            foreach (['SECTION_WEIGHTS', 'FACET_WEIGHTS', 'FIELD_WEIGHTS'] as $table) {
+                if (str_contains($source, $table)) {
+                    $offenders[] = $relative . ' declares ' . $table;
+                }
+            }
+        }
+
+        self::assertSame([], $offenders, implode("\n", $offenders));
+    }
+
+    /**
+     * The scorer can only look at the comparison it is handed.
+     *
+     * No repository, no clock, no HTTP client — so the same original and demo produce the same score in
+     * every realm, on every render, and a score can never depend on who is looking at it. This is
+     * asserted on the constructor rather than trusted to review, because a dependency is one parameter
+     * away and the property it protects is the one the whole feature rests on.
+     */
+    public function testTheScorerDependsOnNothing(): void
+    {
+        $constructor = (new ReflectionClass(ComparisonScorer::class))->getConstructor();
+
+        self::assertNull($constructor, 'ComparisonScorer must take no dependencies.');
+    }
+
+    /**
+     * A score is derived, never stored.
+     *
+     * Both sides of a comparison change — items resync, a demo order is re-imported — so a stored score
+     * is a claim about a comparison that no longer exists. There is therefore no column and no table to
+     * keep in step, and this test is what stops one appearing by convenience later.
+     */
+    public function testNoScoreIsPersisted(): void
+    {
+        $offenders = [];
+
+        foreach (['/src/OrderTesting', '/src/Migration'] as $tree) {
+            foreach ($this->phpFilesIn($this->root() . $tree) as $relative => $source) {
+                // An order-testing score column, by any of the names one would be given. Chat answer
+                // scores are a different feature with its own tables, which is why this is anchored on
+                // the names this feature would use rather than on the word alone.
+                if (preg_match('/order_testing_[a-z_]*score|match_score|overall_score|score_percent/i', $source) === 1) {
+                    $offenders[] = $relative . ' persists a score';
                 }
             }
         }

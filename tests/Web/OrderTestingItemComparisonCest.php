@@ -511,8 +511,9 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('View Receipt', '.page-header__actions');
-        $I->seeElement('.page-header__actions a[href="' . $this->receiptUrl() . '"]');
+        // The controls have their own row below the heading now — see `.ot-toolbar` in the template.
+        $I->see('View Receipt', '.ot-toolbar__actions');
+        $I->seeElement('.ot-toolbar__actions a[href="' . $this->receiptUrl() . '"]');
     }
 
     /** Two receipts, each showing its own order's number and lines. */
@@ -810,8 +811,15 @@ final class OrderTestingItemComparisonCest
         $I->see('Order items');
     }
 
-    /** And still no score, which is a separate, separately specified piece of work. */
-    public function thePageStillReportsNoAccuracyNumber(WebTester $I): void
+    /**
+     * The page scores now, and it shows its working.
+     *
+     * The test this replaces asserted that no percentage existed anywhere, for a stated reason: a score
+     * was an untaken business decision. It has been taken and specified, so what must be guarded is no
+     * longer the absence of a number but the presence of the rules behind it — a figure a reader cannot
+     * check is the thing the old test was really protecting against.
+     */
+    public function theScoreIsShownWithTheRulesItWasComputedBy(WebTester $I): void
     {
         $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
         $this->seedItem(1, $this->wings(), 0);
@@ -820,8 +828,120 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('These are differences, not a score');
-        $I->dontSee('%');
+        $I->see('Overall match score');
+        // The scope, beside the figure: two documents, not a person and not a period.
+        $I->see('this demo order', '.ot-score__scope');
+        $I->see('How this is scored');
+
+        // Every rule that moves the figure, in the page's own words.
+        $I->see('silence is not agreement');
+        $I->see('quantity and unit price count double');
+        $I->see('the grand total counts triple');
+
+        // The weighting, printed from the same table the arithmetic used — and as shares of a
+        // hundred, which is what the sum divides by when every section applies.
+        $I->see('Customer 22.22%');
+        $I->see('Order 22.22%');
+        $I->see('Order items 50.00%');
+        $I->see('Totals 5.56%');
+        $I->see('100.00% in all');
+
+        // Its scope, so a figure about two documents is not read as a figure about a person.
+        $I->see('not the trainee');
+    }
+
+    /**
+     * A demo order that reproduced everything comparable scores full marks.
+     *
+     * The fixture's original holds a phone and one line; the demo holds the same phone, the same line
+     * and a first name the mirror has no counterpart for. That extra name is shown and not charged, so
+     * every scored unit agreed and the figure is 100%.
+     */
+    public function aFaithfulReproductionScoresFull(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('100%', '.ot-score__value');
+    }
+
+    /** A wrong quantity is visible in the figure, not only in the row. */
+    public function aWrongQuantityLowersTheItemSectionScore(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+
+        $wrong = $this->wings();
+        $wrong['qty'] = '3';
+        $this->seedDemoOrder([$wrong]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        // This line has no modifiers and no instructions on either side, so its weighted units are
+        // Product 1, Quantity 2, Unit price 2 and Product SN 1 — six, of which the wrong quantity costs
+        // two: 4/6, i.e. 67%. The unit tests hold the arithmetic; this holds that the page shows it.
+        $I->see('67%', '.ot-book--demo .ot-sscore__value');
+        $I->dontSee('100%', '.ot-score__value');
+    }
+
+    /**
+     * Items that were never fetched leave the order unscored rather than scored low.
+     *
+     * Half the weight is the item list. A figure built from the other half would be a different
+     * measurement wearing this one's name, so the page says so — and the reason is the alert it already
+     * shows, not a second copy of it beside the number.
+     */
+    public function anUnsynchronizedOriginalIsNotScoredAtAll(WebTester $I): void
+    {
+        // `PENDING` is what the mirror holds for an order whose items were never asked for.
+        $this->seedOrder('PENDING');
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        // Unavailable printed as unavailable, in words, rather than as a 0% nobody measured.
+        $I->see('Not scored', '.ot-score__value');
+        $I->see('see the note below', '.ot-score__scope');
+        $I->seeElement('.ot-score--unknown');
+    }
+
+    /**
+     * The score is on the demo panel only.
+     *
+     * It is a statement about what the trainee entered, like the per-row verdicts beside it. On the
+     * original panel it would be a figure about the provider's own order, which is not a thing this
+     * page measures.
+     */
+    public function theSectionScoresAreOnTheDemoPanelOnly(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->seeElement('.ot-book--demo .ot-sscore');
+        $I->dontSeeElement('.ot-book--original .ot-sscore');
+    }
+
+    /** Delivery address is shown and never scored, because its street is redacted on both sides. */
+    public function theDeliveryAddressSectionSaysItIsNotScored(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('Not scored', '.ot-book--demo .ot-sscore--none');
     }
 
     public function aGuestSeesNoneOfIt(WebTester $I): void
@@ -940,7 +1060,9 @@ final class OrderTestingItemComparisonCest
 
         $I->seeElement('form[action*="order-items/sync"] button[type="submit"]');
         $I->see('Sync Original Order Items');
-        $I->see('All demo orders for this call');
+        // Shortened on screen and whole in the accessible name, which is what a screen reader reads.
+        $I->see('All Demo Orders');
+        $I->seeElement('a.btn--secondary[aria-label="All demo orders for this call"]');
     }
 
     /**
@@ -1178,7 +1300,16 @@ final class OrderTestingItemComparisonCest
             }
 
             if (str_contains($class, 'ot-book__section-title')) {
-                $out[] = 'title:' . self::flatten($row->textContent);
+                // Direct text only. The heading on the demo side also carries that section's score,
+                // which is a statement about the demo and deliberately has no counterpart opposite —
+                // the row's identity is the heading's own words.
+                $label = '';
+
+                foreach ($xpath->query('./text()', $row) as $text) {
+                    $label .= $text->textContent;
+                }
+
+                $out[] = 'title:' . self::flatten($label);
 
                 continue;
             }

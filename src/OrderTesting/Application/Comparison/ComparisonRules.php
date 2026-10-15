@@ -29,15 +29,16 @@ use function trim;
  *  - **Phone.** Compared on digits only. A phone number is an identifier; `(917) 853-2637` and
  *    `19178532637` are the same number, and the formatting is the UI's, not the caller's.
  *
- * There is deliberately **no** near-match, no edit distance, no percentage and no threshold. Scoring
- * will need rules like that and will be told them; a comparison that guessed them now would bake an
- * unreviewed business decision into the data a score is later computed from.
+ * There is deliberately **no** near-match, no edit distance, no percentage and no threshold. A field
+ * either agrees or it does not, and {@see ComparisonScorer} weighs those answers without revisiting
+ * them — so a near-match rule is a decision somebody takes here, once, rather than two subsystems
+ * disagreeing about how close is close enough.
  *
- * ## This is the seam scoring will use
+ * ## This is the seam scoring uses
  *
- * Every equality decision in this feature goes through this class. When scoring arrives with its own
- * notion of "close enough" for, say, a product name, it changes here — once — and both the page and the
- * score follow. Nothing else compares two values.
+ * Every equality decision in this feature goes through this class. If "close enough" is ever wanted for,
+ * say, a product name, it changes here — once — and both the page and the score follow, because the
+ * score reads the statuses this produced. Nothing else compares two values.
  */
 final readonly class ComparisonRules
 {

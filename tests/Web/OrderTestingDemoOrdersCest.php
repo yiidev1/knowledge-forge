@@ -97,9 +97,14 @@ final class OrderTestingDemoOrdersCest
 
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
 
-        $I->see('View (3)');
+        // The label and the count are separate elements now, so the count can be set apart from the
+        // word without the two being read as one string. The accessible name carries the whole
+        // sentence, which is the part a screen reader gets.
+        $I->see('3', '.ot-demo-orders__count');
+        $I->see('View', '.ot-demo-orders__label');
         $I->seeElement(
-            'a[href="/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders"]',
+            'a[href="/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER
+            . '/demo-orders"][aria-label="View 3 demo orders for this order"]',
         );
     }
 
@@ -214,8 +219,15 @@ final class OrderTestingDemoOrdersCest
         $I->see('4.28000');
     }
 
-    /** No score, anywhere on the page. */
-    public function theComparisonShowsNoScore(WebTester $I): void
+    /**
+     * The page scores, and what it shows is a measurement rather than a verdict.
+     *
+     * This test used to assert that no percentage existed anywhere, because scoring was a business
+     * decision nobody had taken. It has since been taken and specified, so what is guarded here is what
+     * that decision was: a figure with its scope stated and its rules on the page, and still no pass
+     * mark, grade or judgement about the person who typed the order.
+     */
+    public function theComparisonScoresWithoutPassingJudgement(WebTester $I): void
     {
         $this->signIn($I);
         $this->seedDemoOrder(16630651);
@@ -224,14 +236,22 @@ final class OrderTestingDemoOrdersCest
             '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo/16630651',
         );
 
-        // Not the WORD — this page says in prose that it calculates no accuracy percentage, and a
-        // test banning the word would ban saying so. What must not appear is a verdict.
-        $I->see('These are differences, not a score');
-        // Structural, not lexical: this page says in prose that it calculates no accuracy percentage
-        // or pass mark, so banning those words would ban saying so. What must not exist is a rendered
-        // verdict. `OrderTestingBoundariesTest` is the stronger guard, over the source itself.
-        $I->dontSeeElement('[data-ot-score]');
-        $I->dontSeeElement('.ot-score');
+        $I->seeElement('.ot-score');
+        // This fixture's original order has no synchronised items, and the item list is half the
+        // weighting — so the honest answer is that it is not scored, not a figure built from the other
+        // half. `OrderTestingItemComparisonCest` covers the synchronised case and its percentages.
+        $I->see('Not scored', '.ot-score__value');
+        // Where a scored page states its scope, this one states where the reason is: the
+        // item-synchronisation alert further down, rather than a second copy of it up here.
+        $I->see('see the note below', '.ot-score__scope');
+        // And the rules, so a reader can check whatever figure does appear.
+        $I->see('How this is scored');
+
+        // A measurement, not a verdict. These words would make it one.
+        $I->dontSee('Pass');
+        $I->dontSee('Fail');
+        $I->dontSee('Grade');
+        $I->dontSee('Accuracy');
     }
 
     /** A demo order whose source order was never mirrored stays fully visible. */

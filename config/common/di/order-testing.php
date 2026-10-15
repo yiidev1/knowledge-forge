@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Application\DemoOrderDirectory;
@@ -31,6 +32,10 @@ use Yiisoft\Definitions\DynamicReference;
 return [
     OrderNormalizer::class => OrderNormalizer::class,
     OrderComparator::class => OrderComparator::class,
+
+    // Reads one comparison and weighs it. Stateless and persisted nowhere: a score is derived from two
+    // documents that both change, so it is computed per render rather than stored and kept in step.
+    ComparisonScorer::class => ComparisonScorer::class,
 
     DemoOrderRepositoryInterface::class => DbDemoOrderRepository::class,
     TestAttemptRepositoryInterface::class => DbTestAttemptRepository::class,
