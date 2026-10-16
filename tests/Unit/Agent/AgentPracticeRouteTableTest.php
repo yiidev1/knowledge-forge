@@ -37,6 +37,11 @@ final class AgentPracticeRouteTableTest extends TestCase
         'agent.practice-orders.demo-url',
         'agent.practice-orders.job.ai-audio.file',
         'agent.practice-orders.job.original.file',
+        // The second write this surface has, approved with playback tracking. It records what the
+        // agent's browser played and changes nothing about the recording — no transcript, no audio,
+        // no demo order — and it is scoped per recording by the same middleware as every address
+        // above it. It is a write, so it is named here deliberately rather than slipping in.
+        'agent.practice-orders.job.playback',
         'agent.practice-orders.job.review.fragment',
         'agent.practice-orders.job.status',
         'agent.practice-orders.store',

@@ -134,11 +134,31 @@
 }
 
 /*
+ * On Manage Orders these two are sized as shares of the table instead — see `order-testing.css`.
+ * A rem width here and a percentage there is what made the table ask for 100% plus 532px. The rules
+ * above still apply to the practice surface's own table, which has fewer columns and more room.
+ */
+
+/*
  * Wide enough for a topic name and a compact control beside it. The column was 13rem and the control
  * filled it, so every assigned row was three storeys tall: name, badge, dropdown.
  */
 .practice-col-topic {
     width: 21rem;
+}
+
+/*
+ * On Manage Orders the control fills its column rather than setting the column's size.
+ *
+ * `.practice-assign__select` carries `min-width: 10rem`, which is right on the practice surface where
+ * the topic column is 21rem — but on a nine-column table that 160px floor sat inside a 148px column
+ * and widened the whole table past its container. A fixed-layout table takes its width from the sum
+ * of what its cells insist on, so one rigid control is enough to make everything scroll.
+ */
+.a2t-orders.ot-orders .practice-assign__select,
+.a2t-orders.ot-orders .practice-topic-select {
+    min-width: 0;
+    max-width: 100%;
 }
 
 .practice-select {

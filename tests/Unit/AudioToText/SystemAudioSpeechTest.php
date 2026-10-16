@@ -64,8 +64,6 @@ final class SystemAudioSpeechTest extends TestCase
         $section = self::speechSection();
 
         foreach ([
-            'fetch(' => 'a request to our own server',
-            'XMLHttpRequest' => 'an upload or a POST',
             'navigator.sendBeacon' => 'a background report',
             'Deepgram' => 'the paid provider',
             'deepgram' => 'the paid provider',
@@ -80,6 +78,23 @@ final class SystemAudioSpeechTest extends TestCase
                 'System audio must not involve ' . $what . '.',
             );
         }
+
+        // `fetch(` was on that list until playback tracking was approved, and the amendment is
+        // deliberate: this path may now post what it played to THIS application, and to nothing else.
+        // What the entry was really guarding — the paid provider, the generation endpoint, storage
+        // that outlives the session — is all still above, and the one address it may reach is handed
+        // to it by the server rather than built here.
+        self::assertStringContainsString('fetch(playback.track, {', $section);
+        self::assertSame(
+            1,
+            preg_match_all('/fetch\(/', $section),
+            'The speech path may make one kind of request: reporting what it played.',
+        );
+        self::assertStringNotContainsString(
+            'http',
+            $section,
+            'Every address this path uses arrives from the server; none is written here.',
+        );
 
         // And positively: the only thing it speaks with is the browser's own engine.
         self::assertStringContainsString('window.speechSynthesis.speak(', $section);
@@ -136,20 +151,30 @@ final class SystemAudioSpeechTest extends TestCase
         self::assertSame(
             1,
             preg_match('/var SYSTEM_AUDIO_GAP_MS = (\d+);/', $section, $m),
-            'The gap must be declared once, beside the state it belongs to.',
+            'The legacy gap must be declared once, beside the state it belongs to.',
         );
+        // Still 1500, and that is a decision rather than an oversight: the surfaces that offer no
+        // control — Order Testing and the administrators' practice page — read exactly as they did.
         self::assertSame('1500', $m[1]);
 
-        // Both arming sites go through the name.
+        // The two arming sites now read the gap this reading was started with. One value still, one
+        // place still; it simply belongs to the session rather than to the module, which is what lets
+        // a reading keep its own pause while the dropdown says something else.
         self::assertSame(
             2,
-            preg_match_all('/setTimeout\(speechNext, SYSTEM_AUDIO_GAP_MS\)/', $section),
-            'Every gap is armed from the one value: after a line ends, and when Resume restores it.',
+            preg_match_all('/setTimeout\(speechNext, speech\.gapMs\)/', $section),
+            'Every gap is armed from the session value: after a line ends, and when Resume restores it.',
         );
         self::assertSame(
             0,
             preg_match_all('/setTimeout\(speechNext, \d/', $section),
             'No call site may carry its own number.',
+        );
+        // And the session value can only come from the two places that are allowed to decide it.
+        self::assertStringContainsString(
+            'speech.gapMs = chosenGapMs === null ? SYSTEM_AUDIO_GAP_MS : chosenGapMs;',
+            $section,
+            'A reading takes its gap from the dropdown, or the legacy value where there is none.',
         );
     }
 
@@ -191,7 +216,7 @@ final class SystemAudioSpeechTest extends TestCase
         self::assertStringContainsString("if (speech.phase === 'gap') {", $resume[0]);
         // Resuming from a gap re-arms the gap; it must never speak a line straight away, and must
         // never call speechNext() directly — that is what produced a duplicate of a half-read line.
-        self::assertStringContainsString('setTimeout(speechNext, SYSTEM_AUDIO_GAP_MS)', $resume[0]);
+        self::assertStringContainsString('setTimeout(speechNext, speech.gapMs)', $resume[0]);
         self::assertSame(
             0,
             preg_match_all('/^\s*speechNext\(\);/m', $resume[0]),

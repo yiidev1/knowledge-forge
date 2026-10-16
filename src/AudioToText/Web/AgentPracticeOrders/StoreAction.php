@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\AudioToText\Web\AgentPracticeOrders;
 
+use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Web\PracticeOrders\StoreAction as PracticeStoreAction;
 use Psr\Http\Message\ResponseInterface;
 
@@ -45,6 +46,18 @@ use Psr\Http\Message\ResponseInterface;
  */
 final readonly class StoreAction extends PracticeStoreAction
 {
+    /**
+     * Read-only, and recorded.
+     *
+     * The only surface whose system-voice playback is tracked, and therefore the only one offered the
+     * Message Gap control. Everything that changes a recording stays false — this is `readOnly()` plus
+     * the one capability that writes nothing about the recording and everything about the listening.
+     */
+    protected function capabilities(): ConversationCapabilities
+    {
+        return ConversationCapabilities::agentPractice();
+    }
+
     protected function layoutPath(): string
     {
         return '@src/Agent/Web/Layout/layout.php';

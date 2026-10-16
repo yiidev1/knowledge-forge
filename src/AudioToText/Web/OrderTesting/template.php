@@ -20,6 +20,7 @@ use App\AudioToText\Domain\WorkerStatusView;
 use App\AudioToText\Web\AudioToTextIcons;
 use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\OrderTesting\OrderTestingAsset;
+use App\AudioToText\Web\OrderTesting\OrderTestingRoute;
 use App\Shared\Application\Time\AppTimeZone;
 use App\Shared\Audio\RecordingTypeLabels;
 use Yiisoft\Html\Html;
@@ -123,6 +124,14 @@ $canAssignTopics = $practiceMode && $capabilities->canAssignTopics;
 // well, and `$capabilities` is permissive on the Audio-to-Text store page, so neither answers this on
 // its own: the column exists only where both are true, which is this one page.
 $canVerifyOrders = $practiceMode && $capabilities->canVerifyOrders;
+
+// What agents listened to. The same two conditions as Verification and for the same reason — it is a
+// statement about an order, and it belongs on the page where orders are managed — but a different
+// question, so a flag of its own rather than a second use of that one.
+$canViewAgentEvents = $practiceMode && $capabilities->canViewAgentEvents;
+$agentPlaybackUrl = $canViewAgentEvents
+    ? $urlGenerator->generate(OrderTestingRoute::PLAYBACK_SUMMARY, ['sourceId' => $store->sourceId])
+    : '';
 /** @var array<string, OrderVerificationStatus> $orderVerifications */
 $orderVerifications = $orderVerifications ?? [];
 
@@ -1151,15 +1160,22 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     <?php if ($canVerifyOrders): ?><col class="ot-col-verification"><?php endif; ?>
                     <col class="a2t-col-demo">
                     <col class="ot-col-demo-orders">
+                    <?php
+                    // Declared, and declared HERE. A colgroup one `col` short does not leave the last
+                    // column unsized — it shifts every width one place to the left, so the topic's
+                    // 21rem landed on Agent Events and Set Topic collapsed to nothing. The order of
+                    // these must match the header row exactly.
+?>
+                    <?php if ($canViewAgentEvents): ?><col class="ot-col-agent-events"><?php endif; ?>
                     <?php if ($practiceMode): ?><col class="practice-col-topic"><?php endif; ?>
                 </colgroup>
                 <thead>
                     <tr>
                         <?php if ($canAssignTopics): ?>
                             <?php
-                            // Select-all reaches the rows that were rendered and nothing else. There is
-                            // no server-side "everything matching the filter" selection, so the control
-                            // does not imply one.
+        // Select-all reaches the rows that were rendered and nothing else. There is
+        // no server-side "everything matching the filter" selection, so the control
+        // does not imply one.
                             ?>
                             <th class="practice-select">
                                 <input type="checkbox" data-practice-select-all
@@ -1182,6 +1198,12 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                         <?php // Immediately after Demo URL, because it is the result of pressing it:?>
                         <?php // the orders a trainee produced from this call, each compared on its own.?>
                         <th>Demo Orders</th>
+                        <?php if ($canViewAgentEvents): ?>
+                            <?php // What agents did with this call: how many times they had it read?>
+                            <?php // aloud, and how far they got. Read-only, and after the columns?>
+                            <?php // that produce the practice it reports on.?>
+                            <th>Agent Events</th>
+                        <?php endif; ?>
                         <?php if ($practiceMode): ?>
                             <?php // The topic this source order is practised under. One per order.?>
                             <?php // "Set Topic" where it can be set; just "Topic" where it is read.?>
@@ -1243,7 +1265,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <?php endif; ?>
                             </td>
                         <?php endif; ?>
-                        <td>
+                        <td data-ot-label="Order">
                             <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
                                 <?php // One way in to every recording of this call. The channels it?>
                                 <?php // offers are the Details buttons already in this row, so the?>
@@ -1281,10 +1303,10 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
                             </span>
                         </td>
-                        <td>
+                        <td data-ot-label="Recording">
                             <?= $conversationCell($group) ?>
                         </td>
-                        <td>
+                        <td data-ot-label="Status">
                             <?php
                             // A row whose audio is still arriving says so, instead of reporting a
                             // transcription status for recordings that are not here to transcribe. The
@@ -1398,7 +1420,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <?php endif; ?>
                         </td>
                         <?php if ($canVerifyOrders): ?>
-                            <td class="ot-verify-cell">
+                            <td data-ot-label="Verification" class="ot-verify-cell">
                                 <?php
                                 $verification = $rowOrderId === ''
                                     ? null
@@ -1463,7 +1485,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <?php endif; ?>
                             </td>
                         <?php endif; ?>
-                        <td class="a2t-cell-tight">
+                        <td data-ot-label="Demo URL" class="a2t-cell-tight">
                             <?php
             // Resolved for the whole page in one query before rendering; this cell only prints the
             // answer. Every row was asked about, so a missing key would be a bug rather than a blank.
@@ -1513,7 +1535,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
                             <?php endif; ?>
                         </td>
-                        <td class="a2t-cell-tight">
+                        <td data-ot-label="Demo orders" class="a2t-cell-tight">
                             <?php
                 // Counted for the whole page in one query before rendering; this cell prints the
                 // answer and links on to Order Testing's own page for that order. A dash is the honest
@@ -1545,9 +1567,39 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <span class="util-muted">&mdash;</span>
                             <?php endif; ?>
                         </td>
+                        <?php if ($canViewAgentEvents): ?>
+                            <td data-ot-label="Agent events" class="a2t-cell-tight">
+                                <?php
+                                // Every recording this call has, named on the button that opens the
+                                // report. The dialog asks about exactly these and the server re-reads
+                                // each one against this store before it answers, so the list is a
+                                // convenience for the query and never an authority on what may be
+                                // read.
+                                $playbackJobs = [];
+
+                            foreach ($group->allRecordings() as $recording) {
+                                $playbackJobs[] = $recording->jobPublicId;
+                            }
+                            ?>
+                                <?php if ($playbackJobs === []): ?>
+                                    <?php // No recording, nothing anybody could have played.?>
+                                    <span class="util-muted">&mdash;</span>
+                                <?php else: ?>
+                                    <button class="btn btn--sm btn--secondary ot-agent-events" type="button"
+                                            data-ot-agent-events="<?= Html::encode($agentPlaybackUrl) ?>"
+                                            data-ot-agent-jobs="<?= Html::encode(implode(',', $playbackJobs)) ?>"
+                                            data-ot-agent-order="<?= Html::encode($orderKey) ?>"
+                                            aria-label="<?= Html::encode(
+                                                $orderKey === ''
+                                                    ? 'Agent playback events for this recording'
+                                                    : 'Agent playback events for order ' . $orderKey,
+                                            ) ?>">Details</button>
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                         <?php if ($practiceMode): ?>
                             <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
-                            <td class="practice-topic-cell">
+                            <td data-ot-label="Topic" class="practice-topic-cell">
                                 <?php
                                                                                 // One row for every shape this cell takes: the topic's name, a badge
                                                                                 // when it is no longer offered, and the control that changes it, all on
@@ -2015,7 +2067,12 @@ $last = min($page * $perPage, $total);
     // No token, no corrections. The script reads this element to send `X-CSRF-Token`; without it the
     // editing paths have nothing to send, and the surfaces that omit it mount none of those endpoints.
 ?>
-    <?php if ($capabilities->canEditTranscript): ?>
+    <?php
+    // Also rendered where playback is recorded. The agent cannot edit a transcript and still has no
+    // address that would — the endpoints are not mounted for that realm — but reporting what they
+    // played is a POST, and a POST here carries this token or it is refused.
+?>
+    <?php if ($capabilities->canEditTranscript || $capabilities->canTrackPlayback): ?>
         <div class="a2t-review-token" data-a2t-review-token hidden><?= $csrfField ?></div>
     <?php endif; ?>
     <?php
@@ -2438,6 +2495,48 @@ $last = min($page * $perPage, $total);
     </div>
     <div class="source-modal__body" data-a2t-history-body></div>
 </dialog>
+<?php endif; ?>
+
+<?php if ($canViewAgentEvents): ?>
+    <?php
+    // Two levels, and the second is a sibling rather than a child: a `<dialog>` opened from inside
+    // another one stacks in the top layer, and closing the inner one must not take the outer with it.
+    // So both sit here at the end of the document, the summary opens the history, and closing the
+    // history leaves the summary exactly as it was — which is the drill-down the reader expects.
+    ?>
+    <dialog class="source-modal ot-agent-dialog" id="ot-agent-summary-dialog" data-a2t-dialog
+            aria-labelledby="ot-agent-summary-title">
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="ot-agent-summary-title">Agent playback events</h2>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
+                    title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div class="source-modal__body">
+            <p class="source-modal__meta" data-ot-agent-scope></p>
+            <?php
+            // Said once, where the figures are, because a count of playback events is not a count of
+            // people who listened and a reader should not have to infer the difference.
+    ?>
+            <p class="util-muted ot-agent-note">
+                These are playback events this application recorded. They show what was played and how
+                far it got, not that somebody was listening.
+            </p>
+            <div data-ot-agent-summary></div>
+        </div>
+    </dialog>
+
+    <dialog class="source-modal ot-agent-dialog" id="ot-agent-history-dialog" data-a2t-dialog
+            aria-labelledby="ot-agent-history-title">
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="ot-agent-history-title">Agent playback history</h2>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
+                    title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div class="source-modal__body">
+            <p class="source-modal__meta" data-ot-agent-history-scope></p>
+            <div data-ot-agent-history></div>
+        </div>
+    </dialog>
 <?php endif; ?>
 
 <?php

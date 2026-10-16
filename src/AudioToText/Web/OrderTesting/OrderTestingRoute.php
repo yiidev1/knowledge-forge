@@ -104,4 +104,8 @@ final class OrderTestingRoute
      * pair in the path is the identity the whole application uses for one.
      */
     public const VERIFICATION = 'order-testing.order.verification';
+
+    /** What agents listened to, for the two realms that manage the orders they listened to. */
+    public const PLAYBACK_SUMMARY = 'order-testing.agent-playback.summary';
+    public const PLAYBACK_HISTORY = 'order-testing.agent-playback.history';
 }

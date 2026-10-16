@@ -704,9 +704,9 @@ final class OrderTestingCest
 
         // What remains, and the `<col>`s that size them — one per header, or the table drifts.
         //
-        // Eight now, not five: this is where an order is *managed*, so the table carries a selection
-        // checkbox, the Set Topic control and the Verification column beside the five that have always
-        // been here. All three are management, which is why they are on this page and not on Practice
+        // Nine now: this is where an order is *managed*, so the table carries a selection checkbox,
+        // Verification, Agent Events and the Set Topic control beside the five that have always been
+        // here. All four are management, which is why they are on this page and not on Practice
         // Orders — a point `PracticeOrdersCest` asserts from the other side.
         foreach ([
             'Order No#',
@@ -716,14 +716,28 @@ final class OrderTestingCest
             'Demo Orders',
             'Set Topic',
             'Verification',
+            'Agent Events',
         ] as $header) {
             $I->see($header, 'th');
         }
 
+        /*
+         * Counted against each other rather than against a number written here.
+         *
+         * This assertion compared the colgroup to a literal 8 while the header row had already grown
+         * to 9, so the one thing it existed to catch — a colgroup and a header row that disagree —
+         * was the one thing it could not see. A `<colgroup>` one `col` short does not leave the last
+         * column unsized: it shifts every width one place, which is how Set Topic ended up at 0px and
+         * Agent Events at 336.
+         */
+        $source = $I->grabPageSource();
+        // `<th>` and `<th ` separately, because `<th` alone also counts `<thead`.
+        $headers = substr_count($source, '<th>') + substr_count($source, '<th ');
+
         Assert::assertSame(
-            8,
-            substr_count($I->grabPageSource(), '<col class='),
-            'The colgroup and the headers must describe the same eight columns.',
+            $headers,
+            substr_count($source, '<col class='),
+            'The colgroup and the header row must describe the same columns, in the same number.',
         );
     }
 

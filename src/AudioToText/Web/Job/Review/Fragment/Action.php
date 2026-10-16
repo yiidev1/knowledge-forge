@@ -33,6 +33,7 @@ use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\Conversion\AiAudio\AiAudioPage;
 use App\AudioToText\Web\Job\JobPageGuard;
 use App\AudioToText\Web\Job\Review\ReviewPageView;
+use App\Shared\Audio\PlaybackGapOptions;
 use App\Shared\Application\Time\AppTimeZone;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -163,6 +164,42 @@ readonly class Action
      * that page lands inside the dialog — the conversation is still there, buried under a copy of the
      * site. A null address is not fetched at all.
      */
+    /**
+     * The route this surface's playback events are reported to, or null where none are.
+     *
+     * Null everywhere but the agent practice surface. A null here is what keeps the Message Gap
+     * dropdown off the administrator's dialog and their system-voice gap at its long-standing value:
+     * no url, no control, no tracking, and the endpoint is not mounted for them either.
+     */
+    protected function playbackTrackRoute(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * What the browser needs to offer the gap control and report what it did with it.
+     *
+     * The options are handed over by the server rather than written into the script, so the ten values
+     * exist once — in {@see PlaybackGapOptions} — and the dropdown, the validator and the report
+     * cannot drift apart.
+     *
+     * @return array{track: string, gaps: list<array{ms: int, label: string}>, defaultMs: int}|null
+     */
+    private function playback(string $publicId): ?array
+    {
+        $route = $this->playbackTrackRoute();
+
+        if ($route === null) {
+            return null;
+        }
+
+        return [
+            'track' => $this->urlGenerator->generate($route, ['publicId' => $publicId]),
+            'gaps' => PlaybackGapOptions::forBrowser(),
+            'defaultMs' => PlaybackGapOptions::DEFAULT_MS,
+        ];
+    }
+
     protected function historyUrl(string $publicId): ?string
     {
         return $this->urlGenerator->generate(
@@ -380,6 +417,8 @@ readonly class Action
             // The three ways to hear this recording. Computed here so the dialog renders decisions
             // rather than making them — in particular the staleness rule, which has exactly one home.
             'audio' => $this->audio($job, $publicId),
+            // Present only where playback is recorded; null leaves the dialog exactly as it was.
+            'playback' => $this->playback($publicId),
             'filename' => $job->originalFilename,
             'provider' => $job->transcriptionProvider()->label(),
             // Which slot this recording occupies, and where it lives. Named by the SERVER so the Update
@@ -476,6 +515,7 @@ readonly class Action
                 'children' => $this->combinedChildren($combined),
             ],
             'audio' => $this->audio($job, $publicId),
+            'playback' => $this->playback($publicId),
             'filename' => $job->originalFilename,
             'provider' => $job->transcriptionProvider()->label(),
             'replace' => $this->replaceTarget($job),

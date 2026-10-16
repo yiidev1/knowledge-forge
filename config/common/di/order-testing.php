@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use App\OrderTesting\Application\Comparison\ComparisonScorer;
+use App\OrderTesting\Application\Playback\PlaybackTracker;
+use App\OrderTesting\Domain\Playback\PlaybackRepositoryInterface;
+use App\OrderTesting\Infrastructure\DbPlaybackRepository;
+use App\Shared\Audio\RecordingIdentityReader;
 use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Application\DemoOrderDirectory;
@@ -45,6 +49,16 @@ return [
     // because "mirrored" and "items known" are different states; see OriginalItemsReaderInterface.
     OriginalItemsReaderInterface::class => DbOriginalItemsReader::class,
     StoreReaderInterface::class => DbStoreReader::class,
+
+    // What agents listened to. One repository behind one port, read by the two realms that manage
+    // orders and written only by the agent surface — see the migration for why the two tables are
+    // separate and why a dropdown change has no session.
+    PlaybackRepositoryInterface::class => DbPlaybackRepository::class,
+    PlaybackTracker::class => PlaybackTracker::class,
+
+    // Which store, order and channel a recording belongs to. Shared, because the agent action and the
+    // reporting both need it and neither may name the audio module.
+    RecordingIdentityReader::class => RecordingIdentityReader::class,
 
     // Whether a source order has been checked over, and the history of who changed that. Two tables,
     // one repository, written in one transaction — see the migration for why the history is separate.

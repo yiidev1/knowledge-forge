@@ -58,12 +58,31 @@ final readonly class ConversationCapabilities
          * permission.
          */
         public bool $canVerifyOrders,
+        /**
+         * Whether this reader's system-voice playback is recorded, and offered the gap control.
+         *
+         * True on the agent practice surface alone. It is not a relaxation of {@see readOnly()} — that
+         * profile stays entirely false, and this is a third profile beside it — but it does decide two
+         * visible things: the Message Gap dropdown is rendered, and the dialog is given a CSRF token
+         * to post its playback events with. A surface answering false emits neither, and the endpoint
+         * is not mounted for it either.
+         */
+        public bool $canTrackPlayback,
+        /**
+         * Whether this reader may see what agents listened to.
+         *
+         * Read-only reporting, and a separate question from every other flag here: it is not about
+         * changing a recording but about reading an audit of somebody else's practice. True for the
+         * two realms that manage the orders agents practise on, false for the agents themselves — no
+         * agent sees another agent's history, and none sees their own here.
+         */
+        public bool $canViewAgentEvents,
     ) {}
 
     /** Everything — what this page has always offered, and still offers unchanged. */
     public static function full(): self
     {
-        return new self(true, true, true, true, true, true, true, true, true);
+        return new self(true, true, true, true, true, true, true, true, true, false, true);
     }
 
     /**
@@ -73,8 +92,21 @@ final readonly class ConversationCapabilities
      * not in this list because they are not capabilities: they are what the page *is*. What is listed
      * here is every way to change something, and an agent has none of them.
      */
+    /**
+     * The agent's own: read-only in every respect, and recorded.
+     *
+     * Deliberately not `readOnly()` with a flag flipped by the caller — a profile is a decision about
+     * a surface, and the two surfaces that are read-only differ in exactly this one way. Spelling the
+     * agent's out keeps `readOnly()` answering false to everything, which is what the admin practice
+     * page still needs it to mean.
+     */
+    public static function agentPractice(): self
+    {
+        return new self(false, false, false, false, false, false, false, false, false, true, false);
+    }
+
     public static function readOnly(): self
     {
-        return new self(false, false, false, false, false, false, false, false, false);
+        return new self(false, false, false, false, false, false, false, false, false, false, false);
     }
 }

@@ -77,6 +77,45 @@ final class AgentPracticeOrdersGateCest
     }
 
     /**
+     * The reporting is the administrators' and the operation users', and has no agent address.
+     *
+     * An agent records their own listening and may not read anybody's — not another agent's, and not
+     * their own. There is no gate to argue with here: the routes are mounted in the group that admits
+     * the two managing realms, so under the agent prefix they simply do not exist.
+     */
+    public function theAgentSurfaceHasNoReportingAddress(FunctionalTester $tester): void
+    {
+        foreach ([
+            '/agent/practice-orders/store/' . self::STORE . '/agent-playback',
+            '/agent/practice-orders/store/' . self::STORE . '/agent-playback/1',
+            '/agent/order-testing/store/' . self::STORE . '/agent-playback',
+        ] as $path) {
+            $response = $tester->sendRequest(new ServerRequest(method: 'GET', uri: $path));
+
+            assertSame(404, $response->getStatusCode(), $path . ' must not exist for an agent');
+        }
+    }
+
+    /**
+     * And the reporting addresses that DO exist are behind the managing realms' gate.
+     *
+     * A guest is sent to the administrator login, not the agent one — which is the proof that these
+     * belong to the other group. An agent session reaching them is refused by that same middleware.
+     */
+    public function theReportingAddressesAreBehindTheManagingGate(FunctionalTester $tester): void
+    {
+        foreach ([
+            '/order-testing/store/' . self::STORE . '/agent-playback',
+            '/order-testing/store/' . self::STORE . '/agent-playback/1',
+        ] as $path) {
+            $response = $tester->sendRequest(new ServerRequest(method: 'GET', uri: $path));
+
+            assertSame(302, $response->getStatusCode(), $path);
+            assertSame('/login', $response->getHeaderLine('Location'), $path);
+        }
+    }
+
+    /**
      * The one write, refused — and refused earlier than the gate.
      *
      * The global CSRF middleware sits in front of the router, so an unsafe request with no token is

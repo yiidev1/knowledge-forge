@@ -34,19 +34,80 @@
    without a class of our own these widths would reach it too — it has four columns now, and sizing them
    as if there were five would be worse than leaving it alone. */
 .a2t-orders.ot-orders {
-    /* Lowered from the 72rem the seven-column table needed. Five columns fit a tablet comfortably, and
-       a table that scrolls sideways when it does not have to is a table nobody scrolls. */
-    min-width: 54rem;
+    /* Nine columns, not the five this was written for. Below this the wrapper scrolls, which is the
+       honest answer for a dense table on a small screen — above it, nothing scrolls at all.
+       52rem, measured: at 1280px the content area is 897px and a 58rem floor was pinning the table
+       at 928 and scrolling it for the 31px difference. */
+    min-width: 52rem;
 }
 
-.a2t-orders.ot-orders col.a2t-col-order { width: 17%; }
-/* The widest share, because it holds the most: a duration, a play control, the way in, and a line of
-   channel names underneath. Wide enough for all of it on one line, and no wider — the space beyond
-   that was going to a column that had nothing to put in it. */
-.a2t-orders.ot-orders col.a2t-col-conversation { width: 34%; min-width: 0; }
-.a2t-orders.ot-orders col.a2t-col-status { width: 14%; }
-.a2t-orders.ot-orders col.a2t-col-demo { width: 18%; }
-.a2t-orders.ot-orders col.ot-col-demo-orders { width: 17%; }
+/*
+ * Every column, as a share of the table — including the ones that only appear on some surfaces.
+ *
+ * The rule this replaces sized five of them in percentages totalling 100% and left the other four to
+ * fixed rem values elsewhere, so the table asked for 100% PLUS 532px and overflowed by a constant
+ * 176px at every desktop width. Percentages for all of them is what makes the arithmetic close: with
+ * `table-layout: fixed` the browser normalises whatever subset is rendered, so a surface with six
+ * columns and one with nine both fill their width exactly and neither scrolls.
+ *
+ * These are proportions, not promises of a size: the widest share goes to the column that holds the
+ * most, and the ones holding a single badge or button take the least.
+ */
+.a2t-orders.ot-orders col.practice-col-select { width: 3%; }
+.a2t-orders.ot-orders col.a2t-col-order { width: 11%; }
+.a2t-orders.ot-orders col.a2t-col-conversation { width: 20%; min-width: 0; }
+/* Measured rather than guessed: "Completed" needs 103px, so the column is sized to hold it whole.
+   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status. */
+.a2t-orders.ot-orders col.a2t-col-status { width: 11%; }
+.a2t-orders.ot-orders col.ot-col-verification { width: 11%; }
+.a2t-orders.ot-orders col.a2t-col-demo { width: 10%; }
+.a2t-orders.ot-orders col.ot-col-demo-orders { width: 9%; }
+.a2t-orders.ot-orders col.ot-col-agent-events { width: 9%; }
+/* The widest of the small ones: it holds a control, not a word. */
+.a2t-orders.ot-orders col.practice-col-topic { width: 16%; }
+
+/*
+ * Cells may not push past their column.
+ *
+ * `table-layout: fixed` sizes the columns, but a cell whose contents refuse to wrap still paints
+ * outside it — and the scroller above then has something wider than itself to scroll. These two were
+ * doing exactly that: the badge wanted 103px of 84, and the topic control plus its badge wanted 176
+ * of 148. Allowing them to shrink is what makes the column widths the whole truth.
+ */
+.a2t-orders.ot-orders td {
+    min-width: 0;
+}
+
+.a2t-orders.ot-orders .practice-topic-cell > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+/*
+ * The topic control may not insist on a width of its own here.
+ *
+ * `.practice-topic-cell__stack .practice-assign` is `flex: 0 0 auto` — right on the practice surface,
+ * where the column is 21rem and the control should keep its natural size. On a nine-column table that
+ * refusal to shrink is what kept the cell asking for 176px of a 149px column, and a cell painting
+ * outside its column is what the scroller then had to scroll. Here it takes the line it is given.
+ */
+.a2t-orders.ot-orders .practice-topic-cell__stack {
+    flex-wrap: wrap;
+}
+
+.a2t-orders.ot-orders .practice-topic-cell__stack .practice-assign {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.a2t-orders.ot-orders .practice-topic-cell__stack .practice-assign select {
+    width: 100%;
+}
+
+/* A status is one word and is shown whole: the column above is sized for the longest of them. */
+.a2t-orders.ot-orders .a2t-badge {
+    max-width: 100%;
+}
 
 /* Short values that should never wrap: a status badge broken across two lines reads as two statuses,
    and "View (4)" split after the word is simply wrong. The conversation column is deliberately left
@@ -56,14 +117,18 @@
     white-space: nowrap;
 }
 
-@media (max-width: 60rem) {
+@media (max-width: 58rem) {
     /* Below the table's own minimum the wrapper scrolls, and percentages of a width nobody can see are
        not useful. The columns fall back to their content, which is what a scrolled table wants. */
+    .a2t-orders.ot-orders col.practice-col-select,
     .a2t-orders.ot-orders col.a2t-col-order,
     .a2t-orders.ot-orders col.a2t-col-conversation,
     .a2t-orders.ot-orders col.a2t-col-status,
+    .a2t-orders.ot-orders col.ot-col-verification,
     .a2t-orders.ot-orders col.a2t-col-demo,
-    .a2t-orders.ot-orders col.ot-col-demo-orders {
+    .a2t-orders.ot-orders col.ot-col-demo-orders,
+    .a2t-orders.ot-orders col.ot-col-agent-events,
+    .a2t-orders.ot-orders col.practice-col-topic {
         width: auto;
     }
 }
@@ -388,4 +453,136 @@
     outline: 2px solid var(--primary, #6b7cff);
     outline-offset: 2px;
     border-radius: 6px;
+}
+
+
+/*
+ * Below 1100px the shared `.a2t-table` rule drops to `table-layout: auto` with a 900px floor, which
+ * suits the four-column audio table it was written for. This table has nine columns and its own
+ * proportions, so it keeps them down to the point where a table stops being the right shape at all.
+ */
+@media (max-width: 1100px) {
+    .a2t-table.ot-orders { table-layout: fixed; min-width: 0; }
+}
+
+
+/*
+ * The Agent Events action.
+ *
+ * It had no rule of its own and `btn` alone paints nothing — the base class is layout and typography,
+ * and a `<button>` with no background falls through to the browser's own grey `buttonface`. That grey
+ * belongs to no theme: it read as a disabled control in the dark UI and as a 1995 form button in the
+ * light one. `btn--secondary` gives it the surface, border and text colour every other neutral action
+ * on this page already uses.
+ *
+ * Shaped like the Verify pill beside it so the row's two actions read as a pair, and coloured
+ * differently on purpose: Verify is the decision, this only opens a report.
+ */
+.ot-agent-events {
+    padding: 0.28rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.ot-agent-events:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------------
+ * Narrow screens: one card per order, not nine columns squeezed into a phone
+ *
+ * Below 56rem there is no honest way to show nine columns side by side — the measured content needs
+ * 796px and a phone has 319. So the row stops being a row: each cell becomes a labelled line, the
+ * header is hidden because every line now carries its own name, and nothing is removed. Every control
+ * that was in the table is in the card, in the same order, doing the same thing.
+ *
+ * The labels come from `data-ot-label` on the cells rather than from JavaScript or from duplicated
+ * markup, so one template renders both shapes and they cannot drift apart.
+ * ---------------------------------------------------------------------------------------------------
+ */
+@media (max-width: 56rem) {
+    .a2t-table-scroll:has(.ot-orders) {
+        overflow-x: visible;
+    }
+
+    .a2t-orders.ot-orders,
+    .a2t-orders.ot-orders tbody,
+    .a2t-orders.ot-orders tr,
+    .a2t-orders.ot-orders td {
+        display: block;
+        width: auto;
+        min-width: 0;
+    }
+
+    /* The header row has nothing left to head. Hidden from sight and from a screen reader alike,
+       because each cell now says what it is. */
+    .a2t-orders.ot-orders thead {
+        display: none;
+    }
+
+    .a2t-orders.ot-orders tr {
+        padding: .85rem 1rem;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .a2t-orders.ot-orders tr:last-child {
+        border-bottom: 0;
+    }
+
+    .a2t-orders.ot-orders td {
+        display: flex;
+        align-items: baseline;
+        gap: .75rem;
+        padding: .3rem 0;
+        border-bottom: 0;
+    }
+
+    /* The column's name, in the place the column heading used to be. */
+    .a2t-orders.ot-orders td[data-ot-label]::before {
+        content: attr(data-ot-label);
+        flex: 0 0 7.5rem;
+        font-size: .72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: var(--text-muted);
+    }
+
+    /* The cell's own content takes the rest and may wrap — there is no column to protect any more. */
+    .a2t-orders.ot-orders td > * {
+        min-width: 0;
+    }
+
+    .a2t-orders.ot-orders td.a2t-cell-tight {
+        white-space: normal;
+    }
+
+    /* The checkbox keeps its own line and needs no name beside it. */
+    .a2t-orders.ot-orders td.practice-select {
+        display: block;
+        padding-bottom: .5rem;
+    }
+
+    /*
+     * A cell's own contents stack under its label rather than running along beside it.
+     *
+     * Without this the order number and the "ADDED" date it is followed by sat on one line with no
+     * space between them — they are two facts, and in a card each gets its line.
+     */
+    .a2t-orders.ot-orders td[data-ot-label] > *:not(:only-child) {
+        display: block;
+    }
+
+    .a2t-orders.ot-orders td[data-ot-label] {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .a2t-orders.ot-orders td[data-ot-label] > * {
+        flex: 1 1 10rem;
+    }
 }

@@ -2055,6 +2055,15 @@ window.KFAudioStages = {
         lastAudio = audio;
         lastFragment = data;
 
+        // Whether this recording's playback is recorded, and with which options. Absent on every
+        // surface but the agent's, and absent is the default: no block, no dropdown, no reporting,
+        // and the gap stays the one this player has always used.
+        playback = data.playback || null;
+
+        if (playback !== null && chosenGapMs === null) {
+            chosenGapMs = playback.defaultMs;
+        }
+
         // 1. The file somebody uploaded. Served by the existing route, which resolves the stored
         //    name through the one path builder for retained recordings.
         if (audio.original && audio.original.available) {
@@ -2070,6 +2079,19 @@ window.KFAudioStages = {
 
         // 3. The browser reading the transcript aloud. Costs nothing and leaves nothing behind.
         listenGroup('System', speechControls(), 'speech');
+
+        // A line of its own, under the controls rather than beside the dropdown.
+        //
+        // Inline, it was a sentence competing with two selects for the same row: the row wrapped, the
+        // speed and the gap ended up on different lines, and the note sat where a third control would
+        // be. A row that only exists while it has something to say costs no height the rest of the
+        // time, and reads as what it is — a remark about the playback, not another setting.
+        if (playback !== null) {
+            var note = el('p', 'a2t-listen__note-row', '');
+            note.setAttribute('data-a2t-gap-note', '');
+            note.hidden = true;
+            listen.appendChild(note);
+        }
 
         // 4. What can be DONE to this recording, as opposed to heard. In the dialog's header, not here:
         //    these two reach a provider or replace a file, and the three above only play things.
@@ -3389,9 +3411,25 @@ window.KFAudioStages = {
 
     /* ---- System audio: the browser's own voice ---------------------------------------------- */
 
-    // The one authoritative gap between two spoken messages. Named, and named once: the pause is a
-    // reading decision, and a reading decision scattered across three call sites is three decisions.
+    // What the system voice has always waited where nobody can choose it. Still the gap on every
+    // surface that is handed no options — which is every surface but the agent's, so an
+    // administrator's reading is exactly the reading it was.
     var SYSTEM_AUDIO_GAP_MS = 1500;
+
+    /*
+     * The gap control, and why it is not simply a variable.
+     *
+     * `playback` is whatever the server sent with this recording: the options, the default, and the
+     * address to report to. Null on every surface that does not record playback, and a null here is
+     * the whole of what keeps the dropdown off those pages.
+     *
+     * `chosen` is what the dropdown currently says. `speech.gapMs` is what the RUNNING reading is
+     * using, snapshotted when Play was pressed — changing the dropdown mid-reading records a
+     * selection and applies to the next one, so a recorded session is honest about the pause it
+     * actually used.
+     */
+    var playback = null;
+    var chosenGapMs = null;
 
     // Every piece of playback state, in one place, so Stop and a closing dialog have one thing to
     // clear. `timer` is the gap between messages and is cancelled alongside the speech — without
@@ -3417,10 +3455,170 @@ window.KFAudioStages = {
         playing: false,
         paused: false,
         phase: 'idle',
-        status: null
+        status: null,
+        // The gap this reading is using, and the attempt it is being recorded under. Both are fixed
+        // when Play is pressed and neither is consulted again until the next one.
+        gapMs: SYSTEM_AUDIO_GAP_MS,
+        session: null
     };
     var speechSupported = typeof window.speechSynthesis !== 'undefined'
         && typeof window.SpeechSynthesisUtterance === 'function';
+
+    /**
+     * Tell the server what the reading just did.
+     *
+     * Fire-and-forget on purpose: tracking is a record of practice, not part of it, and a failed
+     * report must never interrupt somebody's reading or pop a message at them. Nothing is retried —
+     * a retry would be a second claim about the same moment, and the session token means the server
+     * would have to decide which to believe.
+     *
+     * Every identifying fact is absent from this body. The agent, the store, the order and the
+     * recording are the server's to know, from the session and from the address this posts to.
+     */
+    function track(event, extra) {
+        if (playback === null || reviewToken === null) {
+            return;
+        }
+
+        var body = new URLSearchParams();
+        body.set('event', event);
+
+        Object.keys(extra || {}).forEach(function (key) {
+            if (extra[key] !== null && extra[key] !== undefined) {
+                body.set(key, String(extra[key]));
+            }
+        });
+
+        try {
+            fetch(playback.track, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-CSRF-Token': reviewToken.value
+                },
+                body: body.toString()
+            }).catch(function () { /* the reading carries on regardless */ });
+        } catch (e) {
+            // Same reason. A browser that cannot fetch can still read a transcript aloud.
+        }
+    }
+
+    /**
+     * One event about the attempt currently in flight.
+     *
+     * Silently does nothing when there is no attempt — which is the case on every surface that does
+     * not track, and also after a session has ended. That second case matters: Stop runs the same
+     * teardown as a finish, and without this a stopped reading would report a second event against a
+     * session the server has already closed.
+     */
+    function reportSession(event, played) {
+        if (speech.session === null) {
+            return;
+        }
+
+        track(event, {
+            session: speech.session.token,
+            played: played,
+            gap: speech.gapMs
+        });
+    }
+
+    /** A token for one attempt, in the shape every public id in this application uses. */
+    function playbackToken() {
+        var bytes = new Uint8Array(16);
+
+        if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+            window.crypto.getRandomValues(bytes);
+        } else {
+            for (var i = 0; i < bytes.length; i++) {
+                bytes[i] = Math.floor(Math.random() * 256);
+            }
+        }
+
+        return Array.from(bytes).map(function (b) {
+            return ('0' + b.toString(16)).slice(-2);
+        }).join('');
+    }
+
+    /**
+     * The gap dropdown — built from what the server sent, never from a list written here.
+     *
+     * Returns nothing at all where no options arrived, which is how this control stays off the
+     * surfaces that do not record playback.
+     */
+    function gapControl() {
+        if (playback === null) {
+            return null;
+        }
+
+        var wrap = el('span', 'a2t-listen__gap');
+        var id = 'a2t-gap-select';
+        var label = el('label', 'a2t-listen__gap-label', 'Message gap');
+        label.setAttribute('for', id);
+
+        var select = document.createElement('select');
+        select.className = 'field__control a2t-listen__gap-select';
+        select.id = id;
+        select.setAttribute('data-a2t-speak-gap', '');
+        // Named in full for a screen reader, because "Message gap" beside a speed control is exactly
+        // the pair a shortened name would confuse.
+        select.setAttribute('aria-label', 'Pause between messages');
+
+        playback.gaps.forEach(function (option) {
+            var node = document.createElement('option');
+            node.value = String(option.ms);
+            node.textContent = option.label;
+            node.selected = option.ms === chosenGapMs;
+            select.appendChild(node);
+        });
+
+        wrap.appendChild(label);
+        wrap.appendChild(select);
+
+        return wrap;
+    }
+
+    /**
+     * How a gap is written, taken from the list the server sent rather than formatted here.
+     *
+     * The fallback only runs for a gap that is not in the current list — a reading that began before
+     * the options changed — and it is the only place this file does arithmetic on a gap. Keeping the
+     * wording with the values means changing the list changes every place that prints one.
+     */
+    function gapLabel(ms) {
+        var match = (playback === null ? [] : playback.gaps).filter(function (option) {
+            return option.ms === ms;
+        });
+
+        return match.length > 0 ? match[0].label : String(ms / 1000) + ' s';
+    }
+
+    /** Say which gap the reading in flight is using, whenever that is not the one on the dropdown. */
+    function paintGapNote() {
+        if (listen === null) {
+            return;
+        }
+
+        var note = listen.querySelector('[data-a2t-gap-note]');
+
+        if (note === null) {
+            return;
+        }
+
+        if (!speech.playing || chosenGapMs === null || speech.gapMs === chosenGapMs) {
+            note.textContent = '';
+            note.hidden = true;
+
+            return;
+        }
+
+        note.textContent = 'Currently playing with a ' + gapLabel(speech.gapMs)
+            + ' gap. The new selection applies to the next playback.';
+        note.hidden = false;
+    }
 
     function speechControls() {
         if (!speechSupported) {
@@ -3455,10 +3653,18 @@ window.KFAudioStages = {
             controls.push(button);
         });
 
+        // Labelled in words, like the gap beside it. Two unlabelled dropdowns of numbers in one row
+        // is a coin toss about which does what, and the reading speed is the one people reach for
+        // first — it had only an accessible name, which a pointer never sees.
+        var rateWrap = el('span', 'a2t-listen__gap');
+        var rateLabel = el('label', 'a2t-listen__gap-label', 'Speech speed');
+        rateLabel.setAttribute('for', 'a2t-rate-select');
+
         var rate = document.createElement('select');
         rate.className = 'field__control a2t-listen__rate';
+        rate.id = 'a2t-rate-select';
         rate.setAttribute('data-a2t-speak-rate', '');
-        rate.setAttribute('aria-label', 'Reading speed');
+        rate.setAttribute('aria-label', 'Speech speed');
         [['0.75', '0.75×'], ['1', '1×'], ['1.25', '1.25×']].forEach(function (choice) {
             var option = document.createElement('option');
             option.value = choice[0];
@@ -3467,7 +3673,9 @@ window.KFAudioStages = {
             option.selected = choice[0] === String(speechRate);
             rate.appendChild(option);
         });
-        controls.push(rate);
+        rateWrap.appendChild(rateLabel);
+        rateWrap.appendChild(rate);
+        controls.push(rateWrap);
 
         // A word, not a control: muted, and carrying its dot in CSS so what a screen reader reads and
         // what this element's text says stay the one word.
@@ -3475,6 +3683,14 @@ window.KFAudioStages = {
         speech.status.setAttribute('role', 'status');
         speech.status.setAttribute('aria-live', 'polite');
         controls.push(speech.status);
+
+        // Last in the row, after the speed and the state — a reading preference, next to the other
+        // one, and plainly not one of the four transport buttons.
+        var gap = gapControl();
+
+        if (gap !== null) {
+            controls.push(gap);
+        }
 
         return controls;
     }
@@ -3506,6 +3722,14 @@ window.KFAudioStages = {
      * over the next recording.
      */
     function speechStop() {
+        // An attempt still open when everything is torn down was stopped — by the button, by a
+        // closing dialog, or by a second recording being opened. Reported before the state is
+        // cleared, and `speech.session` is nulled so a finish cannot also claim it.
+        if (speech.session !== null) {
+            reportSession('STOPPED', speech.index);
+            speech.session = null;
+        }
+
         clearTimeout(speech.timer);
         speech.timer = null;
         speech.playing = false;
@@ -3526,6 +3750,7 @@ window.KFAudioStages = {
             }
         }
 
+        paintGapNote();
         speechSay('Ready');
     }
 
@@ -3562,6 +3787,10 @@ window.KFAudioStages = {
             speech.phase = 'finished';
             speech.timer = null;
             speechSay('Finished');
+            // Reported only from here, where the last message has actually ended. Nothing else in
+            // this file may report a completion, which is what stops a stop being recorded as one.
+            reportSession('COMPLETED', speech.index);
+            speech.session = null;
 
             return;
         }
@@ -3595,11 +3824,25 @@ window.KFAudioStages = {
             speech.phase = 'gap';
             // The gap between messages. Held in `speech.timer` so Pause and Stop can cancel it —
             // a pause during the gap must not let the next line start anyway.
-            speech.timer = setTimeout(speechNext, SYSTEM_AUDIO_GAP_MS);
+            speech.timer = setTimeout(speechNext, speech.gapMs);
         };
         utterance.onerror = function () {
+            // Distinguished from a stop, and the server distinguishes further: a failure before the
+            // engine ever spoke is not a play, and one after it is.
+            reportSession('PLAYBACK_ERROR', speech.index);
+            speech.session = null;
             speechStop();
             speechSay('Stopped');
+        };
+
+        // `onstart` is the engine saying it has begun, which is a different claim from `speak()`
+        // returning — a queued utterance that never plays returns too. The first one to fire is what
+        // makes this attempt a play; later ones are the same session carrying on and say nothing.
+        utterance.onstart = function () {
+            if (speech.session !== null && !speech.session.started) {
+                speech.session.started = true;
+                reportSession('PLAY_STARTED', speech.index);
+            }
         };
 
         speech.phase = 'speaking';
@@ -3632,6 +3875,21 @@ window.KFAudioStages = {
 
         speech.playing = true;
         speech.index = 0;
+
+        // The snapshot. From here the dropdown may say whatever it likes; this reading uses what it
+        // said when Play was pressed, and the server records that value against this attempt.
+        speech.gapMs = chosenGapMs === null ? SYSTEM_AUDIO_GAP_MS : chosenGapMs;
+
+        if (playback !== null) {
+            speech.session = { token: playbackToken(), started: false };
+            track('PLAY_REQUESTED', {
+                session: speech.session.token,
+                gap: speech.gapMs,
+                messages: speech.turns.length
+            });
+        }
+
+        paintGapNote();
         speechNext();
     }
 
@@ -3661,6 +3919,7 @@ window.KFAudioStages = {
             window.speechSynthesis.pause();
         }
 
+        reportSession('PAUSED', speech.index);
         speechSay('Paused');
     }
 
@@ -3678,6 +3937,7 @@ window.KFAudioStages = {
         }
 
         speech.paused = false;
+        reportSession('RESUMED', speech.index);
         speechSay('Speaking');
 
         if (speech.phase === 'gap') {
@@ -3691,7 +3951,7 @@ window.KFAudioStages = {
                 window.speechSynthesis.resume();
             }
 
-            speech.timer = setTimeout(speechNext, SYSTEM_AUDIO_GAP_MS);
+            speech.timer = setTimeout(speechNext, speech.gapMs);
 
             return;
         }
@@ -4552,6 +4812,27 @@ window.KFAudioStages = {
         });
 
         reviewDialog.addEventListener('change', function (event) {
+            var gap = event.target.closest
+                ? event.target.closest('[data-a2t-speak-gap]')
+                : null;
+
+            if (gap) {
+                var chosen = parseInt(gap.value, 10);
+
+                // A change to the value it already had is not a change. The browser does not fire
+                // one, but a programmatic repaint could, and a selection nobody made must not be
+                // recorded as one.
+                if (isFinite(chosen) && chosen !== chosenGapMs) {
+                    chosenGapMs = chosen;
+                    paintGapNote();
+                    // Recorded on its own: it belongs to no attempt, it never becomes one, and the
+                    // reading currently in flight keeps the gap it started with.
+                    track('GAP_SELECTED', { gap: chosen });
+                }
+
+                return;
+            }
+
             var rate = event.target.closest
                 ? event.target.closest('[data-a2t-speak-rate]')
                 : null;
@@ -4728,6 +5009,334 @@ window.KFAudioStages = {
             closeDialog(target);
         }
     });
+    /* ---- What agents listened to: the two reporting dialogs -------------------------------- */
+
+    /*
+     * Read-only, and only ever on the page that manages the orders being reported on.
+     *
+     * Everything here is drawn from one fetch per dialog. The summary's job ids come off the button
+     * that opened it — the row already knows its recordings — and the server re-reads every one of
+     * them against the store in the address before it answers, so the list is a convenience for the
+     * query rather than an authority on what may be read.
+     */
+    var agentSummaryBody = document.querySelector('[data-ot-agent-summary]');
+    var agentSummaryScope = document.querySelector('[data-ot-agent-scope]');
+    var agentSummaryDialog = dialogOf(agentSummaryBody);
+    var agentHistoryBody = document.querySelector('[data-ot-agent-history]');
+    var agentHistoryScope = document.querySelector('[data-ot-agent-history-scope]');
+    var agentHistoryDialog = dialogOf(agentHistoryBody);
+    // The recordings and the address the open summary is about, so the history can ask about the
+    // same ones without the button that opened it still being around.
+    var agentContext = null;
+
+    function agentCell(text, className) {
+        var cell = document.createElement('td');
+
+        if (className) {
+            cell.className = className;
+        }
+
+        cell.textContent = text === null || text === undefined || text === '' ? '—' : String(text);
+
+        return cell;
+    }
+
+    function agentTable(headings) {
+        var table = document.createElement('table');
+        table.className = 'table ot-agent-table';
+        var head = document.createElement('thead');
+        var row = document.createElement('tr');
+
+        headings.forEach(function (heading) {
+            var cell = document.createElement('th');
+            cell.textContent = heading;
+            row.appendChild(cell);
+        });
+
+        head.appendChild(row);
+        table.appendChild(head);
+        table.appendChild(document.createElement('tbody'));
+
+        return table;
+    }
+
+    function agentEmpty(message) {
+        return el('p', 'util-muted', message);
+    }
+
+    /** Ask the server, draw whatever came back, and say so plainly when it could not be read. */
+    function agentFetch(url, draw, body) {
+        empty(body);
+        body.appendChild(agentEmpty('Loading…'));
+
+        fetch(url, {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (response) {
+            return response.ok ? response.json() : null;
+        }).then(function (data) {
+            empty(body);
+
+            if (data === null) {
+                body.appendChild(agentEmpty('These events could not be read just now.'));
+
+                return;
+            }
+
+            draw(data);
+        }).catch(function () {
+            empty(body);
+            body.appendChild(agentEmpty('These events could not be read just now.'));
+        });
+    }
+
+    function drawAgentSummary(data) {
+        if (!data.rows || data.rows.length === 0) {
+            agentSummaryBody.appendChild(agentEmpty('No agent playback activity yet.'));
+
+            return;
+        }
+
+        // Five columns, not eight. Stopped, gap changes and the last-played time are all still
+        // recorded and all still shown — one level down, where a reader has asked for this agent in
+        // particular. A first-level summary that needs sideways scrolling has stopped summarising.
+        var table = agentTable(['Agent', 'Recording', 'Total plays', 'Completed', '']);
+        var tbody = table.querySelector('tbody');
+
+        data.rows.forEach(function (row) {
+            var tr = document.createElement('tr');
+            tr.appendChild(agentCell(row.agent));
+            tr.appendChild(agentCell(row.recording));
+            // The headline figure: attempts the engine actually began. Deliberately not the number of
+            // times Play was pressed, which is beside it only in the history.
+            tr.appendChild(agentCell(row.starts, 'ot-agent-count'));
+            tr.appendChild(agentCell(row.completed, 'ot-agent-count'));
+
+            var action = document.createElement('td');
+            action.className = 'ot-agent-action';
+            var view = document.createElement('button');
+            view.type = 'button';
+            view.className = 'btn btn--sm';
+            view.textContent = 'View details';
+            view.setAttribute('data-ot-agent-history-open', String(row.agentId));
+            view.setAttribute('data-ot-agent-name', row.agent);
+            // Carried to the history's own heading, so the numbers the summary no longer prints are
+            // still one click away and arrive already scoped to this agent and recording.
+            view.setAttribute('data-ot-agent-recording', row.recording);
+            view.setAttribute('data-ot-agent-stopped', String(row.stopped));
+            view.setAttribute('data-ot-agent-selections', String(row.selections));
+            view.setAttribute('data-ot-agent-last', row.lastPlayed || '');
+            action.appendChild(view);
+            tr.appendChild(action);
+
+            tbody.appendChild(tr);
+        });
+
+        agentSummaryBody.appendChild(table);
+    }
+
+    function drawAgentHistory(data) {
+        if ((!data.rows || data.rows.length === 0)
+            && (!data.selections || data.selections.length === 0)) {
+            agentHistoryBody.appendChild(agentEmpty('No agent playback activity yet.'));
+
+            return;
+        }
+
+        if (data.rows && data.rows.length > 0) {
+            // The recording is named once in the heading above rather than on every row, and the
+            // serial number is gone: it counted rows on a page, which is not a fact about anything.
+            // One recording in the set is the usual case; where there are several the column returns.
+            var several = new Set(data.rows.map(function (row) { return row.recording; })).size > 1;
+            var headings = several
+                ? ['Recording', 'Played at', 'Message gap', 'Status', 'Messages']
+                : ['Played at', 'Message gap', 'Status', 'Messages'];
+            var table = agentTable(headings);
+            var tbody = table.querySelector('tbody');
+
+            data.rows.forEach(function (row) {
+                var tr = document.createElement('tr');
+
+                if (several) {
+                    tr.appendChild(agentCell(row.recording));
+                }
+
+                // The moment it began where it began, and the moment it was asked for where it never
+                // did — an attempt that failed before the first word has no start to show.
+                tr.appendChild(agentCell(row.startedAt || row.requestedAt));
+                tr.appendChild(agentCell(row.gap));
+                tr.appendChild(agentCell(row.status));
+                tr.appendChild(agentCell(row.progress, 'ot-agent-count'));
+                tbody.appendChild(tr);
+            });
+
+            agentHistoryBody.appendChild(table);
+
+            if (data.pages > 1) {
+                agentHistoryBody.appendChild(agentPager(data));
+            }
+        }
+
+        // Kept apart from the table above, and labelled, because a dropdown change is not an attempt
+        // and a reader must not be able to count the two together.
+        if (data.selections && data.selections.length > 0) {
+            agentHistoryBody.appendChild(el(
+                'h3',
+                'ot-agent-subhead',
+                'Message gap changes (no playback)'
+            ));
+            var selections = agentTable(['Selected gap', 'Changed at']);
+            var selectionBody = selections.querySelector('tbody');
+
+            data.selections.forEach(function (row) {
+                var tr = document.createElement('tr');
+                tr.appendChild(agentCell(row.gap));
+                tr.appendChild(agentCell(row.at));
+                selectionBody.appendChild(tr);
+            });
+
+            agentHistoryBody.appendChild(selections);
+        }
+    }
+
+    function agentPager(data) {
+        var pager = el('div', 'ot-agent-pager');
+        pager.appendChild(el('span', 'util-muted', 'Page ' + data.page + ' of ' + data.pages));
+
+        [['Previous', data.page - 1], ['Next', data.page + 1]].forEach(function (step) {
+            if (step[1] < 1 || step[1] > data.pages) {
+                return;
+            }
+
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn--sm btn--secondary';
+            button.textContent = step[0];
+            button.setAttribute('data-ot-agent-page', String(step[1]));
+            pager.appendChild(button);
+        });
+
+        return pager;
+    }
+
+    function openAgentHistory(agentId, agentName, page) {
+        if (agentContext === null || agentHistoryBody === null) {
+            return;
+        }
+
+        agentContext.agentId = agentId;
+        agentContext.agentName = agentName;
+
+        if (agentHistoryScope) {
+            // Agent, order, recording — and the three figures the summary no longer has room for.
+            // They were not dropped; they moved to where the reader has already narrowed down to one
+            // agent, which is where a stopped count and a gap-change count actually mean something.
+            var parts = [agentName];
+
+            if (agentContext.order) {
+                parts.push('Order #' + agentContext.order);
+            }
+
+            if (agentContext.recording) {
+                parts.push(agentContext.recording);
+            }
+
+            if (agentContext.stopped && agentContext.stopped !== '0') {
+                parts.push(agentContext.stopped + ' stopped');
+            }
+
+            if (agentContext.selections && agentContext.selections !== '0') {
+                parts.push(agentContext.selections + ' gap change'
+                    + (agentContext.selections === '1' ? '' : 's'));
+            }
+
+            if (agentContext.last) {
+                parts.push('last played ' + agentContext.last);
+            }
+
+            agentHistoryScope.textContent = parts.join(' · ');
+        }
+
+        openDialog(agentHistoryDialog);
+        agentFetch(
+            agentContext.summaryUrl + '/' + encodeURIComponent(String(agentId))
+                + '?jobs=' + encodeURIComponent(agentContext.jobs)
+                + '&page=' + encodeURIComponent(String(page || 1)),
+            drawAgentHistory,
+            agentHistoryBody
+        );
+    }
+
+    if (agentSummaryBody !== null) {
+        document.addEventListener('click', function (event) {
+            var target = event.target;
+
+            if (!(target instanceof Element)) {
+                return;
+            }
+
+            var open = target.closest('[data-ot-agent-events]');
+
+            if (open) {
+                event.preventDefault();
+                agentContext = {
+                    summaryUrl: open.getAttribute('data-ot-agent-events'),
+                    jobs: open.getAttribute('data-ot-agent-jobs') || '',
+                    order: open.getAttribute('data-ot-agent-order') || '',
+                    agentId: null,
+                    agentName: ''
+                };
+
+                if (agentSummaryScope) {
+                    agentSummaryScope.textContent = agentContext.order
+                        ? 'Order #' + agentContext.order
+                        : 'This recording';
+                }
+
+                openDialog(agentSummaryDialog);
+                agentFetch(
+                    agentContext.summaryUrl + '?jobs=' + encodeURIComponent(agentContext.jobs),
+                    drawAgentSummary,
+                    agentSummaryBody
+                );
+
+                return;
+            }
+
+            var history = target.closest('[data-ot-agent-history-open]');
+
+            if (history) {
+                event.preventDefault();
+
+                if (agentContext !== null) {
+                    agentContext.recording = history.getAttribute('data-ot-agent-recording') || '';
+                    agentContext.stopped = history.getAttribute('data-ot-agent-stopped') || '';
+                    agentContext.selections = history.getAttribute('data-ot-agent-selections') || '';
+                    agentContext.last = history.getAttribute('data-ot-agent-last') || '';
+                }
+
+                openAgentHistory(
+                    parseInt(history.getAttribute('data-ot-agent-history-open'), 10),
+                    history.getAttribute('data-ot-agent-name') || 'Agent',
+                    1
+                );
+
+                return;
+            }
+
+            var page = target.closest('[data-ot-agent-page]');
+
+            if (page && agentContext !== null) {
+                event.preventDefault();
+                openAgentHistory(
+                    agentContext.agentId,
+                    agentContext.agentName,
+                    parseInt(page.getAttribute('data-ot-agent-page'), 10)
+                );
+            }
+        });
+    }
+
 }());
 
 /* ------------------------------------------------------------------------------------------------

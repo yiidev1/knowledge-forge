@@ -34,6 +34,18 @@ final readonly class AgentReadOnlyAction extends ReadOnlyAction
     }
 
     /**
+     * The one surface whose listening is recorded.
+     *
+     * A route name, not a class: this module may not name `App\Agent`, and a name is not a namespace.
+     * The endpoint behind it is mounted only in the agent group, scoped per recording by the same
+     * middleware that admits this fragment — so an id learned elsewhere reports nothing.
+     */
+    protected function playbackTrackRoute(): ?string
+    {
+        return 'agent.practice-orders.job.playback';
+    }
+
+    /**
      * No revision history, because an agent has no address to read it from.
      *
      * The history endpoint is not mounted for this realm, and nothing is gained by mounting it: the

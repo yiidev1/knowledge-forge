@@ -710,6 +710,16 @@ return [
             Route::post('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/verification')
                 ->action(OrderTestingModule\Verification\Action::class)
                 ->name(OrderTestingRoute::VERIFICATION),
+
+            // What agents listened to. Read-only, and in this group rather than a new one: the page
+            // that opens them admits administrators and operation users alike, and giving the reports
+            // their own gate would be a second answer to a question already settled here.
+            Route::get('/order-testing/store/{sourceId:\d+}/agent-playback')
+                ->action(OrderTestingModule\Playback\SummaryAction::class)
+                ->name(OrderTestingRoute::PLAYBACK_SUMMARY),
+            Route::get('/order-testing/store/{sourceId:\d+}/agent-playback/{agentId:\d+}')
+                ->action(OrderTestingModule\Playback\HistoryAction::class)
+                ->name(OrderTestingRoute::PLAYBACK_HISTORY),
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
                 ->action(OrderTestingModule\DemoOrders\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),
@@ -994,6 +1004,12 @@ return [
                     // **The one write.** The same action, the same service, the same gap lock and the
                     // same one-open-attempt rule; only the actor differs, and the actor comes from the
                     // middleware rather than from the body.
+                    // What the agent's browser reports about reading a conversation aloud. POST
+                    // only, scoped by `{publicId}` so the middleware above admits the recording
+                    // before the action runs, and writing nothing but its own two tables.
+                    Route::post('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/playback')
+                        ->action(AgentPracticeOrders\PlaybackEventAction::class)
+                        ->name('agent.practice-orders.job.playback'),
                     Route::post('/agent/practice-orders/store/{sourceId:\d+}/demo-url')
                         ->action(OrderTestingModule\DemoUrl\Action::class)
                         ->name('agent.practice-orders.demo-url'),

@@ -469,6 +469,31 @@ tr:hover .a2t-slot__add,
     vertical-align: .05em;
 }
 .a2t-listen__rate { width: auto; min-width: 4.2rem; padding: .16rem .3rem; font-size: .73rem; }
+
+/* The pause between two spoken messages. Last in the System group, and labelled in words rather than
+   by position: beside a speed control, an unlabelled second dropdown of numbers is a coin toss. */
+.a2t-listen__gap { display: inline-flex; align-items: center; gap: .35rem; margin-left: .25rem; }
+/* The two dropdowns are a pair and should read as one: same control height, labels on one line. */
+.a2t-listen__gap-select, .a2t-listen__rate { height: 1.75rem; }
+.a2t-listen__gap-label {
+    font-size: .68rem; font-weight: 600; letter-spacing: .02em; color: var(--text-muted);
+    white-space: nowrap;
+}
+.a2t-listen__gap-select { width: auto; min-width: 5rem; padding: .16rem .3rem; font-size: .73rem; }
+/*
+ * The mid-playback remark, on a row of its own beneath the three control groups.
+ *
+ * Full width and allowed to wrap, because it is a sentence — inline beside the dropdown it pushed the
+ * speed and the gap onto separate lines and read as a third control. Muted and italic: a statement
+ * about what is happening, not a warning that something is wrong.
+ */
+.a2t-listen__note-row {
+    flex-basis: 100%;
+    margin: .1rem 0 0;
+    font-size: .72rem;
+    font-style: italic;
+    color: var(--text-muted);
+}
 /* Squarer and a touch smaller than the round tools beside a bubble: these are a transport, read as a
    block of four, and four circles in a row reads as four separate things. */
 .a2t-listen .a2t-iconbtn { width: 32px; height: 32px; border-radius: 8px; }
@@ -890,3 +915,40 @@ tr:hover .a2t-slot__add,
  * three elements; this covers the controls.
  */
 .a2t-processing [hidden] { display: none; }
+
+
+/* ---- What agents listened to -------------------------------------------------------------------
+ *
+ * Two dialogs on the Manage Orders page, drawn by the script from one fetch each. Styled here rather
+ * than in `order-testing.css` because the dialogs they live in, and the table conventions they borrow,
+ * are this bundle's — and this bundle is what Order Testing depends on.
+ */
+/*
+ * Wider than the shared 46rem, and stated as `width` rather than `max-width`.
+ *
+ * `.source-modal` sets `width: min(46rem, calc(100vw - 2rem))`, a concrete width — so a `max-width`
+ * here could only ever cap it, never widen it, and the modal stayed at 736px while its table wanted
+ * 1035px. The same trap is documented at `admin.css:2069` for another dialog. The viewport term is
+ * kept so the dialog can never exceed the screen.
+ */
+.ot-agent-dialog { width: min(66rem, calc(100vw - 2rem)); }
+.ot-agent-note { font-size: .82rem; margin: .35rem 0 1rem; }
+.ot-agent-subhead {
+    margin: 1.5rem 0 .5rem; font-size: .82rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--text-muted);
+}
+.ot-agent-table { width: 100%; margin: 0; }
+.ot-agent-table th, .ot-agent-table td { white-space: nowrap; }
+/* The agent's name is the one value that may legitimately be long; everything else is a figure, a
+   short label or a timestamp. It wraps so a long name cannot widen the table past the dialog. */
+.ot-agent-table td:first-child { white-space: normal; min-width: 8rem; }
+.ot-agent-action { text-align: right; }
+/* Figures line up under each other so two rows can be compared down the column rather than across. */
+.ot-agent-count { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.ot-agent-pager { display: flex; align-items: center; gap: .5rem; margin-top: .75rem; }
+
+@media (max-width: 720px) {
+    /* Narrower than any sensible column set: the table scrolls inside the dialog rather than pushing
+       the dialog past the screen. Above this width it fits, which is what the column trim is for. */
+    .ot-agent-dialog .source-modal__body { overflow-x: auto; }
+}
