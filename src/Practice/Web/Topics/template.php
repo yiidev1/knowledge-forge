@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Practice\Domain\StoreOption;
 use App\Practice\Domain\Topic;
 use App\Practice\Domain\TopicStatus;
 use App\Practice\Web\PracticeAsset;
@@ -36,6 +37,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var Topic|null $editing
  * @var array<string, string> $values
  * @var array<string, string> $errors
+ * @var list<StoreOption> $storeOptions every selectable store, for the dialog's Store field
  */
 
 $assetManager->register(PracticeAsset::class);
@@ -104,6 +106,9 @@ $fieldValue = static function (string $field, ?Topic $topic) use ($values): stri
         'name' => $topic->name,
         'description' => $topic->description ?? '',
         'status' => $topic->status->value,
+        // Empty string is global — the same thing the "Global (All Stores)" option posts, so a
+        // bounced form and a freshly opened Edit dialog agree about what no store looks like.
+        'store_source_id' => $topic->storeSourceId === null ? '' : (string) $topic->storeSourceId,
         default => '',
     };
 };
@@ -185,6 +190,9 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
     ?>
             <colgroup>
                 <col class="practice-col-name">
+                <?php // One `col` per header, in the header's order: a colgroup one short does not?>
+                <?php // leave the last column unsized, it shifts every width one place left.?>
+                <col class="practice-col-store">
                 <col class="practice-col-status">
                 <col class="practice-col-count">
                 <col class="practice-col-created">
@@ -193,6 +201,9 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
             <thead>
                 <tr>
                     <th scope="col">Topic Name</th>
+                    <?php // Which store may use this topic. "Global" is every store, and is what?>
+                    <?php // every topic was before the column existed.?>
+                    <th scope="col">Store</th>
                     <th scope="col">Status</th>
                     <th scope="col" class="practice-num">Assigned Orders</th>
                     <th scope="col">Created At</th>
@@ -219,6 +230,28 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
                                 title="View topic details"><?= Html::encode($topic->name) ?></button>
                         <?php if ($topic->description !== null): ?>
                             <div class="field__hint"><?= Html::encode($topic->description) ?></div>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php
+                        /*
+                         * The store's name, never its number.
+                         *
+                         * Resolved in the listing's own query — one LEFT JOIN for the page rather
+                         * than a lookup per row. A topic whose store has since left the mirror still
+                         * has to render, so the id is the fallback: it is the one fact still known
+                         * about where that topic belongs, and a blank would read as global, which
+                         * would be a lie.
+                         */
+                ?>
+                        <?php if ($topic->isGlobal()): ?>
+                            <span class="badge badge--muted">Global</span>
+                        <?php elseif ($topic->storeName !== null): ?>
+                            <?= Html::encode($topic->storeName) ?>
+                            <div class="field__hint">#<?= Html::encode((string) $topic->storeSourceId) ?></div>
+                        <?php else: ?>
+                            <span class="util-muted">Store #<?= Html::encode((string) $topic->storeSourceId) ?></span>
+                            <div class="field__hint">Not in the store mirror</div>
                         <?php endif; ?>
                     </td>
                     <td>
@@ -294,4 +327,5 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
     'fieldValue' => $fieldValue,
     'errorClass' => $errorClass,
     'errors' => $errors,
+    'storeOptions' => $storeOptions,
 ]) ?>

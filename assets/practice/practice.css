@@ -338,6 +338,11 @@
     width: auto;
 }
 
+/* A store name, with its id beneath. Fixed like its neighbours, so the name column keeps the slack. */
+.practice-col-store {
+    width: 13rem;
+}
+
 .practice-col-status {
     width: 8rem;
 }
@@ -676,4 +681,111 @@
     background-color: var(--surface, #181b24);
     color: var(--text, #e6e8ee);
     font-style: normal;
+}
+
+/*
+ * The Store picker.
+ *
+ * Deliberately the same surfaces, radii and tokens as `.practice-filter__panel` above: this is the
+ * second searchable list on this feature, and a reader should not be able to tell that one of them
+ * was built later. Every colour is a token with a dark literal behind it, so the control is themed
+ * by the page rather than by itself.
+ *
+ * Nothing here is positioned with an inline style, which is what `style-src 'self'` requires and what
+ * a scripted combobox library could not have given.
+ */
+.practice-store {
+    position: relative;
+}
+
+/*
+ * The real <select> is `hidden`, so it is already out of the layout. This exists so that a browser
+ * that cannot run the script — where the attribute is never set — still gets a full-width control
+ * rather than whatever width the option list happens to imply.
+ */
+.practice-store__native {
+    width: 100%;
+}
+
+.practice-store__summary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+}
+
+.practice-store__summary::after {
+    content: '▾';
+    margin-left: auto;
+    color: var(--text-muted, #8a8f98);
+}
+
+.practice-store__summary:hover,
+.practice-store__summary[aria-expanded='true'] {
+    border-color: var(--primary);
+}
+
+.practice-store__panel {
+    position: absolute;
+    z-index: 30;
+    left: 0;
+    right: 0;
+    margin-top: 0.3rem;
+    padding: 0.6rem;
+    border: 1px solid var(--border-strong, #2a2d34);
+    border-radius: 8px;
+    background: var(--surface-2, #1b1d22);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
+}
+
+.practice-store__panel[hidden] {
+    display: none;
+}
+
+.practice-store__search {
+    width: 100%;
+    margin-bottom: 0.5rem;
+}
+
+.practice-store__options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.practice-store__option {
+    padding: 0.35rem 0.5rem;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.practice-store__option[hidden] {
+    display: none;
+}
+
+/*
+ * Hover and keyboard share one treatment, because they mean the same thing — "this is the one you
+ * are about to choose" — and two different highlights on one list is how a reader loses track of
+ * which it is.
+ */
+.practice-store__option:hover,
+.practice-store__option.is-active {
+    background: var(--surface, rgba(255, 255, 255, 0.06));
+    color: var(--primary);
+}
+
+.practice-store__option[aria-selected='true'] {
+    font-weight: 600;
+}
+
+.practice-store__empty {
+    margin: 0.5rem 0 0;
+}
+
+.practice-store__empty[hidden] {
+    display: none;
 }

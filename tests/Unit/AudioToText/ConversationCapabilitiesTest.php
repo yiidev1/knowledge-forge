@@ -107,6 +107,10 @@ final class ConversationCapabilitiesTest extends TestCase
             'canVerifyOrders',
             'canTrackPlayback',
             'canViewAgentEvents',
+            // Added with the Seq and View Receipt columns. The list is pinned on purpose: a new flag
+            // has to be added here deliberately, which is the moment to ask whether every profile
+            // below answers it correctly — and the agent and read-only profiles both say false.
+            'canViewOrderReceipts',
         ], array_keys(get_object_vars(ConversationCapabilities::full())));
     }
 

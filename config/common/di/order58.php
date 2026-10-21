@@ -15,6 +15,9 @@ use App\Order58\Client\Items\OrderItemClientInterface;
 use App\Order58\Client\Items\OrderItemSettings;
 use App\Order58\Client\Orders\OrderDataClientInterface;
 use App\Order58\Client\Orders\OrderDataSettings;
+use App\Order58\Client\Receipt\HttpReceiptClient;
+use App\Order58\Client\Receipt\ReceiptClientInterface;
+use App\Order58\Client\Receipt\ReceiptSettings;
 use App\Order58\Domain\Items\ItemSyncStateRepositoryInterface;
 use App\Order58\Domain\Items\ItemSyncBatchRepositoryInterface;
 use App\Order58\Domain\Items\ItemSyncSummaryReaderInterface;
@@ -211,6 +214,39 @@ return [
                 'http_errors' => false,
                 // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
                 'stream' => true,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
+        ],
+    ],
+
+    // The Receipt endpoint of that same order-data API, wired exactly like the Orders client beside it
+    // and for the same reasons: a POST from inside a web request, so its timeouts are its own and are
+    // kept under the web server's. Its credential is separate so it can be rotated on its own.
+    ReceiptSettings::class => DynamicReference::to(static fn(): ReceiptSettings => new ReceiptSettings(
+        url: $params['app/order58']['receiptUrl'],
+        token: $params['app/order58']['receiptToken'],
+        connectTimeoutSeconds: $params['app/order58']['receiptConnectTimeoutSeconds'],
+        timeoutSeconds: $params['app/order58']['receiptTimeoutSeconds'],
+        maxResponseBytes: $params['app/order58']['receiptMaxResponseMb'] * 1048576,
+    )),
+
+    ReceiptClientInterface::class => [
+        'class' => HttpReceiptClient::class,
+        '__construct()' => [
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => $params['app/order58']['receiptConnectTimeoutSeconds'],
+                'timeout' => $params['app/order58']['receiptTimeoutSeconds'],
+                'http_errors' => false,
+                // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
+                'stream' => true,
+                // TLS verification stays ON. Named here rather than left to the default so that
+                // turning it off becomes a visible edit to this file instead of a quiet one.
+                'verify' => true,
+                // One hop is followed by the client itself, in code we can bound; Guzzle must not
+                // follow a chain of its own and carry the Authorization header to a host we never
+                // chose.
+                'allow_redirects' => false,
             ])),
             'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
             'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),

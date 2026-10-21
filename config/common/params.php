@@ -261,6 +261,15 @@ return [
         'ordersConnectTimeoutSeconds' => Environment::int('ORDER58_ORDERS_CONNECT_TIMEOUT_SECONDS'),
         'ordersTimeoutSeconds' => Environment::int('ORDER58_ORDERS_TIMEOUT_SECONDS'),
         'ordersMaxResponseMb' => Environment::int('ORDER58_ORDERS_MAX_RESPONSE_MB'),
+
+        // The Receipt endpoint of the same API. Its own URL and its own token on purpose: one
+        // endpoint, one credential, one place to rotate it — so a leaked receipt token can be revoked
+        // without taking the nightly order sync down with it.
+        'receiptUrl' => Environment::string('ORDER58_RECEIPT_API_URL'),
+        'receiptToken' => Environment::string('ORDER58_RECEIPT_API_TOKEN'),
+        'receiptConnectTimeoutSeconds' => Environment::int('ORDER58_RECEIPT_CONNECT_TIMEOUT_SECONDS'),
+        'receiptTimeoutSeconds' => Environment::int('ORDER58_RECEIPT_TIMEOUT_SECONDS'),
+        'receiptMaxResponseMb' => Environment::int('ORDER58_RECEIPT_MAX_RESPONSE_MB'),
         'ordersDeadlineSeconds' => Environment::int('ORDER58_ORDERS_DEADLINE_SECONDS'),
         // Fallback credential validation (a separate Order58 API; see Order58ValidateCredentials).
         'validateUrl' => Environment::string('ORDER58_VALIDATE_API_URL'),

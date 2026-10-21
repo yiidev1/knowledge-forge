@@ -24,6 +24,8 @@ use Yiisoft\Db\Query\Query;
  * A fixture administrator is created per run; topics use a distinctive prefix and are cleaned up by
  * name, never by truncation, so a shared development database survives.
  */
+use function substr_count;
+
 final class TopicManagementCest
 {
     private const USERNAME = '__kf_topics_admin__';
@@ -358,17 +360,87 @@ final class TopicManagementCest
     }
 
     /** The headers the desktop layout depends on, named rather than left to a screenshot. */
-    public function theTableCarriesItsFiveHeaders(WebTester $I): void
+    public function theTableCarriesItsSixHeadersAndAColumnForEach(WebTester $I): void
     {
         $this->seedTopic('Listed');
 
         $I->amOnPage('/admin/topics');
 
         $I->see('Topic Name', 'thead');
+        // Six now: which store may use a topic is a fact about it, beside its name.
+        $I->see('Store', 'thead');
         $I->see('Status', 'thead');
         $I->see('Assigned Orders', 'thead');
         $I->see('Created At', 'thead');
         $I->see('Actions', 'thead');
+
+        /*
+         * And one `<col>` per header, counted against each other rather than against a number.
+         *
+         * A colgroup one short does not leave the last column unsized — it shifts every width one
+         * place left, which on the Manage Orders table put a 21rem width on the wrong column and
+         * collapsed another to nothing. `'<th'` alone would also count `<thead>`, hence the two.
+         */
+        $source = $I->grabPageSource();
+        $headers = substr_count($source, '<th ') + substr_count($source, '<th>');
+
+        Assert::assertSame(
+            $headers,
+            substr_count($source, '<col class="practice-col-'),
+            'The colgroup and the header row must describe the same columns.',
+        );
+    }
+
+    /** A topic with no store reads as Global — which is what every topic was before the column. */
+    public function theStoreColumnSaysGlobalForAnUnscopedTopic(WebTester $I): void
+    {
+        $this->seedTopic('Listed');
+
+        $I->amOnPage('/admin/topics');
+
+        $I->see('Global', '.practice-topics');
+    }
+
+    /** And the dialog offers the choice, defaulting to Global. */
+    public function theDialogOffersTheStoreFieldDefaultingToGlobal(WebTester $I): void
+    {
+        $I->amOnPage('/admin/topics?topic=new');
+
+        $I->see('Store', '.practice-dialog, dialog');
+        $I->seeElement('select[name="store_source_id"]');
+        $I->see('Global (All Stores)');
+    }
+
+    /**
+     * The searchable picker is an upgrade, so what the server sends is still a working control.
+     *
+     * This is the half a browser test cannot make: PhpBrowser runs no script, so it sees exactly what
+     * a reader with scripting off sees. If the select ever stops being rendered — replaced by markup
+     * only the script understands — the field silently stops submitting for them, and this fails.
+     */
+    public function theStoreFieldStillWorksWithNoScript(WebTester $I): void
+    {
+        $I->amOnPage('/admin/topics?topic=new');
+
+        // The host the script builds into, with the real control inside it rather than instead of it.
+        $I->seeElement('[data-practice-store] select[data-practice-store-select][name="store_source_id"]');
+        // Global is the empty value, and it is the one that is selected when nothing was chosen.
+        $I->seeElement('select[name="store_source_id"] option[value=""]');
+        // The label points at the control, and carries the id the picker reads it back by.
+        $I->seeElement('label#practice-topic-store-label[for="practice-topic-store"]');
+
+        /*
+         * Every store is already in the page, which is what lets the search be instant and local.
+         * Counted rather than named: the stores are the real mirrored ones, so any particular id is
+         * a fact about today's data, while "the whole directory is here" is the actual requirement.
+         */
+        $options = $I->grabMultiple('select[name="store_source_id"] option', 'value');
+
+        Assert::assertGreaterThan(
+            50,
+            count($options),
+            'The store list must be rendered in full, not fetched on demand.',
+        );
     }
 
     public function searchAndStatusFiltersComposeAndSurviveInTheForm(WebTester $I): void

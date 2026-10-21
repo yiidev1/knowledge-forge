@@ -77,12 +77,21 @@ final readonly class ConversationCapabilities
          * agent sees another agent's history, and none sees their own here.
          */
         public bool $canViewAgentEvents,
+        /**
+         * Whether this reader may fetch the original order's receipt from Order58.
+         *
+         * A capability of its own rather than a corollary of "can see the order", because it is the
+         * only control on this table that spends a call on a third party and shows a customer's
+         * printed order. The route that serves it is mounted in one route group; this flag is what
+         * keeps the link out of the surfaces whose groups would refuse it anyway.
+         */
+        public bool $canViewOrderReceipts,
     ) {}
 
     /** Everything — what this page has always offered, and still offers unchanged. */
     public static function full(): self
     {
-        return new self(true, true, true, true, true, true, true, true, true, false, true);
+        return new self(true, true, true, true, true, true, true, true, true, false, true, true);
     }
 
     /**
@@ -102,11 +111,11 @@ final readonly class ConversationCapabilities
      */
     public static function agentPractice(): self
     {
-        return new self(false, false, false, false, false, false, false, false, false, true, false);
+        return new self(false, false, false, false, false, false, false, false, false, true, false, false);
     }
 
     public static function readOnly(): self
     {
-        return new self(false, false, false, false, false, false, false, false, false, false, false);
+        return new self(false, false, false, false, false, false, false, false, false, false, false, false);
     }
 }

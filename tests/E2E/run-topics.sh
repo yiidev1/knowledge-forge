@@ -17,6 +17,8 @@ php seed-topics.php > fixtures-topics.json || exit 1
 status=0
 node topics.js || status=1
 node order-testing-topics.js || status=1
+node store-picker.js || status=1
+node order-receipt-columns.js || status=1
 node verification.js || status=1
 
 php cleanup-topics.php

@@ -33,5 +33,12 @@ interface TopicAssignmentReaderInterface
      *
      * @return list<AssignedTopic>
      */
-    public function assignableTopics(): array;
+    /**
+     * The topics this store may assign: its own and the global ones.
+     *
+     * Null asks for every active topic, which is what a surface with no store in hand
+     * wants. A store id narrows it, and narrowing it is what keeps one merchant's
+     * curation off another merchant's page.
+     */
+    public function assignableTopics(?int $storeSourceId = null): array;
 }

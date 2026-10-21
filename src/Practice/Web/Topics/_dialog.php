@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Practice\Application\TopicInputValidator;
+use App\Practice\Domain\StoreOption;
 use App\Practice\Domain\Topic;
 use App\Practice\Domain\TopicStatus;
 use Yiisoft\Html\Html;
@@ -27,6 +28,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var callable(string, Topic|null): string $fieldValue
  * @var callable(string): string $errorClass
  * @var array<string, string> $errors
+ * @var list<StoreOption> $storeOptions every selectable store, for the Store field
  */
 
 $action = $editing === null
@@ -36,6 +38,7 @@ $action = $editing === null
 $title = $editing === null ? 'Add Topic' : 'Edit Topic';
 $submit = $editing === null ? 'Create topic' : 'Save changes';
 $currentStatus = $fieldValue('status', $editing);
+$currentStore = $fieldValue('store_source_id', $editing);
 
 // Which topic this rendered dialog is actually for. The script compares it with what a trigger asks
 // for and lets the browser navigate when they differ — which is what stops an Edit click opening the
@@ -86,6 +89,52 @@ $mode = $editing === null ? 'new' : (string) $editing->id;
             // are here: deleting keeps its own button and its own confirmation, so a rename can never
             // retire a topic by accident.
 ?>
+            <?php
+            /*
+             * Which store this topic belongs to, or all of them.
+             *
+             * A real `<select>` carrying every option, upgraded by `practice.js` into a searchable
+             * listbox. The select is what submits, what the server validates and what a browser with
+             * no scripting shows, so the search box is an improvement on a control that already
+             * works rather than the thing that makes it work — the same arrangement as every other
+             * dialog on this page.
+             *
+             * Select2 was asked for and is not used; `practice.js` explains why at the picker's own
+             * comment. In short: it needs jQuery, it writes inline `style` attributes that
+             * `style-src 'self'` refuses, and it portals its dropdown to `<body>`, which renders
+             * behind a native `<dialog>` in the top layer.
+             *
+             * Global is first and selected by default, so a topic created without a thought about
+             * stores is global — which is what every topic was before this field existed.
+             */
+?>
+            <div class="field">
+                <label class="field__label" id="practice-topic-store-label"
+                       for="practice-topic-store">Store</label>
+                <div class="practice-store" data-practice-store>
+                    <select class="field__control practice-store__native" id="practice-topic-store"
+                            name="store_source_id" data-practice-store-select>
+                        <option value=""<?= $currentStore === '' ? ' selected' : '' ?>>
+                            Global (All Stores)
+                        </option>
+                        <?php foreach ($storeOptions as $storeOption): ?>
+                            <option value="<?= Html::encode((string) $storeOption->sourceId) ?>"<?=
+                    $currentStore === (string) $storeOption->sourceId ? ' selected' : '' ?>>
+                                <?= Html::encode($storeOption->label()) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php if (isset($errors['store_source_id'])): ?>
+                    <p class="field__error"><?= Html::encode($errors['store_source_id']) ?></p>
+                <?php else: ?>
+                    <p class="field__hint">
+                        Leave this on Global and the topic can be assigned on any store. Choose a
+                        store and only that store may use it.
+                    </p>
+                <?php endif; ?>
+            </div>
+
             <div class="field">
                 <label class="field__label" for="practice-topic-status">Status</label>
                 <select class="field__control" id="practice-topic-status" name="status">

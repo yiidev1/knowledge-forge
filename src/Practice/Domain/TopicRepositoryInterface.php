@@ -23,19 +23,40 @@ interface TopicRepositoryInterface
      */
     public function page(string $search, ?TopicStatus $status, int $page, int $perPage): array;
 
-    /** Every topic that may be put on an order right now, by name. */
-    public function assignable(): array;
+    /**
+     * Every topic that may be put on an order right now, by name.
+     *
+     * A store id narrows it to that store's topics and the global ones; null asks for all of them,
+     * which is what a caller with no store in hand wants.
+     *
+     * @return list<Topic>
+     */
+    public function assignable(?int $storeSourceId = null): array;
 
     public function find(int $id): ?Topic;
 
     /** @throws \App\Shared\Domain\Exception\ValidationException on a duplicate live name */
-    public function create(string $name, ?string $description, TopicStatus $status, ?int $createdByAdminId): int;
+    public function create(
+        string $name,
+        ?string $description,
+        TopicStatus $status,
+        ?int $createdByAdminId,
+        ?int $storeSourceId = null,
+    ): int;
 
     /** @throws \App\Shared\Domain\Exception\ValidationException on a duplicate live name */
-    public function update(int $id, string $name, ?string $description): void;
+    public function update(
+        int $id,
+        string $name,
+        ?string $description,
+        ?int $storeSourceId = null,
+    ): void;
 
     public function changeStatus(int $id, TopicStatus $status): void;
 
     /** How many source orders carry this topic. Asked before archiving, to say so out loud. */
+    /** Assignments this topic has in any store but the one given. */
+    public function assignmentsOutsideStore(int $id, int $storeSourceId): int;
+
     public function assignmentCount(int $id): int;
 }

@@ -95,6 +95,23 @@ final readonly class AssignTopicService
             );
         }
 
+        /*
+         * The scope rule, enforced where it actually matters.
+         *
+         * The dropdown on the page only offers this store's topics and the global ones, but a form is
+         * not a promise: the id arrives in a request, and a request can name any topic in the
+         * database. Without this, one store's curated topic could be filed against another store's
+         * order by changing a number — and the listing would then show it there for good.
+         *
+         * Global topics pass, as they belong to every store.
+         */
+        if ($topic->storeSourceId !== null && $topic->storeSourceId !== $storeSourceId) {
+            throw ValidationException::forField(
+                'topic_id',
+                '"' . $topic->name . '" belongs to another store and cannot be assigned here.',
+            );
+        }
+
         // The ids came from a form. Keep only the ones that are really this store's orders, and say so
         // plainly if any were not — silently dropping them would look like a save that worked.
         $belongs = $this->orders->existingOrderIds($storeSourceId, $wanted);

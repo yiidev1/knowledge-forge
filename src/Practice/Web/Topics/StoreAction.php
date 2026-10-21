@@ -36,14 +36,30 @@ final readonly class StoreAction
         $name = $form->string('name');
         $description = $form->nullableString('description');
         $active = $form->string('status') !== 'INACTIVE';
+        // Empty is what the "Global (All Stores)" option posts, and it is the default: a topic
+        // created without a thought about stores belongs to all of them.
+        $store = $form->string('store_source_id');
+        $storeSourceId = $store === '' ? null : (int) $store;
 
         try {
-            $this->topics->create($name, $description, $active, $this->currentAdmin->getOrNull()?->id());
+            $this->topics->create(
+                $name,
+                $description,
+                $active,
+                $this->currentAdmin->getOrNull()?->id(),
+                $storeSourceId,
+            );
         } catch (ValidationException $e) {
             return $this->page->render(
                 $request,
                 creating: true,
-                values: ['name' => $name, 'description' => (string) $description, 'status' => $active ? 'ACTIVE' : 'INACTIVE'],
+                values: [
+                    'name' => $name,
+                    'description' => (string) $description,
+                    'status' => $active ? 'ACTIVE' : 'INACTIVE',
+                    // Bounced back as typed, so a refused save does not silently reset the store.
+                    'store_source_id' => $store,
+                ],
                 errors: $e->errors(),
             );
         }

@@ -41,6 +41,8 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
 {
     private const TABLE = '{{%practice_topics}}';
     private const ASSIGNMENTS = '{{%practice_order_topics}}';
+    /** Read by name, as every cross-module read here does. */
+    private const STORES = '{{%order58_stores}}';
 
     public function __construct(
         private ConnectionInterface $connection,
@@ -69,10 +71,20 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
                 't.description',
                 't.status',
                 't.created_at',
+                't.store_source_id',
+                // Joined here rather than looked up per row: the listing shows a name for every
+                // topic on the page, and a query each would be the N+1 this exists to avoid. A LEFT
+                // join, so a topic whose store has left the mirror still lists — with its id, which
+                // is more use than a blank.
+                'store_name' => 's.name',
                 'assigned_orders' => new Expression('COUNT(a.id)'),
             ])
             ->leftJoin(['a' => self::ASSIGNMENTS], 'a.topic_id = t.id')
-            ->groupBy(['t.id', 't.name', 't.description', 't.status', 't.created_at'])
+            ->leftJoin(['s' => self::STORES], 's.source_id = t.store_source_id')
+            ->groupBy([
+                't.id', 't.name', 't.description', 't.status', 't.created_at',
+                't.store_source_id', 's.name',
+            ])
             ->orderBy(['t.name' => SORT_ASC, 't.id' => SORT_ASC])
             ->limit($perPage)
             ->offset(($page - 1) * $perPage)
@@ -89,14 +101,33 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
         return ['items' => $items, 'total' => $total];
     }
 
-    public function assignable(): array
+    public function assignable(?int $storeSourceId = null): array
     {
-        $rows = (new Query($this->connection))
-            ->select(['id', 'name', 'description', 'status', 'created_at'])
-            ->from(self::TABLE)
-            ->where(['status' => TopicStatus::Active->value])
-            ->orderBy(['name' => SORT_ASC])
-            ->all();
+        $query = (new Query($this->connection))
+            ->select([
+                't.id', 't.name', 't.description', 't.status', 't.created_at', 't.store_source_id',
+                'store_name' => 's.name',
+            ])
+            ->from(['t' => self::TABLE])
+            ->leftJoin(['s' => self::STORES], 's.source_id = t.store_source_id')
+            ->where(['t.status' => TopicStatus::Active->value]);
+
+        if ($storeSourceId !== null) {
+            /*
+             * The scope rule, in the one place a list of choices is built.
+             *
+             * Global topics belong to every store; a store's own belong to it alone. Written as an
+             * OR on the column rather than as two queries, so the ordering below is over the whole
+             * set and a store's topic sits among the global ones by name rather than after them.
+             */
+            $query = $query->andWhere([
+                'or',
+                ['t.store_source_id' => null],
+                ['t.store_source_id' => $storeSourceId],
+            ]);
+        }
+
+        $rows = $query->orderBy(['t.name' => SORT_ASC])->all();
 
         $items = [];
 
@@ -112,22 +143,34 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
     public function find(int $id): ?Topic
     {
         $row = (new Query($this->connection))
-            ->select(['id', 'name', 'description', 'status', 'created_at'])
-            ->from(self::TABLE)
-            ->where(['id' => $id])
+            ->select([
+                't.id', 't.name', 't.description', 't.status', 't.created_at', 't.store_source_id',
+                'store_name' => 's.name',
+            ])
+            ->from(['t' => self::TABLE])
+            ->leftJoin(['s' => self::STORES], 's.source_id = t.store_source_id')
+            ->where(['t.id' => $id])
             ->one();
 
         return is_array($row) ? $this->hydrate($row) : null;
     }
 
-    public function create(string $name, ?string $description, TopicStatus $status, ?int $createdByAdminId): int
-    {
+    public function create(
+        string $name,
+        ?string $description,
+        TopicStatus $status,
+        ?int $createdByAdminId,
+        ?int $storeSourceId = null,
+    ): int {
         $now = $this->clock->now()->format('Y-m-d H:i:s');
 
         try {
             $this->connection->createCommand()->insert(self::TABLE, [
                 'name' => $name,
                 'name_key' => TopicInputValidator::fold($name),
+                // Null is global. The unique key folds it to 0 so two global topics cannot share a
+                // name — see the migration.
+                'store_source_id' => $storeSourceId,
                 'description' => $description,
                 'status' => $status->value,
                 'created_by_admin_id' => $createdByAdminId,
@@ -141,8 +184,12 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
         return (int) $this->connection->getLastInsertID();
     }
 
-    public function update(int $id, string $name, ?string $description): void
-    {
+    public function update(
+        int $id,
+        string $name,
+        ?string $description,
+        ?int $storeSourceId = null,
+    ): void {
         try {
             $this->connection->createCommand()->update(
                 self::TABLE,
@@ -150,6 +197,7 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
                     'name' => $name,
                     'name_key' => TopicInputValidator::fold($name),
                     'description' => $description,
+                    'store_source_id' => $storeSourceId,
                     'updated_at' => $this->clock->now()->format('Y-m-d H:i:s'),
                 ],
                 ['id' => $id],
@@ -174,6 +222,25 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
             ],
             ['id' => $id],
         )->execute();
+    }
+
+    /**
+     * How many of this topic's assignments are in a store other than the one given.
+     *
+     * The question a scope change has to ask before it is allowed. Restricting a topic to store A
+     * when store B's orders already carry it would leave those orders pointing at a topic their store
+     * is not allowed to use — the record would still read, but the rule and the data would disagree.
+     *
+     * Counted in SQL rather than by loading the assignments: the answer is a number, and the number
+     * is all the caller needs to refuse.
+     */
+    public function assignmentsOutsideStore(int $id, int $storeSourceId): int
+    {
+        return (int) (new Query($this->connection))
+            ->from(self::ASSIGNMENTS)
+            ->where(['topic_id' => $id])
+            ->andWhere(['<>', 'store_source_id', $storeSourceId])
+            ->count();
     }
 
     public function assignmentCount(int $id): int
@@ -213,6 +280,10 @@ final readonly class DbTopicRepository implements TopicRepositoryInterface
             status: TopicStatus::from((string) $row['status']),
             assignedOrders: (int) ($row['assigned_orders'] ?? 0),
             createdAt: $row['created_at'] === null ? null : (string) $row['created_at'],
+            storeSourceId: ($row['store_source_id'] ?? null) === null
+                ? null
+                : (int) $row['store_source_id'],
+            storeName: ($row['store_name'] ?? null) === null ? null : (string) $row['store_name'],
         );
     }
 }

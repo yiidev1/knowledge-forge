@@ -12,6 +12,7 @@ use App\Practice\Domain\AssignedByType;
 use App\Practice\Domain\TopicStatus;
 use App\Practice\Infrastructure\DbSourceOrderExistence;
 use App\Practice\Infrastructure\DbTopicAssignmentRepository;
+use App\Practice\Infrastructure\DbStoreOptions;
 use App\Practice\Infrastructure\DbTopicRepository;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Shared\Domain\Exception\ValidationException;
@@ -55,7 +56,11 @@ final class TopicAssignmentTest extends Unit
         $clock = new SystemClock();
         $this->topics = new DbTopicRepository($this->connection, $clock);
         $this->assignments = new DbTopicAssignmentRepository($this->connection, $clock);
-        $this->topicService = new TopicService($this->topics, new TopicInputValidator());
+        $this->topicService = new TopicService(
+            $this->topics,
+            new TopicInputValidator(),
+            new DbStoreOptions($this->connection),
+        );
         $this->assignService = new AssignTopicService(
             $this->topics,
             $this->assignments,

@@ -53,18 +53,37 @@
  * These are proportions, not promises of a size: the widest share goes to the column that holds the
  * most, and the ones holding a single badge or button take the least.
  */
+/*
+ * Eleven columns now, and the two new ones were paid for out of the columns that can actually give.
+ *
+ * The first attempt took a point off everything evenly, which quietly broke the rule the comment on
+ * Status states: at 1280px the content area is 897px, so 9% is 81px and the "Completed" badge wants
+ * 92 — the cell then painted outside its column and the wrapper grew 4px to scroll. Measured in a
+ * browser rather than reasoned about. Conversation and Order No# are what gave way instead: both wrap,
+ * and Conversation already carries `min-width: 0` precisely so it can absorb this.
+ */
 .a2t-orders.ot-orders col.practice-col-select { width: 3%; }
-.a2t-orders.ot-orders col.a2t-col-order { width: 11%; }
-.a2t-orders.ot-orders col.a2t-col-conversation { width: 20%; min-width: 0; }
+.a2t-orders.ot-orders col.a2t-col-order { width: 9%; }
+/* A short printed string such as `31#1`. It needs less than any other column here. */
+.a2t-orders.ot-orders col.ot-col-seq { width: 5%; }
+.a2t-orders.ot-orders col.a2t-col-conversation { width: 14%; min-width: 0; }
 /* Measured rather than guessed: "Completed" needs 103px, so the column is sized to hold it whole.
-   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status. */
+   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status. Kept at 11% when
+   the two new columns were added, because shrinking it is exactly what broke it once already. */
 .a2t-orders.ot-orders col.a2t-col-status { width: 11%; }
-.a2t-orders.ot-orders col.ot-col-verification { width: 11%; }
-.a2t-orders.ot-orders col.a2t-col-demo { width: 10%; }
-.a2t-orders.ot-orders col.ot-col-demo-orders { width: 9%; }
+.a2t-orders.ot-orders col.ot-col-verification { width: 10%; }
+.a2t-orders.ot-orders col.a2t-col-demo { width: 9%; }
+.a2t-orders.ot-orders col.ot-col-demo-orders { width: 8%; }
 .a2t-orders.ot-orders col.ot-col-agent-events { width: 9%; }
 /* The widest of the small ones: it holds a control, not a word. */
-.a2t-orders.ot-orders col.practice-col-topic { width: 16%; }
+.a2t-orders.ot-orders col.practice-col-topic { width: 12%; }
+/* Holds one button whose label is two words, and it wraps rather than widen — see `.ot-receipt`.
+   10%, measured in a browser rather than reasoned about, and twice: at 8% the header's own longest
+   word, "RECEIPT", wanted 4px more than the padding left it, and a header that overflows is the one
+   thing here nobody can wrap away. At 10% the button also sits on one line on a normal desktop
+   instead of two. Below ~1400px it wraps again, which is the intended fallback — it is the overflow
+   that was the bug, never the second line. */
+.a2t-orders.ot-orders col.ot-col-receipt { width: 10%; }
 
 /*
  * Cells may not push past their column.
@@ -122,15 +141,43 @@
        not useful. The columns fall back to their content, which is what a scrolled table wants. */
     .a2t-orders.ot-orders col.practice-col-select,
     .a2t-orders.ot-orders col.a2t-col-order,
+    .a2t-orders.ot-orders col.ot-col-seq,
     .a2t-orders.ot-orders col.a2t-col-conversation,
     .a2t-orders.ot-orders col.a2t-col-status,
     .a2t-orders.ot-orders col.ot-col-verification,
     .a2t-orders.ot-orders col.a2t-col-demo,
     .a2t-orders.ot-orders col.ot-col-demo-orders,
     .a2t-orders.ot-orders col.ot-col-agent-events,
-    .a2t-orders.ot-orders col.practice-col-topic {
+    .a2t-orders.ot-orders col.practice-col-topic,
+    .a2t-orders.ot-orders col.ot-col-receipt {
         width: auto;
     }
+}
+
+/*
+ * The provider's own order number.
+ *
+ * Tabular figures so a column of them lines up digit under digit, and `nowrap` because `31#1` is one
+ * token — breaking it after the hash would read as two numbers.
+ */
+.ot-seq {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/*
+ * The receipt link takes the width it is given.
+ *
+ * `white-space: nowrap` was the obvious thing to write and the wrong one: "View Receipt" is two words
+ * needing ~107px, and at 1280px this column's 8% share is ~72px — so the cell painted 35px outside
+ * its column and the wrapper above grew something to scroll. The same mistake the badge and the topic
+ * control made, recorded in the block above, and it gets the same answer: let it wrap onto a second
+ * line rather than insist on a width the table cannot give it.
+ */
+.a2t-orders.ot-orders .ot-receipt {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
 }
 
 .ot-demo-form {

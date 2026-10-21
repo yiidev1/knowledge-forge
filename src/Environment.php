@@ -177,6 +177,19 @@ final class Environment
         // allows, so the request ends by itself rather than being cut off mid-write.
         'ORDER58_ORDERS_DEADLINE_SECONDS' => ['type' => 'int', 'default' => 45, 'min' => 5, 'max' => 55],
 
+        // The receipt endpoint of that same order-data API, with its own credential so it can be
+        // rotated on its own. Both default to empty, and an empty token means the View Receipt column
+        // renders as unavailable and says why — it never falls back to the Orders token above.
+        'ORDER58_RECEIPT_API_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_RECEIPT_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        'ORDER58_RECEIPT_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 30],
+        // Shorter than the orders call: this one runs while somebody watches a blank tab, and a
+        // receipt is one small image rather than a page of orders.
+        'ORDER58_RECEIPT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 20, 'min' => 1, 'max' => 40],
+        // A printed receipt is an image of one page. Anything past this is not a receipt, and the read
+        // is abandoned rather than buffered.
+        'ORDER58_RECEIPT_MAX_RESPONSE_MB' => ['type' => 'int', 'default' => 8, 'min' => 1, 'max' => 24],
+
         'ORDER58_VALIDATE_API_URL' => ['type' => 'string', 'default' => ''],
         'ORDER58_VALIDATE_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
         // Short on purpose: this call happens AFTER a failed primary call, so its latency is additive on the

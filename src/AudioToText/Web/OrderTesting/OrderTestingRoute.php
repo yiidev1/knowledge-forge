@@ -79,6 +79,15 @@ final class OrderTestingRoute
     public const DEMO_RECEIPT = 'order-testing.demo-receipt';
 
     /**
+     * The **original** order's receipt, fetched from Order58 rather than rendered here.
+     *
+     * A different thing from {@see DEMO_RECEIPT} beside it, and named so that the two cannot be
+     * confused: that one prints a demo order this application already holds, this one asks the
+     * provider for the real order's printed receipt and streams the image back.
+     */
+    public const ORDER_RECEIPT = 'order-testing.order-receipt';
+
+    /**
      * Run the demo-order import now, from the picker.
      *
      * Manual because nothing schedules it yet. When something does, it will call the same service

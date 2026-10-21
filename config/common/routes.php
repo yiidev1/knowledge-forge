@@ -38,6 +38,7 @@ use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\OrderItems as Order58OrderItems;
 use App\Order58\Web\Orders as Order58Orders;
+use App\Order58\Web\Receipt as Order58Receipt;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
 use App\Order58\Web\TestRecordingChannels as Order58TestRecordingChannels;
@@ -736,6 +737,16 @@ return [
             )
                 ->action(OrderTestingModule\Receipt\Action::class)
                 ->name(OrderTestingRoute::DEMO_RECEIPT),
+
+            // The ORIGINAL order's receipt, fetched from Order58 and streamed back as an image.
+            //
+            // Same group, so the same access rule: administrators and operations users, agents
+            // refused. The action looks the order up by `(store, order)` before it calls anything, so
+            // an edited URL cannot fetch another merchant's receipt — and the provider's token never
+            // leaves the server.
+            Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/receipt')
+                ->action(Order58Receipt\Action::class)
+                ->name(OrderTestingRoute::ORDER_RECEIPT),
 
             // The 32-hex constraint rejects a malformed id before any action runs, and keeps job URLs
             // non-enumerable: the internal database id never appears in a URL.

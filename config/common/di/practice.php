@@ -7,9 +7,11 @@ use App\Practice\Application\TopicInputValidator;
 use App\Practice\Application\TopicService;
 use App\Practice\Domain\SourceOrderExistenceInterface;
 use App\Practice\Domain\TopicAssignmentRepositoryInterface;
+use App\Practice\Domain\StoreOptionsInterface;
 use App\Practice\Domain\TopicRepositoryInterface;
 use App\Practice\Infrastructure\DbSourceOrderExistence;
 use App\Practice\Infrastructure\DbTopicAssignmentRepository;
+use App\Practice\Infrastructure\DbStoreOptions;
 use App\Practice\Infrastructure\DbTopicRepository;
 
 /**
@@ -21,6 +23,10 @@ use App\Practice\Infrastructure\DbTopicRepository;
  */
 return [
     TopicRepositoryInterface::class => DbTopicRepository::class,
+
+    // The stores a topic may be restricted to — the same mirror the Order Testing picker
+    // lists, keyed by the same `source_id`.
+    StoreOptionsInterface::class => DbStoreOptions::class,
     TopicAssignmentRepositoryInterface::class => DbTopicAssignmentRepository::class,
 
     // Reads `order58_orders` by table name; see the class docblock for why it is not a call into the

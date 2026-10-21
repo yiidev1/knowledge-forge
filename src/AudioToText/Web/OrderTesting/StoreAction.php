@@ -16,6 +16,7 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\DemoOrderCountReaderInterface;
+use App\AudioToText\Domain\MirroredOrderReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\OrderGroupFilter;
 use App\AudioToText\Domain\OrderVerificationReaderInterface;
@@ -90,6 +91,15 @@ readonly class StoreAction extends AudioStoreAction
         /** This surface's own question: how many demo orders each order on the page produced. */
         private DemoOrderCountReaderInterface $demoOrderCounts,
         /**
+         * The mirrored Order58 record behind each row — its Seq, and whether it exists.
+         *
+         * Read here rather than joined into the group query because the groups come from the audio
+         * tables and an order id there is free text: a join would have to cast it, and a cast in a
+         * join condition cannot use the index. One extra batched lookup is cheaper and says what it
+         * means.
+         */
+        private MirroredOrderReaderInterface $mirroredOrders,
+        /**
          * Which topic each order is practised under.
          *
          * Here rather than on a subclass because **this** is where topics are assigned. The practice
@@ -142,10 +152,18 @@ readonly class StoreAction extends AudioStoreAction
         return [
             'demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds),
             'routes' => $this->surfaceRoutes(),
+            // One query for the page, bounded by this store: the provider's Seq for each order, and
+            // the fact that the order is mirrored at all — which is what decides whether a receipt can
+            // be offered. Not asked for on surfaces that render neither.
+            'mirroredOrders' => $this->capabilities()->canViewOrderReceipts
+                ? $this->mirroredOrders->forOrders($sourceId, $orderIds)
+                : [],
             // Two queries for the whole page, not two per row: the assignments for the orders being
             // shown, and the assignable topics once.
             'topicAssignments' => $this->topics->forOrders($sourceId, $orderIds),
-            'assignableTopics' => $this->topics->assignableTopics(),
+            // Scoped to the store this page is about, so the dropdown offers exactly what the
+            // assignment endpoint will accept.
+            'assignableTopics' => $this->topics->assignableTopics($sourceId),
             // One query for the whole page, and only on the surface that renders the column: an order
             // with no row is unverified, which the template already knows how to say.
             'orderVerifications' => $this->capabilities()->canVerifyOrders
@@ -203,6 +221,11 @@ readonly class StoreAction extends AudioStoreAction
             // only this surface's route group, so a practice page that somehow rendered the control
             // would still have nothing to post to.
             'verification' => OrderTestingRoute::VERIFICATION,
+
+            // The original order's Order58 receipt. Named here like the rest, and mounted only in this
+            // surface's route group — a practice page that inherited the column would render a link
+            // its own group does not serve, so the column is gated on capability rather than on luck.
+            'orderReceipt' => OrderTestingRoute::ORDER_RECEIPT,
 
             // The job-scoped addresses the row controls and the conversation dialog fetch. Here rather
             // than printed from the audio module's constants, because each surface mounts them at its

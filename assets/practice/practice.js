@@ -839,5 +839,386 @@
             verifyPaintDialogButton();
         });
     });
+
+    /*
+     * The Store picker: a searchable listbox over the real <select>.
+     *
+     * ## Why this and not Select2
+     *
+     * Select2 was the shape asked for, and three things here make it the wrong fit rather than
+     * merely a heavy one:
+     *
+     *   - it is a jQuery plugin, and this application ships no jQuery — vendoring both, unminified
+     *     and unversioned, into `assets/` is ~250 KB of third-party code with no build step and no
+     *     upgrade path;
+     *   - it positions its dropdown by writing `style="top: …; left: …; width: …"` onto elements it
+     *     creates, and the policy here is `style-src 'self'` with no `unsafe-inline`, so the browser
+     *     refuses those declarations and the list lands in the wrong place;
+     *   - it appends that dropdown to `document.body`. These modals are native `<dialog>` elements,
+     *     which the browser paints in the top layer, so a body-level dropdown renders *behind* the
+     *     modal. `dropdownParent` works around it, and then the panel is clipped by the dialog's own
+     *     overflow instead.
+     *
+     * What is actually wanted is a reliable searchable store selection, so that is what this is: the
+     * same `<details>`-and-search idiom the topic filter above already uses, built on the control
+     * that was already there.
+     *
+     * ## The select stays
+     *
+     * It is hidden, never removed and never disabled — a hidden form control still submits — so the
+     * posted field, the server-side validation and the no-script rendering are untouched. Choosing
+     * writes through to it and fires `change`, which is what makes the selection real; everything
+     * drawn here is a view of that one value.
+     */
+    var STORE_READY = 'data-practice-store-ready';
+
+    function storeLabel(select) {
+        var option = select.options[select.selectedIndex];
+
+        return option === undefined ? '' : option.textContent.trim();
+    }
+
+    function storePanelOf(host) {
+        return host.querySelector('[data-practice-store-panel]');
+    }
+
+    function storeClose(host) {
+        var panel = storePanelOf(host);
+
+        if (panel === null || panel.hidden) {
+            return;
+        }
+
+        panel.hidden = true;
+        host.querySelector('[data-practice-store-summary]').setAttribute('aria-expanded', 'false');
+    }
+
+    function storeCloseAll() {
+        var hosts = document.querySelectorAll('[data-practice-store]');
+
+        for (var i = 0; i < hosts.length; i++) {
+            storeClose(hosts[i]);
+        }
+    }
+
+    /** The options a reader can currently see, in the order they are drawn. */
+    function storeVisible(host) {
+        var all = host.querySelectorAll('[data-practice-store-option]');
+        var out = [];
+
+        for (var i = 0; i < all.length; i++) {
+            if (!all[i].hidden) {
+                out.push(all[i]);
+            }
+        }
+
+        return out;
+    }
+
+    function storeActivate(host, option) {
+        var all = host.querySelectorAll('[data-practice-store-option]');
+
+        for (var i = 0; i < all.length; i++) {
+            all[i].classList.remove('is-active');
+            all[i].setAttribute('aria-selected', 'false');
+        }
+
+        if (option === undefined || option === null) {
+            return;
+        }
+
+        option.classList.add('is-active');
+        option.setAttribute('aria-selected', 'true');
+        host.querySelector('[data-practice-store-list]').setAttribute(
+            'aria-activedescendant',
+            option.id,
+        );
+
+        // Only within the list's own scroll box; `block: 'nearest'` is what keeps the dialog itself
+        // from being scrolled out from under the reader.
+        if (typeof option.scrollIntoView === 'function') {
+            option.scrollIntoView({block: 'nearest'});
+        }
+    }
+
+    function storeChoose(host, option) {
+        var select = host.querySelector('[data-practice-store-select]');
+
+        select.value = option.getAttribute('data-value');
+        // Dispatched, not assumed: anything else listening for a changed field — now or later — hears
+        // this exactly as it would hear a reader using the select directly.
+        select.dispatchEvent(new Event('change', {bubbles: true}));
+
+        var summary = host.querySelector('[data-practice-store-summary]');
+
+        summary.querySelector('[data-practice-store-current]').textContent = storeLabel(select);
+        storeActivate(host, option);
+        storeClose(host);
+        summary.focus();
+    }
+
+    function storeFilter(host, needle) {
+        var options = host.querySelectorAll('[data-practice-store-option]');
+        var wanted = needle.trim().toLowerCase();
+        var shown = 0;
+
+        for (var i = 0; i < options.length; i++) {
+            var hit = wanted === ''
+                || options[i].getAttribute('data-search').indexOf(wanted) !== -1;
+
+            options[i].hidden = !hit;
+
+            if (hit) {
+                shown++;
+            }
+        }
+
+        host.querySelector('[data-practice-store-empty]').hidden = shown !== 0;
+    }
+
+    function storeOpen(host) {
+        var panel = storePanelOf(host);
+
+        if (panel === null || !panel.hidden) {
+            return;
+        }
+
+        // Every open starts from the whole list rather than from whatever was typed last time, so a
+        // reader who closed the panel mid-search does not reopen it on three stores out of 241.
+        var search = host.querySelector('[data-practice-store-search]');
+
+        search.value = '';
+        storeFilter(host, '');
+        panel.hidden = false;
+        host.querySelector('[data-practice-store-summary]').setAttribute('aria-expanded', 'true');
+
+        var select = host.querySelector('[data-practice-store-select]');
+        var current = host.querySelector(
+            '[data-practice-store-option][data-value="' + CSS.escape(select.value) + '"]',
+        );
+
+        storeActivate(host, current);
+        search.focus();
+    }
+
+    /**
+     * Build the listbox for one host.
+     *
+     * The options are read from the select that is already in the page, so there is exactly one list
+     * of stores and it is the server's. Nothing is fetched and nothing is duplicated into script.
+     */
+    function storeBuild(host) {
+        // The guard that makes a second call free. The dialog is rendered once per page, but this
+        // runs on DOMContentLoaded *and* whenever a dialog opens, and binding twice would give every
+        // click two handlers and every keystroke two filters.
+        if (host.getAttribute(STORE_READY) === 'true') {
+            return;
+        }
+
+        var select = host.querySelector('[data-practice-store-select]');
+
+        if (select === null) {
+            return;
+        }
+
+        host.setAttribute(STORE_READY, 'true');
+
+        var id = select.id || 'practice-store';
+        var summary = document.createElement('button');
+
+        // `type="button"`, emphatically: the default inside a <form> is submit, and a picker that
+        // posts the form on its first click would create the topic before the store was chosen.
+        summary.type = 'button';
+        summary.className = 'field__control practice-store__summary';
+        summary.id = id + '-summary';
+        summary.setAttribute('data-practice-store-summary', '');
+        summary.setAttribute('aria-haspopup', 'listbox');
+        summary.setAttribute('aria-expanded', 'false');
+        summary.setAttribute('aria-controls', id + '-list');
+        // The <label> points at the select by id; this reads that same label out loud for the
+        // control that has actually taken its place.
+        summary.setAttribute('aria-labelledby', id + '-label ' + id + '-summary');
+
+        var current = document.createElement('span');
+
+        current.setAttribute('data-practice-store-current', '');
+        current.textContent = storeLabel(select);
+        summary.appendChild(current);
+
+        var panel = document.createElement('div');
+
+        panel.className = 'practice-store__panel';
+        panel.hidden = true;
+        panel.setAttribute('data-practice-store-panel', '');
+
+        var search = document.createElement('input');
+
+        search.type = 'search';
+        search.className = 'field__control practice-store__search';
+        search.placeholder = 'Search stores';
+        search.autocomplete = 'off';
+        search.setAttribute('aria-label', 'Search stores');
+        search.setAttribute('data-practice-store-search', '');
+        panel.appendChild(search);
+
+        var list = document.createElement('ul');
+
+        list.className = 'practice-store__options';
+        list.id = id + '-list';
+        list.setAttribute('role', 'listbox');
+        list.setAttribute('data-practice-store-list', '');
+
+        for (var i = 0; i < select.options.length; i++) {
+            var source = select.options[i];
+            var option = document.createElement('li');
+
+            option.className = 'practice-store__option';
+            option.id = id + '-option-' + i;
+            option.setAttribute('role', 'option');
+            option.setAttribute('aria-selected', 'false');
+            option.setAttribute('data-practice-store-option', '');
+            option.setAttribute('data-value', source.value);
+            option.textContent = source.textContent.trim();
+            // Matched against the whole label, so the store name, the company and the id all find
+            // the row — which is what makes searching 241 of them bearable.
+            option.setAttribute('data-search', option.textContent.toLowerCase());
+            list.appendChild(option);
+        }
+
+        panel.appendChild(list);
+
+        var empty = document.createElement('p');
+
+        empty.className = 'field__hint practice-store__empty';
+        empty.hidden = true;
+        empty.setAttribute('data-practice-store-empty', '');
+        empty.textContent = 'No store matches that.';
+        panel.appendChild(empty);
+
+        host.appendChild(summary);
+        host.appendChild(panel);
+
+        // Hidden, not removed and not disabled: it is still the field that posts, and it is what the
+        // reader gets back if script ever fails to run.
+        select.hidden = true;
+        select.setAttribute('tabindex', '-1');
+        select.setAttribute('aria-hidden', 'true');
+    }
+
+    function storeHosts() {
+        var hosts = document.querySelectorAll('[data-practice-store]');
+
+        for (var i = 0; i < hosts.length; i++) {
+            storeBuild(hosts[i]);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', storeHosts);
+
+    document.addEventListener('click', function (event) {
+        var summary = event.target.closest('[data-practice-store-summary]');
+
+        if (summary !== null) {
+            var host = summary.closest('[data-practice-store]');
+
+            if (storePanelOf(host).hidden) {
+                storeOpen(host);
+            } else {
+                storeClose(host);
+            }
+
+            return;
+        }
+
+        var option = event.target.closest('[data-practice-store-option]');
+
+        if (option !== null) {
+            storeChoose(option.closest('[data-practice-store]'), option);
+
+            return;
+        }
+
+        // Anywhere else — including the dialog's own backdrop — shuts an open panel.
+        if (event.target.closest('[data-practice-store-panel]') === null) {
+            storeCloseAll();
+        }
+    });
+
+    document.addEventListener('input', function (event) {
+        if (!event.target.matches('[data-practice-store-search]')) {
+            return;
+        }
+
+        var host = event.target.closest('[data-practice-store]');
+
+        storeFilter(host, event.target.value);
+        // The first match becomes the keyboard target, so typing and pressing Enter picks the store
+        // a reader is obviously aiming at without a single arrow key.
+        storeActivate(host, storeVisible(host)[0]);
+    });
+
+    document.addEventListener('keydown', function (event) {
+        var host = event.target.closest('[data-practice-store]');
+
+        if (host === null) {
+            return;
+        }
+
+        var panel = storePanelOf(host);
+        var open = panel !== null && !panel.hidden;
+
+        if (!open) {
+            // Closed: the three keys that mean "show me the list".
+            if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                if (event.target.matches('[data-practice-store-summary]')) {
+                    event.preventDefault();
+                    storeOpen(host);
+                }
+            }
+
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            // Stopped here, deliberately. This picker lives inside a <dialog>, and an Escape that
+            // reaches the dialog closes it — so without this, dismissing the store list would throw
+            // away everything typed into the form behind it.
+            event.preventDefault();
+            event.stopPropagation();
+            storeClose(host);
+            host.querySelector('[data-practice-store-summary]').focus();
+
+            return;
+        }
+
+        var visible = storeVisible(host);
+
+        if (visible.length === 0) {
+            return;
+        }
+
+        var active = host.querySelector('[data-practice-store-option].is-active');
+        var at = visible.indexOf(active);
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            storeActivate(host, visible[at + 1 >= visible.length ? 0 : at + 1]);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            storeActivate(host, visible[at <= 0 ? visible.length - 1 : at - 1]);
+        } else if (event.key === 'Home') {
+            event.preventDefault();
+            storeActivate(host, visible[0]);
+        } else if (event.key === 'End') {
+            event.preventDefault();
+            storeActivate(host, visible[visible.length - 1]);
+        } else if (event.key === 'Enter' && active !== null) {
+            // Enter inside the search box must not submit the form on its way past.
+            event.preventDefault();
+            storeChoose(host, active);
+        } else if (event.key === 'Tab') {
+            storeClose(host);
+        }
+    });
 })();
 

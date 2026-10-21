@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\AudioToText\Domain\AssignedTopic;
+use App\AudioToText\Domain\MirroredOrder;
 use App\AudioToText\Domain\AudioStore;
 use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Domain\ConversationMode;
@@ -134,6 +135,21 @@ $agentPlaybackUrl = $canViewAgentEvents
     : '';
 /** @var array<string, OrderVerificationStatus> $orderVerifications */
 $orderVerifications = $orderVerifications ?? [];
+
+// Seq and View Receipt, which travel together: both are facts from the mirrored Order58 record, both
+// are read by one query, and neither means anything on a surface that has no access to the provider.
+// Same two conditions as Verification above, for the same reason.
+$canViewOrderReceipts = $practiceMode && $capabilities->canViewOrderReceipts;
+
+/**
+ * The mirrored order behind each row, keyed by the order id the row shows.
+ *
+ * A **missing key means there is no such order under this store** — which is a different thing from an
+ * order with no Seq, and the two cells say so differently.
+ *
+ * @var array<string, MirroredOrder> $mirroredOrders
+ */
+$mirroredOrders = $mirroredOrders ?? [];
 
 // The store being active is a fact about the store; being allowed to upload is a fact about the
 // reader. Both must hold, and ANDing them means the upload dialog, both Add Audio buttons and the
@@ -1155,6 +1171,9 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                           // with the rules that lay out what is inside the cells.?>
                     <?php if ($canAssignTopics): ?><col class="practice-col-select"><?php endif; ?>
                     <col class="a2t-col-order">
+                    <?php // Beside the order number, because it is the same order said another way:?>
+                    <?php // the provider's own printed number for it.?>
+                    <?php if ($canViewOrderReceipts): ?><col class="ot-col-seq"><?php endif; ?>
                     <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
                     <?php if ($canVerifyOrders): ?><col class="ot-col-verification"><?php endif; ?>
@@ -1168,6 +1187,9 @@ $conversationCell = static function (StoreOrderGroup $group) use (
 ?>
                     <?php if ($canViewAgentEvents): ?><col class="ot-col-agent-events"><?php endif; ?>
                     <?php if ($practiceMode): ?><col class="practice-col-topic"><?php endif; ?>
+                    <?php // Last, because it leaves the application: everything to its left is this?>
+                    <?php // page's own work, and this one fetches the provider's printed receipt.?>
+                    <?php if ($canViewOrderReceipts): ?><col class="ot-col-receipt"><?php endif; ?>
                 </colgroup>
                 <thead>
                     <tr>
@@ -1183,6 +1205,11 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             </th>
                         <?php endif; ?>
                         <th>Order No#</th>
+                        <?php if ($canViewOrderReceipts): ?>
+                            <?php // The provider's own order number — a printed string such as `31#1`,?>
+                            <?php // not a count and not anything this application derives.?>
+                            <th>Seq</th>
+                        <?php endif; ?>
                         <?php // One column, because an order is one conversation. The channels it was?>
                         <?php // recorded on are named inside the cell, from the enum rather than typed?>
                         <?php // out here, and the dialog it opens gives each of them a tab.?>
@@ -1209,6 +1236,12 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <?php // "Set Topic" where it can be set; just "Topic" where it is read.?>
                             <th><?= $canAssignTopics ? 'Set Topic' : 'Topic' ?></th>
                         <?php endif; ?>
+                        <?php if ($canViewOrderReceipts): ?>
+                            <?php // The real order's receipt, as the provider printed it. Offered only?>
+                            <?php // where the order is actually mirrored here, so a link can never?>
+                            <?php // name an order this store does not have.?>
+                            <th>View Receipt</th>
+                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -1230,6 +1263,12 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     $rowHasSourceOrder = $rowOrderId !== ''
                         && $rowLinkStatus !== DemoLinkStatus::NoOrderId
                         && $rowLinkStatus !== DemoLinkStatus::OrderNotFound;
+
+                    // Resolved once for the row, because two cells need it: Seq prints what it holds,
+                    // and View Receipt exists only when there is one. Looked up here rather than in
+                    // the first of those cells so the second does not depend on the first having been
+                    // rendered.
+                    $mirrored = $rowOrderId === '' ? null : ($mirroredOrders[$rowOrderId] ?? null);
                     ?>
                     <?php
                     // Read by the review dialog's Original transcript button, which is opened from this
@@ -1303,6 +1342,21 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
                             </span>
                         </td>
+                        <?php if ($canViewOrderReceipts): ?>
+                            <?php
+                            // The provider's own number for this order, printed exactly as mirrored.
+                            // An order this store does not have, and one that has no seq, both read
+                            // as a dash — the receipt cell beside it is where that difference is
+                            // actually actionable, so it is not spelled out twice.
+                            ?>
+                            <td data-ot-label="Seq" class="a2t-cell-tight">
+                                <?php if ($mirrored !== null && $mirrored->seq !== null): ?>
+                                    <span class="ot-seq"><?= Html::encode($mirrored->seq) ?></span>
+                                <?php else: ?>
+                                    <span class="util-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                         <td data-ot-label="Recording">
                             <?= $conversationCell($group) ?>
                         </td>
@@ -1745,6 +1799,38 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                     <?php endif; ?>
                                 <?php endif; ?>
                                 </div>
+                            </td>
+                        <?php endif; ?>
+                        <?php if ($canViewOrderReceipts): ?>
+                            <td data-ot-label="View receipt" class="a2t-cell-tight">
+                                <?php if ($mirrored !== null): ?>
+                                    <?php
+                                    /*
+                                     * A plain link, and a real URL.
+                                     *
+                                     * Nothing is fetched while this table loads: the provider is
+                                     * called when, and only when, this is clicked. `target="_blank"`
+                                     * leaves Manage Orders where it is, and `rel` is what stops the
+                                     * opened tab reaching back through `window.opener` — it is an
+                                     * image from somebody else's server, so it gets no handle on
+                                     * this page.
+                                     */
+                                    $receiptUrl = $urlGenerator->generate($routes['orderReceipt'], [
+                                        'sourceId' => $store->sourceId,
+                                        'sourceOrderId' => $group->orderId,
+                                    ]);
+                                    ?>
+                                    <a class="btn btn--sm btn--secondary ot-receipt" href="<?= Html::encode($receiptUrl) ?>"
+                                       target="_blank" rel="noopener noreferrer"
+                                       aria-label="View the Order58 receipt for order <?= Html::encode((string) $group->orderId) ?> (opens in a new tab)">View Receipt</a>
+                                <?php else: ?>
+                                    <?php
+                                    // No mirrored order, so there is no verified id to ask about and
+                                    // no link is built. Saying which of the two is missing would be
+                                    // guessing: the order may be new, or the number may be a typo.
+                                    ?>
+                                    <span class="util-muted">—</span>
+                                <?php endif; ?>
                             </td>
                         <?php endif; ?>
                     </tr>

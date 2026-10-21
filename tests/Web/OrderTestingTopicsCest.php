@@ -48,6 +48,10 @@ final class OrderTestingTopicsCest
      * at upload, so it can name an order that was never mirrored.
      */
     private const ORPHAN_ORDER = 16800999;
+    /** Shaped like the provider's real ones, which are `31#1` and not a bare count. */
+    private const SEQ = '31#1';
+    /** A real mirrored order belonging to a DIFFERENT store, for the cross-store gate. */
+    private const FOREIGN_ORDER = 16800444;
     private const TOPIC = 'ZZ OT Topic';
     private const TOPIC_B = 'ZZ OT Topic Second';
 
@@ -62,7 +66,9 @@ final class OrderTestingTopicsCest
             ->create(self::USERNAME, (new NativePasswordHasher())->hash(self::PASSWORD));
 
         $this->seedStore();
-        $this->seedOrder(self::ORDER);
+        $this->seedOrder(self::ORDER, self::SEQ);
+        // Deliberately without one: the column is nullable, and a mirrored order with no seq must
+        // still be offered a receipt, because the order itself is real.
         $this->seedOrder(self::ORDER_B);
         $this->seedRecording(self::ORDER, 'c', 'd');
         $this->seedRecording(self::ORDER_B, 'e', 'f');
@@ -92,6 +98,146 @@ final class OrderTestingTopicsCest
         $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
         $I->seeElement('[data-practice-assign-select]');
         $I->seeElement('#practice-bulk-form');
+    }
+
+    // ------------------------------------------------------------------ Seq and View Receipt
+
+    /**
+     * The two new columns exist, and the colgroup still describes the header row.
+     *
+     * The count check is the one that matters. A colgroup one `col` short does not leave the last
+     * column unsized — it shifts every width one place left, which is how a 21rem width once landed
+     * on Agent Events and collapsed Set Topic to nothing. Counted against each other rather than
+     * against a number, so adding an eleventh column does not require editing this test.
+     */
+    public function theTableCarriesSeqAndViewReceipt(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+        $I->seeResponseCodeIs(200);
+
+        $I->see('Seq', 'thead');
+        $I->see('View Receipt', 'thead');
+
+        $source = $I->grabPageSource();
+        // `'<th'` alone would also count `<thead`, hence the two forms.
+        $headers = substr_count($source, '<th ') + substr_count($source, '<th>');
+
+        Assert::assertSame(
+            $headers,
+            substr_count($source, '<col class="'),
+            'The colgroup and the header row must describe the same columns.',
+        );
+    }
+
+    /** The provider's own number, printed exactly as mirrored rather than reformatted. */
+    public function theSeqCellShowsTheProvidersOwnNumber(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+
+        $I->see(self::SEQ, '.ot-seq');
+    }
+
+    /**
+     * The link is a real URL on this application, opened in a new tab.
+     *
+     * `rel="noopener noreferrer"` is the part worth pinning: without it the opened tab keeps a handle
+     * on this page through `window.opener`, and what it opens is a document from somebody else's
+     * server.
+     */
+    public function theReceiptLinkPointsAtThisApplicationAndOpensANewTab(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+
+        $expected = self::STORE_URL . '/order/' . self::ORDER . '/receipt';
+
+        $I->seeElement('a.ot-receipt[href="' . $expected . '"][target="_blank"][rel="noopener noreferrer"]');
+    }
+
+    /** No token, no provider host, and no upstream call while the table loads. */
+    public function theTableNeverExposesTheProvidersHostOrCredential(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+
+        $source = $I->grabPageSource();
+
+        Assert::assertStringNotContainsString('order58.com', $source);
+        Assert::assertStringNotContainsString('Bearer', $source);
+        Assert::assertStringNotContainsString('account_id', $source);
+    }
+
+    /**
+     * A mirrored order with no seq still gets a receipt link.
+     *
+     * "No seq" and "no order" are different facts, and only the second means there is no verified id
+     * to ask the provider about.
+     */
+    public function anOrderWithNoSeqIsStillOfferedAReceipt(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+
+        $I->seeElement('a.ot-receipt[href="' . self::STORE_URL . '/order/' . self::ORDER_B . '/receipt"]');
+    }
+
+    /** An order id that names no mirrored row offers no link, because there is nothing to ask about. */
+    public function anUnmirroredOrderIsOfferedNoReceipt(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL);
+
+        $I->dontSeeElement(
+            'a.ot-receipt[href="' . self::STORE_URL . '/order/' . self::ORPHAN_ORDER . '/receipt"]',
+        );
+    }
+
+    /**
+     * The gate that a hand-edited URL meets.
+     *
+     * `order58_orders` is unique on `(account_id, source_order_id)` and not on the order id alone, so
+     * an order that exists under another store must not be fetchable from this one's page. The
+     * lookup is by the pair, so this is a 404 — the same answer as an order that does not exist,
+     * which is also the right answer to give.
+     */
+    public function anotherStoresOrderCannotBeFetchedFromThisStoresUrl(WebTester $I): void
+    {
+        $I->amOnPage(self::STORE_URL . '/order/' . self::ORPHAN_ORDER . '/receipt');
+
+        $I->seeResponseCodeIs(404);
+        $I->see('not on this store');
+        // The provider was never called, so nothing of theirs is on the page.
+        $I->dontSee('Bearer');
+    }
+
+    /**
+     * A real order, mirrored under a DIFFERENT store, requested from this store's URL.
+     *
+     * This is the gate that actually matters, and it is load-bearing rather than belt-and-braces:
+     * the provider was measured on 2026-10-21 answering a receipt request for account 1301 carrying
+     * an order id belonging to 1731. **Upstream does not check that the order belongs to the account**,
+     * so the only thing standing between a hand-edited URL and another merchant's receipt is this
+     * lookup by `(account_id, source_order_id)`.
+     *
+     * Nothing leaves the building during this test: the 404 is decided before any client is called,
+     * which is also why it is safe to assert here rather than against a mock.
+     */
+    public function arealOrderBelongingToAnotherStoreIs404FromThisStore(WebTester $I): void
+    {
+        $other = self::STORE_ID + 1;
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_orders}}', [
+            'account_id' => $other,
+            'source_order_id' => self::FOREIGN_ORDER,
+            'seq' => '99#9',
+            'payload_json' => '{}',
+            'content_hash' => str_repeat('0', 64),
+            'synced_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+
+        $I->amOnPage(self::STORE_URL . '/order/' . self::FOREIGN_ORDER . '/receipt');
+
+        $I->seeResponseCodeIs(404);
+        $I->see('not on this store');
     }
 
     /**
@@ -586,13 +732,16 @@ final class OrderTestingTopicsCest
         ])->execute();
     }
 
-    private function seedOrder(int $orderId): void
+    private function seedOrder(int $orderId, ?string $seq = null): void
     {
         $now = gmdate('Y-m-d H:i:s');
 
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
             'source_order_id' => $orderId,
+            // The provider's own printed number. Shaped like the real ones — `31#1`, not `31` — so a
+            // test cannot pass against a column that silently holds a count.
+            'seq' => $seq,
             'payload_json' => '{}',
             'content_hash' => str_repeat('0', 64),
             'synced_at' => $now,
@@ -663,7 +812,7 @@ final class OrderTestingTopicsCest
         }
 
         $this->connection->createCommand()
-            ->delete('{{%order58_orders}}', ['account_id' => self::STORE_ID])->execute();
+            ->delete('{{%order58_orders}}', ['account_id' => [self::STORE_ID, self::STORE_ID + 1]])->execute();
         $this->connection->createCommand()
             ->delete('{{%knowledge_bases}}', ['source_store_id' => self::STORE_ID])->execute();
         $this->connection->createCommand()

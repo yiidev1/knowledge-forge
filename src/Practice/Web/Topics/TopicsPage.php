@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Practice\Web\Topics;
 
 use App\Practice\Domain\Topic;
+use App\Practice\Domain\StoreOptionsInterface;
 use App\Practice\Domain\TopicRepositoryInterface;
 use App\Practice\Domain\TopicStatus;
 use Psr\Http\Message\ResponseInterface;
@@ -31,6 +32,7 @@ final readonly class TopicsPage
     public function __construct(
         private WebViewRenderer $viewRenderer,
         private TopicRepositoryInterface $topics,
+        private StoreOptionsInterface $stores,
     ) {}
 
     /**
@@ -95,6 +97,8 @@ final readonly class TopicsPage
                 'editing' => $editing,
                 'values' => $values,
                 'errors' => $errors,
+                // Every selectable store, once per render, for the one dropdown both dialogs use.
+                'storeOptions' => $this->stores->all(),
             ]);
     }
 }

@@ -45,21 +45,37 @@ final readonly class UpdateAction
         $name = $form->string('name');
         $description = $form->nullableString('description');
         $status = $form->string('status');
+        $store = $form->string('store_source_id');
 
         try {
             // Only the two values the form offers count as a decision. Anything else — a field
             // stripped by a proxy, a crafted body naming the stored delete value — leaves the status
             // exactly as it is rather than being read as "deactivate".
-            $this->topics->update($id, $name, $description, match ($status) {
-                TopicStatus::Active->value => true,
-                TopicStatus::Inactive->value => false,
-                default => null,
-            });
+            $this->topics->update(
+                $id,
+                $name,
+                $description,
+                match ($status) {
+                    TopicStatus::Active->value => true,
+                    TopicStatus::Inactive->value => false,
+                    default => null,
+                },
+                $store === '' ? null : (int) $store,
+                // Only a body that actually carried the field may move the scope. A request without
+                // it leaves the topic where it is, rather than being read as "make this global" —
+                // the same rule the status above follows, and for the same reason.
+                $form->has('store_source_id'),
+            );
         } catch (ValidationException $e) {
             return $this->page->render(
                 $request,
                 editing: $this->repository->find($id),
-                values: ['name' => $name, 'description' => (string) $description, 'status' => $status],
+                values: [
+                    'name' => $name,
+                    'description' => (string) $description,
+                    'status' => $status,
+                    'store_source_id' => $store,
+                ],
                 errors: $e->errors(),
             );
         }

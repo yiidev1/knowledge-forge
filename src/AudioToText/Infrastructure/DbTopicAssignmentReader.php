@@ -92,14 +92,30 @@ final readonly class DbTopicAssignmentReader implements TopicAssignmentReaderInt
         return $out;
     }
 
-    public function assignableTopics(): array
+    public function assignableTopics(?int $storeSourceId = null): array
     {
-        $rows = (new Query($this->connection))
+        $query = (new Query($this->connection))
             ->select(['id', 'name', 'description'])
             ->from(self::TOPICS)
-            ->where(['status' => AssignedTopic::ACTIVE])
-            ->orderBy(['name' => SORT_ASC])
-            ->all();
+            ->where(['status' => AssignedTopic::ACTIVE]);
+
+        if ($storeSourceId !== null) {
+            /*
+             * This store's topics and the global ones, and nothing else.
+             *
+             * The same OR the Practice module's own reader applies, written out here because this
+             * module reads the topic tables by name rather than through that module's classes — the
+             * arrangement the isolation tests require. Both are the same rule and both are tested;
+             * if they ever disagree, the page would offer a topic the assignment endpoint refuses.
+             */
+            $query = $query->andWhere([
+                'or',
+                ['store_source_id' => null],
+                ['store_source_id' => $storeSourceId],
+            ]);
+        }
+
+        $rows = $query->orderBy(['name' => SORT_ASC])->all();
 
         $out = [];
 

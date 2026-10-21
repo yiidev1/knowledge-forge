@@ -71,6 +71,11 @@ return [
     // is reached by following a link to that module's own pages. See DemoOrderCountReaderInterface.
     App\AudioToText\Domain\DemoOrderCountReaderInterface::class => App\AudioToText\Infrastructure\DbDemoOrderCountReader::class,
 
+    // The mirrored order behind each row: its provider-assigned Seq, and the fact that it exists at
+    // all, which is what decides whether a receipt can be offered for it. Reads the same table by name,
+    // for the same isolation reason.
+    App\AudioToText\Domain\MirroredOrderReaderInterface::class => App\AudioToText\Infrastructure\DbMirroredOrderReader::class,
+
     // The topic each source order is practised under, read from the Practice Orders tables by name —
     // the same arrangement as the demo-order readers above, and for the same reason.
     App\AudioToText\Domain\TopicAssignmentReaderInterface::class => App\AudioToText\Infrastructure\DbTopicAssignmentReader::class,

@@ -85,12 +85,15 @@ $c->createCommand()->insert('{{%knowledge_bases}}', [
     'updated_at' => $now,
 ])->execute();
 
-foreach ([ASSIGNED_ORDER, FREE_ORDER] as $orderId) {
+foreach ([ASSIGNED_ORDER, FREE_ORDER] as $index => $orderId) {
     $payload = (string) json_encode(['id' => (string) $orderId, 'status' => 'completed']);
 
     $c->createCommand()->insert('{{%order58_orders}}', [
         'account_id' => STORE,
         'source_order_id' => $orderId,
+        // Shaped like the provider's own: `31#1`, not a bare count. The Seq column prints it
+        // verbatim, so a fixture that used a plain number would not exercise the real width.
+        'seq' => (31 + $index) . '#1',
         'payload_json' => $payload,
         'content_hash' => hash('sha256', $payload),
         'synced_at' => $now,
