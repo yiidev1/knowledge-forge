@@ -66,17 +66,28 @@
 .a2t-orders.ot-orders col.a2t-col-order { width: 9%; }
 /* A short printed string such as `31#1`. It needs less than any other column here. */
 .a2t-orders.ot-orders col.ot-col-seq { width: 5%; }
-.a2t-orders.ot-orders col.a2t-col-conversation { width: 14%; min-width: 0; }
+.a2t-orders.ot-orders col.a2t-col-conversation { width: 13%; min-width: 0; }
 /* Measured rather than guessed: "Completed" needs 103px, so the column is sized to hold it whole.
-   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status. Kept at 11% when
-   the two new columns were added, because shrinking it is exactly what broke it once already. */
-.a2t-orders.ot-orders col.a2t-col-status { width: 11%; }
-.a2t-orders.ot-orders col.ot-col-verification { width: 10%; }
+   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status.
+
+   13%, and the reason is that 103px was measured against the wrong word. "Completed" is the SHORTEST
+   real status; this database happened to hold only that one. Measured across the whole enum on
+   2026-10-22: "Transcription requested" is 167px and "Ready for transcription" 162px, so an 11%
+   column (161px at 1920, 99px at 1280) could not hold either, and on a live store the badge ran
+   straight into the Verification column beside it. At 12% the longest label sits on one line on a
+   desktop (175px at 1920), and wraps rather than overflows when the window is narrower — which is
+   what the badge rule below makes safe. This is the column that gives way first precisely BECAUSE it
+   can now wrap; Verification and Conversation beside it cannot. */
+.a2t-orders.ot-orders col.a2t-col-status { width: 12%; }
+/* 11%, because this one has a hard floor: the header word "Verification" is a single word that
+   cannot wrap, and it measures 112px. Below that the header paints into the column beside it however
+   short the cell contents are. */
+.a2t-orders.ot-orders col.ot-col-verification { width: 11%; }
 .a2t-orders.ot-orders col.a2t-col-demo { width: 9%; }
 .a2t-orders.ot-orders col.ot-col-demo-orders { width: 8%; }
 .a2t-orders.ot-orders col.ot-col-agent-events { width: 9%; }
-/* The widest of the small ones: it holds a control, not a word. */
-.a2t-orders.ot-orders col.practice-col-topic { width: 12%; }
+/* It holds a control, which takes the width it is given rather than demanding its own. */
+.a2t-orders.ot-orders col.practice-col-topic { width: 11%; }
 /* Holds one button whose label is two words, and it wraps rather than widen — see `.ot-receipt`.
    10%, measured in a browser rather than reasoned about, and twice: at 8% the header's own longest
    word, "RECEIPT", wanted 4px more than the padding left it, and a header that overflows is the one
@@ -123,17 +134,41 @@
     width: 100%;
 }
 
-/* A status is one word and is shown whole: the column above is sized for the longest of them. */
-.a2t-orders.ot-orders .a2t-badge {
-    max-width: 100%;
+/* Short values that should never wrap: "View (4)" split after the word is simply wrong. The
+   conversation column is deliberately left out — it is the one that may wrap, and wrapping it is what
+   keeps the others from having to. */
+.a2t-orders.ot-orders td.a2t-cell-tight {
+    white-space: nowrap;
 }
 
-/* Short values that should never wrap: a status badge broken across two lines reads as two statuses,
-   and "View (4)" split after the word is simply wrong. The conversation column is deliberately left
-   out — it is the one that may wrap, and wrapping it is what keeps the others from having to. */
-.a2t-orders.ot-orders td.a2t-cell-tight,
+/*
+ * …except the sentence this cell shows when there is no order to link to.
+ *
+ * "Order not found" is three words and 119px held on one line, which made the Demo URL column the
+ * widest thing in the table for the sake of a message about an order that does not exist. It wraps;
+ * the link and the "View (4)" beside it still do not.
+ */
+.a2t-orders.ot-orders td[data-ot-label="Demo URL"] {
+    white-space: normal;
+}
+
+/*
+ * A status badge wraps rather than overflows.
+ *
+ * It used to be `nowrap`, on the reasoning that "a status is one word" and "two lines read as two
+ * statuses". The first half was simply wrong — four of the six are two or three words, and the
+ * longest is "Transcription requested" — and the second does not hold for a pill: the background is
+ * one shape, so the text inside it reads as one label however many lines it takes.
+ *
+ * `nowrap` did not keep it on one line either. It made the cell paint straight through the
+ * Verification column next to it, which is what a live store was showing.
+ */
 .a2t-orders.ot-orders .a2t-badge {
-    white-space: nowrap;
+    max-width: 100%;
+    white-space: normal;
+    /* Break between words only. A status split mid-word would be unreadable, and every label here
+       has a space to break at. */
+    overflow-wrap: normal;
 }
 
 @media (max-width: 58rem) {

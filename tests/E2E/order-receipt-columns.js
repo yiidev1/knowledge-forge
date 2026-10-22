@@ -132,6 +132,46 @@ const layout = (page) => page.evaluate(() => {
                 status.length === 0,
                 status.map((c) => c.text + ' +' + c.over + 'px').join(', ') || 'none');
 
+            /*
+             * …and it still fits when the status is the LONGEST one, not the one this store happens
+             * to hold.
+             *
+             * This is the case that reached a live store. The column was sized against "Completed"
+             * (87px) because that is all the dev database contains, while the real enum goes up to
+             * "Transcription requested" (167px) — and with `nowrap` the badge painted straight
+             * through the Verification column. Every label is tried here, so the next person to
+             * adjust these widths is measured against the worst one.
+             */
+            const worst = await page.evaluate(() => {
+                const labels = ['Transcription requested', 'Ready for transcription',
+                    'Partially completed', 'Transcribing', 'Completed', 'Failed'];
+                const badge = document.querySelector('tbody .a2t-badge');
+
+                if (badge === null) {
+                    return null;
+                }
+
+                const was = badge.textContent;
+                const bad = [];
+
+                for (const label of labels) {
+                    badge.textContent = label;
+                    const cell = badge.closest('td');
+
+                    if (cell.scrollWidth > cell.clientWidth + 1) {
+                        bad.push(label + ' +' + (cell.scrollWidth - cell.clientWidth) + 'px');
+                    }
+                }
+
+                badge.textContent = was;
+
+                return bad;
+            });
+
+            check(width + ': every status label in the enum fits, not just this store\'s',
+                worst !== null && worst.length === 0,
+                worst === null ? 'no badge on the page' : (worst.join(', ') || 'all six fit'));
+
             // A header noticeably taller than "Seq" — which is three letters and cannot wrap — has
             // wrapped. Compared against a peer rather than against a line-height, because the
             // computed `line-height` here is `normal` and parses to NaN.
