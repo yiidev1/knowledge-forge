@@ -45,6 +45,7 @@ $assetManager->register(PracticeAsset::class);
 $this->setTitle('Topic Management');
 $this->setParameter('breadcrumbs', [['label' => 'Topic Management']]);
 
+
 $base = $urlGenerator->generate('practice.topics');
 
 /**
@@ -180,13 +181,28 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
         </p>
     </div>
 <?php else: ?>
-    <div class="card">
+    <?php
+    /*
+     * `practice-wide` widens the reading column for this page only.
+     *
+     * Six columns, two of them holding names of unbounded length — a topic's and a store's — do not
+     * fit the standard 1240px column, and a live store showed the consequence:
+     * "MOON TEMPLE_Berkeley_IL" ran under the Status badge beside it.
+     *
+     * A marker class plus `:has()` on `.content`, which is how the Order58 call tables and the
+     * conversions list already do it. NOT `setParameter('wideContent')` — that path sets
+     * `.content--wide`, whose `max-width` is overridden by a later `.content` rule, so it has no
+     * effect at all. A browser without `:has()` keeps the normal width and scrolls inside the card,
+     * which is exactly the behaviour this page had before.
+     */
+    ?>
+    <div class="card practice-wide">
         <?php // Scrolls rather than wraps on a narrow screen: the desktop alignment is the one to keep.?>
         <div class="practice-topics-scroll">
         <table class="table practice-topics">
             <?php
-            // Declared once, here, rather than inferred from whatever the widest cell happens to hold.
-            // The four bounded columns are sized to their longest content and the name takes the rest.
+                // Declared once, here, rather than inferred from whatever the widest cell happens to hold.
+                // The four bounded columns are sized to their longest content and the name takes the rest.
     ?>
             <colgroup>
                 <col class="practice-col-name">
@@ -228,9 +244,13 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
                                 data-practice-topic-orders="<?= $topic->assignedOrders ?>"
                                 data-practice-topic-note=""
                                 title="View topic details"><?= Html::encode($topic->name) ?></button>
-                        <?php if ($topic->description !== null): ?>
-                            <div class="field__hint"><?= Html::encode($topic->description) ?></div>
-                        <?php endif; ?>
+                        <?php
+                        // The description is deliberately NOT printed here. It is free text with no
+                        // length limit short enough to matter in a cell, and a paragraph of it made
+                        // one row as tall as six — so a table meant for scanning a list of topics
+                        // could show three of them. Clicking the name opens the details dialog, which
+                        // already shows the description in full and has room for it.
+                ?>
                     </td>
                     <td>
                         <?php
@@ -264,6 +284,17 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
                     <td class="util-muted"><?= Html::encode($topic->createdAt ?? '—') ?></td>
                     <td class="practice-actions">
                         <?php
+                        /*
+                         * The buttons sit in a wrapper, and the wrapper is what lays them out.
+                         *
+                         * `display: flex` on the `<td>` itself stops it being a table cell: the row's
+                         * bottom border then ended at the column before this one, leaving every
+                         * divider on the page stopping short of the last column. A cell lays out as a
+                         * cell; an element inside it lays out the buttons.
+                         */
+                ?>
+                        <div class="practice-actions__row">
+                        <?php
                 // The link carries the topic in the URL, and `data-practice-dialog-for` tells
                 // the script which topic it wants. The script opens the dialog only when the
                 // one already on the page is that topic's; otherwise it lets the browser
@@ -296,6 +327,7 @@ $errorClass = static fn(string $field): string => isset($errors[$field]) ? ' fie
                             <?= $csrf->hiddenInput() ?>
                             <button class="btn btn--sm btn--danger" type="submit">Delete</button>
                         </form>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>

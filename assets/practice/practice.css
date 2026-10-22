@@ -328,37 +328,60 @@
     overflow-x: auto;
 }
 
+/*
+ * The topics table is a wide table, and says so.
+ *
+ * Same mechanism as `.content:has(.o58-wide)` and `.content:has(.a2t-wide)` in the shared sheet: the
+ * page marks its own card, and the column widens only while such a page is on screen. 1600px matches
+ * the conversions list — six columns, two of them unbounded names.
+ */
+.content:has(.practice-wide) {
+    max-width: 1600px;
+}
+
 .practice-topics {
     width: 100%;
     /* Fixed, so the colgroup is obeyed rather than treated as a suggestion the content can outvote. */
     table-layout: fixed;
 }
 
+/*
+ * The name takes whatever the fixed columns leave, so those are kept to what they actually need.
+ *
+ * They were not: together they claimed 61rem, which on a 1130px card left the name about 155px — and
+ * "No Free Plate, Spoon, and Fork" then stacked onto five lines while four columns of whitespace sat
+ * beside it. Each width below is now the content's own, measured rather than rounded up.
+ */
 .practice-col-name {
     width: auto;
 }
 
-/* A store name, with its id beneath. Fixed like its neighbours, so the name column keeps the slack. */
+/* A store name, with its id beneath.
+   16rem, measured: "MOON TEMPLE_Berkeley_IL" is ~200px and the cell's own padding takes ~29px of the
+   column, so 14rem left it 5px short and wrapped it. The name column beside it has the slack to
+   spare, and a store name on one line is worth more there than whitespace is here. */
 .practice-col-store {
-    width: 13rem;
+    width: 16rem;
 }
 
+/* One badge, and the longest label in it is "Inactive". */
 .practice-col-status {
-    width: 8rem;
+    width: 6rem;
 }
 
+/* The value is a small integer; the header "Assigned Orders" is what sets the width, over two lines. */
 .practice-col-count {
-    width: 9rem;
+    width: 7rem;
 }
 
 /* Wide enough for the full timestamp on one line; it is one value, not two. */
 .practice-col-created {
-    width: 12rem;
+    width: 11rem;
 }
 
 /* Three buttons and two gaps, with room for the longest labels: Edit, Deactivate, Delete. */
 .practice-col-actions {
-    width: 19rem;
+    width: 16rem;
 }
 
 .practice-topics td,
@@ -368,18 +391,43 @@
 }
 
 /*
- * Nothing wraps except the name. Headers, a status word, a count, a timestamp and a row of buttons are
- * each one line by nature, and the colgroup above is what makes that possible without a scrollbar.
+ * No VALUE wraps: a status word, a count, a timestamp and a row of buttons are each one line by
+ * nature, and the colgroup above is what makes that possible without a scrollbar.
  */
-.practice-topics th,
 .practice-topics td {
     white-space: nowrap;
 }
 
-/* The one column with unbounded content: a name and the description beneath it both wrap. */
+/*
+ * Headers do wrap, though, and that is the point.
+ *
+ * "Assigned Orders" is two words held on one line, which demanded 149px of a 112px column and pushed
+ * the header into its neighbour. Wrapping it onto two lines costs nothing — the header row is as tall
+ * as its tallest cell either way — and hands the width back to the name column, which is the one that
+ * actually has something long to show.
+ */
+.practice-topics th {
+    white-space: normal;
+}
+
+/* The one column with unbounded content. The description is no longer printed here, so this is the
+   name alone — and it breaks between words, never mid-word. */
 .practice-topics td:first-child {
     white-space: normal;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+}
+
+/*
+ * The store name wraps too, and that is the guarantee rather than the width above.
+ *
+ * A store name is somebody else's data: it is whatever Order58 holds, it has no length limit, and
+ * "MOON TEMPLE_Berkeley_IL" already exceeded 12rem and ran under the Status badge beside it. The
+ * column is sized for the longest one seen; wrapping is what makes the next one longer than that
+ * harmless. `break-word` and not `anywhere`, so it breaks at the underscore rather than mid-letter.
+ */
+.practice-topics td:nth-child(2) {
+    white-space: normal;
+    overflow-wrap: break-word;
 }
 
 .practice-topics .field__hint {
@@ -398,7 +446,14 @@
  * wrapping row turns three actions into a three-storey cell. Left-aligned, so they sit under the
  * ACTIONS label rather than drifting to the far edge away from it.
  */
-.practice-actions {
+/*
+ * The cell stays a cell; the row inside it does the laying out.
+ *
+ * `display: flex` was on the `<td>`, which takes it out of table layout altogether — so the row's
+ * bottom border stopped at the column before this one and every divider on the page ended short of
+ * the last column.
+ */
+.practice-actions__row {
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
