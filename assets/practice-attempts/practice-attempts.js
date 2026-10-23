@@ -20,6 +20,10 @@
  * at the destination once the POST has answered. Calling `window.open()` after the `await` instead
  * is the version every popup blocker stops: by then the gesture is spent.
  *
+ * It is opened **without** `noopener`. That feature makes `window.open()` return null — a window
+ * this code could never navigate — which is the difference between a tab that reaches Order58 and
+ * an `about:blank` one that sits there while the page claims it was blocked.
+ *
  * The form itself carries `target="_blank"` for the case where this script is absent: the browser
  * then posts it natively into a new tab and the endpoint answers there with its own page, leaving
  * the history open. What that path cannot do is redirect on to Order58 — `form-action` is enforced
@@ -85,11 +89,32 @@
         /*
          * Opened now, empty, while the gesture is still attributable to the click.
          *
-         * It carries `noopener` so the new tab gets no handle on this one. If the browser refuses
-         * anyway the result is null, and the fetch below falls back to navigating this tab rather
-         * than silently doing nothing.
+         * **Not `noopener`, and that was the bug.** `window.open(url, name, 'noopener')` returns
+         * `null` BY SPECIFICATION — the whole point of the feature is that the opener keeps no
+         * handle on the new window. So the tab was created, this code read the null as "the browser
+         * blocked it", printed that message, and left an `about:blank` tab with nothing able to
+         * navigate it. Null here now means what the code always assumed it meant: a popup blocker.
+         *
+         * The property `noopener` was there for is kept by severing the link the other way, below:
+         * the new window is same-origin `about:blank` until it is navigated, so its `opener` can be
+         * nulled from here, and a cross-origin page cannot restore it.
+         *
+         * The referrer is handled by policy rather than by this call. The application sends
+         * `Referrer-Policy: strict-origin-when-cross-origin`, so Order58 receives this application's
+         * origin and never the path — which is what mattered, because the path of the page that
+         * opens this carries a customer's order number.
          */
-        var tab = window.open('', '_blank', 'noopener');
+        var tab = window.open('', '_blank');
+
+        if (tab !== null) {
+            // While it is still about:blank and same-origin. After navigation this would throw.
+            try {
+                tab.opener = null;
+            } catch (e) {
+                // Some engines make `opener` read-only. The tab is trusted either way: it is sent to
+                // a URL this application built and host-checked, never to anything a page supplied.
+            }
+        }
 
         fetch(form.action, {
             method: 'POST',
