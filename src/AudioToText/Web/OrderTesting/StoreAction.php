@@ -298,6 +298,22 @@ readonly class StoreAction extends AudioStoreAction
         return [null, null];
     }
 
+    /**
+     * Mix / Common, and no question asked.
+     *
+     * This table offers one recording per order and plays one recording per order. Letting an
+     * operator file an upload under Customer or Agent from here would put audio somewhere this
+     * surface cannot show it, which reads as the upload having failed.
+     *
+     * The Customer and Agent recordings themselves are untouched: this governs only what a manual
+     * upload or replacement from these pages is stored as. The Audio-to-Text store page still offers
+     * all three, and the provider's own sync still fetches all three.
+     */
+    protected function allowsRecordingTypeChoice(): bool
+    {
+        return false;
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/template';

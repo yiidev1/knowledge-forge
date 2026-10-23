@@ -9,10 +9,12 @@ use App\Auth\Infrastructure\NativePasswordHasher;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function dechex;
+use function substr_count;
 use function gmdate;
 use function str_pad;
 use function str_repeat;
@@ -140,7 +142,8 @@ final class PracticeOrdersCest
 
         // Topic management.
         $I->dontSeeElement('[data-practice-assign-row]');
-        $I->dontSeeElement('[data-practice-assign-select]');
+        // The chip's editor, which replaced the per-row select.
+        $I->dontSeeElement('[data-practice-topic-picker]');
         $I->dontSeeElement('[data-practice-select]');
         $I->dontSeeElement('[data-practice-select-all]');
         $I->dontSeeElement('#practice-bulk-form');
@@ -244,7 +247,8 @@ final class PracticeOrdersCest
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
         $I->seeResponseCodeIs(200);
 
-        $I->seeElement('[data-practice-assign-select]');
+        // The topic editor, which is a chip and a gear now rather than a select on every row.
+        $I->seeElement('[data-practice-topic-picker]');
         $I->seeElement('[data-practice-select-all]');
         $I->seeElement('#practice-bulk-form');
         $I->seeElement('#practice-confirm-dialog');
@@ -270,7 +274,11 @@ final class PracticeOrdersCest
         $I->seeElement('[data-a2t-review-scroll]');
         $I->seeElement('[data-a2t-review-transcripts]');
         $I->seeElement('[data-a2t-listen]');
-        // And its own columns, unchanged.
+        // And its own capabilities, unchanged — though the receipt is now an item in the per-row
+        // menu rather than a column of its own, so it is asked about where it actually lives. What
+        // this test is about is that Manage Orders still HAS it and Practice Orders still does not.
+        // And its own columns, which Practice Orders does not have.
+        // And its own columns, which Practice Orders does not have.
         $I->see('Seq', 'thead');
         $I->see('View Receipt', 'thead');
     }
@@ -303,6 +311,150 @@ final class PracticeOrdersCest
         $I->seeResponseCodeIs(200);
         $I->see('Practice Attempts', 'h1');
         $I->see('Back to Store');
+    }
+
+    /**
+     * The order table carries one recording, named for what it is.
+     *
+     * ## What this guards
+     *
+     * The cell used to be "Recording / Conversation" and held four things: a play control, a View
+     * conversation button, and a caption ticking off Mix / Common, Customer and Agent with a "+1
+     * more" fold. A reader scanning a list of orders wants one answer — can I listen to this call
+     * right now — and was given four, in a column that has room for one.
+     *
+     * Asserted by absence as well as by presence, because the failure this protects against is the
+     * labels creeping back one at a time.
+     */
+    public function theRecordingColumnOffersOneRecordingAndNamesItPlainly(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->see('Recording', 'th');
+        $I->dontSee('Recording / Conversation', 'th');
+
+        // The channel caption, every part of it.
+        $I->dontSeeElement('.a2t-conversions .a2t-channel-have');
+        $I->dontSee('View conversation');
+        $I->dontSee('+1 more');
+        $I->dontSeeElement('.a2t-conversions .a2t-conversation__channels');
+    }
+
+    /**
+     * And the conversation dialog still has its tabs, which is the half that could have broken.
+     *
+     * The dialog builds its tab strip in the browser by scanning the row for
+     * `data-a2t-current-channel`. Those markers used to ride on the visible channel caption, so
+     * removing the caption would have taken the Customer and Agent tabs — and the transcripts
+     * behind them — with it. They are still emitted, now with nothing drawn around them.
+     */
+    public function theConversationDialogKeepsItsChannelMarkers(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->seeElement('.a2t-conversions [data-a2t-current-channel][data-a2t-details]');
+    }
+
+    /**
+     * The Status column is gone, and nothing is left where it stood.
+     *
+     * An empty column would be the worse outcome: the header row and the `<colgroup>` would still
+     * disagree about how many columns there are, and in this table a `<colgroup>` one `col` out
+     * does not leave the last column unsized — it shifts every width one place to the left.
+     */
+    public function theStatusColumnIsGoneAndLeavesNoGapBehind(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->dontSee('Status', 'th');
+
+        $source = $I->grabPageSource();
+        $headers = substr_count($source, '<th>') + substr_count($source, '<th ');
+
+        Assert::assertSame(
+            $headers,
+            substr_count($source, '<col class='),
+            'The colgroup and the header row must describe the same columns, in the same number.',
+        );
+    }
+
+    /**
+     * The order number is the order number, and not three lines of metadata.
+     *
+     * "Added", "Call time" and "Downloaded" tripled the height of every row to carry facts nobody
+     * scans a list for. They are not deleted — the same two values ride on the number's `title`, and
+     * the Call Recordings page still shows them as its subject — but they are out of the cell.
+     */
+    public function theOrderCellCarriesTheNumberAndNotItsTimestamps(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->see('#' . self::ORDER);
+        $I->dontSeeElement('.a2t-conversions .a2t-order-when');
+        $I->dontSee('Call time');
+        $I->dontSee('Downloaded');
+    }
+
+    /**
+     * The upload form asks for a file, not for which channel it belongs to.
+     *
+     * This surface shows one recording per order and plays one recording per order, so there is one
+     * right answer and the operator should not have to give it. The field is still posted, because
+     * the endpoint is shared with the Audio-to-Text page — what changes is that it is pinned.
+     */
+    public function theUploadFormDoesNotAskWhichChannelAFileIs(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '?upload=1');
+
+        $I->dontSeeElement('input[type="radio"][name="recording_type"]');
+        $I->seeElement('input[type="hidden"][name="recording_type"][value="MIXED"]');
+    }
+
+    /**
+     * No per-row menu, and no per-row audio management with it.
+     *
+     * Both were mine and both are gone by request: the menu cost a column and put Agent Events and
+     * View Receipt a click further away, and per-row Replace Audio is not wanted on this table at
+     * all. The capability itself is untouched — `canReplaceAudio`, `ReplaceAction`, the Manage Audio
+     * dialog and every recording version still exist, and the top-level Add Audio button still uses
+     * them. What went is this table's shortcut to them.
+     */
+    public function theTableOffersNoRowMenuAndNoPerRowAudioManagement(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->dontSeeElement('.ot-rowmenu');
+        $I->dontSee('Actions', 'thead');
+        $I->dontSeeElement('.a2t-conversions [data-a2t-manage]');
+
+        // The authorized way in is still on the page, where it always was.
+        $I->seeElement('[data-a2t-open="a2t-upload-dialog"]');
+    }
+
+    /**
+     * The topic cell rests as a chip and only becomes a control when asked.
+     *
+     * A dropdown on every row made a table of twenty orders look like twenty forms. The chip states
+     * what the order carries; the gear beside it opens the editor. Nothing is written by opening it —
+     * the radios change nothing until Save is pressed, which is why the old select needed a
+     * confirmation dialog and this does not.
+     */
+    public function theTopicCellIsAChipWithAnEditorBehindAGear(WebTester $I): void
+    {
+        $this->assignDirectly($this->seedTopic());
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->seeElement('.ot-topic .practice-chip');
+        $I->see(self::TOPIC, '.ot-topic .practice-chip');
+        // No dropdown at rest.
+        $I->dontSeeElement('.practice-topic-cell select');
+        // And the editor behind the gear, posting to the endpoint that already existed.
+        $I->seeElement('.ot-topic__picker[data-practice-topic-picker] summary');
+        $I->seeElement('.ot-topic__panel input[type="radio"][name="topic_id"]');
+        $I->seeElement(
+            'form.practice-assign[action="/order-testing/store/' . self::STORE_ID . '/topic"]',
+        );
     }
 
     /** The flat list it used to open is still there, one click away. */
@@ -537,7 +689,9 @@ final class PracticeOrdersCest
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
 
         $I->see((string) self::ORPHAN_ORDER, 'tbody');
-        $I->see('No matching source order', '.practice-topic-cell');
+        // Listed, with a dash where a topic would be. The explanation that used to sit beside the
+        // dash is gone; what it said is still said by Practice Order in the same row.
+        $I->dontSee('No matching source order');
     }
 
     /**

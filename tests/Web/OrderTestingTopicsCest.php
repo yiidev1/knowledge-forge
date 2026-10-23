@@ -13,6 +13,7 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function substr_count;
 use function dechex;
 use function gmdate;
 use function preg_replace;
@@ -96,7 +97,8 @@ final class OrderTestingTopicsCest
         $I->see('Set Topic', 'thead');
         $I->seeElement('thead [data-practice-select-all]');
         $I->seeElement('tbody [data-practice-select][value="' . self::ORDER . '"]');
-        $I->seeElement('[data-practice-assign-select]');
+        // The per-row editor, which is a chip and a pencil now rather than a select on every row.
+        $I->seeElement('[data-practice-topic-picker]');
         $I->seeElement('#practice-bulk-form');
     }
 
@@ -246,16 +248,22 @@ final class OrderTestingTopicsCest
      * Initialising it anywhere else is how a control silently proposes a change nobody asked for.
      */
     /**
-     * The inline Save ships inside `<noscript>`, which is what stops it being seen at all.
+     * Saving needs no script, and no `<noscript>` fallback either.
      *
-     * It used to be rendered plainly and hidden by the script on DOMContentLoaded. That is correct in
-     * the end state and wrong on the way to it: the button is painted as soon as the row is parsed and
-     * stays on screen until the script runs, which on this page is after a great deal of other
-     * behaviour has loaded. The fix is in the markup, so the guard has to be on the markup — asserted
-     * on the raw response, because whether a parser builds `<noscript>` children depends on whether it
-     * thinks scripting is on, and the property here is about the bytes, not the tree.
+     * The select this replaces saved on CHANGE, so it needed a confirmation dialog to ask "did you
+     * mean to?" — and a second, plain Save button inside `<noscript>` for readers without it. That
+     * button had to be hidden from everyone else, and hiding it in script meant it was painted from
+     * the moment the row parsed until the script caught up.
+     *
+     * The editor has one Save, inside the disclosure, rendered for everybody. Without JavaScript the
+     * `<details>` still opens — the browser implements it — the radios still choose, and the button
+     * still submits the row's own form to the same endpoint. There is nothing to hide, so there is
+     * nothing that can be seen too early.
+     *
+     * Asserted on the raw response, because whether a parser builds `<noscript>` children depends on
+     * whether it thinks scripting is on, and the property here is about the bytes.
      */
-    public function theInlineSaveIsOnlyEverRenderedInsideNoscript(WebTester $I): void
+    public function savingATopicNeedsNoScriptAndNoFallbackButton(WebTester $I): void
     {
         $this->seedTopic();
 
@@ -264,19 +272,17 @@ final class OrderTestingTopicsCest
 
         $source = $I->grabPageSource();
 
-        Assert::assertStringContainsString(
-            'data-practice-assign-save',
-            $source,
-            'the no-script fallback disappeared entirely; a reader without JavaScript cannot save',
-        );
-
+        // One Save, and it is not inside a <noscript>.
+        Assert::assertStringContainsString('ot-topic__save', $source);
         $outsideNoscript = (string) preg_replace('#<noscript\b[^>]*>.*?</noscript>#s', '', $source);
-
-        Assert::assertStringNotContainsString(
-            'data-practice-assign-save',
+        Assert::assertStringContainsString(
+            'ot-topic__save',
             $outsideNoscript,
-            'a Save button is rendered outside <noscript>, so it paints before the script hides it',
+            'the editor\'s Save must render for everybody, not only for readers without scripting',
         );
+
+        // And the old hidden-then-revealed fallback is gone with the control that needed it.
+        Assert::assertStringNotContainsString('data-practice-assign-save', $source);
     }
 
     /**
@@ -293,16 +299,10 @@ final class OrderTestingTopicsCest
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->seeElement(
-            '#practice-topic-' . self::ORDER . '.practice-assign__select--assigned',
-        );
-        // The order with nothing on it keeps the neutral control.
-        $I->dontSeeElement(
-            '#practice-topic-' . self::ORDER_B . '.practice-assign__select--assigned',
-        );
-        $I->dontSeeElement(
-            '#practice-topic-' . self::ORDER_B . '.practice-assign__select--historical',
-        );
+        // The order that carries one says so by name.
+        $I->see(self::TOPIC, '.ot-topic .practice-chip');
+        // And the order with nothing on it says that, in the neutral chip rather than an empty cell.
+        $I->see('No topic', '.practice-chip--none');
     }
 
     /** A topic that is no longer offered is marked apart from a live one, and stays on its order. */
@@ -314,35 +314,45 @@ final class OrderTestingTopicsCest
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->seeElement(
-            '#practice-topic-' . self::ORDER . '.practice-assign__select--historical',
-        );
-        $I->dontSeeElement(
-            '#practice-topic-' . self::ORDER . '.practice-assign__select--assigned',
-        );
+        /*
+         * Marked apart, and still on its order.
+         *
+         * The modifier is the second signal, not the only one: the chip's `title` names the status
+         * in words, which is what a reader who cannot tell a dashed border from a solid one gets.
+         */
+        $I->seeElement('.ot-topic .practice-chip--historical');
+        $I->see(self::TOPIC, '.ot-topic .practice-chip--historical');
     }
 
-    public function theDropdownOpensOnTheAssignedTopic(WebTester $I): void
+    /**
+     * The editor opens on what the order actually carries.
+     *
+     * The select this replaces showed the current topic as its selected option; the editor shows it
+     * as the checked radio. Same fact, same source — the server renders the checked state from the
+     * stored assignment, so opening the editor and pressing Save cannot change anything by itself.
+     */
+    public function theEditorOpensOnTheAssignedTopic(WebTester $I): void
     {
         $topicId = $this->seedTopic();
         $this->assignDirectly($topicId);
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->seeOptionIsSelected('#practice-topic-' . self::ORDER, self::TOPIC);
-        $I->seeElement('[data-practice-assign-select][data-practice-saved="' . $topicId . '"]');
+        $I->seeElement(
+            '.ot-topic__panel input[type="radio"][name="topic_id"][value="' . $topicId . '"][checked]',
+        );
         // Unassigning is offered, because the business rule allows it.
-        $I->see('Unassign', '#practice-topic-' . self::ORDER);
+        $I->see('No topic', '.ot-topic__panel');
     }
 
-    public function anUnassignedRowOpensOnThePlaceholder(WebTester $I): void
+    /** And on "No topic" where there is none, which is the unassign option doubling as the default. */
+    public function anUnassignedRowOpensOnNoTopic(WebTester $I): void
     {
         $this->seedTopic();
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->seeOptionIsSelected('#practice-topic-' . self::ORDER, 'Select Topic');
-        $I->seeElement('[data-practice-assign-select][data-practice-saved=""]');
+        $I->seeElement('.ot-topic__panel input[type="radio"][name="topic_id"][value=""][checked]');
     }
 
     /** Submitting the row's own form assigns it — the path the confirmation takes on Confirm. */
@@ -356,9 +366,13 @@ final class OrderTestingTopicsCest
         $I->see('assigned', '.alert');
         Assert::assertSame($topicId, $this->assignedTopicId(self::ORDER));
 
-        // And the reload shows what was stored.
+        // And the reload shows what was stored — in the chip, which is what a reader sees, and in
+        // the editor's checked radio, which is what they would see if they opened it again.
         $I->amOnPage(self::STORE_URL);
-        $I->seeOptionIsSelected('#practice-topic-' . self::ORDER, self::TOPIC);
+        $I->see(self::TOPIC, '.ot-topic .practice-chip');
+        $I->seeElement(
+            '.ot-topic__panel input[type="radio"][value="' . $topicId . '"][checked]',
+        );
     }
 
     public function choosingTheEmptyOptionUnassigns(WebTester $I): void
@@ -387,10 +401,23 @@ final class OrderTestingTopicsCest
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->seeElement('#practice-topic-' . self::ORDER . ' option[value="' . $topicId . '"][selected]');
-        $I->see('Deleted', '#practice-topic-' . self::ORDER);
-        // Not offered on a row that does not already carry it.
-        $I->dontSeeElement('#practice-topic-' . self::ORDER_B . ' option[value="' . $topicId . '"]');
+        /*
+         * Still on its order, and still the checked choice in that order's editor.
+         *
+         * This is what stops the editor proposing an unassignment by simply being opened: a deleted
+         * topic is not offered anywhere, so without this row's own entry the checked radio would
+         * fall through to "No topic" and the first Save would quietly take the topic off.
+         */
+        $I->seeElement(
+            '.ot-topic__panel input[type="radio"][value="' . $topicId . '"][checked]',
+        );
+        $I->see('Deleted', '.ot-topic__panel');
+        // Not offered on a row that does not already carry it, nor to the bulk toolbar.
+        Assert::assertSame(
+            1,
+            substr_count($I->grabPageSource(), 'value="' . $topicId . '"'),
+            'a deleted topic appears once: on the row that already carries it',
+        );
         $I->dontSeeElement('#practice-bulk-topic option[value="' . $topicId . '"]');
     }
 
@@ -412,7 +439,15 @@ final class OrderTestingTopicsCest
 
         $I->amOnPage(self::STORE_URL);
 
-        $I->see('No matching source order', '.practice-topic-cell');
+        /*
+         * A dash, and no editor — the reason is no longer spelled out beside it.
+         *
+         * It was a sentence in a column of chips, on every row with no order behind it, saying what
+         * Practice Order already says two columns to the left. What matters is asserted here and is
+         * unchanged: no checkbox, no editor, and the server refusing one anyway — which the test
+         * below this proves.
+         */
+        $I->dontSee('No matching source order');
         $I->dontSeeElement('tbody [data-practice-select][value="' . self::ORPHAN_ORDER . '"]');
         $I->dontSeeElement('#practice-topic-' . self::ORPHAN_ORDER);
     }

@@ -79,16 +79,25 @@
  * The toolbar's own select used to be a `field__control` with no width of its own, so it took the
  * whole row and pushed the button onto a second line — a three-storey bar for three short controls.
  */
+/*
+ * The contextual toolbar, shown only while rows are selected.
+ *
+ * Accented rather than neutral, and sitting directly on top of the table with its bottom corners
+ * squared off, so it reads as belonging to the selection beneath it instead of as one more control
+ * stacked above the list. A toolbar that is always present but usually disabled teaches a reader to
+ * ignore it, which is why this one is `hidden` until there is something to do.
+ */
 .practice-bulk {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.7rem;
-    margin-bottom: 0.9rem;
-    padding: 0.45rem 0.8rem;
-    border: 1px solid var(--border, #2a2d34);
-    border-radius: 0.5rem;
-    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+    gap: 0.6rem;
+    margin-bottom: 0;
+    padding: 0.5rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+    border-bottom: 0;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface-2));
 }
 
 .practice-bulk__select {
@@ -110,6 +119,32 @@
 .practice-bulk__count {
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Quieter than the primary action beside it: leaving a selection is not what the toolbar is for.
+ * Still a real button with a real focus ring, because it is the only way back out of one.
+ */
+.practice-bulk__clear {
+    flex: 0 0 auto;
+    padding: 0.3rem 0.55rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.practice-bulk__clear:hover {
+    background: var(--surface);
+    color: var(--text);
+}
+
+.practice-bulk__clear:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
 }
 
 /* Pushed to the far end where there is room, and first to wrap where there is not. */
@@ -843,4 +878,307 @@
 
 .practice-store__empty[hidden] {
     display: none;
+}
+
+/* ===========================================================================================
+   Topic chips.
+
+   One topic per order, so the cell is a single token rather than a sentence — and a token is what
+   the eye picks out of a column while scanning. Three shapes, one set of measurements: the read-only
+   chip, the editable chip (which is the `<select>` itself, so there is one control and not a control
+   plus a label saying the same thing), and the muted "No topic".
+
+   Every colour is a token, so light and dark are one set of rules. Nothing here is colour-only: the
+   chip always carries the topic's name, and the historical variant says "(Deleted)" in its text.
+   =========================================================================================== */
+
+.practice-chip {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+    color: var(--text);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    /* A long topic name is truncated rather than allowed to widen the column; the full name is on
+       the element's `title`, so nothing is lost. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+/*
+ * No topic yet. A chip rather than an empty cell, because an empty cell reads as missing data and
+ * this is an answer. Muted and outlined rather than filled, so it recedes behind the real ones.
+ */
+.practice-chip--none {
+    border-color: var(--border);
+    border-style: dashed;
+    background: none;
+    color: var(--text-muted);
+}
+
+/*
+ * The editable chip IS the select.
+ *
+ * Rather than a chip that opens a picker, the picker is drawn as the chip: one control, one tab
+ * stop, one thing to click, and the browser's own listbox — which works with a keyboard, with a
+ * screen reader and on a phone without a line of script. The existing per-row form, its CSRF field,
+ * its confirmation step and its `<noscript>` Save are all untouched underneath.
+ */
+.a2t-orders.ot-orders .practice-topic-cell__stack .practice-assign__select,
+.practice-topic-cell__stack .practice-assign__select {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.15rem 1.6rem 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    /* Truncation again, and it matters more here: a select sized to its longest option would set
+       the column's width from a topic nobody has assigned. */
+    text-overflow: ellipsis;
+}
+
+/*
+ * The one state the chip shape must not flatten: a topic that is no longer offered.
+ *
+ * Dashed, like "No topic", because both are saying the same kind of thing — this is not a live
+ * choice. The option text already reads "(Deleted)", so the border is a second signal rather than
+ * the only one.
+ */
+.practice-assign__select--historical {
+    border-style: dashed;
+}
+
+/*
+ * The filter row as one toolbar: controls at the left, the count at the far right.
+ *
+ * The count used to live only under the table, which is the wrong end — the number that tells you
+ * whether a filter did what you meant belongs beside the filter. `margin-left: auto` puts it there
+ * without a second flex container, and it is the first thing to wrap on a narrow screen because it
+ * is the only item here that is not a control.
+ */
+.practice-filter__count {
+    margin-left: auto;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+@media (max-width: 48rem) {
+    .practice-filter__count {
+        margin-left: 0;
+    }
+}
+
+/* ===========================================================================================
+   The topic cell: a chip saying what the order carries, and a gear that changes it.
+
+   The column's resting state is a fact, not a form. Only a row being edited looks like a control,
+   which is what lets a table of twenty orders read as a table.
+   =========================================================================================== */
+
+.ot-topic {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+/* The chip gives way first; the gear keeps its size, because a 14px target is already the minimum. */
+.ot-topic > .practice-chip {
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+/*
+ * A topic that is no longer offered, still on the order that carries it.
+ *
+ * Dashed like "No topic", because both say the same kind of thing — this is not a live choice. The
+ * `title` spells out which status it is, so the border is a second signal rather than the only one.
+ */
+.practice-chip--historical {
+    border-style: dashed;
+    border-color: var(--border-strong);
+    background: color-mix(in srgb, var(--text-muted) 12%, var(--surface));
+    color: var(--text-muted);
+}
+
+.ot-topic__picker {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+/*
+ * The gear. `list-style: none` plus the WebKit pseudo-element removes the disclosure triangle a
+ * `<summary>` draws by default; without both, the triangle sits beside the icon.
+ */
+.ot-topic__gear {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.ot-topic__gear::-webkit-details-marker {
+    display: none;
+}
+
+.ot-topic__gear .a2t-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.ot-topic__gear:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+/* The keyboard's only clue that this is where it is. Never removed. */
+.ot-topic__gear:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+.ot-topic__picker[open] > .ot-topic__gear {
+    background: var(--surface-2);
+    color: var(--primary);
+}
+
+/*
+ * The panel. Right-aligned so it opens inward from a column near the end of the table, and above the
+ * sticky header this table has.
+ */
+/*
+ * Hidden until the disclosure is open, said explicitly.
+ *
+ * A `<details>` hides its own contents when closed, but an absolutely positioned child is taken out
+ * of that flow and keeps painting — so every row's editor was on screen at once, over the rows below
+ * it. Measured in a browser, where it was unmissable; invisible to a markup test, which sees the
+ * element present either way and cannot know it is being painted.
+ */
+.ot-topic__picker:not([open]) .ot-topic__panel {
+    display: none;
+}
+
+.ot-topic__panel {
+    position: absolute;
+    right: 0;
+    z-index: 40;
+    width: 15rem;
+    margin-top: 0.3rem;
+    padding: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    text-align: left;
+    white-space: normal;
+}
+
+.ot-topic__title {
+    margin: 0 0 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* Capped and scrolled rather than allowed to grow past the viewport on a store with many topics. */
+.ot-topic__options {
+    margin: 0 0 0.45rem;
+    padding: 0;
+    list-style: none;
+    max-height: 13rem;
+    overflow-y: auto;
+}
+
+.ot-topic__option {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.28rem 0.35rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    cursor: pointer;
+    /* A long topic name wraps inside the panel rather than widening it. */
+    overflow-wrap: anywhere;
+}
+
+.ot-topic__option:hover {
+    background: var(--surface-2);
+}
+
+/* The whole row reacts to the radio's focus, so keyboard and mouse land on the same target. */
+.ot-topic__option:has(input:focus-visible) {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+}
+
+.ot-topic__option input {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.ot-topic__save {
+    width: 100%;
+}
+
+.ot-topic__empty {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+/* Near the right edge of a narrow screen, anchoring left keeps the panel on the page. */
+@media (max-width: 58rem) {
+    .ot-topic__panel {
+        right: auto;
+        left: 0;
+    }
+}
+
+/*
+ * A compact row action — Agent Events' Details and View Receipt.
+ *
+ * Styled as one thing because to a reader they are one thing: a small control that opens something
+ * about this row. Which of the two is a `<button>` and which an `<a>` is an implementation detail.
+ */
+.ot-rowaction {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    text-align: center;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.ot-rowaction:hover {
+    border-color: var(--primary);
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.ot-rowaction:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
 }

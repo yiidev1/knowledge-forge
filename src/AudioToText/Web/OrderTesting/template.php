@@ -23,7 +23,7 @@ use App\AudioToText\Web\AudioToTextViews;
 use App\AudioToText\Web\OrderTesting\OrderTestingAsset;
 use App\AudioToText\Web\OrderTesting\OrderTestingRoute;
 use App\Shared\Application\Time\AppTimeZone;
-use App\Shared\Audio\RecordingTypeLabels;
+use App\Shared\Audio\RecordingAcquisitionState;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
@@ -95,6 +95,17 @@ if ($practiceMode) {
 // `??` is what loses the type, so this is where it is given back.
 /** @var array<string, AssignedTopic> $topicAssignments keyed by the order id each row shows */
 $topicAssignments = $topicAssignments ?? [];
+
+/*
+ * Whether the upload form asks which side of the call a file holds.
+ *
+ * Defaulted rather than required, so a surface that has not been taught about it keeps the choice it
+ * has always had. The server pins the value either way.
+ *
+ * @var bool $canChooseRecordingType
+ */
+$canChooseRecordingType = $canChooseRecordingType ?? true;
+
 
 /** @var list<AssignedTopic> $assignableTopics active topics, the only ones that may be chosen */
 $assignableTopics = $assignableTopics ?? [];
@@ -301,16 +312,16 @@ $providerField = static function (string $id) use (
     // that would reasonably assume their upload used the engine the settings page advertises.
     $defaultNote = ($providerUsable[$globalDefault->value] ?? false) === false
         ? '<div class="field__hint">'
-            . Html::encode(
-                'The global default is ' . $globalDefault->label() . ', which is not available on this '
+        . Html::encode(
+            'The global default is ' . $globalDefault->label() . ', which is not available on this '
                 . 'server, so another provider is selected for this upload. The global setting has not '
                 . 'been changed.',
-            )
-            . '</div>'
+        )
+        . '</div>'
         : '<div class="field__hint">'
-            . Html::encode('Global default: ' . $globalDefault->label() . '.')
-            . ' This choice applies only to this upload.'
-            . '</div>';
+        . Html::encode('Global default: ' . $globalDefault->label() . '.')
+        . ' This choice applies only to this upload.'
+        . '</div>';
 
     return '<div class="field">'
         . '<label class="field__label" for="' . Html::encode($id) . '">Transcription provider</label>'
@@ -336,7 +347,7 @@ $providerField = static function (string $id) use (
 $aiAudioField = static function (string $id) use ($ttsConfigured): string {
     $hint = $ttsConfigured
         ? 'Costs money. Off by default. A clean synthetic reading of the transcript, for agents who '
-            . 'cannot follow the original recording.'
+        . 'cannot follow the original recording.'
         : 'Not configured on this server yet, so nothing would be generated.';
 
     return '<div class="field">'
@@ -528,20 +539,38 @@ $slotCellInner = static function (
  * The visible part is not a control: no button, no link styling, nothing to press. Pressing it would
  * only reach the dialog the link above it already opens.
  */
-$channelIndicator = static function (StoreRecordingSlot $slot) use (
+$channelIndicator = static function (
+    StoreRecordingSlot $slot,
+    /**
+     * Whether the reader is shown this channel's name beside the marker.
+     *
+     * False in the orders table, where one column answers one question — can this order's Mix
+     * recording be played? — and "Customer ✓ Agent ✓" underneath answered a different one. The
+     * hidden half is emitted either way, because it is not decoration: the conversation dialog
+     * builds its tab strip by scanning the row for it, so dropping it would cost the dialog its
+     * Customer and Agent tabs. Data for the script, nothing for the reader.
+     */
+    bool $withLabel = true,
+) use (
     $fragmentUrl,
     $fullReviewUrl,
     $capabilities,
 ): string {
-    return '<span hidden'
+    $marker = '<span hidden'
         . ' data-a2t-current-channel="' . $slot->channelRank() . '"'
         . ' data-a2t-details="' . Html::encode($fragmentUrl($slot->jobPublicId)) . '"'
         . ($capabilities->canOpenFullEditor
             ? ' data-a2t-details-full="' . Html::encode($fullReviewUrl($slot->jobPublicId)) . '"'
             : '')
-        . ' data-a2t-details-label="' . Html::encode($slot->label()) . '"></span>'
-        // `aria-hidden` on the tick: a reader using a screen reader is told the channel's name, which is
-        // the information. Read aloud, the glyph would be pronounced as a word.
+        . ' data-a2t-details-label="' . Html::encode($slot->label()) . '"></span>';
+
+    if (!$withLabel) {
+        return $marker;
+    }
+
+    // `aria-hidden` on the tick: a reader using a screen reader is told the channel's name, which is
+    // the information. Read aloud, the glyph would be pronounced as a word.
+    return $marker
         . '<span class="a2t-channel-have">' . Html::encode($slot->label())
         . '<span class="a2t-channel-have__tick" aria-hidden="true">&#10003;</span></span>';
 };
@@ -613,7 +642,8 @@ $slotCell = static function (
         // Callable only where the group can accept one at all. A legacy Customer + Agent pair has no
         // mixed/caller/callee shape to add to, and an upload that named no order has nothing to group a
         // second recording under — the same two refusals ReplaceAction enforces server-side.
-        if ($emptyType === null || $group === null || $group->orderId === null || $group->isLegacySeparate()
+        if (
+            $emptyType === null || $group === null || $group->orderId === null || $group->isLegacySeparate()
             || !$capabilities->canReplaceAudio
         ) {
             return '<span class="util-muted">&mdash;</span>';
@@ -786,8 +816,8 @@ $channelLine = static function (
     $readable = $slot !== null && ($slot->isReviewable() || $slot->isAudioOnly());
 
     return ($readable ? '' : '<span class="a2t-conversation__name">'
-            . Html::encode($type === null ? ($slot?->label() ?? '') : $type->label())
-            . '</span>')
+        . Html::encode($type === null ? ($slot?->label() ?? '') : $type->label())
+        . '</span>')
         // Still the one renderer. A replaced recording keeps the fold holding its older versions, an
         // empty channel keeps "+ Add audio", and a running one keeps its progress link — none of which
         // this cell could have reproduced without owning a second copy of the same state machine.
@@ -795,107 +825,124 @@ $channelLine = static function (
 };
 
 /**
- * One call's recordings as a single cell.
+ * When this call happened and when it reached us, as one line for a tooltip.
  *
- * ## Why three columns became one
+ * The two facts the Order column used to print under every number. Kept, because somebody does
+ * occasionally need them and the data is right here — moved onto the number's own `title` so they
+ * cost a hover instead of two lines of row height on every row in the table.
  *
- * The table used to carry a Mix / Common, a Customer and an Agent column, each with its own play
- * control, duration and Details button. Three identical durations and three near-identical buttons read
- * as three different things to do, when they are three recordings of **one conversation** and the thing
- * to do with them is the same: open it. The unified dialog that does so already existed behind the order
- * number — this gives it a name and puts it where the recordings were.
+ * The call time is the provider's own string, printed exactly as sent and with NO zone label: it
+ * carries none, and appending one would be inventing a claim. The import instant is this
+ * application's own, so it gets the business timezone every other timestamp here is formatted in.
+ */
+$orderWhen = static function (StoreOrderGroup $group) use ($appTimeZone): string {
+    $parts = [];
+
+    if ($group->callTimeRaw !== null) {
+        $parts[] = 'Call time ' . $group->callTimeRaw;
+    }
+
+    $parts[] = ($group->callTimeRaw === null ? 'Added ' : 'Downloaded ')
+        . $appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A');
+
+    return implode(' · ', $parts);
+};
+
+/**
+ * One order's **Mix / Common** recording, and nothing else.
  *
- * ## What is kept, and why the per-channel controls are still here
+ * ## One column, one question
  *
- * Every control {@see $slotCell} draws is still drawn, with the same data attributes: the dialog's tab
- * strip is built in the browser by scanning this row for `data-a2t-current-channel`, and the Transcribe,
- * watch-progress, Add audio and version-history controls are each the only way to reach what they do. So
- * the channels are compacted, never dropped — what is suppressed is one duplicated play button per
- * channel, because all three report the same number.
+ * This cell used to be "Recording / Conversation": a play control, a View conversation button and a
+ * caption naming all three channels with ticks. Four facts in a table column that has room for one,
+ * and the one a reader actually wants is whether they can listen to this call right now. So the cell
+ * answers exactly that, about exactly one recording.
  *
- * Clicking a channel still opens that channel. The dialog lands on its tab, which is the behaviour the
- * three Details buttons had, so nothing a reader could do before has moved.
+ * **Mix only, and never a substitute.** The old play control took the first of Mixed, Caller or Callee
+ * that happened to have audio, so a row could be playing one side of a call while looking identical to
+ * a row playing both. Customer and Agent recordings are still stored, still transcribed and still
+ * reachable through the conversation dialog; they are simply not offered here under another name.
+ *
+ * ## The five states, and why the secondary channels cannot change them
+ *
+ * A call is fetched from the provider one channel at a time, so Mix can be in hand while Customer is
+ * still downloading, and Customer can fail while Mix plays perfectly. This reads **only** the Mix
+ * channel's own acquisition state, which is what keeps a secondary failure from greying out a working
+ * player.
+ *
+ * | State | Shown |
+ * |---|---|
+ * | Mix audio in hand | the play control, with its duration |
+ * | Mix still arriving | its live label, updated in place by the arriving poller |
+ * | Mix download failed | a failed state, in the provider-neutral words the enum already uses |
+ * | Provider has no Mix | "No Mix audio" — nothing went wrong, there is simply none |
+ * | Mix existed, file gone | "Mix audio not stored", which is retention, not a failure |
+ *
+ * Transcription status is not consulted anywhere in here. A recording that has never been through a
+ * provider is still a recording, and it plays.
+ *
+ * ## What is still emitted, invisibly
+ *
+ * One hidden marker per current channel. The conversation dialog builds its tab strip by scanning the
+ * row for them, so without them the dialog would open on Mix alone and the Customer and Agent tabs —
+ * and the transcripts behind them — would be unreachable. They render nothing.
  */
 $conversationCell = static function (StoreOrderGroup $group) use (
     $clock,
     $originalUrl,
-    $channelLine,
-    $canReadConversation
+    $channelIndicator
 ): string {
-    // The first line: what there is to listen to, and the one way in. Wrapped together so they stay on
-    // one line and the channels below read as a caption to them.
-    $html = '<div class="a2t-conversation"><div class="a2t-conversation__lead">';
+    $html = '<div class="ot-rec">';
 
-    // One play control for the call, from whichever recording of it can still be played. They are the
-    // same call and the same length; which file backs the button is not a distinction worth drawing.
-    $playable = null;
+    $mix = $group->mixed;
+    // The acquisition reader keys its channels by the lower-cased recording type, the same spelling
+    // the empty-slot note uses — so the arriving poller updates this cell in place by the same
+    // selector it has always used.
+    $mixChannel = strtolower(RecordingType::Mixed->value);
+    $arriving = $group->arrivingFor($mixChannel);
 
-    foreach ($group->primaries() as $slot) {
-        if ($slot->hasOriginalAudio) {
-            $playable = $slot;
-
-            break;
-        }
-    }
-
-    if ($playable !== null) {
+    if ($mix !== null && $mix->hasOriginalAudio) {
+        // In hand. Drawn even while its transcription is queued, running or absent entirely: this is
+        // a play button, and none of that stops a file playing.
         $html .= '<button class="a2t-play" type="button"'
-            . ' data-a2t-play="' . Html::encode($originalUrl($playable->jobPublicId)) . '"'
-            . ' aria-label="' . Html::encode('Play the recording of this call') . '">'
+            . ' data-a2t-play="' . Html::encode($originalUrl($mix->jobPublicId)) . '"'
+            . ' aria-label="' . Html::encode('Play the Mix recording of this call') . '">'
             . '<span class="a2t-play__icon" aria-hidden="true"></span>'
-            . '<span class="a2t-play__time">' . Html::encode($clock($playable->durationSeconds)) . '</span>'
+            . '<span class="a2t-play__time">' . Html::encode($clock($mix->durationSeconds)) . '</span>'
             . '</button>';
-    }
-
-    // The named way in. It carries `data-a2t-order-open` because that is the attribute the dialog's
-    // existing opener reads — the order number keeps working and this is the same door, not a second one.
-    //
-    // Absent where the conversation may not be read as text. The order number still opens the dialog
-    // on those surfaces — there is audio to hear in it — but a control whose label promises a
-    // conversation must not be the way in to a dialog that deliberately shows none.
-    if ($canReadConversation && $group->orderId !== null && $group->hasReviewableRecording()) {
-        $html .= '<button class="a2t-slot__link a2t-slot__link--open" type="button"'
-            . ' data-a2t-order-open="' . Html::encode($group->orderId) . '">View conversation</button>';
-    }
-
-    $html .= '</div><div class="a2t-conversation__channels">';
-
-    if ($group->isLegacySeparate()) {
-        // A pair uploaded before recording types existed: its halves are Customer and Agent, named by
-        // the role the administrator supplied rather than by a channel this application never knew.
-        // Kept inside `a2t-legacy` so the caption and its two halves stay one thing on the page.
-        $html .= '<span class="a2t-legacy">'
-            . '<span class="a2t-legacy__tag">Customer + Agent</span>';
-
-        foreach ($group->legacySeparate as $half) {
-            // Named by the half's own `source_role`, because a legacy pair has no recording type to be
-            // named by — the same distinction the caption above draws.
-            $html .= '<span class="a2t-conversation__channel"'
-                . ' data-a2t-channel="' . Html::encode($half->sourceRole->value) . '">'
-                . $channelLine($half, null, null)
-                . '</span>';
-        }
-
-        $html .= '</span>';
+    } elseif ($arriving !== null && !$arriving->isSettled()) {
+        // Still coming. `data-a2t-arriving-channel` is what the poller already rewrites as each state
+        // changes, so this line follows the download without the page reloading.
+        $html .= '<span class="ot-rec__state ot-rec__state--arriving"'
+            . ' data-a2t-arriving-channel="' . Html::encode($mixChannel) . '">'
+            . Html::encode($arriving->label()) . ' Mix audio…</span>';
+    } elseif ($arriving === RecordingAcquisitionState::Failed) {
+        // The provider was asked and the request failed. The enum's own word for it, and no more: the
+        // underlying reason is a provider response this page has no business reprinting.
+        $html .= '<span class="ot-rec__state ot-rec__state--failed"'
+            . ' data-a2t-arriving-channel="' . Html::encode($mixChannel) . '"'
+            . ' title="' . Html::encode('The Mix recording could not be downloaded from the provider.') . '">'
+            . 'Mix audio failed</span>';
+    } elseif ($mix !== null) {
+        // The recording is known but its file is not here — retention took it, or it was never kept.
+        // Distinct from both "none exists" and "the download failed", because it is neither.
+        $html .= '<span class="ot-rec__state ot-rec__state--gone">Mix audio not stored</span>';
     } else {
-        foreach (
-            [
-                [$group->mixed, RecordingType::Mixed],
-                [$group->caller, RecordingType::Caller],
-                [$group->callee, RecordingType::Callee],
-            ] as [$slot, $type]
-        ) {
-            // The channel this line is about, as the enum spells it. A reader sees the label; this is
-            // what lets anything else — a test, a style, a script — address one channel now that the
-            // three of them share a cell and can no longer be told apart by which column they sit in.
-            $html .= '<span class="a2t-conversation__channel"'
-                . ' data-a2t-channel="' . Html::encode($type->value) . '">'
-                . $channelLine($slot, $type, $group)
-                . '</span>';
+        // Nothing to play and nothing went wrong: either the provider has no Mix recording for this
+        // call, or none was ever uploaded. `Unavailable` is the provider having answered that it has
+        // none, which is the same thing to a reader.
+        $html .= '<span class="ot-rec__state ot-rec__state--none">No Mix audio</span>';
+    }
+
+    // Invisible, and load-bearing — see the docblock. One per CURRENT channel, so a side uploaded
+    // twice contributes one tab rather than two with the same name.
+    foreach ($group->primaries() as $slot) {
+        if ($slot->isReviewable() || $slot->isAudioOnly()) {
+            $html .= $channelIndicator($slot, false);
         }
     }
 
-    return $html . '</div></div>';
+    return $html . '</div>';
 };
 
 ?>
@@ -914,28 +961,29 @@ $conversationCell = static function (StoreOrderGroup $group) use (
 ?>
         <?php if ($canUpload): ?>
             <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
-               data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+                data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
         <?php endif; ?>
         <?php
-        // The same button, the same endpoint and the same importer as the picker's — the only
-        // difference is the `return` field, which brings the operator back to this store rather than
-        // to the picker. The import itself stays global: one configured directory, and the store is
-        // read from inside each document, so there is nothing here to scope it by.
-        //
-        // `data-busy-label` is the generic double-submit guard in admin.js. The real protection is the
-        // lock on the server, which also holds across two tabs and against the console command.
+// The same button, the same endpoint and the same importer as the picker's — the only
+// difference is the `return` field, which brings the operator back to this store rather than
+// to the picker. The import itself stays global: one configured directory, and the store is
+// read from inside each document, so there is nothing here to scope it by.
+//
+// `data-busy-label` is the generic double-submit guard in admin.js. The real protection is the
+// lock on the server, which also holds across two tabs and against the console command.
 ?>
         <?php if ($capabilities->canSyncDemoOrders): ?>
             <form method="post"
-                  action="<?= Html::encode($urlGenerator->generate($routes['syncDemo'])) ?>">
+                action="<?= Html::encode($urlGenerator->generate($routes['syncDemo'])) ?>">
                 <?= $csrfField ?>
                 <input type="hidden" name="return" value="<?= Html::encode($routes['store']) ?>">
                 <input type="hidden" name="sourceId" value="<?= Html::encode((string) $store->sourceId) ?>">
                 <button class="btn btn--secondary" type="submit"
-                        data-busy-label="Syncing…">Sync demo orders</button>
+                    data-busy-label="Syncing…">Sync demo orders</button>
             </form>
         <?php endif; ?>
-        <?php // Order Testing's own list, not the Order58 picker, whose links go to the audio page.?>
+        <?php // Order Testing's own list, not the Order58 picker, whose links go to the audio page.
+?>
         <a class="btn" href="<?= Html::encode($urlGenerator->generate($routes['page'])) ?>">All stores</a>
     </div>
 </div>
@@ -1019,7 +1067,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
             : count($topicChoices) . ' selected';
         ?>
         <form class="practice-filter" method="get" action="<?= Html::encode($storeUrl) ?>"
-              data-practice-filter-form>
+            data-practice-filter-form>
             <span class="practice-filter__label" id="practice-filter-label">Filter by topic</span>
             <?php
             // Open and shut by the script; rendered open-able without it, because a `<details>` is a
@@ -1032,19 +1080,20 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 </summary>
                 <div class="practice-filter__panel">
                     <?php if (count($assignableTopics) > 8): ?>
-                        <?php // Only where the list is long enough to need it.?>
+                        <?php // Only where the list is long enough to need it.
+                    ?>
                         <label class="util-visually-hidden" for="practice-filter-search">Find a topic</label>
                         <input class="field__control practice-filter__search" type="search"
-                               id="practice-filter-search" placeholder="Find a topic"
-                               data-practice-filter-search autocomplete="off">
+                            id="practice-filter-search" placeholder="Find a topic"
+                            data-practice-filter-search autocomplete="off">
                     <?php endif; ?>
 
                     <ul class="practice-filter__options">
                         <li class="practice-filter__option" data-practice-filter-row>
                             <label>
                                 <input type="checkbox" name="<?= OrderGroupFilter::PARAM ?>[]"
-                                       value="<?= OrderGroupFilter::UNASSIGNED ?>"
-                                       data-practice-filter-choice
+                                    value="<?= OrderGroupFilter::UNASSIGNED ?>"
+                                    data-practice-filter-choice
                                     <?= $chosen(OrderGroupFilter::UNASSIGNED) ? 'checked' : '' ?>>
                                 <span>Not assigned</span>
                             </label>
@@ -1053,7 +1102,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <li class="practice-filter__option" data-practice-filter-row>
                                 <label>
                                     <input type="checkbox" name="<?= OrderGroupFilter::PARAM ?>[]"
-                                           value="<?= $topic->id ?>" data-practice-filter-choice
+                                        value="<?= $topic->id ?>" data-practice-filter-choice
                                         <?= $chosen((string) $topic->id) ? 'checked' : '' ?>>
                                     <span><?= Html::encode($topic->name) ?></span>
                                 </label>
@@ -1063,7 +1112,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <li class="practice-filter__option" data-practice-filter-row>
                                 <label>
                                     <input type="checkbox" name="<?= OrderGroupFilter::PARAM ?>[]"
-                                           value="<?= Html::encode($retired) ?>" data-practice-filter-choice checked>
+                                        value="<?= Html::encode($retired) ?>" data-practice-filter-choice checked>
                                     <span class="util-muted">Topic #<?= Html::encode($retired) ?> — no longer offered</span>
                                 </label>
                             </li>
@@ -1080,11 +1129,27 @@ $conversationCell = static function (StoreOrderGroup $group) use (
             <?php if ($hasTopicFilter): ?>
                 <a class="btn btn--sm" href="<?= Html::encode($storeUrl) ?>">Clear</a>
             <?php endif; ?>
+            <?php
+        /*
+         * How many orders the filter is currently showing, at the far end of the same row.
+         *
+         * It was only at the foot of the table, which is the wrong end: the number that tells you
+         * whether a filter did what you meant belongs beside the filter. The sentence under the
+         * table keeps its fuller wording — this is the headline, that is the detail.
+         *
+         * Said in words as well as a number, so it reads as an answer rather than as a count of
+         * something unnamed.
+         */
+        ?>
+            <span class="practice-filter__count">
+                <?= Html::encode((string) $total) ?> order<?= $total === 1 ? '' : 's' ?>
+            </span>
         </form>
     <?php endif; ?>
 
     <?php if ($groups === []): ?>
-        <?php // A short sentence and the one action that changes it, rather than an empty table.?>
+        <?php // A short sentence and the one action that changes it, rather than an empty table.
+        ?>
         <div class="a2t-empty-state">
             <?php if ($practiceMode && $hasTopicFilter): ?>
                 <?php
@@ -1097,7 +1162,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 <p>No audio recordings yet.</p>
                 <?php if ($canUpload): ?>
                     <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
-                       data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
+                        data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
                 <?php endif; ?>
             <?php endif; ?>
         </div>
@@ -1119,8 +1184,8 @@ $conversationCell = static function (StoreOrderGroup $group) use (
         ?>
         <div class="a2t-table-scroll"
             <?php if ($arrivingCalls !== []): ?>
-                data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
-                data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
+            data-a2t-arriving-poll="<?= Html::encode($arrivingUrl) ?>"
+            data-a2t-arriving-landed="<?= Html::encode((string) $landed) ?>"
             <?php endif; ?>>
             <?php if ($canAssignTopics): ?>
                 <?php
@@ -1132,14 +1197,15 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 // disabled teaches a reader to ignore it.
                 ?>
                 <form id="practice-bulk-form" method="post" class="practice-bulk" hidden
-                      data-practice-bulk
-                      action="<?= Html::encode($urlGenerator->generate(
-                          $routes['topicBulk'],
-                          ['sourceId' => $store->sourceId],
-                      )) ?>">
+                    data-practice-bulk
+                    action="<?= Html::encode($urlGenerator->generate(
+                        $routes['topicBulk'],
+                        ['sourceId' => $store->sourceId],
+                    )) ?>">
                     <?= $csrfField ?>
                     <?php foreach ($topicChoices as $choice): ?>
-                        <?php // The filter to return to, as on the single-assign form below.?>
+                        <?php // The filter to return to, as on the single-assign form below.
+                        ?>
                         <input type="hidden" name="filter_topics[]" value="<?= Html::encode($choice) ?>">
                     <?php endforeach; ?>
                     <span class="practice-bulk__count" data-practice-count>0 selected</span>
@@ -1154,7 +1220,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     // the Unassign entry in that row's own dropdown.
                 ?>
                     <select class="field__control practice-bulk__select" id="practice-bulk-topic"
-                            name="topic_id" data-practice-bulk-topic>
+                        name="topic_id" data-practice-bulk-topic>
                         <option value="" selected>Not Selected</option>
                         <?php foreach ($assignableTopics as $topic): ?>
                             <option value="<?= $topic->id ?>"><?= Html::encode($topic->name) ?></option>
@@ -1164,9 +1230,20 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 // The script turns this into a confirmation; with no script it submits directly.
                 // Either way the server is the only thing that decides what is written.
                 ?>
-                    <?php // Disabled until a topic is chosen, as well as when there are none to choose.?>
+                    <?php // Disabled until a topic is chosen, as well as when there are none to choose.
+                ?>
                     <button class="btn btn--primary btn--sm" type="submit" data-practice-bulk-submit
-                            disabled>Bulk Set Topic</button>
+                        disabled>Set Topic</button>
+                    <?php
+                /*
+                 * The way out of a selection, beside the way to use one.
+                 *
+                 * Unticking twenty rows one at a time is the alternative, and select-all only
+                 * clears a selection when every row happens to be in it. `type="button"` so it
+                 * cannot submit the form it sits in.
+                 */
+                ?>
+                    <button class="practice-bulk__clear" type="button" data-practice-clear>Clear</button>
                     <span class="practice-bulk__note">
                         <?= $assignableTopics === []
                         ? 'No active topics yet — create one in Topic Management.'
@@ -1177,33 +1254,53 @@ $conversationCell = static function (StoreOrderGroup $group) use (
 
             <table class="table a2t-table a2t-orders a2t-conversions ot-orders">
                 <?php
-                    // Sized to content, with the one recording column taking the slack: a filename no
-                    // longer appears here, so nothing in this table has an unbounded length.
+                // Sized to content, with the one recording column taking the slack: a filename no
+                // longer appears here, so nothing in this table has an unbounded length.
 ?>
                 <colgroup>
                     <?php // A column, not a cell: its own class, so the width rule cannot be confused
-                          // with the rules that lay out what is inside the cells.?>
-                    <?php if ($canAssignTopics): ?><col class="practice-col-select"><?php endif; ?>
+    // with the rules that lay out what is inside the cells.
+?>
+                    <?php if ($canAssignTopics): ?>
+                        <col class="practice-col-select"><?php endif; ?>
                     <col class="a2t-col-order">
-                    <?php // Beside the order number, because it is the same order said another way:?>
-                    <?php // the provider's own printed number for it.?>
-                    <?php if ($canViewOrderSeq): ?><col class="ot-col-seq"><?php endif; ?>
+                    <?php // Beside the order number, because it is the same order said another way:
+?>
+                    <?php // the provider's own printed number for it.
+?>
+                    <?php if ($canViewOrderSeq): ?>
+                        <col class="ot-col-seq"><?php endif; ?>
                     <col class="a2t-col-conversation">
-                    <col class="a2t-col-status">
-                    <?php if ($canVerifyOrders): ?><col class="ot-col-verification"><?php endif; ?>
+                    <?php
+// No Status column. The question it answered — "is this order's audio ready?" —
+// is now answered by the Recording cell itself, which shows a player when the Mix
+// recording can be played and says why when it cannot. Two columns describing one
+// readiness disagreed with each other the moment a secondary channel failed.
+?>
+                    <?php if ($canVerifyOrders): ?>
+                        <col class="ot-col-verification"><?php endif; ?>
                     <col class="a2t-col-demo">
                     <col class="ot-col-demo-orders">
                     <?php
-                    // Declared, and declared HERE. A colgroup one `col` short does not leave the last
-                    // column unsized — it shifts every width one place to the left, so the topic's
-                    // 21rem landed on Agent Events and Set Topic collapsed to nothing. The order of
-                    // these must match the header row exactly.
+// Declared, and declared HERE. A colgroup one `col` short does not leave the last
+// column unsized — it shifts every width one place to the left, so the topic's
+// 21rem landed on Agent Events and Set Topic collapsed to nothing. The order of
+// these must match the header row exactly.
 ?>
-                    <?php if ($canViewAgentEvents): ?><col class="ot-col-agent-events"><?php endif; ?>
-                    <?php if ($practiceMode): ?><col class="practice-col-topic"><?php endif; ?>
-                    <?php // Last, because it leaves the application: everything to its left is this?>
-                    <?php // page's own work, and this one fetches the provider's printed receipt.?>
-                    <?php if ($canViewOrderReceipts): ?><col class="ot-col-receipt"><?php endif; ?>
+                    <?php
+// No Agent Events column. What agents played is still recorded, still served by its own route and
+// still rendered by the dialog further down this template — it is the COLUMN that is gone, because
+// a full share of the table's width was being spent on a control most rows never need. Restoring it
+// is the `<col>`, the `<th>` and the `<td>` that git holds, and nothing else.
+?>
+                    <?php if ($practiceMode): ?>
+                        <col class="practice-col-topic"><?php endif; ?>
+                    <?php // Last, because it leaves the application: everything to its left is this
+?>
+                    <?php // page's own work, and this one fetches the provider's printed receipt.
+?>
+                    <?php if ($canViewOrderReceipts): ?>
+                        <col class="ot-col-receipt"><?php endif; ?>
                 </colgroup>
                 <thead>
                     <tr>
@@ -1215,611 +1312,592 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             ?>
                             <th class="practice-select">
                                 <input type="checkbox" data-practice-select-all
-                                       aria-label="Select all orders on this page">
+                                    aria-label="Select all orders on this page">
                             </th>
                         <?php endif; ?>
                         <th>Order No#</th>
                         <?php if ($canViewOrderSeq): ?>
-                            <?php // The provider's own order number — a printed string such as `31#1`,?>
-                            <?php // not a count and not anything this application derives.?>
+                            <?php // The provider's own order number — a printed string such as `31#1`,
+                            ?>
+                            <?php // not a count and not anything this application derives.
+                            ?>
                             <th>Seq</th>
                         <?php endif; ?>
-                        <?php // One column, because an order is one conversation. The channels it was?>
-                        <?php // recorded on are named inside the cell, from the enum rather than typed?>
-                        <?php // out here, and the dialog it opens gives each of them a tab.?>
-                        <th>Recording / Conversation</th>
-                        <th>Status</th>
+                        <?php
+                        // One column answering one question: can this order's Mix recording be played
+                        // right now? Not "Recording / Conversation" any more — the conversation is a
+                        // different thing, reached from the order number, and naming it here made the
+                        // column look like two.
+?>
+                        <th>Recording</th>
                         <?php if ($canVerifyOrders): ?>
-                            <?php // Beside Status, because the two answer the same kind of question?>
-                            <?php // about an order: what the machine made of it, and what a person?>
-                            <?php // made of it. The actions that change an order stay further right.?>
+                            <?php // Beside Status, because the two answer the same kind of question
+    ?>
+                            <?php // about an order: what the machine made of it, and what a person
+    ?>
+                            <?php // made of it. The actions that change an order stay further right.
+    ?>
                             <th>Verification</th>
                         <?php endif; ?>
                         <th>Practice Order</th>
-                        <?php // Immediately after Demo URL, because it is the result of pressing it:?>
-                        <?php // the orders a trainee produced from this call, each compared on its own.?>
+                        <?php // Immediately after Demo URL, because it is the result of pressing it:
+?>
+                        <?php // the orders a trainee produced from this call, each compared on its own.
+?>
                         <th>Demo Orders</th>
-                        <?php if ($canViewAgentEvents): ?>
-                            <?php // What agents did with this call: how many times they had it read?>
-                            <?php // aloud, and how far they got. Read-only, and after the columns?>
-                            <?php // that produce the practice it reports on.?>
-                            <th>Agent Events</th>
-                        <?php endif; ?>
                         <?php if ($practiceMode): ?>
-                            <?php // The topic this source order is practised under. One per order.?>
-                            <?php // "Set Topic" where it can be set; just "Topic" where it is read.?>
+                            <?php // The topic this source order is practised under. One per order.
+    ?>
+                            <?php // "Set Topic" where it can be set; just "Topic" where it is read.
+    ?>
                             <th><?= $canAssignTopics ? 'Set Topic' : 'Topic' ?></th>
                         <?php endif; ?>
                         <?php if ($canViewOrderReceipts): ?>
-                            <?php // The real order's receipt, as the provider printed it. Offered only?>
-                            <?php // where the order is actually mirrored here, so a link can never?>
-                            <?php // name an order this store does not have.?>
+                            <?php // The real order's receipt, as the provider printed it. Offered only
+    ?>
+                            <?php // where the order is actually mirrored here, so a link can never
+    ?>
+                            <?php // name an order this store does not have.
+    ?>
                             <th>View Receipt</th>
                         <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($groups as $group): ?>
-                    <?php $status = $group->aggregateStatus(); ?>
-                    <?php
-                    // Whether this row has a source order that actually exists, decided once and used
-                    // by the checkbox, the Set Topic button and the Demo URL cell alike.
-                    //
-                    // The demo-link reader has already answered it for the whole page: it looks the
-                    // order up by `(account_id, source_order_id)` and reports `OrderNotFound` when
-                    // there is no such row. Every other status means the order WAS found and something
-                    // else is missing, so reusing it costs no query and cannot disagree with the
-                    // "Order not found" the next cell prints.
-                    $rowOrderId = $group->orderId ?? '';
-                    $rowLinkStatus = $rowOrderId !== '' && isset($demoLinks[$rowOrderId])
-                        ? $demoLinks[$rowOrderId]->status
-                        : DemoLinkStatus::NoOrderId;
-                    $rowHasSourceOrder = $rowOrderId !== ''
-                        && $rowLinkStatus !== DemoLinkStatus::NoOrderId
-                        && $rowLinkStatus !== DemoLinkStatus::OrderNotFound;
+                    <?php foreach ($groups as $group): ?>
+                        <?php $status = $group->aggregateStatus(); ?>
+                        <?php
+// Whether this row has a source order that actually exists, decided once and used
+// by the checkbox, the Set Topic button and the Demo URL cell alike.
+//
+// The demo-link reader has already answered it for the whole page: it looks the
+// order up by `(account_id, source_order_id)` and reports `OrderNotFound` when
+// there is no such row. Every other status means the order WAS found and something
+// else is missing, so reusing it costs no query and cannot disagree with the
+// "Order not found" the next cell prints.
+$rowOrderId = $group->orderId ?? '';
+                        $rowLinkStatus = $rowOrderId !== '' && isset($demoLinks[$rowOrderId])
+                            ? $demoLinks[$rowOrderId]->status
+                            : DemoLinkStatus::NoOrderId;
+                        $rowHasSourceOrder = $rowOrderId !== ''
+                            && $rowLinkStatus !== DemoLinkStatus::NoOrderId
+                            && $rowLinkStatus !== DemoLinkStatus::OrderNotFound;
 
-                    // Resolved once for the row, because two cells need it: Seq prints what it holds,
-                    // and View Receipt exists only when there is one. Looked up here rather than in
-                    // the first of those cells so the second does not depend on the first having been
-                    // rendered.
-                    $mirrored = $rowOrderId === '' ? null : ($mirroredOrders[$rowOrderId] ?? null);
-                    ?>
-                    <?php
-                    // Read by the review dialog's Original transcript button, which is opened from this
-                    // row and has no other way to know which order it is looking at. A deliberately
-                    // inert attribute name: `data-a2t-transcripts` is what the page-wide click handler
-                    // binds to, and putting that on the `<tr>` would make a click anywhere in the row
-                    // open the transcript dialog. Absent when there is nothing transcribed, which is
-                    // what keeps the button hidden rather than opening an empty dialog.
-                    ?>
-                    <tr<?= $group->arriving !== null
-                ? ' data-a2t-arriving-call="' . Html::encode($group->arriving->callSessionId) . '"'
-                : '' ?><?= $group->hasAnyTranscript()
-                ? ' data-a2t-row-transcripts="' . Html::encode(
-                    $groupUrl($routes['transcripts'], $group->key),
-                ) . '"'
-                : '' ?>>
-                        <?php if ($canAssignTopics): ?>
-                            <?php
-                            // Only a row whose source order really exists can carry a topic: the
-                            // assignment keys on `(store, order)` and the service refuses a pair that
-                            // is not this store's, so a checkbox here would offer a selection the
-                            // server would reject — and reject the whole batch with it, since a bulk
-                            // assignment is all-or-nothing. Such a row keeps its place in the table and
-                            // simply offers no checkbox.
-                            ?>
-                            <td class="practice-select">
-                                <?php if ($rowHasSourceOrder): ?>
-                                    <input type="checkbox" form="practice-bulk-form"
-                                           name="source_order_ids[]"
-                                           value="<?= Html::encode($rowOrderId) ?>"
-                                           data-practice-select
-                                           aria-label="Select order <?= Html::encode($rowOrderId) ?>">
-                                <?php endif; ?>
-                            </td>
-                        <?php endif; ?>
-                        <td data-ot-label="Order">
-                            <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
-                                <?php // One way in to every recording of this call. The channels it?>
-                                <?php // offers are the Details buttons already in this row, so the?>
-                                <?php // page carries nothing extra for it and nothing is fetched?>
-                                <?php // until it is opened.?>
-                                <button class="a2t-order-id a2t-order-id--open" type="button"
+                        // Resolved once for the row, because two cells need it: Seq prints what it holds,
+                        // and View Receipt exists only when there is one. Looked up here rather than in
+                        // the first of those cells so the second does not depend on the first having been
+                        // rendered.
+                        $mirrored = $rowOrderId === '' ? null : ($mirroredOrders[$rowOrderId] ?? null);
+                        ?>
+                        <?php
+                        // Read by the review dialog's Original transcript button, which is opened from this
+                        // row and has no other way to know which order it is looking at. A deliberately
+                        // inert attribute name: `data-a2t-transcripts` is what the page-wide click handler
+                        // binds to, and putting that on the `<tr>` would make a click anywhere in the row
+                        // open the transcript dialog. Absent when there is nothing transcribed, which is
+                        // what keeps the button hidden rather than opening an empty dialog.
+                        ?>
+                        <tr<?= $group->arriving !== null
+                                ? ' data-a2t-arriving-call="' . Html::encode($group->arriving->callSessionId) . '"'
+                                : '' ?><?= $group->hasAnyTranscript()
+                                            ? ' data-a2t-row-transcripts="' . Html::encode(
+                                                $groupUrl($routes['transcripts'], $group->key),
+                                            ) . '"'
+                                            : '' ?>>
+                            <?php if ($canAssignTopics): ?>
+                                <?php
+                                // Only a row whose source order really exists can carry a topic: the
+                                // assignment keys on `(store, order)` and the service refuses a pair that
+                                // is not this store's, so a checkbox here would offer a selection the
+                                // server would reject — and reject the whole batch with it, since a bulk
+                                // assignment is all-or-nothing. Such a row keeps its place in the table and
+                                // simply offers no checkbox.
+                                ?>
+                                <td class="practice-select">
+                                    <?php if ($rowHasSourceOrder): ?>
+                                        <input type="checkbox" form="practice-bulk-form"
+                                            name="source_order_ids[]"
+                                            value="<?= Html::encode($rowOrderId) ?>"
+                                            data-practice-select
+                                            aria-label="Select order <?= Html::encode($rowOrderId) ?>">
+                                    <?php endif; ?>
+                                </td>
+                            <?php endif; ?>
+                            <td data-ot-label="Order">
+                                <?php if ($group->orderId !== null && $group->hasReviewableRecording()): ?>
+                                    <?php // One way in to every recording of this call. The channels it
+                                    ?>
+                                    <?php // offers are the Details buttons already in this row, so the
+                                    ?>
+                                    <?php // page carries nothing extra for it and nothing is fetched
+                                    ?>
+                                    <?php // until it is opened.
+                                    ?>
+                                    <button class="a2t-order-id a2t-order-id--open" type="button"
+                                        title="<?= Html::encode($orderWhen($group)) ?>"
                                         data-a2t-order-open="<?= Html::encode($group->orderId) ?>">#<?= Html::encode($group->orderId) ?></button>
-                            <?php elseif ($group->orderId !== null): ?>
-                                <?php // Nothing in this row has finished, so there is nothing for a?>
-                                <?php // details view to show. Manage Audio is where it is watched.?>
-                                <span class="a2t-order-id">#<?= Html::encode($group->orderId) ?></span>
-                            <?php else: ?>
-                                <?php
-                // An upload that named no order is still its own row — never merged
-                // with every other order-less upload. It says so rather than showing
-                // a blank cell that would read as missing data.
-                                ?>
-                                <span class="util-muted">No order</span>
-                            <?php endif; ?>
-                            <?php
-                            // Two different facts that were being shown as one. The call time is the
-                            // provider's own string, printed exactly as sent and with NO zone label —
-                            // it carries none, and appending one would be inventing a claim. The import
-                            // time is this application's own instant, so it gets the business timezone
-                            // every other timestamp on this page is formatted in.
-                    ?>
-                            <?php if ($group->callTimeRaw !== null): ?>
-                                <span class="a2t-order-when">
-                                    <span class="a2t-order-when__key">Call time</span>
-                                    <?= Html::encode($group->callTimeRaw) ?>
-                                </span>
-                            <?php endif; ?>
-                            <span class="a2t-order-when">
-                                <span class="a2t-order-when__key"><?= $group->callTimeRaw === null ? 'Added' : 'Downloaded' ?></span>
-                                <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
-                            </span>
-                        </td>
-                        <?php if ($canViewOrderSeq): ?>
-                            <?php
-                            // The provider's own number for this order, printed exactly as mirrored.
-                            // An order this store does not have, and one that has no seq, both read
-                            // as a dash — the receipt cell beside it is where that difference is
-                            // actually actionable, so it is not spelled out twice.
-                            ?>
-                            <td data-ot-label="Seq" class="a2t-cell-tight">
-                                <?php if ($mirrored !== null && $mirrored->seq !== null): ?>
-                                    <span class="ot-seq"><?= Html::encode($mirrored->seq) ?></span>
+                                <?php elseif ($group->orderId !== null): ?>
+                                    <?php // Nothing in this row has finished, so there is nothing for a
+                                    ?>
+                                    <?php // details view to show. Manage Audio is where it is watched.
+                                    ?>
+                                    <span class="a2t-order-id"
+                                        title="<?= Html::encode($orderWhen($group)) ?>">#<?= Html::encode($group->orderId) ?></span>
                                 <?php else: ?>
-                                    <span class="util-muted">—</span>
+                                    <?php
+                                    // An upload that named no order is still its own row — never merged
+                                    // with every other order-less upload. It says so rather than showing
+                                    // a blank cell that would read as missing data.
+                                    ?>
+                                    <span class="util-muted">No order</span>
                                 <?php endif; ?>
+                                <?php
+                                /*
+                             * The timestamps are gone from the cell, not from the data.
+                             *
+                             * Three lines under every order number — Call time, and Added or
+                             * Downloaded — tripled the height of the busiest column in the table to
+                             * carry facts nobody scans a list for. `callTimeRaw` and
+                             * `latestActivityAt` are still read, still ordered by, and still shown
+                             * where they are the subject rather than the footnote: the Call
+                             * Recordings page and the conversation dialog.
+                             *
+                             * They survive here as a title, so the one reader in twenty who wants
+                             * the date can hover for it without the other nineteen paying a row's
+                             * height for it.
+                             */
+                        ?>
                             </td>
-                        <?php endif; ?>
-                        <td data-ot-label="Recording">
-                            <?= $conversationCell($group) ?>
-                        </td>
-                        <td data-ot-label="Status">
-                            <?php
-                            // A row whose audio is still arriving says so, instead of reporting a
-                            // transcription status for recordings that are not here to transcribe. The
-                            // two numbers are kept apart for the reason they are everywhere in this
-                            // feature: the count is channels the provider has answered for, and the
-                            // line under it is what actually arrived.
-                    ?>
-                            <?php if ($group->arriving !== null && $group->arriving->isActive()): ?>
+                            <?php if ($canViewOrderSeq): ?>
                                 <?php
-                                // The transcription panel's shape and its step marks, reusing its
-                                // PRIMITIVES — `.a2t-processing__stages`, `__stage`, `__mark` — rather
-                                // than its shell classes. That card's markup lives in one partial and
-                                // must stay there (ManualProcessingPanelTest enforces it); this is a
-                                // different thing wearing the same clothes, so it owns its shell and
-                                // shares the parts that make the two read as one product.
-                                //
-                                // Drawn only while a channel is still pending or downloading. Once the
-                                // acquisition settles the call is no longer reported as arriving at
-                                // all, so this disappears and the row falls back to its ordinary
-                                // recordings — which is what the reader actually wants to see.
+                        // The provider's own number for this order, printed exactly as mirrored.
+                        // An order this store does not have, and one that has no seq, both read
+                        // as a dash — the receipt cell beside it is where that difference is
+                        // actually actionable, so it is not spelled out twice.
                                 ?>
-                                <?php
-                // A badge in the cell, the detail in a modal.
-                //
-                // This panel is seven lines of progress and it used to render in full in every arriving
-                // row, which made the table scroll for pages. An inline disclosure fixed the height but
-                // not the width: a summary's parts have no column to wrap into, so on a real store they
-                // spilled sideways across the Demo URL cell. A modal takes the detail out of the table's
-                // geometry entirely, which is the only way a seven-line panel and a fixed column width
-                // can both be satisfied.
-                //
-                // `:target`, not JavaScript: the policy here is `script-src 'self'` with no inline
-                // handlers. The modal also stays *inside* this `<tr>`, because the poller in
-                // audio-store.js finds its targets with `row.querySelector(...)` — a hidden modal keeps
-                // every one of them in the DOM, so the figures stay live while it is shut and are
-                // current the moment it opens.
-                $arrivingId = 'a2t-arriving-' . $group->arriving->callSessionId;
-                                ?>
-                                <a class="a2t-badge a2t-badge--processing a2t-arriving__open"
-                                   href="#<?= Html::encode($arrivingId) ?>">Downloading<span
-                                   class="a2t-arriving__caret" aria-hidden="true">&rsaquo;</span></a>
-
-                                <div class="a2t-modal" id="<?= Html::encode($arrivingId) ?>"
-                                     role="dialog" aria-modal="true" aria-label="Download progress">
-                                    <a class="a2t-modal__backdrop" href="#" aria-label="Close"></a>
-                                    <div class="a2t-modal__panel">
-                                        <div class="a2t-modal__head">
-                                            <div>
-                                                <h3 class="a2t-modal__title">Downloading recordings</h3>
-                                                <p class="a2t-modal__sub">
-                                                    <?= $group->orderId === null
-                                                        ? 'No order'
-                                                        : 'Order #' . Html::encode($group->orderId) ?>
-                                                    &middot;
-                                                    <span data-a2t-arriving-outcome><?=
-                                                        Html::encode($group->arriving->outcome()->label())
-                                ?></span>
-                                                </p>
-                                            </div>
-                                            <a class="btn btn--sm a2t-modal__close" href="#">Close</a>
-                                        </div>
-
-                                        <div class="a2t-modal__body a2t-arriving">
-                                            <div class="a2t-arriving__overall">
-                                                <div class="a2t-arriving__label">
-                                                    <span class="a2t-arriving__title">Overall progress</span>
-                                                    <?php
-                        // The one place this figure lives. The poller takes the first match in the row,
-                        // so a second copy in the cell would leave one of the two stale.
-                                ?>
-                                                    <span data-a2t-arriving-progress><?=
-                                    Html::encode($group->arriving->progressText())
-                                ?></span>
-                                                </div>
-                                        <progress class="a2t-arriving__bar" max="100"
-                                            value="<?= $group->arriving->percentChecked() ?>"
-                                            aria-label="<?= Html::encode($group->arriving->progressText()) ?>"
-                                            data-a2t-arriving-bar></progress>
-                                    </div>
-
-                                    <ol class="a2t-processing__stages">
-                                        <?php foreach ($group->arriving->channels as $channel => $state): ?>
-                                            <li class="a2t-processing__stage"
-                                                data-state="<?= Html::encode($state->step()) ?>"
-                                                data-a2t-arriving-step="<?= Html::encode($channel) ?>">
-                                                <span class="a2t-processing__mark" aria-hidden="true"></span>
-                                                <?= Html::encode(
-                                                    RecordingTypeLabels::forStorageValue(strtoupper($channel)),
-                                                ) ?>
-                                                <span data-a2t-arriving-channel="<?= Html::encode($channel) ?>">
-                                                    <?= Html::encode($state->label()) ?>
-                                                </span>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ol>
-
-                                    <p class="a2t-arriving__detail" role="status" data-a2t-arriving-current>
-                                        <?= Html::encode((string) $group->arriving->currentStep()) ?>
-                                    </p>
-                                    <?php // What actually arrived — never inferred from the bar.?>
-                                    <p class="a2t-arriving__detail" data-a2t-arriving-availability>
-                                        <?= Html::encode($group->arriving->availabilityText()) ?>
-                                    </p>
-                                        </div>
-                                    </div>
-                                </div>
-                            <?php else: ?>
-                                <span class="a2t-badge a2t-badge--<?= Html::encode($status->badgeModifier()) ?>">
-                                    <?= Html::encode($status->label()) ?>
-                                </span>
+                                <td data-ot-label="Seq" class="a2t-cell-tight">
+                                    <?php if ($mirrored !== null && $mirrored->seq !== null): ?>
+                                        <span class="ot-seq"><?= Html::encode($mirrored->seq) ?></span>
+                                    <?php else: ?>
+                                        <span class="util-muted">—</span>
+                                    <?php endif; ?>
+                                </td>
                             <?php endif; ?>
-                        </td>
-                        <?php if ($canVerifyOrders): ?>
-                            <td data-ot-label="Verification" class="ot-verify-cell">
-                                <?php
+                            <td data-ot-label="Recording">
+                                <?= $conversationCell($group) ?>
+                            </td>
+                            <?php
+                            // No Status cell. What it reported was an aggregate over all three
+                            // channels, so one failed secondary download made a row with perfectly
+                            // good Mix audio look broken. The Recording cell to the left now answers
+                            // the only question this table needs answered, about the one recording it
+                            // offers. `aggregateStatus()` is untouched and still computed — nothing
+                            // about transcription, ingestion or state transitions changed.
+                        ?>
+                            <?php if ($canVerifyOrders): ?>
+                                <td data-ot-label="Verification" class="ot-verify-cell">
+                                    <?php
                                 $verification = $rowOrderId === ''
                                     ? null
                                     : ($orderVerifications[$rowOrderId] ?? OrderVerificationStatus::none());
-                            ?>
-                                <?php if (!$rowHasSourceOrder || $verification === null): ?>
-                                    <?php
-                                // Nothing to verify. The same rule the Set Topic cell applies, from
-                                // the same answer: a recording whose order was never mirrored is not
-                                // an order anybody can make a statement about.
-                                    ?>
-                                    <span class="util-muted">&mdash;</span>
-                                <?php else: ?>
-                                    <?php
-                                    // A real form, posting to a real endpoint. The script turns the
-                                    // click into a confirmation and sends it by fetch; with no script
-                                    // it submits directly and the server answers with a redirect. The
-                                    // control is the same element either way, so there is nothing the
-                                    // script has to hide once it loads — and therefore nothing that can
-                                    // be seen for a moment before it does.
-                                    ?>
-                                    <form class="ot-verify" method="post"
-                                          data-ot-verify
-                                          data-ot-order="<?= Html::encode($rowOrderId) ?>"
-                                          data-ot-verified="<?= $verification->isVerified ? '1' : '0' ?>"
-                                          action="<?= Html::encode($urlGenerator->generate(
-                                              $routes['verification'],
-                                              [
-                                                  'sourceId' => $store->sourceId,
-                                                  'sourceOrderId' => $rowOrderId,
-                                              ],
-                                          )) ?>">
-                                        <?= $csrfField ?>
+                                ?>
+                                    <?php if (!$rowHasSourceOrder || $verification === null): ?>
                                         <?php
-                                        // The state this control was rendered from. The endpoint
-                                        // refuses a write whose version has moved on, so a tab left
-                                        // open across somebody else's change cannot silently undo it.
-                                    ?>
-                                        <input type="hidden" name="version"
-                                               value="<?= $verification->version ?>" data-ot-version>
+                                    // Nothing to verify. The same rule the Set Topic cell applies, from
+                                    // the same answer: a recording whose order was never mirrored is not
+                                    // an order anybody can make a statement about.
+                                        ?>
+                                        <span class="util-muted">&mdash;</span>
+                                    <?php else: ?>
                                         <?php
+                                        // A real form, posting to a real endpoint. The script turns the
+                                        // click into a confirmation and sends it by fetch; with no script
+                                        // it submits directly and the server answers with a redirect. The
+                                        // control is the same element either way, so there is nothing the
+                                        // script has to hide once it loads — and therefore nothing that can
+                                        // be seen for a moment before it does.
+                                        ?>
+                                        <form class="ot-verify" method="post"
+                                            data-ot-verify
+                                            data-ot-order="<?= Html::encode($rowOrderId) ?>"
+                                            data-ot-verified="<?= $verification->isVerified ? '1' : '0' ?>"
+                                            action="<?= Html::encode($urlGenerator->generate(
+                                                $routes['verification'],
+                                                [
+                                                    'sourceId' => $store->sourceId,
+                                                    'sourceOrderId' => $rowOrderId,
+                                                ],
+                                            )) ?>">
+                                            <?= $csrfField ?>
+                                            <?php
+                                            // The state this control was rendered from. The endpoint
+                                            // refuses a write whose version has moved on, so a tab left
+                                            // open across somebody else's change cannot silently undo it.
+                                        ?>
+                                            <input type="hidden" name="version"
+                                                value="<?= $verification->version ?>" data-ot-version>
+                                            <?php
                                         // `decision`, not `action`: a control named `action` becomes a
                                         // property of its own form element and shadows `form.action`,
                                         // so the script would read an <input> where the URL should be
                                         // and post to it. It did, once.
-                                    ?>
-                                        <input type="hidden" name="decision" data-ot-decision
-                                               value="<?= $verification->isVerified ? 'unverified' : 'verified' ?>">
-                                        <?php if ($verification->isVerified): ?>
-                                            <button class="badge badge--success ot-verify__badge"
+                                        ?>
+                                            <input type="hidden" name="decision" data-ot-decision
+                                                value="<?= $verification->isVerified ? 'unverified' : 'verified' ?>">
+                                            <?php if ($verification->isVerified): ?>
+                                                <button class="badge badge--success ot-verify__badge"
                                                     type="submit" data-ot-verify-button
                                                     title="<?= Html::encode(
                                                         $verification->verifiedLine ?? 'Verified.',
                                                     ) ?>">
-                                                <span aria-hidden="true">&check;</span> Verified
-                                            </button>
-                                        <?php else: ?>
-                                            <button class="btn btn--sm ot-verify__button"
+                                                    <span aria-hidden="true">&check;</span> Verified
+                                                </button>
+                                            <?php else: ?>
+                                                <button class="btn btn--sm ot-verify__button"
                                                     type="submit" data-ot-verify-button>Verify</button>
-                                        <?php endif; ?>
-                                    </form>
-                                <?php endif; ?>
-                            </td>
-                        <?php endif; ?>
-                        <td data-ot-label="Demo URL" class="a2t-cell-tight">
-                            <?php
-            // Resolved for the whole page in one query before rendering; this cell only prints the
-            // answer. Every row was asked about, so a missing key would be a bug rather than a blank.
-            // The Action asks about every row, so a missing key would be a bug — but an explicit
-            // "not found" is a safer answer than a null nobody checks, and it keeps this cell to one
-            // type throughout.
-            $orderKey = $group->orderId ?? '';
-                    $demo = array_key_exists($orderKey, $demoLinks)
-                        ? $demoLinks[$orderKey]
-                        : DemoOrderUrl::unavailable(DemoLinkStatus::OrderNotFound);
-                    ?>
-                            <?php if ($demo->isReady()): ?>
-                                <?php
-                // A POST, not a link — and this is the one place on either surface where the two
-                // templates genuinely differ in behaviour rather than in wording.
-                //
-                // Order58's demo document carries no field this application controls, so the ONLY
-                // moment at which "who is testing this order" can be captured is this click. A plain
-                // anchor cannot capture it. The form writes the attempt first, then the action
-                // redirects to the Order58 address — which it builds from the mirrored host and phone
-                // through DemoOrderUrl's allow-list, never from anything the browser sent.
-                //
-                // `target="_blank"` keeps the behaviour an operator already had: the browser opens the
-                // new tab, posts into it, and follows the redirect there. `rel` still matters on it —
-                // the destination carries a customer's phone number in its path, and without
-                // `noreferrer` the browser would hand this store page's URL to it as the Referer.
-                                ?>
-                                <form class="ot-demo-form" method="post" target="_blank"
-                                      rel="noopener noreferrer"
-                                      action="<?= Html::encode($demoUrlAction) ?>">
-                                    <?= $csrfField ?>
-                                    <input type="hidden" name="source_order_id"
-                                           value="<?= Html::encode($orderKey) ?>">
-                                    <?php
-                // `data-ot-demo-url` is what `order-testing.js` binds to. It is a real submit button
-                // and the form is a real form: with the script absent the browser posts it, the
-                // attempt is still recorded, and the server answers in the new tab with a page
-                // carrying the link. The script only spares the operator that second click.
-                                ?>
-                                    <button class="ot-linkbutton" type="submit"
-                                            data-ot-demo-url>Practice Order</button>
-                                </form>
-                                <?php // Filled by the script on a refusal — most often "somebody else is testing this".?>
-                                <span class="ot-demo-message" role="alert" data-ot-demo-message hidden></span>
-                            <?php else: ?>
-                                <?php // Plain text, not a dead link: nothing to click is clearer than something that cannot work.?>
-                                <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
-                            <?php endif; ?>
-                        </td>
-                        <td data-ot-label="Demo orders" class="a2t-cell-tight">
-                            <?php
-                // Counted for the whole page in one query before rendering; this cell prints the
-                // answer and links on to Order Testing's own page for that order. A dash is the honest
-                // answer for "nothing has been created from this call yet" — a "View (0)" would be a
-                // link to an empty page.
-                $demoCount = $demoOrderCounts[$orderKey] ?? 0;
-                    ?>
-                            <?php if ($orderKey !== '' && $demoCount > 0): ?>
-                                <?php
-                                // One link, two parts: the word that says what pressing it does, and a
-                                // count that says how much is behind it. The count is inside the
-                                // anchor rather than beside it, so there is one target to click and
-                                // one thing for a keyboard to land on — a badge that was its own
-                                // control would be a second way to the same page.
-                                //
-                                // The visible text is "View 4"; the accessible name says what the 4
-                                // counts, which the eye gets from the column heading and a screen
-                                // reader does not.
-                                ?>
-                                <a class="ot-demo-orders" aria-label="View <?= $demoCount ?> demo order<?=
-                                    $demoCount === 1 ? '' : 's' ?> for this order"
-                                   href="<?= Html::encode($urlGenerator->generate(
-                                       $routes['demoOrders'],
-                                       ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
-                                   )) ?>"><span class="ot-demo-orders__label">View</span><span
-                                        class="ot-demo-orders__count" aria-hidden="true"><?=
-                                        Html::encode((string) $demoCount) ?></span></a>
-                            <?php else: ?>
-                                <span class="util-muted">&mdash;</span>
-                            <?php endif; ?>
-                        </td>
-                        <?php if ($canViewAgentEvents): ?>
-                            <td data-ot-label="Agent events" class="a2t-cell-tight">
-                                <?php
-                                // Every recording this call has, named on the button that opens the
-                                // report. The dialog asks about exactly these and the server re-reads
-                                // each one against this store before it answers, so the list is a
-                                // convenience for the query and never an authority on what may be
-                                // read.
-                                $playbackJobs = [];
-
-                            foreach ($group->allRecordings() as $recording) {
-                                $playbackJobs[] = $recording->jobPublicId;
-                            }
-                            ?>
-                                <?php if ($playbackJobs === []): ?>
-                                    <?php // No recording, nothing anybody could have played.?>
-                                    <span class="util-muted">&mdash;</span>
-                                <?php else: ?>
-                                    <button class="btn btn--sm btn--secondary ot-agent-events" type="button"
-                                            data-ot-agent-events="<?= Html::encode($agentPlaybackUrl) ?>"
-                                            data-ot-agent-jobs="<?= Html::encode(implode(',', $playbackJobs)) ?>"
-                                            data-ot-agent-order="<?= Html::encode($orderKey) ?>"
-                                            aria-label="<?= Html::encode(
-                                                $orderKey === ''
-                                                    ? 'Agent playback events for this recording'
-                                                    : 'Agent playback events for order ' . $orderKey,
-                                            ) ?>">Details</button>
-                                <?php endif; ?>
-                            </td>
-                        <?php endif; ?>
-                        <?php if ($practiceMode): ?>
-                            <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
-                            <td data-ot-label="Topic" class="practice-topic-cell">
-                                <?php
-                                                                                // One row for every shape this cell takes: the topic's name, a badge
-                                                                                // when it is no longer offered, and the control that changes it, all on
-                                                                                // one line. It wraps rather than overflows, so a long topic name pushes
-                                                                                // the control down instead of widening the table.
-                            ?>
-                                <div class="practice-topic-cell__stack">
-                                <?php if (!$rowHasSourceOrder): ?>
-                                    <?php
-                                                                // No source order behind this recording, so there is nothing to
-                                                                // practise. Said plainly and with the reason, rather than offering
-                                                                // a button the server would refuse. The recording itself is still
-                                                                // fully reachable from the cells to the left.
-                                    ?>
-                                    <span class="util-muted">&mdash;</span>
-                                    <div class="field__hint">
-                                        <?= $orderKey === '' ? 'No order on this recording' : 'No matching source order' ?>
-                                    </div>
-                                <?php else: ?>
-                                    <?php if (!$canAssignTopics): ?>
-                                        <?php
-                                        // Read-only surfaces say what the topic is, and nothing more.
-                                        //
-                                        // It used to be a button that opened the topic's details. The
-                                        // details are a topic's own information, not this order's, and
-                                        // a name that looks like a link in a table of orders reads as
-                                        // "this will take me somewhere about the order". Topic
-                                        // Management still has the dialog, where a topic is the subject
-                                        // rather than a column.
-                                        ?>
-                                        <div class="practice-topic-cell__name">
-                                        <?php if ($assigned === null): ?>
-                                            <span class="practice-unassigned">Not Assigned</span>
-                                        <?php else: ?>
-                                            <span class="practice-topic__value"><?=
-                                                Html::encode($assigned->name) ?></span>
-                                            <?php if (!$assigned->isAssignable()): ?>
-                                                <?php
-                                                // Which of the two states it is, in the width a table
-                                                // column actually has. The assignment itself stays:
-                                                // this is history, not a mistake to clean up.
-                                                ?>
-                                                <span class="badge badge--muted"><?=
-                                                    Html::encode($assigned->statusLabel()) ?></span>
                                             <?php endif; ?>
-                                        <?php endif; ?>
-                                        </div>
-                                    <?php endif; ?>
-                                    <?php
-                                    // Where topics are assigned, the control IS the answer: the select
-                                    // below already shows the current topic as its selected option, and
-                                    // printing the same name beside it was the same fact twice in a
-                                    // column that has room for one.
-                    ?>
-                                    <?php if ($canAssignTopics): ?>
-                                        <?php
-                        // One control, inline, instead of a button that opens a picker.
-                        //
-                        // Its own form per row, posting to the same endpoint the bulk
-                        // toolbar uses. The script turns a change into a confirmation
-                        // and submits only when the reader confirms; with no script the
-                        // Save below submits directly, so the page still works and the
-                        // server is the only thing that ever decides.
-                        //
-                        // The currently assigned topic is an option even when it is no
-                        // longer offered — otherwise initialising the control would
-                        // silently propose unassigning a historical topic, and the
-                        // first stray click would carry it out.
-                        $currentValue = $assigned === null ? null : (string) $assigned->id;
-                                        $currentOffered = $assigned !== null && $assigned->isAssignable();
-                                        ?>
-                                        <form class="practice-assign" method="post"
-                                              data-practice-assign-row
-                                              data-practice-order="<?= Html::encode($orderKey) ?>"
-                                              data-practice-current-label="<?= Html::encode($assigned?->name ?? '') ?>"
-                                              action="<?= Html::encode($urlGenerator->generate(
-                                                  $routes['topicAssign'],
-                                                  ['sourceId' => $store->sourceId],
-                                              )) ?>">
-                                            <?= $csrfField ?>
-                                            <input type="hidden" name="source_order_id"
-                                                   value="<?= Html::encode($orderKey) ?>">
-                                            <?php foreach ($topicChoices as $choice): ?>
-                                                <input type="hidden" name="filter_topics[]"
-                                                       value="<?= Html::encode($choice) ?>">
-                                            <?php endforeach; ?>
-
-                                            <?php
-                                            // What the control looks like is decided by what is
-                                            // STORED, not by what is selected. The class is rendered
-                                            // by the server from the saved assignment, so choosing a
-                                            // different topic changes the selected option and nothing
-                                            // else: the row keeps saying what it currently is until a
-                                            // confirmed save reloads the page. Cancel therefore has
-                                            // nothing to undo, and a failed save cannot leave the row
-                                            // looking like something it is not.
-                                            $assignedClass = $assigned === null
-                                                ? ''
-                                                : ($assigned->isAssignable()
-                                                    ? ' practice-assign__select--assigned'
-                                                    : ' practice-assign__select--historical');
-                                        ?>
-                                            <select class="field__control practice-assign__select<?=
-                                            $assignedClass ?>"
-                                                    id="practice-topic-<?= Html::encode($orderKey) ?>"
-                                                    name="topic_id"
-                                                    aria-label="Topic for order <?= Html::encode($orderKey) ?>"
-                                                    data-practice-assign-select
-                                                    data-practice-saved="<?= Html::encode($currentValue ?? '') ?>">
-                                                <option value=""<?= $currentValue === null ? ' selected' : '' ?>><?=
-                                                $currentValue === null ? 'Select Topic' : 'Unassign' ?></option>
-                                                <?php if ($assigned !== null && !$currentOffered): ?>
-                                                    <option value="<?= $assigned->id ?>" selected><?=
-                                                    Html::encode($assigned->name) ?> (<?=
-                                                    Html::encode($assigned->statusLabel()) ?>)</option>
-                                                <?php endif; ?>
-                                                <?php foreach ($assignableTopics as $topic): ?>
-                                                    <option value="<?= $topic->id ?>"<?=
-                                                    $currentValue === (string) $topic->id ? ' selected' : '' ?>><?=
-                                                    Html::encode($topic->name) ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <?php
-                                        // The no-script path, and nothing else.
-                                        //
-                                        // Inside <noscript> rather than rendered and then hidden
-                                        // by the script. A browser with scripting on does not
-                                        // build this element at all, so the first paint is already
-                                        // the final one. Rendered-then-hidden meant every Save on
-                                        // the page was on screen from the first paint until the
-                                        // script got to it — and this page loads a great deal of
-                                        // audio behaviour first, so "until" was long enough to
-                                        // watch them disappear. The CSP forbids inline scripts and
-                                        // inline styles, so the parser is the earliest hook there
-                                        // is; the correction page's fallback is the same shape for
-                                        // the same reason.
-                                        ?>
-                                            <noscript>
-                                                <button class="btn btn--primary btn--sm practice-assign__save"
-                                                        type="submit" data-practice-assign-save>Save</button>
-                                            </noscript>
                                         </form>
                                     <?php endif; ?>
-                                <?php endif; ?>
-                                </div>
-                            </td>
-                        <?php endif; ?>
-                        <?php if ($canViewOrderReceipts): ?>
-                            <td data-ot-label="View receipt" class="a2t-cell-tight">
-                                <?php if ($mirrored !== null): ?>
+                                </td>
+                            <?php endif; ?>
+                            <td data-ot-label="Demo URL" class="a2t-cell-tight">
+                                <?php
+                                // Resolved for the whole page in one query before rendering; this cell only prints the
+                                // answer. Every row was asked about, so a missing key would be a bug rather than a blank.
+                                // The Action asks about every row, so a missing key would be a bug — but an explicit
+                                // "not found" is a safer answer than a null nobody checks, and it keeps this cell to one
+                                // type throughout.
+                                $orderKey = $group->orderId ?? '';
+                        $demo = array_key_exists($orderKey, $demoLinks)
+                            ? $demoLinks[$orderKey]
+                            : DemoOrderUrl::unavailable(DemoLinkStatus::OrderNotFound);
+                        ?>
+                                <?php if ($demo->isReady()): ?>
                                     <?php
-                                    /*
+                            // A POST, not a link — and this is the one place on either surface where the two
+                            // templates genuinely differ in behaviour rather than in wording.
+                            //
+                            // Order58's demo document carries no field this application controls, so the ONLY
+                            // moment at which "who is testing this order" can be captured is this click. A plain
+                            // anchor cannot capture it. The form writes the attempt first, then the action
+                            // redirects to the Order58 address — which it builds from the mirrored host and phone
+                            // through DemoOrderUrl's allow-list, never from anything the browser sent.
+                            //
+                            // `target="_blank"` keeps the behaviour an operator already had: the browser opens the
+                            // new tab, posts into it, and follows the redirect there. `rel` still matters on it —
+                            // the destination carries a customer's phone number in its path, and without
+                            // `noreferrer` the browser would hand this store page's URL to it as the Referer.
+                                    ?>
+                                    <form class="ot-demo-form" method="post" target="_blank"
+                                        rel="noopener noreferrer"
+                                        action="<?= Html::encode($demoUrlAction) ?>">
+                                        <?= $csrfField ?>
+                                        <input type="hidden" name="source_order_id"
+                                            value="<?= Html::encode($orderKey) ?>">
+                                        <?php
+                                        // `data-ot-demo-url` is what `order-testing.js` binds to. It is a real submit button
+                                        // and the form is a real form: with the script absent the browser posts it, the
+                                        // attempt is still recorded, and the server answers in the new tab with a page
+                                        // carrying the link. The script only spares the operator that second click.
+                                    ?>
+                                        <button class="ot-linkbutton" type="submit"
+                                            data-ot-demo-url>Practice Order</button>
+                                    </form>
+                                    <?php // Filled by the script on a refusal — most often "somebody else is testing this".
+                                    ?>
+                                    <span class="ot-demo-message" role="alert" data-ot-demo-message hidden></span>
+                                <?php else: ?>
+                                    <?php // Plain text, not a dead link: nothing to click is clearer than something that cannot work.
+                                    ?>
+                                    <span class="util-muted"><?= Html::encode($demo->status->message()) ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td data-ot-label="Demo orders" class="a2t-cell-tight">
+                                <?php
+                                // Counted for the whole page in one query before rendering; this cell prints the
+                                // answer and links on to Order Testing's own page for that order. A dash is the honest
+                                // answer for "nothing has been created from this call yet" — a "View (0)" would be a
+                                // link to an empty page.
+                                $demoCount = $demoOrderCounts[$orderKey] ?? 0;
+                        ?>
+                                <?php if ($orderKey !== '' && $demoCount > 0): ?>
+                                    <?php
+                            // One link, two parts: the word that says what pressing it does, and a
+                            // count that says how much is behind it. The count is inside the
+                            // anchor rather than beside it, so there is one target to click and
+                            // one thing for a keyboard to land on — a badge that was its own
+                            // control would be a second way to the same page.
+                            //
+                            // The visible text is "View 4"; the accessible name says what the 4
+                            // counts, which the eye gets from the column heading and a screen
+                            // reader does not.
+                                    ?>
+                                    <a class="ot-demo-orders" aria-label="View <?= $demoCount ?> demo order<?=
+                                                                                                            $demoCount === 1 ? '' : 's' ?> for this order"
+                                        href="<?= Html::encode($urlGenerator->generate(
+                                            $routes['demoOrders'],
+                                            ['sourceId' => $store->sourceId, 'sourceOrderId' => $orderKey],
+                                        )) ?>"><span class="ot-demo-orders__label">View</span><span
+                                            class="ot-demo-orders__count" aria-hidden="true"><?=
+                                                                                        Html::encode((string) $demoCount) ?></span></a>
+                                <?php else: ?>
+                                    <span class="util-muted">&mdash;</span>
+                                <?php endif; ?>
+                            </td>
+                            <?php if ($practiceMode): ?>
+                                <?php $assigned = $orderKey === '' ? null : ($topicAssignments[$orderKey] ?? null); ?>
+                                <td data-ot-label="Topic" class="practice-topic-cell">
+                                    <?php
+                                    // One row for every shape this cell takes: the topic's name, a badge
+                                    // when it is no longer offered, and the control that changes it, all on
+                                    // one line. It wraps rather than overflows, so a long topic name pushes
+                                    // the control down instead of widening the table.
+                                ?>
+                                    <div class="practice-topic-cell__stack">
+                                        <?php if (!$rowHasSourceOrder): ?>
+                                            <?php
+                                        // No source order behind this recording, so there is nothing to
+                                        // practise. Said plainly and with the reason, rather than offering
+                                        // a button the server would refuse. The recording itself is still
+                                        // fully reachable from the cells to the left.
+                                            ?>
+                                            <?php
+                                            // A dash, and nothing after it.
+                                            //
+                                            // The reason used to be spelled out beside it —
+                                            // "No matching source order" — a sentence in a
+                                            // column of chips, on every row with no order
+                                            // behind it. The same fact is already two columns
+                                            // to the left, where Practice Order says "Order not
+                                            // found" and is the cell a reader acts on.
+                                            //
+                                            // The RULE is unchanged: such a row still carries
+                                            // no checkbox, still offers no editor, and a topic
+                                            // posted for it is still refused by the service.
+                                            ?>
+                                            <span class="util-muted">&mdash;</span>
+                                        <?php else: ?>
+                                            <?php if (!$canAssignTopics): ?>
+                                                <?php
+                                                // Read-only surfaces say what the topic is, and nothing more.
+                                                //
+                                                // It used to be a button that opened the topic's details. The
+                                                // details are a topic's own information, not this order's, and
+                                                // a name that looks like a link in a table of orders reads as
+                                                // "this will take me somewhere about the order". Topic
+                                                // Management still has the dialog, where a topic is the subject
+                                                // rather than a column.
+                                                ?>
+                                                <div class="practice-topic-cell__name">
+                                                    <?php
+                                                    /*
+                                         * A chip, not a line of text.
+                                         *
+                                         * One topic per order, so the cell is a single token rather
+                                         * than a sentence — and a token is what the eye picks out of
+                                         * a column while scanning. `title` carries the full name so
+                                         * a long one can be truncated without being lost.
+                                         *
+                                         * "No topic" is drawn as a chip too, in the muted variant:
+                                         * an empty cell reads as missing data, and a chip reads as
+                                         * an answer.
+                                         */
+                                                ?>
+                                                    <?php if ($assigned === null): ?>
+                                                        <span class="practice-chip practice-chip--none">No topic</span>
+                                                    <?php else: ?>
+                                                        <span class="practice-chip practice-topic__value"
+                                                            title="<?= Html::encode($assigned->name) ?>"><?=
+                                                                                                        Html::encode($assigned->name) ?></span>
+                                                        <?php if (!$assigned->isAssignable()): ?>
+                                                            <?php
+                                                        // Which of the two states it is, in the width a table
+                                                        // column actually has. The assignment itself stays:
+                                                        // this is history, not a mistake to clean up.
+                                                            ?>
+                                                            <span class="badge badge--muted"><?=
+                                                                                                Html::encode($assigned->statusLabel()) ?></span>
+                                                        <?php endif; ?>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php
+                                            // Where topics are assigned, the control IS the answer: the select
+                                            // below already shows the current topic as its selected option, and
+                                            // printing the same name beside it was the same fact twice in a
+                                            // column that has room for one.
+                        ?>
+                                            <?php if ($canAssignTopics): ?>
+                                                <?php
+                            // One control, inline, instead of a button that opens a picker.
+                            //
+                            // Its own form per row, posting to the same endpoint the bulk
+                            // toolbar uses. The script turns a change into a confirmation
+                            // and submits only when the reader confirms; with no script the
+                            // Save below submits directly, so the page still works and the
+                            // server is the only thing that ever decides.
+                            //
+                            // The currently assigned topic is an option even when it is no
+                            // longer offered — otherwise initialising the control would
+                            // silently propose unassigning a historical topic, and the
+                            // first stray click would carry it out.
+                            $currentValue = $assigned === null ? null : (string) $assigned->id;
+                                                $currentOffered = $assigned !== null && $assigned->isAssignable();
+                                                ?>
+                                                <form class="practice-assign" method="post"
+                                                    data-practice-assign-row
+                                                    data-practice-order="<?= Html::encode($orderKey) ?>"
+                                                    data-practice-current-label="<?= Html::encode($assigned?->name ?? '') ?>"
+                                                    action="<?= Html::encode($urlGenerator->generate(
+                                                        $routes['topicAssign'],
+                                                        ['sourceId' => $store->sourceId],
+                                                    )) ?>">
+                                                    <?= $csrfField ?>
+                                                    <input type="hidden" name="source_order_id"
+                                                        value="<?= Html::encode($orderKey) ?>">
+                                                    <?php foreach ($topicChoices as $choice): ?>
+                                                        <input type="hidden" name="filter_topics[]"
+                                                            value="<?= Html::encode($choice) ?>">
+                                                    <?php endforeach; ?>
+
+                                                    <?php
+                                                    // What the control looks like is decided by what is
+                                                    // STORED, not by what is selected. The class is rendered
+                                                    // by the server from the saved assignment, so choosing a
+                                                    // different topic changes the selected option and nothing
+                                                    // else: the row keeps saying what it currently is until a
+                                                    // confirmed save reloads the page. Cancel therefore has
+                                                    // nothing to undo, and a failed save cannot leave the row
+                                                    // looking like something it is not.
+                                                    $assignedClass = $assigned === null
+                                                        ? ''
+                                                        : ($assigned->isAssignable()
+                                                    ? ' practice-assign__select--assigned'
+                                                    : ' practice-assign__select--historical');
+                                                ?>
+                                                    <div class="ot-topic">
+                                                        <?php
+                                                    /*
+                                                 * What the order carries, as a chip.
+                                                 *
+                                                 * The control used to BE the answer — a select
+                                                 * showing the current topic as its selected option —
+                                                 * which meant the column's resting state was a
+                                                 * dropdown on every row. A chip states the fact and
+                                                 * the gear beside it offers to change it, so a table
+                                                 * being read looks like a table and only a row being
+                                                 * edited looks like a form.
+                                                 *
+                                                 * `title` carries the full name, so a long one can be
+                                                 * truncated in the chip without being lost.
+                                                 */
+                                                ?>
+                                                        <?php if ($assigned === null): ?>
+                                                            <span class="practice-chip practice-chip--none">No topic</span>
+                                                        <?php else: ?>
+                                                            <span class="practice-chip<?= $currentOffered
+                                                                                    ? ''
+                                                                                    : ' practice-chip--historical' ?>"
+                                                                title="<?= Html::encode(
+                                                                    $assigned->name
+                                                                        . ($currentOffered ? '' : ' (' . $assigned->statusLabel() . ')'),
+                                                                ) ?>"><?= Html::encode($assigned->name) ?></span>
+                                                        <?php endif; ?>
+                                                        <?php
+                                                        /*
+                                                 * The editor: a `<details>`, like the topic filter
+                                                 * above the table.
+                                                 *
+                                                 * The browser opens and closes it, gives the summary
+                                                 * a tab stop and announces its state, with no script
+                                                 * at all — which is what this page's `script-src
+                                                 * 'self'` and its no-JavaScript path both need. The
+                                                 * script adds only click-outside and Escape, and it
+                                                 * is the same handler the filter picker already uses.
+                                                 *
+                                                 * **Radios, and a Save.** Choosing does not submit:
+                                                 * opening the editor and changing your mind must cost
+                                                 * nothing, so nothing is written until Save is
+                                                 * pressed. That is also the confirmation — the select
+                                                 * this replaces needed a dialog to ask "did you mean
+                                                 * to?" precisely because choosing WAS saving.
+                                                 */
+                        ?>
+                                                        <details class="ot-topic__picker" data-practice-topic-picker>
+                                                            <summary class="ot-topic__gear"
+                                                                aria-label="<?= Html::encode(
+                                                                    'Change the topic for order ' . $orderKey,
+                                                                ) ?>"><?= AudioToTextIcons::svg(AudioToTextIcons::PENCIL, 'Change topic') ?></summary>
+                                                            <div class="ot-topic__panel">
+                                                                <p class="ot-topic__title">Set topic</p>
+                                                                <?php if ($assignableTopics === []): ?>
+                                                                    <p class="ot-topic__empty">
+                                                                        No active topics yet — create one in Topic Management.
+                                                                    </p>
+                                                                <?php else: ?>
+                                                                    <ul class="ot-topic__options">
+                                                                        <?php
+                                                                        // "No topic" first, and it is the
+                                                                        // UNASSIGN path: the endpoint reads an
+                                                                        // empty `topic_id` as "take it off",
+                                                                        // which is the same contract the
+                                                                        // select's first option had.
+                                                                    ?>
+                                                                        <li>
+                                                                            <label class="ot-topic__option">
+                                                                                <input type="radio" name="topic_id" value=""
+                                                                                    <?= $currentValue === null ? ' checked' : '' ?>>
+                                                                                <span class="util-muted">No topic</span>
+                                                                            </label>
+                                                                        </li>
+                                                                        <?php if ($assigned !== null && !$currentOffered): ?>
+                                                                            <?php
+                                                                        // The topic this order actually
+                                                                        // carries, when it is no longer
+                                                                        // offered. Listed so that opening
+                                                                        // the editor and pressing Save
+                                                                        // cannot silently unassign it.
+                                                                            ?>
+                                                                            <li>
+                                                                                <label class="ot-topic__option">
+                                                                                    <input type="radio" name="topic_id"
+                                                                                        value="<?= $assigned->id ?>" checked>
+                                                                                    <span><?= Html::encode($assigned->name) ?>
+                                                                                        <span class="util-muted">(<?=
+                                                                                                                    Html::encode($assigned->statusLabel()) ?>)</span></span>
+                                                                                </label>
+                                                                            </li>
+                                                                        <?php endif; ?>
+                                                                        <?php foreach ($assignableTopics as $topic): ?>
+                                                                            <li>
+                                                                                <label class="ot-topic__option">
+                                                                                    <input type="radio" name="topic_id"
+                                                                                        value="<?= $topic->id ?>"
+                                                                                        <?= $currentValue === (string) $topic->id
+                                                                                            ? ' checked'
+                                                                                            : '' ?>>
+                                                                                    <span><?= Html::encode($topic->name) ?></span>
+                                                                                </label>
+                                                                            </li>
+                                                                        <?php endforeach; ?>
+                                                                    </ul>
+                                                                    <button class="btn btn--primary btn--sm ot-topic__save"
+                                                                        type="submit">Save</button>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </details>
+                                                    </div>
+                                                </form>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            <?php endif; ?>
+                            <?php if ($canViewOrderReceipts): ?>
+                                <td data-ot-label="View receipt" class="a2t-cell-tight">
+                                    <?php if ($mirrored !== null): ?>
+                                        <?php
+                                        /*
                                      * A plain link, and a real URL.
                                      *
                                      * Nothing is fetched while this table loads: the provider is
@@ -1829,36 +1907,36 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                      * image from somebody else's server, so it gets no handle on
                                      * this page.
                                      */
-                                    $receiptUrl = $urlGenerator->generate($routes['orderReceipt'], [
-                                        'sourceId' => $store->sourceId,
-                                        'sourceOrderId' => $group->orderId,
-                                    ]);
-                                    ?>
-                                    <a class="btn btn--sm btn--secondary ot-receipt" href="<?= Html::encode($receiptUrl) ?>"
-                                       target="_blank" rel="noopener noreferrer"
-                                       aria-label="View the Order58 receipt for order <?= Html::encode((string) $group->orderId) ?> (opens in a new tab)">View Receipt</a>
-                                <?php else: ?>
-                                    <?php
-                                    // No mirrored order, so there is no verified id to ask about and
-                                    // no link is built. Saying which of the two is missing would be
-                                    // guessing: the order may be new, or the number may be a typo.
-                                    ?>
-                                    <span class="util-muted">—</span>
-                                <?php endif; ?>
-                            </td>
-                        <?php endif; ?>
-                    </tr>
-                <?php endforeach; ?>
+                                        $receiptUrl = $urlGenerator->generate($routes['orderReceipt'], [
+                                            'sourceId' => $store->sourceId,
+                                            'sourceOrderId' => $group->orderId,
+                                        ]);
+                                        ?>
+                                        <a class="ot-rowaction ot-receipt" href="<?= Html::encode($receiptUrl) ?>"
+                                            target="_blank" rel="noopener noreferrer"
+                                            aria-label="View the Order58 receipt for order <?= Html::encode((string) $group->orderId) ?> (opens in a new tab)">Receipt</a>
+                                    <?php else: ?>
+                                        <?php
+                                        // No mirrored order, so there is no verified id to ask about and
+                                        // no link is built. Saying which of the two is missing would be
+                                        // guessing: the order may be new, or the number may be a typo.
+                                        ?>
+                                        <span class="util-muted">&mdash;</span>
+                                    <?php endif; ?>
+                                </td>
+                            <?php endif; ?>
+                            </tr>
+                        <?php endforeach; ?>
                 </tbody>
             </table>
         </div>
 
         <?php if ($pageCount > 1): ?>
             <?php
-                // Three, not four: this template sits at `src/AudioToText/Web/OrderTesting`, one level
-                // shallower than the audio pages at `.../Web/Job/Store` that this was copied from. At
-                // four it resolved above `src/` and the page died — but only for a store with more
-                // than one page of orders, which is why it stood for so long.
+            // Three, not four: this template sits at `src/AudioToText/Web/OrderTesting`, one level
+            // shallower than the audio pages at `.../Web/Job/Store` that this was copied from. At
+            // four it resolved above `src/` and the page died — but only for a store with more
+            // than one page of orders, which is why it stood for so long.
             ?>
             <?= $this->render(dirname(__DIR__, 3) . '/Web/Shared/_partial/pager', [
                 'page' => $page,
@@ -1889,7 +1967,8 @@ $last = min($page * $perPage, $total);
     <?php endif; ?>
 </p>
 
-<?php // ---- The dialogs -------------------------------------------------------------------------?>
+<?php // ---- The dialogs -------------------------------------------------------------------------
+?>
 <?php if ($canUpload): ?>
     <?php
     // ONE form, where there were three. The recording type it posts is a radio rather than three
@@ -1901,7 +1980,7 @@ $last = min($page * $perPage, $total);
     // "could not confirm this upload".
     ?>
     <dialog class="source-modal a2t-upload-dialog" id="a2t-upload-dialog" data-a2t-dialog
-            aria-labelledby="a2t-upload-title"<?= $uploadOpen ? ' open' : '' ?>>
+        aria-labelledby="a2t-upload-title" <?= $uploadOpen ? ' open' : '' ?>>
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="a2t-upload-title">Add audio</h2>
             <button class="source-modal__close" type="button" data-a2t-dialog-close
@@ -1917,7 +1996,7 @@ $last = min($page * $perPage, $total);
             <?php endif; ?>
 
             <form class="a2t-upload-form" data-a2t-upload data-a2t-stay id="a2t-upload-form"
-                  method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
+                method="post" action="<?= Html::encode($storeUrl) ?>" enctype="multipart/form-data">
                 <?= $csrfField ?>
                 <input type="hidden" name="mode" value="<?= Html::encode(ConversationMode::Common->value) ?>">
 
@@ -1930,14 +2009,14 @@ $last = min($page * $perPage, $total);
     ?>
                     <label class="a2t-upload-picker" for="a2t-audio">
                         <svg class="a2t-upload-picker__icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"
-                             stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 16V3m-4 4 4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+                            stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 16V3m-4 4 4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" />
                         </svg>
                         <span class="a2t-upload-picker__title" aria-hidden="true">Choose an audio file</span>
                         <span class="a2t-upload-picker__hint" aria-hidden="true">Browse files to get started</span>
                         <input class="a2t-upload-input<?= isset($errors['audio']) ? ' field__control--error' : '' ?>"
-                               id="a2t-audio" type="file" name="audio"
-                               accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*" aria-describedby="a2t-audio-limits">
+                            id="a2t-audio" type="file" name="audio"
+                            accept=".wav,.mp3,.m4a,.ogg,.webm,audio/*" aria-describedby="a2t-audio-limits">
                     </label>
                     <div class="a2t-upload-file" data-a2t-file hidden></div>
                     <?= $fieldErrors($errors['audio'] ?? []) ?>
@@ -1949,56 +2028,71 @@ $last = min($page * $perPage, $total);
 
                 <?= $orderIdField('a2t-order-id') ?>
 
-                <div class="field">
-                    <span class="field__label">Recording type</span>
+                <?php if (!$canChooseRecordingType): ?>
                     <?php
-    // The one thing three cards said that one form has to say some other way. The
-    // server allow-lists whatever arrives, so this is a convenience, not the control.
-    ?>
-                    <div class="a2t-type-choice" data-a2t-type-choice>
-                        <?php foreach (RecordingType::cases() as $type): ?>
-                            <label class="a2t-checkbox" for="a2t-type-<?= Html::encode(strtolower($type->value)) ?>">
-                                <input type="radio" name="recording_type"
-                                       id="a2t-type-<?= Html::encode(strtolower($type->value)) ?>"
-                                       value="<?= Html::encode($type->value) ?>"
-                                    <?= $type === $selectedType ? 'checked' : '' ?>>
-                                <span><?= Html::encode($type->label()) ?></span>
-                            </label>
-                        <?php endforeach; ?>
+    /*
+     * Mix / Common, stated rather than asked.
+     *
+     * This surface shows one recording per order, so there is one answer and the
+     * operator should not have to give it. The field is still posted because the
+     * endpoint is shared with the Audio-to-Text page, and the server pins the value
+     * regardless of what arrives — see `allowsRecordingTypeChoice()`.
+     */
+                    ?>
+                    <input type="hidden" name="recording_type"
+                        value="<?= Html::encode(RecordingType::Mixed->value) ?>">
+                <?php else: ?>
+                    <div class="field">
+                        <span class="field__label">Recording type</span>
+                        <?php
+                        // The one thing three cards said that one form has to say some other way. The
+                        // server allow-lists whatever arrives, so this is a convenience, not the control.
+                    ?>
+                        <div class="a2t-type-choice" data-a2t-type-choice>
+                            <?php foreach (RecordingType::cases() as $type): ?>
+                                <label class="a2t-checkbox" for="a2t-type-<?= Html::encode(strtolower($type->value)) ?>">
+                                    <input type="radio" name="recording_type"
+                                        id="a2t-type-<?= Html::encode(strtolower($type->value)) ?>"
+                                        value="<?= Html::encode($type->value) ?>"
+                                        <?= $type === $selectedType ? 'checked' : '' ?>>
+                                    <span><?= Html::encode($type->label()) ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="field__hint">
+                            Which side of the call this file holds. A Caller or Callee file holds one
+                            person, so its speaker is taken as given — the Customer or the Agent — and
+                            nothing is guessed from the audio.
+                        </div>
+                        <?php
+                    // Shown for Mix / Common, hidden for the two sides. The browser toggles it; the server decides
+                    // the same thing either way, so the page is describing a rule rather than setting one.
+                    ?>
+                        <div class="field__hint a2t-type-note" data-a2t-mixed-note hidden>
+                            A Mix / Common file holds both people on one track, so it is stored as the
+                            playable original of the call and is not converted to text. The call's words
+                            come from its Customer and Agent recordings — upload those under the same
+                            order to build the conversation.
+                        </div>
                     </div>
-                    <div class="field__hint">
-                        Which side of the call this file holds. A Caller or Callee file holds one
-                        person, so its speaker is taken as given — the Customer or the Agent — and
-                        nothing is guessed from the audio.
-                    </div>
-                    <?php
-    // Shown for Mix / Common, hidden for the two sides. The browser toggles it; the server decides
-    // the same thing either way, so the page is describing a rule rather than setting one.
-    ?>
-                    <div class="field__hint a2t-type-note" data-a2t-mixed-note hidden>
-                        A Mix / Common file holds both people on one track, so it is stored as the
-                        playable original of the call and is not converted to text. The call's words
-                        come from its Customer and Agent recordings — upload those under the same
-                        order to build the conversation.
-                    </div>
-                </div>
+                <?php endif; ?>
 
                 <?php
-    // Both of these describe what happens to a transcript, so neither applies to a Mix / Common file:
-    // nothing transcribes one. Wrapped rather than removed because the choice is made in the browser
-    // and this form has no page reload to rebuild itself on — and with scripting off the wrapper
-    // simply stays visible, which costs nothing because the server refuses the transcription anyway.
-    ?>
+                // Both of these describe what happens to a transcript, so neither applies to a Mix / Common file:
+                // nothing transcribes one. Wrapped rather than removed because the choice is made in the browser
+                // and this form has no page reload to rebuild itself on — and with scripting off the wrapper
+                // simply stays visible, which costs nothing because the server refuses the transcription anyway.
+?>
                 <div data-a2t-transcription-options>
                     <?= $providerField('a2t-provider') ?>
                     <?= $aiAudioField('a2t-ai-audio') ?>
                 </div>
 
                 <?php
-                // The same card the manual dialogs render — one file, one structure. This one names the
-                // attribute hooks its own script has always used, so nothing about the upload flow
-                // changes; what is shared is the markup, not the wiring.
-    ?>
+// The same card the manual dialogs render — one file, one structure. This one names the
+// attribute hooks its own script has always used, so nothing about the upload flow
+// changes; what is shared is the markup, not the wiring.
+?>
                 <?= $this->render(AudioToTextViews::processingCard(), [
                     'title' => 'Recording progress',
                     'cardAttrs' => ['data-a2t-feedback' => true],
@@ -2040,26 +2134,26 @@ $last = min($page * $perPage, $total);
                 ]) ?>
 
                 <?php
-    // The label is a promise about what the press does, so it follows the type: a Mix / Common file is
-    // uploaded and nothing else. `data-a2t-transcribe-label` is what the script swaps.
-    ?>
+// The label is a promise about what the press does, so it follows the type: a Mix / Common file is
+// uploaded and nothing else. `data-a2t-transcribe-label` is what the script swaps.
+?>
                 <button class="btn btn--primary a2t-upload-submit" type="submit"
-                        data-a2t-upload-submit
-                        data-a2t-transcribe-label="Upload &amp; Transcribe"
-                        data-a2t-store-label="Upload">Upload &amp; Transcribe</button>
+                    data-a2t-upload-submit
+                    data-a2t-transcribe-label="Upload &amp; Transcribe"
+                    data-a2t-store-label="Upload">Upload &amp; Transcribe</button>
             </form>
         </div>
     </dialog>
 <?php endif; ?>
 
 <?php
-    // The three read/edit dialogs are rendered empty and filled on demand: a store page must not carry
-    // every transcript of every row it lists. Each one follows the shell the chat source dialog
-    // established — a `<dialog>` with data hooks, no ids printed, closed by its own button or a backdrop
-    // click, and filled with textContent rather than markup.
+// The three read/edit dialogs are rendered empty and filled on demand: a store page must not carry
+// every transcript of every row it lists. Each one follows the shell the chat source dialog
+// established — a `<dialog>` with data hooks, no ids printed, closed by its own button or a backdrop
+// click, and filled with textContent rather than markup.
 ?>
 <dialog class="source-modal a2t-review-dialog" id="a2t-review-dialog" data-a2t-dialog
-        aria-labelledby="a2t-review-title">
+    aria-labelledby="a2t-review-title">
     <div class="source-modal__head">
         <div>
             <h2 class="source-modal__title" id="a2t-review-title" data-a2t-review-title>Recording details</h2>
@@ -2075,22 +2169,22 @@ $last = min($page * $perPage, $total);
             // buttons at all, and an empty container is nothing on screen.
 ?>
             <?php
-            // Both of these are ways to change the recording: the action strip the script fills with
-            // Replace and Generate, and the way through to the correction page. A reader who may do
-            // neither gets neither element — so there is nothing for the script to fill, and nothing
-            // to click.
+// Both of these are ways to change the recording: the action strip the script fills with
+// Replace and Generate, and the way through to the correction page. A reader who may do
+// neither gets neither element — so there is nothing for the script to fill, and nothing
+// to click.
 ?>
             <?php if ($canVerifyOrders): ?>
                 <?php
-                // The same decision the column offers, in the place a reader reaches it: they have just
-                // listened to the call and read the conversation, which is when somebody actually
-                // decides an order has been checked.
-                //
-                // It owns no state. The click is handed to that row's own form in the table, so the two
-                // controls cannot disagree and there is no second record of anything. Hidden until the
-                // dialog is opened on an ORDER — opened on a single recording there is nothing to make
-                // a statement about, and the script leaves it as it found it. Hidden in the markup
-                // rather than revealed-then-hidden, so it cannot appear for a moment on the way in.
+    // The same decision the column offers, in the place a reader reaches it: they have just
+    // listened to the call and read the conversation, which is when somebody actually
+    // decides an order has been checked.
+    //
+    // It owns no state. The click is handed to that row's own form in the table, so the two
+    // controls cannot disagree and there is no second record of anything. Hidden until the
+    // dialog is opened on an ORDER — opened on a single recording there is nothing to make
+    // a statement about, and the script leaves it as it found it. Hidden in the markup
+    // rather than revealed-then-hidden, so it cannot appear for a moment on the way in.
                 ?>
                 <button class="btn btn--sm" type="button" data-ot-verify-dialog hidden></button>
             <?php endif; ?>
@@ -2101,18 +2195,18 @@ $last = min($page * $perPage, $total);
                 <a class="btn btn--sm" data-a2t-full-editor href="#">Open full editor</a>
             <?php endif; ?>
             <?php
-// The machine's own output, beside the corrected conversation it produced.
-//
-// The listing's Actions column used to hold the only way in, and the two realms that share
-// this page do not share a fallback: an administrator could still reach it from the audio
-// store page, while an operation user is deliberately kept out of that module altogether.
-// Hiding the column would therefore have taken the original transcript away from one role
-// and not the other.
-//
-// So the way in moved here rather than disappearing. It opens the SAME dialog the column
-// opened, over the SAME order-testing-scoped route — the script fills in which order from
-// the row the dialog was opened on, and a row with nothing transcribed leaves this hidden.
-// No new endpoint, no second copy of the transcript, and no change to who may read one.
+            // The machine's own output, beside the corrected conversation it produced.
+            //
+            // The listing's Actions column used to hold the only way in, and the two realms that share
+            // this page do not share a fallback: an administrator could still reach it from the audio
+            // store page, while an operation user is deliberately kept out of that module altogether.
+            // Hiding the column would therefore have taken the original transcript away from one role
+            // and not the other.
+            //
+            // So the way in moved here rather than disappearing. It opens the SAME dialog the column
+            // opened, over the SAME order-testing-scoped route — the script fills in which order from
+            // the row the dialog was opened on, and a row with nothing transcribed leaves this hidden.
+            // No new endpoint, no second copy of the transcript, and no change to who may read one.
 ?>
             <?php if ($canReadConversation): ?>
                 <button class="btn btn--sm" type="button" data-a2t-review-transcripts hidden>
@@ -2161,18 +2255,18 @@ $last = min($page * $perPage, $total);
     <div class="a2t-tabs" role="tablist" data-a2t-review-tabs hidden></div>
     <p class="source-modal__status" data-a2t-review-status hidden></p>
     <?php
-    // The token this dialog's corrections are sent with. A rendered input, exactly as every form on
-    // this page uses, read by the script and sent as `X-CSRF-Token` — the header the existing
-    // middleware already accepts. Nothing about the token is composed in JavaScript.
+// The token this dialog's corrections are sent with. A rendered input, exactly as every form on
+// this page uses, read by the script and sent as `X-CSRF-Token` — the header the existing
+// middleware already accepts. Nothing about the token is composed in JavaScript.
 ?>
     <?php
-    // No token, no corrections. The script reads this element to send `X-CSRF-Token`; without it the
-    // editing paths have nothing to send, and the surfaces that omit it mount none of those endpoints.
+// No token, no corrections. The script reads this element to send `X-CSRF-Token`; without it the
+// editing paths have nothing to send, and the surfaces that omit it mount none of those endpoints.
 ?>
     <?php
-    // Also rendered where playback is recorded. The agent cannot edit a transcript and still has no
-    // address that would — the endpoints are not mounted for that realm — but reporting what they
-    // played is a POST, and a POST here carries this token or it is refused.
+// Also rendered where playback is recorded. The agent cannot edit a transcript and still has no
+// address that would — the endpoints are not mounted for that realm — but reporting what they
+// played is a POST, and a POST here carries this token or it is refused.
 ?>
     <?php if ($capabilities->canEditTranscript || $capabilities->canTrackPlayback): ?>
         <div class="a2t-review-token" data-a2t-review-token hidden><?= $csrfField ?></div>
@@ -2190,7 +2284,7 @@ $last = min($page * $perPage, $total);
         <template data-a2t-icon="edit"><?= AudioToTextIcons::svg(AudioToTextIcons::PENCIL, '') ?></template>
         <template data-a2t-icon="history"><?= AudioToTextIcons::svg(AudioToTextIcons::CLOCK, '') ?></template>
         <?php
-        // And the transport for the browser's own voice, from the same constants for the same reason.
+    // And the transport for the browser's own voice, from the same constants for the same reason.
 ?>
         <template data-a2t-icon="play"><?= AudioToTextIcons::svg(AudioToTextIcons::PLAY, '') ?></template>
         <template data-a2t-icon="pause"><?= AudioToTextIcons::svg(AudioToTextIcons::PAUSE, '') ?></template>
@@ -2204,34 +2298,34 @@ $last = min($page * $perPage, $total);
 ?>
     <div class="a2t-history-dialogs" data-a2t-history-host></div>
     <?php
-    // `a2t-review` is the correction page's own scope, borrowed deliberately: it is what stacks the
-    // controls under a bubble, puts the icons in the margin on the speaker's side and tints a
-    // published Agent turn green. `a2t-chat` is **not** borrowed — `.app:has(.a2t-chat)` pins the
-    // whole shell to 100vh, which is right for a page that is only a conversation and wrong for a
-    // table with a dialog over it.
+// `a2t-review` is the correction page's own scope, borrowed deliberately: it is what stacks the
+// controls under a bubble, puts the icons in the margin on the speaker's side and tints a
+// published Agent turn green. `a2t-chat` is **not** borrowed — `.app:has(.a2t-chat)` pins the
+// whole shell to 100vh, which is right for a page that is only a conversation and wrong for a
+// table with a dialog over it.
 ?>
     <div class="source-modal__body a2t-review" data-a2t-review-body hidden>
         <?php
-        // Three ways to hear this recording, filled per recording when the dialog opens: the file that
-        // was uploaded, the audio this application generated from the transcript, and the browser
-        // reading the transcript aloud itself. They are kept apart because they are different things —
-        // one is evidence, one costs money, and one is a convenience that leaves nothing behind.
+    // Three ways to hear this recording, filled per recording when the dialog opens: the file that
+    // was uploaded, the audio this application generated from the transcript, and the browser
+    // reading the transcript aloud itself. They are kept apart because they are different things —
+    // one is evidence, one costs money, and one is a convenience that leaves nothing behind.
 ?>
         <div class="a2t-listen" data-a2t-listen hidden></div>
         <div class="a2t-mnotice" data-a2t-review-notice></div>
         <?php
-        /*
-         * Where the conversation's turns are drawn — and only where they may be read.
-         *
-         * Omitted rather than hidden. A `display: none` container is still a container: the script
-         * would fill it, the words would be in the document, and anyone could read them from the
-         * element inspector. With the element absent the script skips the whole thread-building
-         * branch (it checks for this node), so on an audio-only surface no turn is ever built.
-         *
-         * The payload the dialog fetches still carries the turns, because it is the same response
-         * that carries the audio URLs this dialog needs. Splitting that would mean a second endpoint
-         * for one surface; it is recorded as a known limit rather than worked around badly.
-         */
+/*
+ * Where the conversation's turns are drawn — and only where they may be read.
+ *
+ * Omitted rather than hidden. A `display: none` container is still a container: the script
+ * would fill it, the words would be in the document, and anyone could read them from the
+ * element inspector. With the element absent the script skips the whole thread-building
+ * branch (it checks for this node), so on an audio-only surface no turn is ever built.
+ *
+ * The payload the dialog fetches still carries the turns, because it is the same response
+ * that carries the audio URLs this dialog needs. Splitting that would mean a second endpoint
+ * for one surface; it is recorded as a known limit rather than worked around badly.
+ */
 ?>
         <?php if ($canReadConversation): ?>
             <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
@@ -2255,75 +2349,75 @@ $last = min($page * $perPage, $total);
 // many recordings it lists.
 ?>
 <?php if ($capabilities->canTranscribe): ?>
-<dialog class="source-modal a2t-confirm-dialog" id="a2t-transcribe-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-confirm-dialog" id="a2t-transcribe-dialog" data-a2t-dialog
         aria-labelledby="a2t-transcribe-title">
-    <div class="source-modal__head">
-        <div>
-            <h2 class="source-modal__title" id="a2t-transcribe-title">Transcribe this audio?</h2>
-            <p class="source-modal__meta">
-                This will convert the selected recording to text using the currently configured
-                transcription provider.
-            </p>
+        <div class="source-modal__head">
+            <div>
+                <h2 class="source-modal__title" id="a2t-transcribe-title">Transcribe this audio?</h2>
+                <p class="source-modal__meta">
+                    This will convert the selected recording to text using the currently configured
+                    transcription provider.
+                </p>
+            </div>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
+                title="Close" aria-label="Close">&times;</button>
         </div>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
-            title="Close" aria-label="Close">&times;</button>
-    </div>
 
-    <div class="source-modal__body">
-        <?php
-        // What is about to happen, to what. Named in the client's own words — the recording's column
-        // heading, not a channel code — so the line reads as the row it came from.
+        <div class="source-modal__body">
+            <?php
+            // What is about to happen, to what. Named in the client's own words — the recording's column
+            // heading, not a channel code — so the line reads as the row it came from.
     ?>
-        <dl class="a2t-confirm__facts">
-            <div class="a2t-confirm__fact" data-a2t-confirm-order-row>
-                <dt>Order ID</dt>
-                <dd data-a2t-confirm-order></dd>
-            </div>
-            <div class="a2t-confirm__fact">
-                <dt>Recording</dt>
-                <dd data-a2t-confirm-recording></dd>
-            </div>
-            <div class="a2t-confirm__fact" data-a2t-confirm-duration-row>
-                <dt>Duration</dt>
-                <dd data-a2t-confirm-duration></dd>
-            </div>
-            <div class="a2t-confirm__fact" data-a2t-confirm-provider-row>
-                <dt>Provider</dt>
-                <dd data-a2t-confirm-provider></dd>
-            </div>
-        </dl>
+            <dl class="a2t-confirm__facts">
+                <div class="a2t-confirm__fact" data-a2t-confirm-order-row>
+                    <dt>Order ID</dt>
+                    <dd data-a2t-confirm-order></dd>
+                </div>
+                <div class="a2t-confirm__fact">
+                    <dt>Recording</dt>
+                    <dd data-a2t-confirm-recording></dd>
+                </div>
+                <div class="a2t-confirm__fact" data-a2t-confirm-duration-row>
+                    <dt>Duration</dt>
+                    <dd data-a2t-confirm-duration></dd>
+                </div>
+                <div class="a2t-confirm__fact" data-a2t-confirm-provider-row>
+                    <dt>Provider</dt>
+                    <dd data-a2t-confirm-provider></dd>
+                </div>
+            </dl>
 
-        <?php
-            // Only ever shown after a refusal, and worded for the person rather than for a log. A failure
-            // here leaves the recording exactly where it was, which is why the dialog stays open: there is
-            // something to try again.
+            <?php
+    // Only ever shown after a refusal, and worded for the person rather than for a log. A failure
+    // here leaves the recording exactly where it was, which is why the dialog stays open: there is
+    // something to try again.
     ?>
-        <p class="field__error" data-a2t-confirm-error hidden></p>
-    </div>
+            <p class="field__error" data-a2t-confirm-error hidden></p>
+        </div>
 
-    <div class="source-modal__foot a2t-confirm__actions">
-        <button class="btn btn--secondary" type="button" data-a2t-dialog-close>Cancel</button>
-        <button class="btn btn--primary" type="button" data-a2t-confirm-transcribe>Start transcription</button>
-    </div>
-</dialog>
+        <div class="source-modal__foot a2t-confirm__actions">
+            <button class="btn btn--secondary" type="button" data-a2t-dialog-close>Cancel</button>
+            <button class="btn btn--primary" type="button" data-a2t-confirm-transcribe>Start transcription</button>
+        </div>
+    </dialog>
 
 <?php endif; ?>
 
 <dialog class="source-modal a2t-transcript-dialog" id="a2t-transcript-dialog" data-a2t-dialog
-        aria-labelledby="a2t-transcript-title">
+    aria-labelledby="a2t-transcript-title">
     <div class="source-modal__head">
         <div>
             <h2 class="source-modal__title" id="a2t-transcript-title">Original transcript</h2>
             <p class="source-modal__meta" data-a2t-transcript-meta></p>
         </div>
         <button class="source-modal__close" type="button" data-a2t-dialog-close
-                title="Close" aria-label="Close">&times;</button>
+            title="Close" aria-label="Close">&times;</button>
     </div>
     <div class="a2t-tabs" role="tablist" data-a2t-transcript-tabs hidden></div>
     <p class="source-modal__status" data-a2t-transcript-status hidden></p>
     <?php
-        // The same bubbles, without `a2t-review`: nothing here can be corrected, so there is no margin to
-        // reserve for controls and no role to tint. That is the read-only conversation page's own layout.
+    // The same bubbles, without `a2t-review`: nothing here can be corrected, so there is no margin to
+    // reserve for controls and no role to tint. That is the read-only conversation page's own layout.
 ?>
     <div class="source-modal__body" data-a2t-transcript-body hidden>
         <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-transcript-scroll></div>
@@ -2345,112 +2439,113 @@ $last = min($page * $perPage, $total);
 // upload. Nothing about replacement is restated here.
 ?>
 <?php if ($capabilities->canReplaceAudio): ?>
-<dialog class="source-modal a2t-update-dialog" id="a2t-update-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-update-dialog" id="a2t-update-dialog" data-a2t-dialog
         aria-labelledby="a2t-update-title">
-    <div class="source-modal__head">
-        <div>
-            <h2 class="source-modal__title" id="a2t-update-title">Update Audio</h2>
-            <p class="source-modal__meta" data-a2t-update-meta></p>
-        </div>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
+        <div class="source-modal__head">
+            <div>
+                <h2 class="source-modal__title" id="a2t-update-title">Update Audio</h2>
+                <p class="source-modal__meta" data-a2t-update-meta></p>
+            </div>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
                 aria-label="Close">&times;</button>
-    </div>
+        </div>
 
-    <p class="source-modal__status" data-a2t-update-status hidden></p>
+        <p class="source-modal__status" data-a2t-update-status hidden></p>
 
-    <form class="source-modal__body a2t-update" method="post" enctype="multipart/form-data"
-          data-a2t-update-form>
-        <?= $csrf->hiddenInput() ?>
-        <?php // Named by the server when the dialog opens. Never a control the reader can change.?>
-        <input type="hidden" name="replaces" data-a2t-update-replaces value="">
+        <form class="source-modal__body a2t-update" method="post" enctype="multipart/form-data"
+            data-a2t-update-form>
+            <?= $csrf->hiddenInput() ?>
+            <?php // Named by the server when the dialog opens. Never a control the reader can change.
+            ?>
+            <input type="hidden" name="replaces" data-a2t-update-replaces value="">
 
-        <?php
-        // The same three-class row the other confirmation dialogs use for a key and its value, rather
-        // than a fourth arrangement of the same thing. Facts, not fields: the recording being updated is
-        // decided by the button that opened this dialog, and none of it is for the reader to change.
+            <?php
+            // The same three-class row the other confirmation dialogs use for a key and its value, rather
+            // than a fourth arrangement of the same thing. Facts, not fields: the recording being updated is
+            // decided by the button that opened this dialog, and none of it is for the reader to change.
     ?>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Store</span>
-            <span class="a2t-confirm__value"><?= Html::encode($store->name) ?></span>
-        </div>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Order</span>
-            <span class="a2t-confirm__value" data-a2t-update-order></span>
-        </div>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Recording</span>
-            <span class="a2t-confirm__value" data-a2t-update-type></span>
-        </div>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Current file</span>
-            <span class="a2t-confirm__value" data-a2t-update-current></span>
-        </div>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Store</span>
+                <span class="a2t-confirm__value"><?= Html::encode($store->name) ?></span>
+            </div>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Order</span>
+                <span class="a2t-confirm__value" data-a2t-update-order></span>
+            </div>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Recording</span>
+                <span class="a2t-confirm__value" data-a2t-update-type></span>
+            </div>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Current file</span>
+                <span class="a2t-confirm__value" data-a2t-update-current></span>
+            </div>
 
-        <div class="field">
-            <label class="field__label" for="a2t-update-file">New audio file</label>
-            <input class="field__control" type="file" id="a2t-update-file" name="audio"
-                   accept="audio/*" required>
-        </div>
+            <div class="field">
+                <label class="field__label" for="a2t-update-file">New audio file</label>
+                <input class="field__control" type="file" id="a2t-update-file" name="audio"
+                    accept="audio/*" required>
+            </div>
 
-        <?php
-            // The same two closures the page's own upload form uses, so the three rules — which engines
-            // exist, which this machine can run, and whether AI audio may be asked for — are stated once in
-            // this application rather than restated for a second form.
-            //
-            // The provider starts on this server's default rather than on the recording being replaced's,
-            // because the dialog is rendered with the page and has no one recording in mind. `UploadOptions`
-            // falls back to the replaced recording's own engine when the field posts nothing, and re-checks
-            // that the chosen one can actually run.
+            <?php
+    // The same two closures the page's own upload form uses, so the three rules — which engines
+    // exist, which this machine can run, and whether AI audio may be asked for — are stated once in
+    // this application rather than restated for a second form.
+    //
+    // The provider starts on this server's default rather than on the recording being replaced's,
+    // because the dialog is rendered with the page and has no one recording in mind. `UploadOptions`
+    // falls back to the replaced recording's own engine when the field posts nothing, and re-checks
+    // that the chosen one can actually run.
     ?>
-        <?php
-        // Hidden for a Mix / Common recording, which is never converted to text — so an engine for its
-        // transcript and a reading of that transcript are both settings for something that will not happen.
-        // The server answers the same either way: `ReplaceAction` goes through the one ingestion seam, and
-        // the policy there refuses a mixed recording whatever the form posts.
+            <?php
+    // Hidden for a Mix / Common recording, which is never converted to text — so an engine for its
+    // transcript and a reading of that transcript are both settings for something that will not happen.
+    // The server answers the same either way: `ReplaceAction` goes through the one ingestion seam, and
+    // the policy there refuses a mixed recording whatever the form posts.
     ?>
-        <div data-a2t-update-transcription>
-            <?= $providerField('a2t-update-provider') ?>
-            <?= $aiAudioField('a2t-update-ai-audio') ?>
+            <div data-a2t-update-transcription>
+                <?= $providerField('a2t-update-provider') ?>
+                <?= $aiAudioField('a2t-update-ai-audio') ?>
 
-            <p class="field__hint">
-                Replacing this recording starts a new transcription. The recording it replaces stays in
-                use, and keeps its transcript, corrections and generated audio, until the new one
-                finishes.
+                <p class="field__hint">
+                    Replacing this recording starts a new transcription. The recording it replaces stays in
+                    use, and keeps its transcript, corrections and generated audio, until the new one
+                    finishes.
+                </p>
+            </div>
+
+            <p class="field__hint" data-a2t-update-audio-only hidden>
+                This is the mixed recording of the call, so it is stored as the playable original and is not
+                converted to text. Replacing it changes the audio and nothing else — the recording it
+                replaces stays in use, and any transcript it already has is left exactly as it is.
             </p>
-        </div>
 
-        <p class="field__hint" data-a2t-update-audio-only hidden>
-            This is the mixed recording of the call, so it is stored as the playable original and is not
-            converted to text. Replacing it changes the audio and nothing else — the recording it
-            replaces stays in use, and any transcript it already has is left exactly as it is.
-        </p>
+            <div class="a2t-confirm__actions">
+                <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
+                <button class="btn btn--primary btn--sm" type="submit" data-a2t-update-submit>Update Audio</button>
+            </div>
+        </form>
 
-        <div class="a2t-confirm__actions">
-            <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
-            <button class="btn btn--primary btn--sm" type="submit" data-a2t-update-submit>Update Audio</button>
-        </div>
-    </form>
-
-    <?php
+        <?php
         // The one progress card. Same file, same hooks and same stage list as the Details dialog's and the
         // AI-audio one — see the partial for why there is only ever one of these.
     ?>
-    <?= $this->render(AudioToTextViews::processingCard(), [
-        'title' => 'Update Audio Progress',
-        'cardAttrs' => ['data-a2t-processing' => 'update'],
-        'badgeAttrs' => ['data-a2t-processing-badge' => true],
-        'badgeText' => 'Starting',
-        'steps' => $transcriptionSteps(),
-        'errorAttrs' => ['data-a2t-processing-error' => true],
-        'layout' => 'overall',
-        'meta' => true,
-        'note' => true,
-        'closable' => true,
-        'extra' => '',
-    ]) ?>
-</dialog>
+        <?= $this->render(AudioToTextViews::processingCard(), [
+            'title' => 'Update Audio Progress',
+            'cardAttrs' => ['data-a2t-processing' => 'update'],
+            'badgeAttrs' => ['data-a2t-processing-badge' => true],
+            'badgeText' => 'Starting',
+            'steps' => $transcriptionSteps(),
+            'errorAttrs' => ['data-a2t-processing-error' => true],
+            'layout' => 'overall',
+            'meta' => true,
+            'note' => true,
+            'closable' => true,
+            'extra' => '',
+        ]) ?>
+    </dialog>
 
-<?php
+    <?php
     // Generate / Regenerate AI audio — one recording, one question.
     //
     // Small on purpose. The big AI-audio page exists and is unchanged; this is the confirmation an
@@ -2466,72 +2561,72 @@ $last = min($page * $perPage, $total);
 <?php endif; ?>
 
 <?php if ($capabilities->canGenerateTts): ?>
-<dialog class="source-modal a2t-tts-confirm-dialog" id="a2t-tts-confirm-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-tts-confirm-dialog" id="a2t-tts-confirm-dialog" data-a2t-dialog
         aria-labelledby="a2t-tts-confirm-title">
-    <div class="source-modal__head">
-        <div>
-            <h2 class="source-modal__title" id="a2t-tts-confirm-title" data-a2t-tts-confirm-title>
-                Generate AI Audio
-            </h2>
-        </div>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
+        <div class="source-modal__head">
+            <div>
+                <h2 class="source-modal__title" id="a2t-tts-confirm-title" data-a2t-tts-confirm-title>
+                    Generate AI Audio
+                </h2>
+            </div>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
                 aria-label="Close">&times;</button>
-    </div>
-
-    <p class="source-modal__status" data-a2t-tts-confirm-status hidden></p>
-
-    <div class="source-modal__body">
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Recording</span>
-            <span class="a2t-confirm__value" data-a2t-tts-confirm-recording></span>
         </div>
-        <?php
+
+        <p class="source-modal__status" data-a2t-tts-confirm-status hidden></p>
+
+        <div class="source-modal__body">
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Recording</span>
+                <span class="a2t-confirm__value" data-a2t-tts-confirm-recording></span>
+            </div>
+            <?php
             // Which transcript gets read aloud, in the words `EffectiveConversationReader` decides it by:
             // a corrected transcript if this recording has one, otherwise the machine's. Shown because it is
             // the one thing about a generation an administrator cannot see from the button.
     ?>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Reads</span>
-            <span class="a2t-confirm__value" data-a2t-tts-confirm-source></span>
-        </div>
-        <div class="a2t-confirm__row">
-            <span class="a2t-confirm__key">Existing audio</span>
-            <span class="a2t-confirm__value" data-a2t-tts-confirm-state></span>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Reads</span>
+                <span class="a2t-confirm__value" data-a2t-tts-confirm-source></span>
+            </div>
+            <div class="a2t-confirm__row">
+                <span class="a2t-confirm__key">Existing audio</span>
+                <span class="a2t-confirm__value" data-a2t-tts-confirm-state></span>
+            </div>
+
+            <p class="field__hint" data-a2t-tts-confirm-note></p>
+
+            <div class="a2t-confirm__actions">
+                <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
+                <button class="btn btn--primary btn--sm" type="button" data-a2t-tts-confirm-submit>
+                    Generate
+                </button>
+            </div>
         </div>
 
-        <p class="field__hint" data-a2t-tts-confirm-note></p>
-
-        <div class="a2t-confirm__actions">
-            <button class="btn btn--sm" type="button" data-a2t-dialog-close>Cancel</button>
-            <button class="btn btn--primary btn--sm" type="button" data-a2t-tts-confirm-submit>
-                Generate
-            </button>
-        </div>
-    </div>
-
-    <?php
+        <?php
         // The one progress card. Same file, same hooks and same stage list as the Details dialog's and the
         // AI-audio one — see the partial for why there is only ever one of these.
     ?>
-    <?= $this->render(AudioToTextViews::processingCard(), [
-        'title' => 'AI Audio Progress',
-        'cardAttrs' => ['data-a2t-processing' => 'tts'],
-        'badgeAttrs' => ['data-a2t-processing-badge' => true],
-        'badgeText' => 'Starting',
-        'steps' => [
-            $progressStep('01', 'ACCEPTED', 'Request', 'Generation request accepted'),
-            $progressStep('02', 'GENERATING', 'Generate audio', 'Creating AI audio from the transcript'),
-        ],
-        'errorAttrs' => ['data-a2t-processing-error' => true],
-        'layout' => 'overall',
-        'meta' => true,
-        'note' => true,
-        'closable' => true,
-        'extra' => '',
-    ]) ?>
-</dialog>
+        <?= $this->render(AudioToTextViews::processingCard(), [
+            'title' => 'AI Audio Progress',
+            'cardAttrs' => ['data-a2t-processing' => 'tts'],
+            'badgeAttrs' => ['data-a2t-processing-badge' => true],
+            'badgeText' => 'Starting',
+            'steps' => [
+                $progressStep('01', 'ACCEPTED', 'Request', 'Generation request accepted'),
+                $progressStep('02', 'GENERATING', 'Generate audio', 'Creating AI audio from the transcript'),
+            ],
+            'errorAttrs' => ['data-a2t-processing-error' => true],
+            'layout' => 'overall',
+            'meta' => true,
+            'note' => true,
+            'closable' => true,
+            'extra' => '',
+        ]) ?>
+    </dialog>
 
-<?php
+    <?php
     // Manage Audio. One section per kind of recording, each listing its current version and everything it
     // superseded, with the replacement upload inside the section it belongs to.
     //
@@ -2543,76 +2638,76 @@ $last = min($page * $perPage, $total);
 <?php endif; ?>
 
 <?php
-    // Manage Audio is the replacement surface and it carries the Generate form inside it, so it is gated
-    // on either of the two capabilities that reach it. A reader with neither gets no dialog at all —
-    // which is also why the button that opens it is not emitted for them.
+// Manage Audio is the replacement surface and it carries the Generate form inside it, so it is gated
+// on either of the two capabilities that reach it. A reader with neither gets no dialog at all —
+// which is also why the button that opens it is not emitted for them.
 ?>
 <?php if ($capabilities->canReplaceAudio || $capabilities->canGenerateTts): ?>
-<dialog class="source-modal a2t-manage-dialog" id="a2t-manage-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-manage-dialog" id="a2t-manage-dialog" data-a2t-dialog
         aria-labelledby="a2t-manage-title">
-    <div class="source-modal__head">
-        <div>
-            <?php
-            // Renamed by the script when the dialog is opened from one column's "+ Add audio": it then
-            // shows that channel alone, and calling that "Manage Audio" would promise the other two.
+        <div class="source-modal__head">
+            <div>
+                <?php
+                // Renamed by the script when the dialog is opened from one column's "+ Add audio": it then
+                // shows that channel alone, and calling that "Manage Audio" would promise the other two.
     ?>
-            <h2 class="source-modal__title" id="a2t-manage-title" data-a2t-manage-title>Manage Audio</h2>
-            <p class="source-modal__meta" data-a2t-manage-meta></p>
-        </div>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
+                <h2 class="source-modal__title" id="a2t-manage-title" data-a2t-manage-title>Manage Audio</h2>
+                <p class="source-modal__meta" data-a2t-manage-meta></p>
+            </div>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
                 title="Close" aria-label="Close">&times;</button>
-    </div>
-    <p class="source-modal__status" data-a2t-manage-status hidden></p>
-    <div class="source-modal__body" data-a2t-manage-body hidden>
-        <div class="a2t-manage" data-a2t-manage-slots></div>
-    </div>
-    <div class="a2t-manage-token" data-a2t-manage-token hidden><?= $csrfField ?></div>
-</dialog>
+        </div>
+        <p class="source-modal__status" data-a2t-manage-status hidden></p>
+        <div class="source-modal__body" data-a2t-manage-body hidden>
+            <div class="a2t-manage" data-a2t-manage-slots></div>
+        </div>
+        <div class="a2t-manage-token" data-a2t-manage-token hidden><?= $csrfField ?></div>
+    </dialog>
 
-<dialog class="source-modal a2t-tts-dialog" id="a2t-tts-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-tts-dialog" id="a2t-tts-dialog" data-a2t-dialog
         aria-labelledby="a2t-tts-title">
-    <div class="source-modal__head">
-        <div>
-            <h2 class="source-modal__title" id="a2t-tts-title">Generate Text to Audio</h2>
-            <p class="source-modal__meta" data-a2t-tts-meta></p>
-        </div>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
+        <div class="source-modal__head">
+            <div>
+                <h2 class="source-modal__title" id="a2t-tts-title">Generate Text to Audio</h2>
+                <p class="source-modal__meta" data-a2t-tts-meta></p>
+            </div>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
                 title="Close" aria-label="Close">&times;</button>
-    </div>
-    <p class="source-modal__status" data-a2t-tts-status hidden></p>
-    <?php
-    // A real form posting to the existing generate route. The action, the output type and the hash all
-    // come from the server's own answer about this group — the browser never decides which job or
-    // which output type a choice means, because the UI's Caller is not the column's CUSTOMER.
+        </div>
+        <p class="source-modal__status" data-a2t-tts-status hidden></p>
+        <?php
+        // A real form posting to the existing generate route. The action, the output type and the hash all
+        // come from the server's own answer about this group — the browser never decides which job or
+        // which output type a choice means, because the UI's Caller is not the column's CUSTOMER.
     ?>
-    <form class="source-modal__body" method="post" action="" data-a2t-tts-form hidden>
-        <?= $csrfField ?>
-        <input type="hidden" name="output_type" value="" data-a2t-tts-output>
-        <input type="hidden" name="expected_hash" value="" data-a2t-tts-hash>
-        <div class="a2t-tts-options" data-a2t-tts-options></div>
-        <button class="btn btn--primary" type="submit" data-a2t-tts-submit disabled>Generate</button>
-    </form>
-</dialog>
+        <form class="source-modal__body" method="post" action="" data-a2t-tts-form hidden>
+            <?= $csrfField ?>
+            <input type="hidden" name="output_type" value="" data-a2t-tts-output>
+            <input type="hidden" name="expected_hash" value="" data-a2t-tts-hash>
+            <div class="a2t-tts-options" data-a2t-tts-options></div>
+            <button class="btn btn--primary" type="submit" data-a2t-tts-submit disabled>Generate</button>
+        </form>
+    </dialog>
 
-<?php
+    <?php
     // The same two confirmations the correction page shows, from the same partial. The dialog submits
     // them by fetch instead of following the redirect; the fields, the token and the version are
     // identical, which is what makes this the same operation rather than a second one that resembles it.
     ?>
-<?= $this->render(AudioToTextViews::reviewConfirm(), [
+    <?= $this->render(AudioToTextViews::reviewConfirm(), [
         'csrfField' => $csrfField,
         'version' => null,
     ]) ?>
 
-<dialog class="source-modal a2t-history-dialog" id="a2t-history-dialog" data-a2t-dialog
+    <dialog class="source-modal a2t-history-dialog" id="a2t-history-dialog" data-a2t-dialog
         aria-labelledby="a2t-history-title">
-    <div class="source-modal__head">
-        <h2 class="source-modal__title" id="a2t-history-title">Earlier recordings</h2>
-        <button class="source-modal__close" type="button" data-a2t-dialog-close
+        <div class="source-modal__head">
+            <h2 class="source-modal__title" id="a2t-history-title">Earlier recordings</h2>
+            <button class="source-modal__close" type="button" data-a2t-dialog-close
                 title="Close" aria-label="Close">&times;</button>
-    </div>
-    <div class="source-modal__body" data-a2t-history-body></div>
-</dialog>
+        </div>
+        <div class="source-modal__body" data-a2t-history-body></div>
+    </dialog>
 <?php endif; ?>
 
 <?php if ($canViewAgentEvents): ?>
@@ -2623,11 +2718,11 @@ $last = min($page * $perPage, $total);
     // history leaves the summary exactly as it was — which is the drill-down the reader expects.
     ?>
     <dialog class="source-modal ot-agent-dialog" id="ot-agent-summary-dialog" data-a2t-dialog
-            aria-labelledby="ot-agent-summary-title">
+        aria-labelledby="ot-agent-summary-title">
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="ot-agent-summary-title">Agent playback events</h2>
             <button class="source-modal__close" type="button" data-a2t-dialog-close
-                    title="Close" aria-label="Close">&times;</button>
+                title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="source-modal__body">
             <p class="source-modal__meta" data-ot-agent-scope></p>
@@ -2644,11 +2739,11 @@ $last = min($page * $perPage, $total);
     </dialog>
 
     <dialog class="source-modal ot-agent-dialog" id="ot-agent-history-dialog" data-a2t-dialog
-            aria-labelledby="ot-agent-history-title">
+        aria-labelledby="ot-agent-history-title">
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="ot-agent-history-title">Agent playback history</h2>
             <button class="source-modal__close" type="button" data-a2t-dialog-close
-                    title="Close" aria-label="Close">&times;</button>
+                title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="source-modal__body">
             <p class="source-modal__meta" data-ot-agent-history-scope></p>
@@ -2668,19 +2763,19 @@ $last = min($page * $perPage, $total);
 
 <?php if ($canAssignTopics): ?>
     <?php
-        // Two confirmations, and nothing else down here any more.
-        //
-        // The picker that used to live in a dialog is now the select on each row, so what is left is the
-        // only part that was ever worth a modal: saying out loud what is about to change, before it
-        // changes. Both are filled by the script from the control that opened them and submit the form
-        // that control already belongs to — there is no second endpoint and no second copy of the rules.
+    // Two confirmations, and nothing else down here any more.
+    //
+    // The picker that used to live in a dialog is now the select on each row, so what is left is the
+    // only part that was ever worth a modal: saying out loud what is about to change, before it
+    // changes. Both are filled by the script from the control that opened them and submit the form
+    // that control already belongs to — there is no second endpoint and no second copy of the rules.
     ?>
     <dialog class="source-modal practice-dialog" id="practice-confirm-dialog" data-practice-dialog
-            aria-labelledby="practice-confirm-title">
+        aria-labelledby="practice-confirm-title">
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="practice-confirm-title">Confirm topic assignment</h2>
             <button class="source-modal__close" type="button" data-practice-dialog-close
-                    title="Close" aria-label="Close">&times;</button>
+                title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="source-modal__body">
             <dl class="practice-details">
@@ -2703,7 +2798,7 @@ $last = min($page * $perPage, $total);
     ?>
             <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
             <button class="btn btn--primary btn--sm" type="button"
-                    data-practice-confirm-submit>Confirm assignment</button>
+                data-practice-confirm-submit>Confirm assignment</button>
         </div>
     </dialog>
 
@@ -2713,11 +2808,11 @@ $last = min($page * $perPage, $total);
     // to keep the order number, the wording and the button labels in step. The script fills all three.
     ?>
     <dialog class="source-modal practice-dialog" id="ot-verify-dialog" data-practice-dialog
-            aria-labelledby="ot-verify-title">
+        aria-labelledby="ot-verify-title">
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="ot-verify-title" data-ot-verify-title>Verify Order</h2>
             <button class="source-modal__close" type="button" data-practice-dialog-close
-                    title="Close" aria-label="Close">&times;</button>
+                title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="source-modal__body">
             <dl class="practice-details">
@@ -2729,16 +2824,16 @@ $last = min($page * $perPage, $total);
         <div class="a2t-confirm__actions">
             <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
             <button class="btn btn--primary btn--sm" type="button"
-                    data-ot-verify-confirm>Confirm Verification</button>
+                data-ot-verify-confirm>Confirm Verification</button>
         </div>
     </dialog>
 
     <dialog class="source-modal practice-dialog" id="practice-bulk-confirm-dialog" data-practice-dialog
-            aria-labelledby="practice-bulk-confirm-title">
+        aria-labelledby="practice-bulk-confirm-title">
         <div class="source-modal__head">
             <h2 class="source-modal__title" id="practice-bulk-confirm-title">Confirm bulk assignment</h2>
             <button class="source-modal__close" type="button" data-practice-dialog-close
-                    title="Close" aria-label="Close">&times;</button>
+                title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="source-modal__body">
             <dl class="practice-details">
@@ -2756,7 +2851,7 @@ $last = min($page * $perPage, $total);
         <div class="a2t-confirm__actions">
             <button class="btn btn--sm" type="button" data-practice-dialog-close>Cancel</button>
             <button class="btn btn--primary btn--sm" type="button"
-                    data-practice-bulk-confirm-submit>Confirm assignment</button>
+                data-practice-bulk-confirm-submit>Confirm assignment</button>
         </div>
     </dialog>
 <?php endif; ?>

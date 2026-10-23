@@ -268,6 +268,9 @@ readonly class Action
                 // What was typed, so a refused submission does not silently discard it.
                 'orderId' => $orderId,
                 'selectedType' => $selectedType,
+                // Whether the form draws the three radios or one hidden field. The server decides the
+                // same thing either way, so this describes a rule rather than setting one.
+                'canChooseRecordingType' => $this->allowsRecordingTypeChoice(),
                 // The upload dialog opens by itself when a submission was refused — its errors are
                 // inside it — and when a reader followed the no-JS `?upload=1` link.
                 'uploadOpen' => $errors !== [] || ($request->getQueryParams()['upload'] ?? null) === '1',
@@ -538,7 +541,35 @@ readonly class Action
             return null;
         }
 
+        /*
+         * A surface that does not offer the choice does not honour it either.
+         *
+         * Returning null leaves `$selectedType` at its default, which is Mixed — so a hand-written
+         * POST naming CALLER from the simplified order tables is stored as the Mix recording rather
+         * than quietly filed under a channel that surface never offered. The form not drawing the
+         * radios is a courtesy; this is the rule.
+         */
+        if (!$this->allowsRecordingTypeChoice()) {
+            return null;
+        }
+
         return RecordingType::fromStorage($this->text($body, 'recording_type'));
+    }
+
+    /**
+     * Whether this surface lets the operator say which side of the call a file holds.
+     *
+     * True here, because the Audio-to-Text store page is where a conversation is assembled out of its
+     * Customer and Agent recordings and the choice is the whole point. The simplified order tables
+     * override it: there, a recording is the call's Mix audio or it is nothing, and asking somebody
+     * to pick between three channels to do the one thing that surface supports is a question with
+     * one right answer.
+     *
+     * It governs what is STORED, not just what is drawn — see {@see recordingType()}.
+     */
+    protected function allowsRecordingTypeChoice(): bool
+    {
+        return true;
     }
 
     /**

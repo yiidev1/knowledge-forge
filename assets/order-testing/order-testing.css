@@ -33,12 +33,37 @@
    `.ot-orders` is on this table alone. The audio page's table carries the same `a2t-` classes, and
    without a class of our own these widths would reach it too — it has four columns now, and sizing them
    as if there were five would be worse than leaving it alone. */
+/*
+ * This table's wrapper does not clip, because this table does not overflow.
+ *
+ * `.a2t-table-scroll` carries `overflow-x: auto` for every table in the application, which is right
+ * for the ones that are wider than their container. This one is not — every column is a share of
+ * 100% and nothing inside demands a width — and `overflow-x` on a box makes it a clipping context on
+ * BOTH axes. So the topic editor, which is absolutely positioned and hangs below its row, was cut
+ * off at the card's edge: measured in a browser, invisible to any markup test.
+ *
+ * `visible` only above the width where the card layout takes over; below it the media query puts the
+ * scrolling back, which is where it is actually wanted.
+ */
+@media (min-width: 56.01rem) {
+    .a2t-table-scroll:has(.ot-orders) {
+        overflow: visible;
+    }
+}
+
 .a2t-orders.ot-orders {
-    /* Nine columns, not the five this was written for. Below this the wrapper scrolls, which is the
-       honest answer for a dense table on a small screen — above it, nothing scrolls at all.
-       52rem, measured: at 1280px the content area is 897px and a 58rem floor was pinning the table
-       at 928 and scrolling it for the 31px difference. */
-    min-width: 52rem;
+    /*
+     * No floor on a desktop, and one only where a floor is the honest answer.
+     *
+     * A `min-width` here is what made the wrapper scroll: the table could not be narrower than the
+     * floor, so any width below it scrolled for the difference. With every column stated as a share
+     * of 100% and no cell demanding a width of its own, the table fills whatever it is given — so on
+     * a desktop there is nothing to scroll.
+     *
+     * Below 58rem the columns fall back to their content and the wrapper does scroll, which is what
+     * a ten-column table on a phone actually needs. That is set in the media query further down.
+     */
+    width: 100%;
 }
 
 /*
@@ -54,46 +79,52 @@
  * most, and the ones holding a single badge or button take the least.
  */
 /*
- * Eleven columns now, and the two new ones were paid for out of the columns that can actually give.
+ * Nine columns, sized by what each one actually holds, and summing to exactly 100%.
  *
- * The first attempt took a point off everything evenly, which quietly broke the rule the comment on
- * Status states: at 1280px the content area is 897px, so 9% is 81px and the "Completed" badge wants
- * 92 — the cell then painted outside its column and the wrapper grew 4px to scroll. Measured in a
- * browser rather than reasoned about. Conversation and Order No# are what gave way instead: both wrap,
- * and Conversation already carries `min-width: 0` precisely so it can absorb this.
+ * ## Why the table was scrolling on a wide desktop
+ *
+ * Two causes, and the second is the one that made it look like a mystery.
+ *
+ * 1. The shares did not add up. With `table-layout: fixed` the browser normalises whatever subset of
+ *    `<col>`s is rendered, so a set totalling 94% is scaled back up to 100% — which is fine until a
+ *    cell inside one of them refuses to shrink. Then that column takes its content's width, every
+ *    other column keeps its scaled share, and the total lands over 100%.
+ * 2. `min-width: 52rem` on the table put a floor under all of it. At 1280px the content area is
+ *    ~897px, so the floor was not reached there — but it meant the table could never be narrower
+ *    than its contents demanded, and the wrapper scrolled for the difference.
+ *
+ * The refusing cell was the topic control: `.practice-assign__select` carried `min-width: 10rem`, so
+ * the Set Topic column could not go below 160px however little the table had to give. Replacing it
+ * with a chip and a gear removed the floor — a chip truncates, which is exactly what a table column
+ * needs a cell to do.
+ *
+ * So: every share is stated, they total 100, and nothing in a cell sets a width the column cannot
+ * honour. Percentages rather than rem because `table-layout: fixed` then fills the available width
+ * exactly at any viewport, instead of at the one width fixed sizes happened to suit.
  */
+/* 3%: a checkbox and its hit area. */
 .a2t-orders.ot-orders col.practice-col-select { width: 3%; }
-.a2t-orders.ot-orders col.a2t-col-order { width: 9%; }
-/* A short printed string such as `31#1`. It needs less than any other column here. */
+/* 12%: `#17072151` is 9 characters and never wraps now that the timestamps are off it. */
+.a2t-orders.ot-orders col.a2t-col-order { width: 14%; }
+/* 5%: `31#1`. The shortest real content in the table. */
 .a2t-orders.ot-orders col.ot-col-seq { width: 5%; }
-.a2t-orders.ot-orders col.a2t-col-conversation { width: 13%; min-width: 0; }
-/* Measured rather than guessed: "Completed" needs 103px, so the column is sized to hold it whole.
-   An ellipsis here was worse than the overflow it fixed — "Com…" is not a status.
-
-   13%, and the reason is that 103px was measured against the wrong word. "Completed" is the SHORTEST
-   real status; this database happened to hold only that one. Measured across the whole enum on
-   2026-10-22: "Transcription requested" is 167px and "Ready for transcription" 162px, so an 11%
-   column (161px at 1920, 99px at 1280) could not hold either, and on a live store the badge ran
-   straight into the Verification column beside it. At 12% the longest label sits on one line on a
-   desktop (175px at 1920), and wraps rather than overflows when the window is narrower — which is
-   what the badge rule below makes safe. This is the column that gives way first precisely BECAUSE it
-   can now wrap; Verification and Conversation beside it cannot. */
-.a2t-orders.ot-orders col.a2t-col-status { width: 12%; }
-/* 11%, because this one has a hard floor: the header word "Verification" is a single word that
-   cannot wrap, and it measures 112px. Below that the header paints into the column beside it however
-   short the cell contents are. */
-.a2t-orders.ot-orders col.ot-col-verification { width: 11%; }
-.a2t-orders.ot-orders col.a2t-col-demo { width: 9%; }
-.a2t-orders.ot-orders col.ot-col-demo-orders { width: 8%; }
-.a2t-orders.ot-orders col.ot-col-agent-events { width: 9%; }
-/* It holds a control, which takes the width it is given rather than demanding its own. */
-.a2t-orders.ot-orders col.practice-col-topic { width: 11%; }
-/* Holds one button whose label is two words, and it wraps rather than widen — see `.ot-receipt`.
-   10%, measured in a browser rather than reasoned about, and twice: at 8% the header's own longest
-   word, "RECEIPT", wanted 4px more than the padding left it, and a header that overflows is the one
-   thing here nobody can wrap away. At 10% the button also sits on one line on a normal desktop
-   instead of two. Below ~1400px it wraps again, which is the intended fallback — it is the overflow
-   that was the bug, never the second line. */
+/* 12%: `▶ 1:23`, or one short state such as "Downloading Mix audio…", which wraps to two lines.
+   `min-width: 0` is what lets it give way first when the window narrows. */
+.a2t-orders.ot-orders col.a2t-col-conversation { width: 14%; min-width: 0; }
+/* 10%: the header word "Verification" is one word that cannot wrap and measures ~112px; below that
+   it paints into the column beside it however short the cell content is. */
+.a2t-orders.ot-orders col.ot-col-verification { width: 10%; }
+/* 13%, measured: "Practice Order" is the table's primary action and at 11% it wrapped to two lines
+   on every row, which is what was making the rows 64px tall. 13% is 137px at 1440 and the link needs
+   ~104px plus padding, so it sits on one line from 1280 upward. */
+.a2t-orders.ot-orders col.a2t-col-demo { width: 13%; }
+/* 9%: "View" plus a count badge. */
+.a2t-orders.ot-orders col.ot-col-demo-orders { width: 10%; }
+/* 21%, still the largest share: this is the only column a reader edits, and the chip truncates
+   rather than pushing, so the width it gets is the width a topic name gets. Two points of it went to
+   Practice Order, which could not afford to wrap and this can. */
+.a2t-orders.ot-orders col.practice-col-topic { width: 21%; }
+/* 9%: one compact control, under a header that wraps to two short lines if it must. */
 .a2t-orders.ot-orders col.ot-col-receipt { width: 10%; }
 
 /*
@@ -178,11 +209,9 @@
     .a2t-orders.ot-orders col.a2t-col-order,
     .a2t-orders.ot-orders col.ot-col-seq,
     .a2t-orders.ot-orders col.a2t-col-conversation,
-    .a2t-orders.ot-orders col.a2t-col-status,
     .a2t-orders.ot-orders col.ot-col-verification,
     .a2t-orders.ot-orders col.a2t-col-demo,
     .a2t-orders.ot-orders col.ot-col-demo-orders,
-    .a2t-orders.ot-orders col.ot-col-agent-events,
     .a2t-orders.ot-orders col.practice-col-topic,
     .a2t-orders.ot-orders col.ot-col-receipt {
         width: auto;
@@ -668,3 +697,58 @@
         flex: 1 1 10rem;
     }
 }
+
+/* ===========================================================================================
+   The Recording cell, and the per-row menu beside it.
+
+   Both arrived with the simplified order table: one column that answers "can I play this order's
+   Mix audio right now", and one control holding the per-order errands that used to be columns.
+   Every colour here is a token, so the two themes are one set of rules rather than two.
+   =========================================================================================== */
+
+/*
+ * One line, always.
+ *
+ * The cell holds a play control OR one short state, never both and never a list, so it has no
+ * reason to be taller than its contents. That is most of where the row height went.
+ */
+.ot-rec {
+    display: flex;
+    align-items: center;
+    min-height: 1.75rem;
+}
+
+/*
+ * What is shown when there is nothing to play.
+ *
+ * Deliberately not a badge: a badge reads as a status somebody should act on, and three of the four
+ * states here are simply facts about the provider's recording. Colour is never the only signal —
+ * each state says what it is in words, which is what a screen reader and a monochrome display get.
+ */
+.ot-rec__state {
+    font-size: .78rem;
+    line-height: 1.3;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+/* Still coming. The arriving poller rewrites this text in place as the download progresses. */
+.ot-rec__state--arriving {
+    color: var(--info-text);
+}
+
+/*
+ * The one state that is somebody's problem. `--error-text` is readable on both surfaces — #991b1b
+ * on the light one, #fca5a5 on the dark — so no per-theme override is needed here.
+ */
+.ot-rec__state--failed {
+    color: var(--error-text);
+    cursor: help;
+}
+
+/* Nothing went wrong in either of these: there is no Mix recording, or its file is no longer kept. */
+.ot-rec__state--none,
+.ot-rec__state--gone {
+    color: var(--text-faint);
+}
+

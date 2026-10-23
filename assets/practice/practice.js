@@ -145,6 +145,32 @@
         }
     }
 
+    /*
+     * Clearing the selection.
+     *
+     * A click rather than a change, because the button is not a control with a value. It unticks
+     * every row and then asks `refreshSelection()` for the consequences, so the count, the
+     * select-all tri-state and the toolbar's own visibility are all decided in the one place that
+     * already decides them.
+     */
+    document.addEventListener('click', function (event) {
+        var clear = event.target.closest('[data-practice-clear]');
+
+        if (clear === null) {
+            return;
+        }
+
+        event.preventDefault();
+
+        var boxes = document.querySelectorAll('[data-practice-select]');
+
+        for (var i = 0; i < boxes.length; i++) {
+            boxes[i].checked = false;
+        }
+
+        refreshSelection();
+    });
+
     // Nothing here listens to the topic filter's select. Choosing an option must change only what the
     // control shows; the list changes when Apply is pressed, and not before. A select that navigates
     // on change loses a reader who is still looking at the options, and makes the Apply button a lie.
@@ -451,8 +477,21 @@
      * `contains()` check is the whole rule: the summary, the checkboxes, their labels and the search
      * box are all inside, and everything else is out.
      */
+    /*
+     * Whichever disclosure is currently open — the topic filter above the table, or one row's topic
+     * editor.
+     *
+     * One selector and one pair of handlers for both, because the rule is the same for both: a click
+     * outside closes it, Escape closes it and hands focus back. A second copy for the row editor
+     * would be a second place for that rule to drift.
+     *
+     * Only one can be open at a time in practice: opening either is a click, and that click closes
+     * the other on its way through.
+     */
     function openFilterPicker() {
-        return document.querySelector('[data-practice-filter-picker][open]');
+        return document.querySelector(
+            '[data-practice-filter-picker][open], [data-practice-topic-picker][open]',
+        );
     }
 
     document.addEventListener('click', function (event) {
@@ -462,6 +501,11 @@
             return;
         }
 
+        /*
+         * Opening a second picker closes the first, which this already does — the click that opens
+         * one is outside the other. What it must NOT do is cancel that click: `removeAttribute` only,
+         * never `preventDefault`, or the gear would need pressing twice.
+         */
         picker.removeAttribute('open');
     });
 

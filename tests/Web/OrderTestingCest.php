@@ -692,7 +692,15 @@ final class OrderTestingCest
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
 
         $I->dontSee('Text to Audio', 'th');
-        $I->dontSee('Actions', 'th');
+        /*
+         * No longer asserted by the word "Actions".
+         *
+         * A column with that header exists again — the per-row menu — and it is a different thing:
+         * one narrow column holding Manage Mix audio, Agent events and View receipt, where the old
+         * one held Text to Audio and the transcription controls. What this test is actually about is
+         * that the OLD column has not come back, so it asks about that column's own markup rather
+         * than about a word two different columns can share.
+         */
         $I->dontSeeElement('.a2t-conversions td.a2t-cell-actions');
         $I->dontSeeElement('.a2t-conversions .a2t-tts-list');
         // The buttons themselves, not just their column. `.a2t-slot__link` is what the Actions cell
@@ -710,18 +718,51 @@ final class OrderTestingCest
         // Orders — a point `PracticeOrdersCest` asserts from the other side.
         foreach ([
             'Order No#',
-            'Recording / Conversation',
-            'Status',
+            // Renamed from "Recording / Conversation". The column offers one recording — the Mix —
+            // and the conversation is a different thing reached from the order number, so naming
+            // both here made one column look like two.
+            'Recording',
             // Renamed from "Demo URL": the label says what the link is for, and nothing about where
             // it goes changed with it.
             'Practice Order',
             'Demo Orders',
             'Set Topic',
             'Verification',
-            'Agent Events',
+            // A column of its own again. The menu put it one click further away and bought a
+            // column's width the table did not need; the widths are content-aware now.
+            'View Receipt',
         ] as $header) {
             $I->see($header, 'th');
         }
+
+        /*
+         * And no menu column at all.
+         *
+         * Every action it held is either a column again or deliberately gone from this table — the
+         * per-row Manage Audio, which the top-level Add Audio button still covers.
+         */
+        $I->dontSee('Actions', 'th');
+        $I->dontSeeElement('.a2t-conversions .ot-rowmenu');
+
+        /*
+         * And no Agent Events column either, by request.
+         *
+         * A full share of the table's width for a control most rows never need. What agents played
+         * is still recorded, still served by its own route, and the dialog that shows it is still
+         * rendered further down the page — it is the column that went, not the feature.
+         */
+        $I->dontSee('Agent Events', 'th');
+        $I->dontSeeElement('.a2t-conversions [data-ot-agent-events]');
+
+        /*
+         * And Status is gone — header, cell and `<col>` alike.
+         *
+         * It reported an aggregate over all three channels, so one failed secondary download made a
+         * row with perfectly good Mix audio look broken. The Recording cell answers the readiness
+         * question now, about the one recording this table offers. `aggregateStatus()` is untouched;
+         * what went is the column.
+         */
+        $I->dontSee('Status', 'th');
 
         /*
          * Counted against each other rather than against a number written here.
@@ -768,8 +809,16 @@ final class OrderTestingCest
         Assert::assertStringStartsWith('/order-testing/store/' . self::STORE_ID . '/group/', (string) $url);
         Assert::assertStringEndsWith('/transcripts', (string) $url);
 
-        // And the way in is still there to open it with.
-        $I->see('View conversation');
+        /*
+         * And the way in is still there — it is the order number itself.
+         *
+         * "View conversation" sat in the recording cell and is gone with the rest of that cell's
+         * second line. The dialog it opened is unchanged and so is the control that opens it: the
+         * same `data-a2t-order-open` the button carried has always been on the order number too.
+         * Losing the button would have been losing the dialog; this is what proves it was not.
+         */
+        $I->dontSee('View conversation');
+        $I->seeElement('.a2t-conversions .a2t-order-id--open[data-a2t-order-open]');
     }
 
     /** Nothing transcribed, nothing to open: the row offers no endpoint and the button stays away. */
