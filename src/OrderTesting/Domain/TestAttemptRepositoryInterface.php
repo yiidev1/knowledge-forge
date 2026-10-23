@@ -47,6 +47,30 @@ interface TestAttemptRepositoryInterface
      * the second and third order of the same session, where it leaves `matched_demo_order_id` alone —
      * that column is the first result, not the latest.
      */
+    /**
+     * The attempt that was running when a demo order was **created**, if exactly one was.
+     *
+     * This is the only honest basis for attribution available. The demo JSON carries no agent id, no
+     * attempt id and no correlation token, so the question "who made this order?" can only be answered
+     * by "whose attempt was open at the moment Order58 says it was created?".
+     *
+     * `$createdAt` must be the provider's own creation instant, never the import instant. Imports run
+     * manually and have been observed a full day after the order was created, so an attempt open at
+     * import time is almost certainly somebody else's — crediting it would invent a training record.
+     *
+     * Status is deliberately not filtered: by the time the file is imported the attempt that produced
+     * it has normally expired, and an expired attempt is still a true record of who was practising.
+     *
+     * Returns null when nothing covers the instant **and** when more than one thing does. One open
+     * attempt per source order is enforced at `start()`, so overlapping windows should be impossible;
+     * if the data ever says otherwise, the honest answer is Unmatched rather than a guess.
+     */
+    public function attemptCoveringInstant(
+        int $storeSourceId,
+        int $sourceOrderId,
+        DateTimeImmutable $createdAt,
+    ): ?TestAttempt;
+
     public function recordMatch(int $attemptId, int $demoOrderId, DateTimeImmutable $now): void;
 
     /**
@@ -66,4 +90,24 @@ interface TestAttemptRepositoryInterface
      * @return array<int, TestAttempt> keyed by id; ids with no row are absent
      */
     public function byIds(array $ids): array;
+
+    /**
+     * Every attempt ever made on one source order, oldest first.
+     *
+     * Oldest first because Try 1 is the first one somebody made, and that ordering must not change
+     * when a file is imported late — numbering follows the attempts, not the demo orders.
+     *
+     * `$onlyActorType`/`$onlyActorId` narrow to a single practitioner. That filter exists **here**
+     * rather than in the page because it is an authorization boundary: an agent may see their own
+     * history and nobody else's, and a template that filtered a full list would still have fetched
+     * the rest.
+     *
+     * @return list<TestAttempt>
+     */
+    public function historyFor(
+        int $storeSourceId,
+        int $sourceOrderId,
+        ?InitiatorType $onlyActorType = null,
+        ?int $onlyActorId = null,
+    ): array;
 }

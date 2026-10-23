@@ -258,17 +258,41 @@ final class OrderTestingBoundariesTest extends TestCase
         // A score is a measurement of two documents' agreement. The moment it has a pass mark it is a
         // judgement about a person, which is a different feature with different consequences and was
         // not what was approved.
+        /*
+         * `isPerfect` is deliberately NOT in this list, and the distinction is the whole point.
+         *
+         * Every word here names a threshold somebody chose: a pass mark is a line drawn across other
+         * people's work. "Perfect" draws no line — it is the statement that two documents are
+         * identical, which is a property of the comparison itself and would be the same number
+         * whoever read it. It decides how a card is presented and nothing about a person.
+         */
         $verdicts = ['passMark', 'accuracyPercent', 'totalScore', 'isPass', 'grade'];
 
-        // Where a score may be named at all: the one service that computes it, the two value objects
-        // it returns, and the page that prints them. A sixth file naming a score would be a second
-        // opinion about the same two documents, which is exactly what one service prevents.
+        /*
+         * Where a score may be named at all.
+         *
+         * The rule is **one opinion**, not one file: there is exactly one service that decides what
+         * two documents are worth, and everything else either hands it the documents or prints what
+         * it said. A file that computed a score of its own would be a second opinion about the same
+         * comparison, which is what this guard exists to prevent.
+         *
+         * The Practice Attempts entries below were added when that page shipped. They carry the
+         * score — the history builder asks the same `ComparisonScorer` for it, the outcome holds the
+         * `ComparisonScore` it returned, and the page prints it — and none of them computes one.
+         */
         $mayScore = [
             'src/OrderTesting/Application/Comparison/ComparisonScorer.php',
             'src/OrderTesting/Domain/Comparison/ComparisonScore.php',
             'src/OrderTesting/Domain/Comparison/SectionScore.php',
             'src/OrderTesting/Web/Compare/Action.php',
             'src/OrderTesting/Web/Compare/template.php',
+            // Practice Attempts: carries the score from the one service above, never its own.
+            'src/OrderTesting/Application/Practice/PracticeHistoryBuilder.php',
+            'src/OrderTesting/Domain/Practice/DemoOutcome.php',
+            'src/OrderTesting/Domain/Practice/PracticeTry.php',
+            'src/OrderTesting/Domain/Practice/AttemptGroup.php',
+            'src/OrderTesting/Web/PracticeAttempts/Action.php',
+            'src/OrderTesting/Web/PracticeAttempts/template.php',
         ];
 
         $offenders = [];

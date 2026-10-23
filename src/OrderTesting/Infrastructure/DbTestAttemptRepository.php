@@ -17,9 +17,11 @@ use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
 
 use function bin2hex;
+use function count;
 use function is_array;
 use function random_bytes;
 
+use const SORT_ASC;
 use const SORT_DESC;
 
 /**
@@ -142,6 +144,82 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
                 return new AttemptStart($this->hydrate($row), true);
             },
         );
+    }
+
+    public function historyFor(
+        int $storeSourceId,
+        int $sourceOrderId,
+        ?InitiatorType $onlyActorType = null,
+        ?int $onlyActorId = null,
+    ): array {
+        $query = $this->withActorName((new Query($this->connection))->from(['a' => self::TABLE]))
+            ->where(['a.store_source_id' => $storeSourceId, 'a.source_order_id' => $sourceOrderId]);
+
+        /*
+         * The authorization filter, applied to the QUERY.
+         *
+         * An agent may see their own attempts and nobody else's. Narrowing here rather than after
+         * the fact means the rows never leave the database, so a template that forgot to filter — or
+         * a future caller that renders the list differently — cannot leak somebody else's history.
+         *
+         * Both halves are required together: a realm without an id would match every agent, and an
+         * id without a realm would match whichever administrator happens to share the number.
+         */
+        if ($onlyActorType !== null && $onlyActorId !== null) {
+            $query = $query->andWhere([
+                'a.initiated_by_type' => $onlyActorType->value,
+                'a.initiated_by_id' => $onlyActorId,
+            ]);
+        }
+
+        // Oldest first: Try 1 is the first attempt somebody made, and a late import must not renumber
+        // the ones around it. `id` breaks ties, so two attempts in the same second stay deterministic.
+        $rows = $query->orderBy(['a.started_at' => SORT_ASC, 'a.id' => SORT_ASC])->all();
+
+        $attempts = [];
+
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $attempts[] = $this->hydrate($row);
+            }
+        }
+
+        return $attempts;
+    }
+
+    public function attemptCoveringInstant(
+        int $storeSourceId,
+        int $sourceOrderId,
+        DateTimeImmutable $createdAt,
+    ): ?TestAttempt {
+        $at = self::stamp($createdAt);
+
+        /*
+         * Every attempt whose window contains the instant — and two are asked for on purpose.
+         *
+         * `limit(2)` rather than `limit(1)`: the point is to find out whether the evidence is
+         * *unambiguous*, and a query that takes the first row can never tell the difference between
+         * one candidate and three. Two rows is all it takes to know the answer is "more than one",
+         * and more than one means Unmatched.
+         *
+         * The window is half-open — `started_at <= instant < expires_at` — so two back-to-back
+         * attempts cannot both claim an order created exactly on the boundary.
+         */
+        $rows = $this->withActorName((new Query($this->connection))->from(['a' => self::TABLE]))
+            ->where([
+                'and',
+                ['a.store_source_id' => $storeSourceId, 'a.source_order_id' => $sourceOrderId],
+                ['<=', 'a.started_at', $at],
+                ['>', 'a.expires_at', $at],
+            ])
+            ->limit(2)
+            ->all();
+
+        if (count($rows) !== 1 || !is_array($rows[0])) {
+            return null;
+        }
+
+        return $this->hydrate($rows[0]);
     }
 
     public function recordMatch(int $attemptId, int $demoOrderId, DateTimeImmutable $now): void

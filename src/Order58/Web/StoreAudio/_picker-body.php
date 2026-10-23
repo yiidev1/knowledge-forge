@@ -33,6 +33,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var bool $showsPractisable whether to name how many of the orders can be practised
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic; absent means none
  * @var string $base the surface's own landing address, which the search form posts back to
  * @var callable(array): string $dirUrl builds a URL carrying the current filters
@@ -172,15 +173,31 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                             <dd class="store-card__metric-value<?= $conversions === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
                                 $conversions ?></dd>
                             <dt class="store-card__metric-label">Audio Recordings</dt>
+                            <?php
+                            /*
+                             * How much of that audio this surface can actually offer.
+                             *
+                             * Only where the two differ. Practice Orders lists orders whose number
+                             * resolves to a real source order and leaves the rest out, so its card
+                             * would otherwise read 4 above a page showing 3. The headline stays the
+                             * store's true audio count — both pickers agree on that — and this says
+                             * what is reachable from here.
+                             */
+            ?>
+                            <?php if ($showsPractisable && $breakdown->practisable !== $conversions): ?>
+                                <dd class="store-card__metric-note">
+                                    <?= Html::encode((string) $breakdown->practisable) ?> available to practise
+                                </dd>
+                            <?php endif; ?>
                         </div>
                         <div class="store-card__metric">
                             <dd class="store-card__metric-value<?= $topics === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
-                                $topics ?></dd>
+                $topics ?></dd>
                             <?php
-                            // "Topics Assigned" over "Orders with topics": the label is what the number
-                            // is called, the line under it is what the number counts. Said here because
-                            // the two are easy to confuse — the first version of this counted distinct
-                            // topics and a store with three orders under one topic read as 1.
+            // "Topics Assigned" over "Orders with topics": the label is what the number
+            // is called, the line under it is what the number counts. Said here because
+            // the two are easy to confuse — the first version of this counted distinct
+            // topics and a store with three orders under one topic read as 1.
             ?>
                             <dt class="store-card__metric-label">Topics Assigned
                                 <span class="store-card__metric-note">Orders with topics</span>

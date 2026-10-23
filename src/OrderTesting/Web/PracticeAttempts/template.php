@@ -1,0 +1,298 @@
+<?php
+
+declare(strict_types=1);
+
+use App\OrderTesting\Domain\Practice\AttemptGroup;
+use App\OrderTesting\Domain\Practice\PracticeTry;
+use App\OrderTesting\Domain\TestAttempt;
+use App\OrderTesting\Web\PracticeAttemptsAsset;
+use App\Shared\Application\Time\AppTimeZone;
+use Yiisoft\Html\Html;
+use Yiisoft\Router\UrlGeneratorInterface;
+
+/**
+ * Practice Attempts: one source order's history, grouped by who practised it.
+ *
+ * ## Summary first, comparison on request
+ *
+ * A card carries the score and nothing of the comparison itself. Rendering a side-by-side invoice
+ * inside every card would put the original order — the answer — in front of a trainee who is about
+ * to try again, and would draw a dozen invoices to show one number. **View Full Comparison** opens
+ * the existing comparison page, unchanged, in a new tab.
+ *
+ * A perfect try is the exception: there is nothing left to practise, so the card says so plainly and
+ * its link is the primary action rather than a quiet one.
+ *
+ * @var Yiisoft\View\WebView $this
+ * @var UrlGeneratorInterface $urlGenerator
+ * @var Yiisoft\Yii\View\Renderer\Csrf $csrf
+ * @var Yiisoft\Assets\AssetManager $assetManager
+ * @var AppTimeZone $appTimeZone
+ * @var int $sourceId
+ * @var string $storeName
+ * @var int $sourceOrderId
+ * @var list<AttemptGroup> $groups the groups to draw, after the Filter by agent choice
+ * @var list<AttemptGroup> $allGroups every group this reader may see, for the filter's own options
+ * @var ?string $chosenAgent the selected group key, or null for all of them
+ * @var bool $canRetry
+ * @var bool $sourceOrderIsMirrored
+ * @var array<string, string> $routes the addresses this surface builds its links from
+ */
+
+$assetManager->register(PracticeAttemptsAsset::class);
+
+$this->setTitle('Practice attempts for #' . $sourceOrderId);
+$this->setParameter('breadcrumbs', [
+    ['label' => $routes['pageLabel'], 'route' => $routes['page']],
+    ['label' => $storeName, 'route' => $routes['store'], 'arguments' => ['sourceId' => $sourceId]],
+    ['label' => 'Practice attempts'],
+]);
+
+$storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $sourceId]);
+$allDemoUrl = $urlGenerator->generate(
+    $routes['allDemoOrders'],
+    ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
+);
+
+/** The existing comparison page, for one demo order, on whichever surface this is. */
+$compareUrl = static fn(int $demoOrderId): string => $urlGenerator->generate(
+    $routes['demoCompare'],
+    ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId, 'demoOrderId' => $demoOrderId],
+);
+
+$when = static fn(?DateTimeImmutable $at): string => $at === null
+    ? '—'
+    : $appTimeZone->format($at, 'M j, Y g:i A');
+
+/** A stored UTC timestamp string, read in the business timezone like every other one on this page. */
+$stamp = static fn(?string $utc): string => $utc === null || $utc === ''
+    ? '—'
+    : $appTimeZone->format(new DateTimeImmutable($utc . ' UTC'), 'M j, Y g:i A');
+
+/**
+ * One try, as a card.
+ *
+ * Three states, and they are genuinely different things rather than three colours of the same thing:
+ * an attempt with a result, an attempt still waiting for one, and a demo order with no owner.
+ */
+/**
+ * Who practised, as a sentence.
+ *
+ * The stored name when the account still exists, the realm and the id when it does not — an attempt
+ * outlives the account that made it, and "AGENT #12" is a true statement where a blank is not.
+ */
+$testedBy = static function (?TestAttempt $attempt): string {
+    if ($attempt === null) {
+        return 'Unknown';
+    }
+
+    $name = $attempt->initiatedByName;
+
+    return $attempt->initiatedByType->label() . ' '
+        . ($name === null || $name === '' ? '#' . (string) $attempt->initiatedById : $name);
+};
+
+$card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $testedBy): string {
+    $outcome = $try->best();
+
+    if ($try->isUnmatched()) {
+        $demo = $outcome?->demo;
+        $percent = $outcome?->score->displayPercent();
+
+        $html = '<article class="pa-card pa-card--unmatched">'
+            . '<header class="pa-card__head">'
+            . '<span class="pa-card__try">Unmatched</span>'
+            . '<span class="badge badge--muted">No attempt</span>'
+            . '</header>'
+            . '<p class="pa-card__demo">Demo #' . Html::encode((string) ($demo?->demoOrderId ?? 0)) . '</p>'
+            . '<p class="pa-card__score pa-card__score--none">'
+            . ($percent === null ? 'No score' : Html::encode((string) $percent) . '%')
+            . '</p>'
+            . '<dl class="pa-card__facts">'
+            . '<dt>Tested by</dt><dd class="util-muted">Unknown</dd>'
+            . '<dt>Imported</dt><dd>' . Html::encode($stamp($demo?->importedAt)) . '</dd>'
+            . '</dl>'
+            . '<p class="pa-card__note">Nobody could be shown to have created this order, so it is '
+            . 'credited to no one.</p>';
+
+        if ($demo !== null) {
+            $html .= '<a class="btn btn--secondary btn--sm pa-card__action" target="_blank"'
+                . ' rel="noopener noreferrer" href="' . Html::encode($compareUrl($demo->demoOrderId))
+                . '">View Full Comparison</a>';
+        }
+
+        return $html . '</article>';
+    }
+
+    $attempt = $try->attempt;
+
+    if ($try->isPending()) {
+        return '<article class="pa-card pa-card--pending">'
+            . '<header class="pa-card__head">'
+            . '<span class="pa-card__try">Try ' . Html::encode((string) $try->number) . '</span>'
+            . '<span class="badge badge--warning">Pending demo</span>'
+            . '</header>'
+            . '<p class="pa-card__score pa-card__score--none">—</p>'
+            . '<dl class="pa-card__facts">'
+            . '<dt>Started</dt><dd>' . Html::encode($when($attempt?->startedAt)) . '</dd>'
+            . '</dl>'
+            . '<p class="pa-card__note">This attempt was started but no demo order has been imported '
+            . 'for it yet. Press Sync demo orders once the order has been recreated.</p>'
+            . '</article>';
+    }
+
+    $demo = $outcome?->demo;
+    $percent = $outcome?->score->displayPercent();
+    $perfect = $outcome !== null && $outcome->isPerfect();
+    $tone = $perfect ? 'perfect' : ($percent === null ? 'none' : ($percent >= 80 ? 'good' : 'low'));
+
+    $html = '<article class="pa-card pa-card--' . ($perfect ? 'perfect' : 'scored') . '">'
+        . '<header class="pa-card__head">'
+        . '<span class="pa-card__try">Try ' . Html::encode((string) $try->number) . '</span>'
+        . ($perfect
+            ? '<span class="badge badge--success">Completed</span>'
+            : '<span class="badge badge--muted">Imported</span>')
+        . '</header>'
+        . '<p class="pa-card__demo">Demo #' . Html::encode((string) ($demo?->demoOrderId ?? 0)) . '</p>'
+        . '<p class="pa-card__score pa-card__score--' . $tone . '">'
+        . ($percent === null ? 'No score' : Html::encode((string) $percent) . '%')
+        . '</p>'
+        . '<dl class="pa-card__facts">'
+        . '<dt>Tested by</dt><dd>' . Html::encode($testedBy($attempt)) . '</dd>'
+        . '<dt>Imported</dt><dd>' . Html::encode($stamp($demo?->importedAt)) . '</dd>'
+        . '</dl>';
+
+    // Every demo order of this attempt is kept. The card scores the best one and says so rather than
+    // hiding the others, because "one click produced three orders" is a thing that happens.
+    if ($try->demoCount() > 1) {
+        $html .= '<p class="pa-card__note">'
+            . Html::encode((string) $try->demoCount())
+            . ' demo orders came from this attempt; the best is scored above.</p>';
+    }
+
+    if ($demo !== null) {
+        $html .= '<a class="btn ' . ($perfect ? 'btn--primary' : 'btn--secondary')
+            . ' btn--sm pa-card__action" target="_blank" rel="noopener noreferrer" href="'
+            . Html::encode($compareUrl($demo->demoOrderId)) . '">View Full Comparison</a>';
+    }
+
+    return $html . '</article>';
+};
+?>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-header__title">Practice Attempts</h1>
+        <p class="page-header__subtitle">
+            <?= Html::encode($storeName) ?> · Store #<?= Html::encode((string) $sourceId) ?> —
+            every attempt made on source order #<?= Html::encode((string) $sourceOrderId) ?>.
+        </p>
+    </div>
+    <div class="page-header__actions">
+        <?php if ($canRetry): ?>
+            <?php
+            /*
+             * Retry goes through the ORDINARY Practice Order endpoint.
+             *
+             * A form posting to the same address the table's own button posts to, so the attempt is
+             * created, the slot is taken and the concurrency rule is applied by exactly the code that
+             * already does it. A link straight to Order58 would start an untracked attempt, which is
+             * the one thing this must not do.
+             */
+            ?>
+            <form class="pa-retry" method="post"
+                  action="<?= Html::encode($urlGenerator->generate($routes['demoUrl'], ['sourceId' => $sourceId])) ?>">
+                <?= $csrf->hiddenInput() ?>
+                <input type="hidden" name="source_order_id" value="<?= Html::encode((string) $sourceOrderId) ?>">
+                <?php
+                            // A plain submit, with no `data-ot-demo-url` hook: this page does not load the table's
+                            // script, so the button must work as the form it is. The endpoint answers a POST
+                            // without one by rendering its own one-click page, which is the no-script path the
+                            // table has always had.
+            ?>
+                <button class="btn btn--primary" type="submit">Retry Practice</button>
+            </form>
+        <?php endif; ?>
+        <a class="btn btn--secondary" href="<?= Html::encode($allDemoUrl) ?>">All Demo Orders</a>
+        <a class="btn btn--ghost" href="<?= Html::encode($storeUrl) ?>">Back to Store</a>
+    </div>
+</div>
+
+<?php if (!$sourceOrderIsMirrored): ?>
+    <p class="pa-warning">
+        This source order is not mirrored here, so comparisons have nothing to compare against.
+        Sync this store's orders to fill the original side.
+    </p>
+<?php endif; ?>
+
+<?php
+            /*
+ * Filter by agent.
+ *
+ * Rendered only where there is more than one thing to choose between — a filter over a single group
+ * is a control that cannot change anything. A GET form with an explicit Apply, like the topic filter
+ * on the store page: no inline script, nothing navigates on change, and the choice survives a reload
+ * and a bookmark because it lives in the URL.
+ */
+?>
+<?php if (count($allGroups) > 1): ?>
+    <form class="pa-filter" method="get" role="search">
+        <label class="pa-filter__label" for="pa-agent">Filter by agent</label>
+        <select class="field__control" id="pa-agent" name="agent">
+            <option value=""<?= $chosenAgent === null ? ' selected' : '' ?>>All agents</option>
+            <?php foreach ($allGroups as $option): ?>
+                <option value="<?= Html::encode($option->key()) ?>"<?=
+                $chosenAgent === $option->key() ? ' selected' : '' ?>>
+                    <?= Html::encode($option->label()) ?>
+                    (<?= Html::encode((string) $option->tryCount()) ?>)
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <button class="btn btn--secondary btn--sm" type="submit">Apply</button>
+        <?php if ($chosenAgent !== null): ?>
+            <a class="btn btn--ghost btn--sm" href="<?= Html::encode($urlGenerator->generate(
+                $routes['self'],
+                ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
+            )) ?>">Clear</a>
+        <?php endif; ?>
+    </form>
+<?php endif; ?>
+
+<?php if ($groups === []): ?>
+    <div class="empty">
+        <div class="empty__icon" aria-hidden="true">🎯</div>
+        <div class="empty__title">Nothing practised yet</div>
+        <p>
+            Press Practice Order on this order to start an attempt. Once the recreated order has been
+            imported with Sync demo orders, it appears here.
+        </p>
+    </div>
+<?php else: ?>
+    <?php foreach ($groups as $group): ?>
+        <section class="card pa-group<?= $group->isUnmatched() ? ' pa-group--unmatched' : '' ?>"
+                 data-pa-group="<?= Html::encode($group->key()) ?>">
+            <header class="pa-group__head">
+                <h2 class="pa-group__name"><?= Html::encode($group->label()) ?></h2>
+                <p class="pa-group__meta">
+                    <?php if ($group->isUnmatched()): ?>
+                        <?= Html::encode((string) $group->tryCount()) ?>
+                        demo order<?= $group->tryCount() === 1 ? '' : 's' ?> with no identified author
+                    <?php else: ?>
+                        <?= Html::encode((string) $group->tryCount()) ?>
+                        <?= $group->tryCount() === 1 ? 'try' : 'tries' ?>
+                        <?php $best = $group->bestPercent(); ?>
+                        <?php if ($best !== null): ?>
+                            · best <?= Html::encode((string) $best) ?>%
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </p>
+            </header>
+            <?php // Three to a row on a desktop, and fewer as the window narrows — see the stylesheet.?>
+            <div class="pa-grid">
+                <?php foreach ($group->tries as $try): ?>
+                    <?= $card($try) ?>
+                <?php endforeach; ?>
+            </div>
+        </section>
+    <?php endforeach; ?>
+<?php endif; ?>

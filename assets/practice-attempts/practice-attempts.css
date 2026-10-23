@@ -1,0 +1,166 @@
+/*
+ * Practice Attempts.
+ *
+ * One source order's history, grouped by who practised it. Every colour is a token with a dark
+ * literal behind it, so the page is themed by the application rather than by this file.
+ */
+
+.pa-group {
+    margin-bottom: 1.25rem;
+}
+
+.pa-group__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    margin-bottom: 0.9rem;
+}
+
+.pa-group__name {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.pa-group__meta {
+    margin: 0;
+    color: var(--text-muted, #8a8f98);
+    font-size: 0.85rem;
+}
+
+/* A group with no owner is set apart, so it can never read as the heading above it. */
+.pa-group--unmatched .pa-group__name {
+    color: var(--text-muted, #8a8f98);
+}
+
+/*
+ * Three to a row on a desktop, and fewer as the window narrows.
+ *
+ * `auto-fill` with a minimum rather than a fixed `repeat(3, …)`: the cards then reflow to two and to
+ * one on their own, at whatever width the content stops fitting, instead of at breakpoints guessed
+ * here. 18rem is the width at which a card's longest line — the tested-by row — stops wrapping.
+ */
+.pa-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+    gap: 0.9rem;
+}
+
+.pa-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.9rem 1rem 1rem;
+    border: 1px solid var(--border-strong, #2a2d34);
+    border-radius: 10px;
+    background: var(--surface-2, #1b1d22);
+}
+
+/* A perfect try is the one state worth marking on the card itself, not only in its badge. */
+.pa-card--perfect {
+    border-color: var(--success-border, #2f6f4f);
+}
+
+.pa-card--unmatched {
+    border-style: dashed;
+}
+
+.pa-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.pa-card__try {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.pa-card__demo {
+    margin: 0;
+    color: var(--text-muted, #8a8f98);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+}
+
+/* The number the card exists to show. Tabular, so a column of cards lines up digit under digit. */
+.pa-card__score {
+    margin: 0;
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.pa-card__score--perfect { color: var(--success-text, #5fd39b); }
+.pa-card__score--good    { color: var(--text, #e6e8ee); }
+.pa-card__score--low     { color: var(--warning-text, #e3b341); }
+.pa-card__score--none    { color: var(--text-muted, #8a8f98); font-size: 1.4rem; }
+
+/*
+ * Two columns: label, value. A definition list because that is what it is — and the grid keeps the
+ * values aligned with each other rather than each one starting wherever its label ended.
+ */
+.pa-card__facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.6rem;
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+.pa-card__facts dt {
+    color: var(--text-muted, #8a8f98);
+}
+
+.pa-card__facts dd {
+    margin: 0;
+    overflow-wrap: break-word;
+}
+
+.pa-card__note {
+    margin: 0;
+    color: var(--text-muted, #8a8f98);
+    font-size: 0.8rem;
+}
+
+/* Pushed to the bottom so every card's action sits on the same line however tall its facts are. */
+.pa-card__action {
+    margin-top: auto;
+    align-self: flex-start;
+}
+
+.pa-retry {
+    display: inline;
+    margin: 0;
+}
+
+.pa-warning {
+    margin: 0 0 1rem;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid var(--warning-border, #6b5a1f);
+    border-radius: 8px;
+    background: var(--warning-bg, rgba(227, 179, 65, .08));
+    color: var(--warning-text, #e3b341);
+}
+
+/* The filter sits above the groups, on one line until the window is too narrow for it. */
+.pa-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.pa-filter__label {
+    color: var(--text-muted, #8a8f98);
+    font-size: 0.85rem;
+}
+
+.pa-filter .field__control {
+    width: auto;
+    min-width: 14rem;
+}

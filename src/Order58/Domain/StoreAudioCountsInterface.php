@@ -32,15 +32,14 @@ interface StoreAudioCountsInterface
      *
      * @param list<int> $sourceIds
      *
-     * `$linkedOrdersOnly` narrows the order-wise figure to orders this application can actually
-     * resolve, which is what the Practice Orders surface lists: that page applies
-     * `linkedOrdersOnly()` and drops a recording whose order id names nothing, so a card above it
-     * counting those rows would promise orders the page then refuses to show. Manage Orders lists
-     * them — they can be seen and fixed there — so it counts them.
+     * Every breakdown carries both figures: how many grouped orders hold audio, and how many of
+     * those can be practised. Both pickers show the same headline — the store holds what it holds —
+     * and the Practice Orders card names the smaller number beside it, because that is the one its
+     * own list will show.
      *
      * @return array<int, StoreAudioBreakdown>
      */
-    public function countsFor(array $sourceIds, bool $linkedOrdersOnly = false): array;
+    public function countsFor(array $sourceIds): array;
 
     /**
      * Every store that has at least one conversion.

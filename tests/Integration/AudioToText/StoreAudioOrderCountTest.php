@@ -187,6 +187,117 @@ final class StoreAudioOrderCountTest extends Unit
         );
     }
 
+    // ------------------------------------------------------------------ the two cards differ on purpose
+
+    /**
+     * Store #301, reproduced: one recording against an order no mirror row matches.
+     *
+     * **Both cards show 1.** The store really does hold one order's worth of audio, and two pickers
+     * disagreeing about that reads as a bug whichever number is right. What differs is the second
+     * figure: nothing here can be practised, because there is no source order to recreate.
+     */
+    public function testAnUnmirroredOrderCountsOnBothCardsButIsNotPractisable(): void
+    {
+        $this->seed('23113659', 'MIXED');
+
+        self::assertSame(1, $this->cardCount(), 'both pickers show the store\'s real audio count');
+        self::assertSame(0, $this->practisableCount(), 'and none of it can be practised');
+    }
+
+    /**
+     * Store #1731: four orders with audio, three of them practisable.
+     *
+     * Both cards read 4. The Practice Orders card adds "3 available to practise", which is what its
+     * own list will show — so the page below can hold fewer rows than the number above it without
+     * either figure being wrong or unexplained.
+     */
+    public function testAMixOfMirroredAndUnmirroredOrdersSharesOneHeadline(): void
+    {
+        $this->seedMirroredOrder(16754561);
+        $this->seedMirroredOrder(16758551);
+        $this->seedMirroredOrder(16800401);
+
+        foreach (['16754561', '16758551', '16800401'] as $orderId) {
+            $this->seed($orderId, 'MIXED');
+            $this->seed($orderId, 'CALLER');
+            $this->seed($orderId, 'CALLEE');
+        }
+
+        // The one with no mirrored order behind it, recorded on two channels.
+        $this->seed('111', 'MIXED');
+        $this->seed('111', 'CALLER');
+
+        self::assertSame(4, $this->cardCount(), 'four grouped orders have audio');
+        self::assertSame(3, $this->practisableCount(), 'three of them can be practised');
+        // And it is still orders being counted, not the eleven recordings underneath them.
+        self::assertSame(11, $this->cards->countsFor([self::STORE])[self::STORE]->total);
+    }
+
+    /** An order-less upload can never be practised either: there is no order to recreate. */
+    public function testAnUploadWithNoOrderIdIsNeverPractisable(): void
+    {
+        $this->seed(null, 'MIXED');
+
+        self::assertSame(1, $this->cardCount());
+        self::assertSame(0, $this->practisableCount());
+    }
+
+    /** The narrowing is store-scoped too: another store's mirrored order does not qualify ours. */
+    public function testAMirroredOrderInAnotherStoreDoesNotMakeOursPractisable(): void
+    {
+        $this->seedMirroredOrder(16800901, self::OTHER_STORE);
+        $this->seed('16800901', 'MIXED');
+
+        self::assertSame(1, $this->cardCount());
+        self::assertSame(0, $this->practisableCount());
+    }
+
+    /**
+     * Every order practisable: the two figures agree, and the card says nothing extra.
+     *
+     * The template only prints "N available to practise" when the numbers differ, so this is the
+     * case where both pickers are identical down to the last pixel.
+     */
+    public function testWhenEveryOrderIsPractisableTheTwoFiguresAgree(): void
+    {
+        $this->seedMirroredOrder(16800401);
+        $this->seed('16800401', 'MIXED');
+        $this->seed('16800401', 'CALLER');
+
+        self::assertSame(1, $this->cardCount());
+        self::assertSame(1, $this->practisableCount());
+    }
+
+    /** The smaller figure can never exceed the headline, whatever the data. */
+    private function practisableCount(): int
+    {
+        $counts = $this->cards->countsFor([self::STORE]);
+
+        if (!isset($counts[self::STORE])) {
+            return 0;
+        }
+
+        self::assertLessThanOrEqual($counts[self::STORE]->orders, $counts[self::STORE]->practisable);
+
+        return $counts[self::STORE]->practisable;
+    }
+
+    private function seedMirroredOrder(int $sourceOrderId, int $store = self::STORE): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_orders}}', [
+            'account_id' => $store,
+            'source_order_id' => $sourceOrderId,
+            'payload_json' => '{}',
+            'content_hash' => str_repeat('0', 64),
+            'synced_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
+    /** The headline both pickers show: every grouped order of this store that holds audio. */
     private function cardCount(): int
     {
         $counts = $this->cards->countsFor([self::STORE]);
@@ -197,8 +308,17 @@ final class StoreAudioOrderCountTest extends Unit
     private function seed(?string $orderId, string $type, int $store = self::STORE): void
     {
         $now = gmdate('Y-m-d H:i:s');
-        // Hex, because the job routes constrain `{publicId}` to 32 hex characters.
-        $publicId = 'cd' . str_pad(dechex(++$this->seq), 30, '0', STR_PAD_LEFT);
+        /*
+         * Hex, because the job routes constrain `{publicId}` to 32 hex characters — and `ef` rather
+         * than the `cd` two other fixtures already use.
+         *
+         * `public_id` is UNIQUE across the whole table, and those fixtures pad the same counter the
+         * same way, so a `cd`-prefixed seeder here produces byte-identical ids to theirs. They live
+         * in different suites but share one database, so a run that died before its cleanup left
+         * rows that made the next suite's insert fail — a collision that looks like a regression in
+         * whichever test happens to run second.
+         */
+        $publicId = 'ef' . str_pad(dechex(++$this->seq), 30, '0', STR_PAD_LEFT);
 
         $this->connection->createCommand()->insert('{{%audio_conversations}}', [
             'public_id' => $publicId,
@@ -219,6 +339,9 @@ final class StoreAudioOrderCountTest extends Unit
     {
         $this->connection->createCommand()
             ->delete('{{%audio_conversations}}', ['store_source_id' => [self::STORE, self::OTHER_STORE]])
+            ->execute();
+        $this->connection->createCommand()
+            ->delete('{{%order58_orders}}', ['account_id' => [self::STORE, self::OTHER_STORE]])
             ->execute();
     }
 }

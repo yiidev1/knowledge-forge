@@ -160,13 +160,21 @@ final class OrderTestingDemoOrdersCest
         }
     }
 
-    /** Attribution is shown only where a real attempt backs it. */
+    /**
+     * Attribution is shown only where a real attempt backs it.
+     *
+     * On `/demo-orders/all`, which is where the flat list lives since "View (N)" began opening the
+     * practice history instead. The same property is asserted on that history page below, because
+     * attribution is now printed in two places and an invented name would be equally wrong in either.
+     */
     public function anUnmatchedDemoOrderIsLabelledUnmatched(WebTester $I): void
     {
         $this->signIn($I);
         $this->seedDemoOrder(16630651);
 
-        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
+        $I->amOnPage(
+            '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders/all',
+        );
 
         // Scoped to the table: the admin layout prints the signed-in username in the sidebar, so an
         // unscoped assertion here would be testing the chrome rather than the attribution cell.
@@ -180,9 +188,43 @@ final class OrderTestingDemoOrdersCest
         $attemptId = $this->seedAttempt();
         $this->seedDemoOrder(16630651, self::SOURCE_ORDER, $attemptId);
 
-        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
+        $I->amOnPage(
+            '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders/all',
+        );
 
         $I->see(self::ADMIN, 'table');
+    }
+
+    /**
+     * The history page keeps an unowned demo order in its own section and names nobody.
+     *
+     * The important half is the second assertion. A card that fell into somebody's group — or that
+     * borrowed the signed-in reader's name because it was convenient — would be exactly the invented
+     * training record the importer refuses to create.
+     */
+    public function thePracticeHistoryKeepsAnUnmatchedDemoOrderUnowned(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedDemoOrder(16630651);
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
+
+        $I->see('Unmatched', '.pa-group--unmatched');
+        $I->see('Unknown', '.pa-card--unmatched');
+        $I->dontSee(self::ADMIN, '.pa-group');
+    }
+
+    /** And an attributed one is named, under its own practitioner's heading. */
+    public function thePracticeHistoryNamesTheAdministratorWhoPractised(WebTester $I): void
+    {
+        $this->signIn($I);
+        $attemptId = $this->seedAttempt();
+        $this->seedDemoOrder(16630651, self::SOURCE_ORDER, $attemptId);
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
+
+        $I->see(self::ADMIN, '.pa-group__name');
+        $I->see('Try 1', '.pa-card');
     }
 
     // ------------------------------------------------------------------ the comparison

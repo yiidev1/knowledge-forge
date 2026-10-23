@@ -60,6 +60,14 @@ final readonly class DemoOrder
         /** The complete document, with payment secrets already removed. JSON-encoded. */
         public string $rawPayload,
         public ?int $matchedAttemptId = null,
+        /**
+         * When this application first stored the order — not when Order58 created it.
+         *
+         * The two are days apart in practice, because importing is a manual button press. Kept
+         * separate from {@see $orderCreatedAt} for exactly that reason: the creation instant is what
+         * attribution is decided on, and this is only what the history page shows a reader.
+         */
+        public ?string $importedAt = null,
     ) {}
 
     public function customerName(): ?string

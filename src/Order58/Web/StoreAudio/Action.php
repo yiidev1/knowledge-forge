@@ -126,10 +126,9 @@ readonly class Action
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
                 // One query for the whole page, not one per card.
-                'audioCounts' => $this->audioCounts->countsFor(
-                    $this->shownIds($result->items),
-                    $this->countsLinkedOrdersOnly(),
-                ),
+                'showsPractisable' => $this->showsPractisableCount(),
+                // One query for the whole page, not one per card, and it carries both figures.
+                'audioCounts' => $this->audioCounts->countsFor($this->shownIds($result->items)),
                 // The second card metric, asked the same way and for the same reason.
                 'topicCounts' => $this->topicCounts->assignedOrdersFor($this->shownIds($result->items)),
                 // The transcription default, shown here because this is where an administrator already
@@ -159,17 +158,16 @@ readonly class Action
 
     /** The template this surface renders. Everything above it is the same question on both. */
     /**
-     * Whether this picker's cards count only orders the store page will actually list.
+     * Whether this picker adds "N available to practise" under the audio count.
      *
-     * False here, because Manage Orders lists every grouped order it has audio for — including one
-     * whose id resolves to nothing, which is a thing an administrator goes there to see and fix. The
-     * Practice Orders picker overrides it: that page applies `linkedOrdersOnly()`, so counting the
-     * unresolvable rows would put a number above a page that then shows fewer.
+     * False here: on Manage Orders every grouped order with audio is listed, so the two numbers
+     * would always be the same and the second would say nothing.
      *
-     * A seam rather than a flag threaded through the constructor, matching how these two pickers
-     * already differ — by overriding one small method each.
+     * The Practice Orders picker turns it on. Its own list applies `linkedOrdersOnly()` and leaves
+     * out orders that resolve to no source order, so without the second line a store would show 4
+     * on the card and 3 on the page with nothing explaining the gap.
      */
-    protected function countsLinkedOrdersOnly(): bool
+    protected function showsPractisableCount(): bool
     {
         return false;
     }

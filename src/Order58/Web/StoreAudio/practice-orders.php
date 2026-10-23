@@ -34,6 +34,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var bool $showsPractisable
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  */
 
@@ -127,6 +128,7 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    'showsPractisable' => $showsPractisable,
     'topicCounts' => $topicCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,

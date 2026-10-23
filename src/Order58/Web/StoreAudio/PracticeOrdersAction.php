@@ -22,13 +22,14 @@ use App\Order58\Domain\StoreAudioFilter;
 final readonly class PracticeOrdersAction extends Action
 {
     /**
-     * This surface lists only orders it can resolve, so its card counts only those.
+     * The card shows the store's whole audio count, and names how much of it can be practised.
      *
-     * Without this the card said 4 for a store whose Practice Orders page lists 3: the fourth is a
-     * recording whose order id names nothing, which Manage Orders shows and this page deliberately
-     * does not.
+     * The headline deliberately matches Manage Orders: the store holds what it holds, and two
+     * pickers disagreeing about that reads as a bug whichever number is right. What differs is the
+     * second line — this page's own list leaves out orders that resolve to no source order, so the
+     * card says how many remain rather than letting the reader discover the gap by counting rows.
      */
-    protected function countsLinkedOrdersOnly(): bool
+    protected function showsPractisableCount(): bool
     {
         return true;
     }

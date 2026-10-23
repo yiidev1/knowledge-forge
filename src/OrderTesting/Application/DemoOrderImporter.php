@@ -8,6 +8,8 @@ use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\DemoOrderUpsert;
 use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
+use DateTimeImmutable;
+use DateTimeZone;
 use App\Shared\Domain\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -35,11 +37,15 @@ use function is_readable;
  *
  * ## Attribution happens here, and only on the way in
  *
- * A demo order is credited to the open attempt for its store and source order **at the moment it is
- * first inserted**. Re-running the importer never moves attribution: an order that already exists keeps
- * the attempt it was given, so a rescan cannot hand one operator's work to whoever clicked most
- * recently. An order that arrives with nothing open stays unmatched, and the page says so rather than
- * guessing.
+ * A demo order is credited to the attempt that was running **when the provider says it was created**,
+ * and only on the way in. Re-running the importer never moves attribution: an order that already
+ * exists keeps the attempt it was given, so a rescan cannot hand one operator's work to whoever
+ * clicked most recently.
+ *
+ * Attribution is refused rather than guessed. An order whose creation instant falls inside no
+ * attempt's window — or inside more than one — stays unmatched, and the page says so. The filenames
+ * carry a source order id and a demo order id and nothing about who was at the keyboard, so there is
+ * no second source of truth to fall back on.
  */
 final readonly class DemoOrderImporter
 {
@@ -124,7 +130,29 @@ final readonly class DemoOrderImporter
             $order = $document->order;
 
             try {
-                $attempt = $this->attempts->openFor($order->storeSourceId, $order->sourceOrderId, $now);
+                /*
+                 * Who was practising when THIS order was created — not who happens to be practising
+                 * now.
+                 *
+                 * This used to ask `openFor(..., $now)`: the attempt open at **import** time. Imports
+                 * are manual and the measured gap between an order being created and the button being
+                 * pressed is more than a day, while an attempt lives sixty minutes. So that lookup
+                 * could only ever match by coincidence — and when it did match it would credit a
+                 * two-day-old order to whoever had clicked Practice Order in the last hour. A
+                 * confidently wrong training record is worse than an honest blank.
+                 *
+                 * The demo JSON carries no agent id, no attempt id and no correlation token, so the
+                 * provider's own creation timestamp is the only evidence there is. An order that
+                 * arrives without one cannot be attributed at all, and says so by staying unmatched.
+                 */
+                $attempt = $order->orderCreatedAt === null
+                    ? null
+                    : $this->attempts->attemptCoveringInstant(
+                        $order->storeSourceId,
+                        $order->sourceOrderId,
+                        (new DateTimeImmutable('@' . $order->orderCreatedAt))
+                            ->setTimezone(new DateTimeZone('UTC')),
+                    );
 
                 $result = $this->demoOrders->upsert($order, $attempt?->id);
 

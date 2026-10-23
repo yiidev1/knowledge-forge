@@ -287,6 +287,76 @@ final class PracticeOrdersCest
         // OrderTestingDemoOrdersCest, which this change does not touch.
     }
 
+    // ---------------------------------------------------------------- practice attempts
+
+    /**
+     * "View (N)" now opens the history rather than the flat list of imports.
+     *
+     * The route name is unchanged, so every link that already pointed here keeps working — the table
+     * cell, the comparison page's back link and the agent surface's own copy all land on the new page
+     * without being edited.
+     */
+    public function theDemoOrdersViewOpensThePracticeAttemptsPage(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->seeResponseCodeIs(200);
+        $I->see('Practice Attempts', 'h1');
+        $I->see('Back to Store');
+    }
+
+    /** The flat list it used to open is still there, one click away. */
+    public function theFlatDemoOrderListIsStillReachable(WebTester $I): void
+    {
+        $I->amOnPage(
+            '/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders/all',
+        );
+
+        $I->seeResponseCodeIs(200);
+        $I->see('Demo orders for #' . self::ORDER, 'h1');
+    }
+
+    /** And the history page links to it, so the old view is never stranded. */
+    public function thePracticeAttemptsPageLinksToTheFullList(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->seeElement(
+            'a[href="/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER
+            . '/demo-orders/all"]',
+        );
+    }
+
+    /**
+     * Retry goes through the tracked Practice Order endpoint, not straight to Order58.
+     *
+     * A link to the external destination would start an untracked attempt — nobody would own the
+     * demo order it produced, and the concurrency rule that stops two people holding one source
+     * order would never run. So it is a form, posting where the table's own button posts.
+     */
+    public function retryPracticePostsToTheTrackedPracticeOrderEndpoint(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->seeElement(
+            'form.pa-retry[method="post"][action="/order-testing/store/' . self::STORE_ID . '/demo-url"]',
+        );
+        $I->see('Retry Practice');
+        // The external destination is never named in the page: it is resolved server-side, by the
+        // endpoint, after the attempt has been recorded.
+        $I->dontSee('order58.com');
+    }
+
+    /** The summary carries the score and no comparison: the answer is one deliberate click away. */
+    public function theAttemptCardsLinkOutToTheExistingComparisonInANewTab(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        // No side-by-side invoice is drawn into the page itself.
+        $I->dontSeeElement('.ot-compare');
+        $I->dontSee('ORIGINAL ORDER');
+    }
+
     // ---------------------------------------------------------------- the multi-topic filter
 
     /** One topic, chosen as a set of one. */

@@ -23,7 +23,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  *      therefore the one the links below omit — see Action::defaultAudioFilter()
  * @var string $letter
  * @var int $page
- * @var array<int, StoreAudioBreakdown> $audioCounts store source id => conversion breakdown,
+ * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var bool $showsPractisable
  *      absent when the store has none. `total` is the same conversation count it always was.
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  * @var string $providerDefault storage value of the current default transcription provider
@@ -207,6 +208,7 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    'showsPractisable' => $showsPractisable,
     'topicCounts' => $topicCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,

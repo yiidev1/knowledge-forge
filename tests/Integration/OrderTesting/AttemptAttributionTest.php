@@ -173,6 +173,239 @@ final class AttemptAttributionTest extends Unit
         self::assertSame($this->sharedId + 1, $attempt->initiatedById);
     }
 
+    // ------------------------------------------------------------------ attribution by creation time
+
+    /**
+     * The attempt that was running when the order was created is the one credited.
+     *
+     * This is the whole basis of attribution. The demo JSON carries a source order id and a demo
+     * order id and nothing about who was at the keyboard, so the provider's creation timestamp
+     * against the attempt windows is the only evidence that exists.
+     */
+    public function testTheAttemptRunningAtCreationTimeIsTheOneFound(): void
+    {
+        $start = new DateTimeImmutable('2026-10-07 13:00:00', new DateTimeZone('UTC'));
+        $this->attempts->start(
+            self::STORE,
+            16900020,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+            $start,
+            $start->modify('+1 hour'),
+        );
+
+        $created = $start->modify('+20 minutes');
+        $found = $this->attempts->attemptCoveringInstant(self::STORE, 16900020, $created);
+
+        self::assertNotNull($found);
+        self::assertSame(InitiatorType::Agent, $found->initiatedByType);
+        self::assertSame($this->sharedId + 1, $found->initiatedById);
+    }
+
+    /**
+     * The defect this replaced, pinned so it cannot come back.
+     *
+     * Attribution used to ask which attempt was open at **import** time. Imports are manual and the
+     * measured gap in this database between an order being created and the button being pressed is
+     * over a day, while an attempt lives an hour. So a two-day-old order would be credited to
+     * whoever had clicked Practice Order most recently — a training record naming the wrong person.
+     *
+     * Here a demo is created inside one person's window and imported long after, while somebody
+     * else has an attempt open. The lookup must still name the first person.
+     */
+    public function testADemoImportedLongAfterwardsIsNotCreditedToWhoeverIsPractisingNow(): void
+    {
+        $then = new DateTimeImmutable('2026-10-07 13:00:00', new DateTimeZone('UTC'));
+        $this->attempts->start(
+            self::STORE,
+            16900021,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+            $then,
+            $then->modify('+1 hour'),
+        );
+
+        // Two days later, somebody else is practising the same order when the import runs.
+        $later = $then->modify('+2 days');
+        $this->attempts->start(
+            self::STORE,
+            16900021,
+            InitiatorType::Admin,
+            $this->sharedId,
+            $later,
+            $later->modify('+1 hour'),
+        );
+
+        $found = $this->attempts->attemptCoveringInstant(
+            self::STORE,
+            16900021,
+            $then->modify('+10 minutes'),
+        );
+
+        self::assertNotNull($found);
+        self::assertSame(InitiatorType::Agent, $found->initiatedByType, 'the creator, not the current user');
+        self::assertSame($this->sharedId + 1, $found->initiatedById);
+    }
+
+    /** An order created when nobody was practising belongs to nobody. */
+    public function testAnInstantInsideNoWindowIsUnmatched(): void
+    {
+        $start = new DateTimeImmutable('2026-10-07 13:00:00', new DateTimeZone('UTC'));
+        $this->attempts->start(
+            self::STORE,
+            16900022,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+            $start,
+            $start->modify('+1 hour'),
+        );
+
+        self::assertNull($this->attempts->attemptCoveringInstant(
+            self::STORE,
+            16900022,
+            $start->modify('+3 hours'),
+        ));
+    }
+
+    /** The window is half-open, so two back-to-back attempts cannot both claim the boundary. */
+    public function testTheInstantAnAttemptExpiresBelongsToTheNextOne(): void
+    {
+        $start = new DateTimeImmutable('2026-10-07 13:00:00', new DateTimeZone('UTC'));
+        $expires = $start->modify('+1 hour');
+
+        $this->attempts->start(
+            self::STORE,
+            16900023,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+            $start,
+            $expires,
+        );
+        $this->attempts->start(
+            self::STORE,
+            16900023,
+            InitiatorType::Admin,
+            $this->sharedId,
+            $expires,
+            $expires->modify('+1 hour'),
+        );
+
+        $found = $this->attempts->attemptCoveringInstant(self::STORE, 16900023, $expires);
+
+        self::assertNotNull($found);
+        self::assertSame(InitiatorType::Admin, $found->initiatedByType);
+    }
+
+    /** Another store's attempt never answers for this one, however well the times line up. */
+    public function testAnotherStoresAttemptIsNeverTheAnswer(): void
+    {
+        $start = new DateTimeImmutable('2026-10-07 13:00:00', new DateTimeZone('UTC'));
+        $this->attempts->start(
+            self::STORE,
+            16900024,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+            $start,
+            $start->modify('+1 hour'),
+        );
+
+        self::assertNull($this->attempts->attemptCoveringInstant(
+            self::STORE + 1,
+            16900024,
+            $start->modify('+10 minutes'),
+        ));
+    }
+
+    // ------------------------------------------------------------------ whose history is whose
+
+    /**
+     * An agent's history is narrowed in the QUERY, not after it.
+     *
+     * This is the authorization boundary for the Practice Attempts page. Filtering a full list in the
+     * page would leave somebody else's attempts one forgotten `continue` away from being rendered;
+     * narrowing here means their rows never leave the database at all.
+     */
+    public function testHistoryNarrowedToOneAgentExcludesEveryoneElse(): void
+    {
+        $this->attemptFor(16900030, InitiatorType::Agent, $this->sharedId + 1, '13:00');
+        $this->attemptFor(16900030, InitiatorType::Agent, $this->sharedId + 2, '15:00');
+        $this->attemptFor(16900030, InitiatorType::Admin, $this->sharedId, '17:00');
+
+        $mine = $this->attempts->historyFor(
+            self::STORE,
+            16900030,
+            InitiatorType::Agent,
+            $this->sharedId + 1,
+        );
+
+        self::assertCount(1, $mine);
+        self::assertSame($this->sharedId + 1, $mine[0]->initiatedById);
+        self::assertSame(InitiatorType::Agent, $mine[0]->initiatedByType);
+    }
+
+    /** Both halves of the filter are required: an id alone must not match across realms. */
+    public function testTheRealmIsPartOfTheFilterNotJustTheId(): void
+    {
+        // The three realms number their users separately, so one id can exist in all of them.
+        $this->attemptFor(16900031, InitiatorType::Agent, $this->sharedId, '13:00');
+        $this->attemptFor(16900031, InitiatorType::Admin, $this->sharedId, '15:00');
+
+        $agentOnly = $this->attempts->historyFor(
+            self::STORE,
+            16900031,
+            InitiatorType::Agent,
+            $this->sharedId,
+        );
+
+        self::assertCount(1, $agentOnly);
+        self::assertSame(InitiatorType::Agent, $agentOnly[0]->initiatedByType);
+    }
+
+    /** No filter means everybody, which is what the administrator surfaces ask for. */
+    public function testUnfilteredHistoryReturnsEveryAttempt(): void
+    {
+        $this->attemptFor(16900032, InitiatorType::Agent, $this->sharedId + 1, '13:00');
+        $this->attemptFor(16900032, InitiatorType::Admin, $this->sharedId, '15:00');
+
+        self::assertCount(2, $this->attempts->historyFor(self::STORE, 16900032));
+    }
+
+    /**
+     * Oldest first, so Try 1 stays Try 1.
+     *
+     * Numbering is taken from this order. A file imported late attaches to the attempt it was
+     * created during and the numbers around it do not move — which is the whole reason the history
+     * is built from attempts rather than from demo orders.
+     */
+    public function testHistoryIsOldestFirstSoTryNumbersAreStable(): void
+    {
+        $this->attemptFor(16900033, InitiatorType::Agent, $this->sharedId + 1, '09:00');
+        $this->attemptFor(16900033, InitiatorType::Agent, $this->sharedId + 1, '11:00');
+        $this->attemptFor(16900033, InitiatorType::Agent, $this->sharedId + 1, '13:00');
+
+        $history = $this->attempts->historyFor(self::STORE, 16900033);
+
+        self::assertCount(3, $history);
+        self::assertTrue($history[0]->startedAt < $history[1]->startedAt);
+        self::assertTrue($history[1]->startedAt < $history[2]->startedAt);
+    }
+
+    /** One store's history never answers for another's. */
+    public function testHistoryIsScopedToOneStore(): void
+    {
+        $this->attemptFor(16900034, InitiatorType::Agent, $this->sharedId + 1, '13:00');
+
+        self::assertSame([], $this->attempts->historyFor(self::STORE + 1, 16900034));
+    }
+
+    /** One attempt at a fixed hour, so windows never overlap and ordering is deterministic. */
+    private function attemptFor(int $sourceOrderId, InitiatorType $type, int $actorId, string $hour): void
+    {
+        $at = new DateTimeImmutable('2026-10-07 ' . $hour . ':00', new DateTimeZone('UTC'));
+
+        $this->attempts->start(self::STORE, $sourceOrderId, $type, $actorId, $at, $at->modify('+1 hour'));
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** Starts one attempt and returns the name the repository reports for it. */

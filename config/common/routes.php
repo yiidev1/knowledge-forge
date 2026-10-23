@@ -721,9 +721,15 @@ return [
             Route::get('/order-testing/store/{sourceId:\d+}/agent-playback/{agentId:\d+}')
                 ->action(OrderTestingModule\Playback\HistoryAction::class)
                 ->name(OrderTestingRoute::PLAYBACK_HISTORY),
+            // The "View (N)" destination: the practice history, grouped by who practised.
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders')
-                ->action(OrderTestingModule\DemoOrders\Action::class)
+                ->action(OrderTestingModule\PracticeAttempts\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),
+
+            // The flat list it used to open, kept and reachable from that page's own toolbar.
+            Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders/all')
+                ->action(OrderTestingModule\DemoOrders\Action::class)
+                ->name(OrderTestingRoute::DEMO_ORDERS_ALL),
             Route::get(
                 '/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo/{demoOrderId:\d+}',
             )
@@ -1026,11 +1032,19 @@ return [
                         ->name('agent.practice-orders.demo-url'),
 
                     // What the trainee produced, and how it compares with the original. Read-only.
+                    // Same split as the administrator surface: "View (N)" opens the history, and
+                    // the flat list it used to open is one click away from that page's toolbar.
                     Route::get(
                         '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders',
                     )
-                        ->action(AgentPracticeOrders\DemoOrdersAction::class)
+                        ->action(AgentPracticeOrders\PracticeAttemptsAction::class)
                         ->name('agent.practice-orders.demo-orders'),
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                            . '/demo-orders/all',
+                    )
+                        ->action(AgentPracticeOrders\DemoOrdersAction::class)
+                        ->name('agent.practice-orders.demo-orders.all'),
                     Route::get(
                         '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
                             . '/demo/{demoOrderId:\d+}',

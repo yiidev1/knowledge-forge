@@ -17,6 +17,8 @@ use App\OrderTesting\Infrastructure\DbTestAttemptRepository;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use Codeception\Test\Unit;
+use DateTimeImmutable;
+use DateTimeZone;
 use Psr\Log\NullLogger;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
@@ -28,6 +30,7 @@ use function time;
 use function PHPUnit\Framework\assertCount;
 use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertNotSame;
+use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertStringContainsString;
@@ -60,6 +63,14 @@ final class DemoOrderImportTest extends Unit
      */
     private const STORE = 987655920;
     private const SOURCE_ORDER = 16758551;
+
+    /**
+     * The `created_at` every fixture document carries, as a unix timestamp.
+     *
+     * Attribution is decided against this instant, not against when the importer runs, so a test
+     * that wants a demo order credited has to put an attempt window around THIS.
+     */
+    private const FIXTURE_CREATED = 1791353759;
     private const OTHER_SOURCE_ORDER = 16754561;
 
     private const USERNAME = '__kf_order_testing_import_admin__';
@@ -87,6 +98,31 @@ final class DemoOrderImportTest extends Unit
     protected function _after(): void
     {
         $this->cleanup();
+    }
+
+    /**
+     * One attempt whose window contains `$instant`, returning its id.
+     *
+     * Times are passed explicitly rather than taken from the clock, because the fixtures' creation
+     * timestamp is fixed in the past and attribution is decided against it.
+     */
+    private function attemptCovering(int $sourceOrderId, int $instant): int
+    {
+        $at = (new DateTimeImmutable('@' . $instant))->setTimezone(new DateTimeZone('UTC'));
+
+        $start = $this->attempts->start(
+            self::STORE,
+            $sourceOrderId,
+            InitiatorType::Admin,
+            $this->adminId,
+            $at->modify('-10 minutes'),
+            $at->modify('+50 minutes'),
+        );
+
+        $id = $start->attempt?->id;
+        assertNotNull($id, 'the attempt should have been written');
+
+        return $id;
     }
 
     private function importer(string $subdirectory = 'demo_mix_orders'): DemoOrderImporter
@@ -189,7 +225,39 @@ final class DemoOrderImportTest extends Unit
 
     // ------------------------------------------------------------------ attribution
 
-    public function testADemoOrderArrivingDuringAnOpenAttemptIsCreditedToIt(): void
+    /**
+     * A demo order is credited to the attempt that was running when it was CREATED.
+     *
+     * This test used to start an attempt and import immediately, asserting that an order "arriving
+     * during an open attempt" was credited to it. That described the old rule, and the old rule was
+     * wrong: imports are manual and run long after the fact, so arrival time says nothing about who
+     * was practising. The window below is placed around the fixture's own `created_at` instead,
+     * which is the evidence attribution actually rests on.
+     */
+    public function testADemoOrderCreatedDuringAnAttemptIsCreditedToIt(): void
+    {
+        $attemptId = $this->attemptCovering(self::SOURCE_ORDER, self::FIXTURE_CREATED);
+
+        $this->importer()->import();
+
+        foreach ($this->demoOrders->forSourceOrder(self::STORE, self::SOURCE_ORDER) as $order) {
+            assertSame($attemptId, $order->matchedAttemptId, 'demo #' . $order->demoOrderId);
+        }
+
+        // The other source order had no attempt covering its creation, so it stays honestly
+        // unattributed — a blank Tested By rather than a guess.
+        $other = $this->demoOrders->forSourceOrder(self::STORE, self::OTHER_SOURCE_ORDER);
+        assertNull($other[0]->matchedAttemptId);
+    }
+
+    /**
+     * An attempt that merely happens to be open at import time credits nothing.
+     *
+     * The failure mode this replaced: a demo order created days ago, imported while somebody else
+     * has just clicked Practice Order, and credited to them. An honest blank is better than a
+     * training record naming the wrong person.
+     */
+    public function testAnAttemptOpenOnlyAtImportTimeIsNotCredited(): void
     {
         $service = new TestAttemptService($this->attempts, new SystemClock(), 60);
         $outcome = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Admin, $this->adminId);
@@ -199,12 +267,8 @@ final class DemoOrderImportTest extends Unit
         $this->importer()->import();
 
         foreach ($this->demoOrders->forSourceOrder(self::STORE, self::SOURCE_ORDER) as $order) {
-            assertSame($outcome->attempt?->id, $order->matchedAttemptId, 'demo #' . $order->demoOrderId);
+            assertNull($order->matchedAttemptId, 'demo #' . $order->demoOrderId);
         }
-
-        // The other source order had nothing open, so it stays honestly unattributed.
-        $other = $this->demoOrders->forSourceOrder(self::STORE, self::OTHER_SOURCE_ORDER);
-        assertNull($other[0]->matchedAttemptId);
     }
 
     public function testAnUnmatchedDemoOrderIsKeptRatherThanDiscarded(): void
@@ -219,28 +283,34 @@ final class DemoOrderImportTest extends Unit
         }
     }
 
-    /** A rescan must never move somebody else's work onto a newer attempt. */
+    /**
+     * A rescan must never move somebody else's work onto a newer attempt.
+     *
+     * Deliberately set up so the lookup itself could not decide: a SECOND attempt is backdated over
+     * the same creation instant, which makes the evidence ambiguous. Attribution must still not
+     * move, because an order that already exists is updated rather than inserted and only an insert
+     * credits anybody. Ambiguity may leave a new order unmatched; it may never rewrite an old one.
+     */
     public function testRescanningDoesNotReattributeAnExistingDemoOrder(): void
     {
-        $service = new TestAttemptService($this->attempts, new SystemClock(), 60);
-        $first = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Admin, $this->adminId);
+        $first = $this->attemptCovering(self::SOURCE_ORDER, self::FIXTURE_CREATED);
 
         $this->importer()->import();
 
-        // Close the first attempt the way time would, then let somebody else start one.
+        // Close the first attempt the way time would, then backdate a second over the same instant.
         $this->connection->createCommand()->update(
             '{{%order_testing_attempts}}',
             ['status' => AttemptStatus::Expired->value],
-            ['id' => $first->attempt?->id],
+            ['id' => $first],
         )->execute();
 
-        $second = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Admin, $this->adminId);
-        assertNotSame($first->attempt?->id, $second->attempt?->id);
+        $second = $this->attemptCovering(self::SOURCE_ORDER, self::FIXTURE_CREATED);
+        assertNotSame($first, $second);
 
         $this->importer()->import();
 
         foreach ($this->demoOrders->forSourceOrder(self::STORE, self::SOURCE_ORDER) as $order) {
-            assertSame($first->attempt?->id, $order->matchedAttemptId, 'attribution must not move');
+            assertSame($first, $order->matchedAttemptId, 'attribution must not move');
         }
     }
 

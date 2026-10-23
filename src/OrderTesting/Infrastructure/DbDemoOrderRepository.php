@@ -207,6 +207,7 @@ final readonly class DbDemoOrderRepository implements DemoOrderRepositoryInterfa
             contentHash: (string) ($row['content_hash'] ?? ''),
             rawPayload: (string) ($row['raw_payload'] ?? '{}'),
             matchedAttemptId: self::number($row['matched_attempt_id'] ?? null),
+            importedAt: self::text($row['imported_at'] ?? null),
         );
     }
 

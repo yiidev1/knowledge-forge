@@ -69,8 +69,22 @@ final class OrderTestingRoute
     /** POST. Records who is testing, then redirects to Order58. Never a plain external link. */
     public const DEMO_URL = 'order-testing.demo-url';
 
-    /** The demo orders one source order produced — the "View (N)" destination. */
+    /**
+     * The "View (N)" destination: one source order's practice history, grouped by who practised it.
+     *
+     * The name is unchanged on purpose. Every link that already points here — the table cell, the
+     * comparison page's back link, the agent surface's own copy — keeps working and now lands on the
+     * history rather than on a flat list of imports.
+     */
     public const DEMO_ORDERS = 'order-testing.demo-orders';
+
+    /**
+     * The flat list of every imported demo order, which "View (N)" used to open.
+     *
+     * Still here, one click away under All Demo Orders. It answers a different question: the history
+     * says what somebody did, this says what was imported.
+     */
+    public const DEMO_ORDERS_ALL = 'order-testing.demo-orders.all';
 
     /** One demo order beside the source order it was recreated from. */
     public const DEMO_COMPARE = 'order-testing.demo-compare';

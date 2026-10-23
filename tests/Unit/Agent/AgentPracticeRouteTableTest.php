@@ -33,6 +33,15 @@ final class AgentPracticeRouteTableTest extends TestCase
         'agent.practice-orders',
         'agent.practice-orders.demo-compare',
         'agent.practice-orders.demo-orders',
+        /*
+         * The flat list of imported demo orders, which "View (N)" used to open.
+         *
+         * Added when Practice Attempts shipped: that name now serves the history page, and the list
+         * moved here rather than disappearing. Same action, same read-only data, same group — an
+         * agent could already reach every row on it, so nothing new is exposed by it having its own
+         * address.
+         */
+        'agent.practice-orders.demo-orders.all',
         'agent.practice-orders.demo-receipt',
         'agent.practice-orders.demo-url',
         'agent.practice-orders.job.ai-audio.file',

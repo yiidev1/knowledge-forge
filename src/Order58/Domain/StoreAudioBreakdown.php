@@ -47,6 +47,18 @@ final readonly class StoreAudioBreakdown
          * counts once, exactly as the page renders it.
          */
         public int $orders,
+        /**
+         * Of those orders, the ones that can actually be practised.
+         *
+         * A recording whose order number resolves to no mirrored source order has nothing to
+         * recreate and no practice link to press, so the Practice Orders list leaves it out. The
+         * card still counts it under {@see $orders} — both pickers show the same headline, because
+         * the store really does hold that much audio — and names this smaller number beside it
+         * rather than silently showing a different total from the page next door.
+         *
+         * Always less than or equal to {@see $orders}.
+         */
+        public int $practisable,
         public int $total,
         public int $mixed,
         public int $caller,
@@ -56,7 +68,7 @@ final readonly class StoreAudioBreakdown
     /** The empty case, so a caller can default without a null check. */
     public static function none(): self
     {
-        return new self(0, 0, 0, 0, 0);
+        return new self(0, 0, 0, 0, 0, 0);
     }
 
     /**

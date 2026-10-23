@@ -39,7 +39,7 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
 
     public function __construct(private ConnectionInterface $connection) {}
 
-    public function countsFor(array $sourceIds, bool $linkedOrdersOnly = false): array
+    public function countsFor(array $sourceIds): array
     {
         if ($sourceIds === []) {
             return [];
@@ -81,7 +81,13 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
                  * to either side that drifts fails there rather than on a card.
                  */
                 'orders' => new Expression(
-                    'COUNT(DISTINCT ' . self::groupKeySql($linkedOrdersOnly) . ')',
+                    'COUNT(DISTINCT ' . self::groupKeySql(false) . ')',
+                ),
+                // The same grouping, narrowed to orders this application can resolve. Counted in the
+                // same scan rather than by a second query, so the two numbers on one card can never
+                // come from two different reads of the table.
+                'practisable' => new Expression(
+                    'COUNT(DISTINCT ' . self::groupKeySql(true) . ')',
                 ),
                 'total' => 'COUNT(*)',
                 'mixed' => new Expression("SUM(recording_type = 'MIXED')"),
@@ -97,6 +103,7 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
         foreach ($rows as $row) {
             $counts[(int) $row['store_source_id']] = new StoreAudioBreakdown(
                 (int) $row['orders'],
+                (int) $row['practisable'],
                 (int) $row['total'],
                 (int) $row['mixed'],
                 (int) $row['caller'],
