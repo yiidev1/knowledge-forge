@@ -259,6 +259,99 @@ $c->createCommand()->insert('{{%order_testing_attempts}}', [
     'updated_at' => $now,
 ])->execute();
 
+/*
+ * Practitioners for the Practice Results table, enough of them to need a second page.
+ *
+ * Thirty, so the twenty-five-per-page boundary is exercised rather than described, with a spread of
+ * try counts and scores — including one practitioner whose history is long enough to exceed what a
+ * page can score, which is the state the table reports as "Not available" rather than guessing at.
+ *
+ * Agents are mirrored first so the table has real names to show and to search by: a row named
+ * "Agent #7701" would pass a test and tell nobody whether the join works.
+ */
+$practitioners = [];
+
+for ($i = 0; $i < 30; ++$i) {
+    $adminIdForAgent = 97100 + $i;
+    $username = sprintf('e2e_agent_%02d', $i);
+
+    $c->createCommand()->insert('{{%order58_agents}}', [
+        'admin_id' => $adminIdForAgent,
+        'username' => $username,
+        'status' => 'active',
+        'user_type' => 'agent',
+        'sync_hash' => str_repeat('e', 64),
+        'synced_at' => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ])->execute();
+
+    $c->createCommand()->insert('{{%order_testing_attempts}}', [
+        'public_id' => bin2hex(random_bytes(16)),
+        'store_source_id' => STORE,
+        'source_order_id' => ORDER,
+        'initiated_by_type' => 'AGENT',
+        'initiated_by_id' => $adminIdForAgent,
+        'status' => 'EXPIRED',
+        'started_at' => $now,
+        'expires_at' => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ])->execute();
+
+    $attemptId = (int) $c->getLastInsertID();
+    // One practitioner with a history longer than a page can score, and the rest ordinary.
+    $tries = $i === 0 ? 70 : (1 + ($i % 4));
+
+    for ($t = 0; $t < $tries; ++$t) {
+        $demoOrderId = 18_000_000 + ($i * 100) + $t;
+
+        $c->createCommand()->insert('{{%order_testing_demo_orders}}', [
+            'public_id' => bin2hex(random_bytes(16)),
+            'store_source_id' => STORE,
+            'source_order_id' => ORDER,
+            'demo_order_id' => $demoOrderId,
+            'matched_attempt_id' => $attemptId,
+            'order_created_at' => 1_791_000_000 + ($i * 10_000) + ($t * 600),
+            'total_amount' => '12.50000',
+            'source_filename' => 'e2e.json',
+            'content_hash' => hash('sha256', (string) $demoOrderId),
+            'raw_payload' => (string) json_encode([
+                'id' => $demoOrderId,
+                'total_amount' => '12.50000',
+                'type' => 'take-out',
+                'payment_method' => 'cash',
+            ]),
+            'imported_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
+    $practitioners[] = $adminIdForAgent;
+}
+
+// And two results nobody can be shown to have created, for the Unmatched section.
+foreach ([0, 1] as $n) {
+    $demoOrderId = 18_900_000 + $n;
+
+    $c->createCommand()->insert('{{%order_testing_demo_orders}}', [
+        'public_id' => bin2hex(random_bytes(16)),
+        'store_source_id' => STORE,
+        'source_order_id' => ORDER,
+        'demo_order_id' => $demoOrderId,
+        'matched_attempt_id' => null,
+        'order_created_at' => 1_792_000_000 + $n,
+        'total_amount' => '9.90000',
+        'source_filename' => 'e2e.json',
+        'content_hash' => hash('sha256', 'unmatched' . $demoOrderId),
+        'raw_payload' => (string) json_encode(['id' => $demoOrderId, 'total_amount' => '9.90000']),
+        'imported_at' => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ])->execute();
+}
+
 echo json_encode([
     'admin' => ADMIN,
     'password' => PASSWORD,
@@ -267,5 +360,7 @@ echo json_encode([
     'heldOrder' => HELD_ORDER,
     'job' => JOB,
     'storeUrl' => '/order-testing/store/' . STORE,
+    'resultsUrl' => '/order-testing/store/' . STORE . '/order/' . ORDER . '/demo-orders',
+    'practitioners' => $practitioners,
     'audioUrl' => '/audio-to-text/job/' . JOB . '/original/file',
 ], JSON_PRETTY_PRINT), "\n";

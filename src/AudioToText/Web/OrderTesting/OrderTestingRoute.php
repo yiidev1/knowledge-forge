@@ -86,6 +86,15 @@ final class OrderTestingRoute
      */
     public const DEMO_ORDERS_ALL = 'order-testing.demo-orders.all';
 
+    /**
+     * One practitioner's tries, for the View Tries drawer — and for a page of its own without script.
+     *
+     * Its own address rather than a fragment of the page above, because the table must not fetch
+     * every practitioner's history to draw a row: it fetches none, and this answers for the one
+     * somebody opened.
+     */
+    public const DEMO_ORDERS_TRIES = 'order-testing.demo-orders.tries';
+
     /** One demo order beside the source order it was recreated from. */
     public const DEMO_COMPARE = 'order-testing.demo-compare';
 

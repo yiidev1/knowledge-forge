@@ -2,26 +2,33 @@
 
 declare(strict_types=1);
 
-use App\OrderTesting\Domain\Practice\AttemptGroup;
-use App\OrderTesting\Domain\Practice\PracticeTry;
-use App\OrderTesting\Domain\TestAttempt;
+use App\OrderTesting\Application\Practice\PractitionerScores;
+use App\OrderTesting\Domain\DemoOrder;
+use App\OrderTesting\Domain\Practice\PracticeResultsQuery;
+use App\OrderTesting\Domain\Practice\PractitionerSummary;
 use App\OrderTesting\Web\PracticeAttemptsAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
 /**
- * Practice Attempts: one source order's history, grouped by who practised it.
+ * Practice Results: who practised one source order, as a table rather than a wall of cards.
  *
- * ## Summary first, comparison on request
+ * ## Why a table
  *
- * A card carries the score and nothing of the comparison itself. Rendering a side-by-side invoice
- * inside every card would put the original order — the answer — in front of a trainee who is about
- * to try again, and would draw a dozen invoices to show one number. **View Full Comparison** opens
- * the existing comparison page, unchanged, in a new tab.
+ * One card per try, grouped under one heading per practitioner, is readable at four results and
+ * unusable at four hundred — a hundred practitioners with three tries each is a page nobody scrolls
+ * to the bottom of, and every card on it costs a document parsed and a comparison scored.
  *
- * A perfect try is the exception: there is nothing left to practise, so the card says so plainly and
- * its link is the primary action rather than a quiet one.
+ * So each practitioner is one row: how many results they produced, their best, their latest, when
+ * they last practised. Their individual tries are one click away, in a drawer, and are fetched only
+ * for the practitioner somebody actually opened.
+ *
+ * ## The topic is context, not a control
+ *
+ * `practice_order_topics` is unique on `(store, source order)`, so every result on this page carries
+ * the same topic. A filter offering it would have one option that excluded nothing, so it is printed
+ * beside the order number as the fact it is.
  *
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
@@ -31,208 +38,115 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var int $sourceId
  * @var string $storeName
  * @var int $sourceOrderId
- * @var list<AttemptGroup> $groups the groups to draw, after the Filter by agent choice
- * @var list<AttemptGroup> $allGroups every group this reader may see, for the filter's own options
- * @var ?string $chosenAgent the selected group key, or null for all of them
- * @var bool $canRetry whether this surface may start an attempt at all
- * @var bool $readerHasPractised whether the reader has an imported result of their own here
+ * @var PracticeResultsQuery $query the search and sort in force
+ * @var list<PractitionerSummary> $practitioners this page's rows, in display order
+ * @var array<string, PractitionerScores> $scores keyed by practitioner key
+ * @var int $page
+ * @var int $pages
+ * @var int $perPage
+ * @var int $totalPractitioners
+ * @var int $totalResults
+ * @var int $unmatchedCount
+ * @var list<DemoOrder> $unmatched
+ * @var array<int, App\OrderTesting\Domain\Comparison\ComparisonScore> $unmatchedScores
+ * @var ?string $topic the source order's current topic, or null
+ * @var bool $canRetry
+ * @var bool $readerHasPractised
  * @var bool $sourceOrderIsMirrored
- * @var array<string, string> $routes the addresses this surface builds its links from
+ * @var array<string, string> $routes
  */
 
 $assetManager->register(PracticeAttemptsAsset::class);
 
-$this->setTitle('Practice attempts for #' . $sourceOrderId);
+$this->setTitle('Practice results for #' . $sourceOrderId);
 $this->setParameter('breadcrumbs', [
     ['label' => $routes['pageLabel'], 'route' => $routes['page']],
     ['label' => $storeName, 'route' => $routes['store'], 'arguments' => ['sourceId' => $sourceId]],
-    ['label' => 'Practice attempts'],
+    ['label' => 'Practice results'],
 ]);
 
 $storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $sourceId]);
+$selfUrl = $urlGenerator->generate(
+    $routes['self'],
+    ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
+);
 $allDemoUrl = $urlGenerator->generate(
     $routes['allDemoOrders'],
     ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
 );
 
-/** The existing comparison page, for one demo order, on whichever surface this is. */
-$compareUrl = static fn(int $demoOrderId): string => $urlGenerator->generate(
-    $routes['demoCompare'],
-    ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId, 'demoOrderId' => $demoOrderId],
-);
-
-$when = static fn(?DateTimeImmutable $at): string => $at === null
-    ? '—'
-    : $appTimeZone->format($at, 'M j, Y g:i A');
-
-/** A stored UTC timestamp string, read in the business timezone like every other one on this page. */
-$stamp = static fn(?string $utc): string => $utc === null || $utc === ''
-    ? '—'
-    : $appTimeZone->format(new DateTimeImmutable($utc . ' UTC'), 'M j, Y g:i A');
-
 /**
- * One try, as a card.
+ * A score as a percentage, or a dash where there is none.
  *
- * Three states, and they are genuinely different things rather than three colours of the same thing:
- * an attempt with a result, an attempt still waiting for one, and a demo order with no owner.
+ * `overall` is null when the comparison could not be made — the source order is not mirrored here,
+ * or its items were never fetched. **Never rendered as 0%**: a zero is a real score somebody earned
+ * badly, and showing it for a comparison nobody performed would rank a practitioner below one who
+ * actually did poorly.
  */
-/**
- * Who practised, as a sentence.
- *
- * The stored name when the account still exists, the realm and the id when it does not — an attempt
- * outlives the account that made it, and "AGENT #12" is a true statement where a blank is not.
- */
-$testedBy = static function (?TestAttempt $attempt): string {
-    if ($attempt === null) {
-        return 'Unknown';
+$percent = static function (?App\OrderTesting\Domain\Comparison\ComparisonScore $score): string {
+    if ($score === null || !$score->isAvailable()) {
+        return '—';
     }
 
-    $name = $attempt->initiatedByName;
-
-    return $attempt->initiatedByType->label() . ' '
-        . ($name === null || $name === '' ? '#' . (string) $attempt->initiatedById : $name);
+    return (string) $score->displayPercent() . '%';
 };
 
-$card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $testedBy): string {
-    $outcome = $try->best();
-
-    if ($try->isUnmatched()) {
-        $demo = $outcome?->demo;
-        $percent = $outcome?->score->displayPercent();
-
-        $html = '<article class="pa-card pa-card--unmatched">'
-            . '<header class="pa-card__head">'
-            . '<span class="pa-card__try">Unmatched</span>'
-            . '<span class="badge badge--muted">No attempt</span>'
-            . '</header>'
-            . '<p class="pa-card__demo">Demo #' . Html::encode((string) ($demo?->demoOrderId ?? 0)) . '</p>'
-            . '<p class="pa-card__score pa-card__score--none">'
-            . ($percent === null ? 'No score' : Html::encode((string) $percent) . '%')
-            . '</p>'
-            . '<dl class="pa-card__facts">'
-            . '<dt>Tested by</dt><dd class="util-muted">Unknown</dd>'
-            . '<dt>Imported</dt><dd>' . Html::encode($stamp($demo?->importedAt)) . '</dd>'
-            . '</dl>'
-            . '<p class="pa-card__note">Nobody could be shown to have created this order, so it is '
-            . 'credited to no one.</p>';
-
-        if ($demo !== null) {
-            $html .= '<a class="btn btn--secondary btn--sm pa-card__action" target="_blank"'
-                . ' rel="noopener noreferrer" href="' . Html::encode($compareUrl($demo->demoOrderId))
-                . '">View Full Comparison</a>';
-        }
-
-        return $html . '</article>';
+/** The band a score sits in, for the one piece of colour this table uses. */
+$band = static function (?App\OrderTesting\Domain\Comparison\ComparisonScore $score): string {
+    if ($score === null || !$score->isAvailable()) {
+        return 'none';
     }
 
-    $attempt = $try->attempt;
+    $value = (int) $score->displayPercent();
 
-    /*
-     * There is no pending card any more.
-     *
-     * A try is only built where a demo order was actually imported — see `PracticeHistoryBuilder`.
-     * An attempt with nothing behind it is still recorded and still auditable; it simply has nothing
-     * to show yet, and a card saying so was six-sevenths of this page on the live store.
-     */
-    $demo = $outcome?->demo;
-    $percent = $outcome?->score->displayPercent();
-    $perfect = $outcome !== null && $outcome->isPerfect();
-    $tone = $perfect ? 'perfect' : ($percent === null ? 'none' : ($percent >= 80 ? 'good' : 'low'));
+    return match (true) {
+        $value >= 90 => 'excellent',
+        $value >= 75 => 'good',
+        $value >= 50 => 'fair',
+        default => 'poor',
+    };
+};
 
-    $html = '<article class="pa-card pa-card--' . ($perfect ? 'perfect' : 'scored') . '">'
-        . '<header class="pa-card__head">'
-        . '<span class="pa-card__try">Try ' . Html::encode((string) $try->number) . '</span>'
-        . ($perfect
-            ? '<span class="badge badge--success">Completed</span>'
-            : '<span class="badge badge--muted">Imported</span>')
-        . '</header>'
-        . '<p class="pa-card__demo">Demo #' . Html::encode((string) ($demo?->demoOrderId ?? 0)) . '</p>'
-        . '<p class="pa-card__score pa-card__score--' . $tone . '">'
-        . ($percent === null ? 'No score' : Html::encode((string) $percent) . '%')
-        . '</p>'
-        . '<dl class="pa-card__facts">'
-        . '<dt>Tested by</dt><dd>' . Html::encode($testedBy($attempt)) . '</dd>'
-        . '<dt>Imported</dt><dd>' . Html::encode($stamp($demo?->importedAt)) . '</dd>'
-        . '</dl>';
-
-    // Every demo order of this attempt is kept. The card scores the best one and says so rather than
-    // hiding the others, because "one click produced three orders" is a thing that happens.
-    if ($try->demoCount() > 1) {
-        $html .= '<p class="pa-card__note">'
-            . Html::encode((string) $try->demoCount())
-            . ' demo orders came from this attempt; the best is scored above.</p>';
-    }
-
-    if ($demo !== null) {
-        $html .= '<a class="btn ' . ($perfect ? 'btn--primary' : 'btn--secondary')
-            . ' btn--sm pa-card__action" target="_blank" rel="noopener noreferrer" href="'
-            . Html::encode($compareUrl($demo->demoOrderId)) . '">View Full Comparison</a>';
-    }
-
-    return $html . '</article>';
+/** This page's address under a different page or sort, keeping everything else in force. */
+$pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId, $sourceOrderId, $query): string {
+    return $urlGenerator->generate(
+        $routes['self'],
+        ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
+        $query->toParams() + $extra,
+    );
 };
 ?>
 
 <div class="page-header">
     <div>
-        <h1 class="page-header__title">Practice Attempts</h1>
+        <h1 class="page-header__title">Practice Results</h1>
         <p class="page-header__subtitle">
-            <?= Html::encode($storeName) ?> · Store #<?= Html::encode((string) $sourceId) ?> —
-            every attempt made on source order #<?= Html::encode((string) $sourceOrderId) ?>.
+            <?= Html::encode($storeName) ?> &middot; Store #<?= Html::encode((string) $sourceId) ?>
+            &mdash; source order #<?= Html::encode((string) $sourceOrderId) ?>.
+            <?php
+            // The topic, as a fact about the order. See the docblock: it is not a filter because on
+            // this page it could not narrow anything.
+?>
+            <?php if ($topic !== null): ?>
+                <span class="pr-topic">Topic: <?= Html::encode($topic) ?></span>
+            <?php endif; ?>
         </p>
     </div>
     <div class="page-header__actions">
         <?php if ($canRetry): ?>
-            <?php
-            /*
-             * Retry goes through the ORDINARY Practice Order endpoint.
-             *
-             * A form posting to the same address the table's own button posts to, so the attempt is
-             * created, the slot is taken and the concurrency rule is applied by exactly the code that
-             * already does it. A link straight to Order58 would start an untracked attempt, which is
-             * the one thing this must not do.
-             */
-            ?>
             <div class="pa-retry-wrap">
                 <?php
-                /*
-                 * `target="_blank"`, on the form itself, for the path where the script is not there.
-                 *
-                 * The script below takes this submission over and opens the tab itself, so the
-                 * attribute never applies when it loads. When it does not, the browser posts the form
-                 * natively — and without this the endpoint's own page would replace the history the
-                 * reader is looking at. The table's Practice Order button carries the same attribute
-                 * for the same reason.
-                 *
-                 * `rel` is not decoration: the destination carries a customer's phone number in its
-                 * path, and without `noreferrer` the browser hands this page's URL to Order58 as the
-                 * Referer.
-                 */
+                // Unchanged from the page this replaces: the same tracked endpoint, the same
+                // attempt, the same new-tab behaviour. Only the table around it changed.
             ?>
                 <form class="pa-retry" method="post" data-pa-retry
                       target="_blank" rel="noopener noreferrer"
                       action="<?= Html::encode($urlGenerator->generate($routes['demoUrl'], ['sourceId' => $sourceId])) ?>">
                     <?= $csrf->hiddenInput() ?>
                     <input type="hidden" name="source_order_id" value="<?= Html::encode((string) $sourceOrderId) ?>">
-                    <?php
-                    /*
-                     * "Retry" only where the reader has finished this order before.
-                     *
-                     * The action is identical either way — the same tracked endpoint, the same
-                     * attempt — so this is a label, not a permission. But calling a first attempt a
-                     * retry is simply untrue, and an administrator reading somebody else's history
-                     * has not practised it themselves.
-                     */
-            ?>
                     <button class="btn btn--primary" type="submit"><?=
-                                $readerHasPractised ? 'Retry Practice' : 'Start Practice' ?></button>
+                        $readerHasPractised ? 'Retry Practice' : 'Start Practice' ?></button>
                 </form>
-                <?php
-                            // Where a refused or failed start is reported. The script fills this instead of
-                            // navigating, so a refusal never looks like a successful start. With no script the
-                            // form posts normally and the endpoint renders its own page — the path that has
-                            // always existed.
-            ?>
                 <p class="pa-retry__error" data-pa-retry-error hidden></p>
             </div>
         <?php endif; ?>
@@ -249,73 +163,287 @@ $card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $tes
 <?php endif; ?>
 
 <?php
-                        /*
-             * Filter by agent.
-             *
-             * Rendered only where there is more than one thing to choose between — a filter over a single group
-             * is a control that cannot change anything. A GET form with an explicit Apply, like the topic filter
-             * on the store page: no inline script, nothing navigates on change, and the choice survives a reload
-             * and a bookmark because it lives in the URL.
-             */
+// Three counts, and they are three different things on purpose: people, results, and the results
+// nobody can be shown to have produced. Each is a plain indexed count — no document is read to
+// produce any of them, which is why they are exact even when the scores on the page are budgeted.
 ?>
-<?php if (count($allGroups) > 1): ?>
-    <form class="pa-filter" method="get" role="search">
-        <label class="pa-filter__label" for="pa-agent">Filter by agent</label>
-        <select class="field__control" id="pa-agent" name="agent">
-            <option value=""<?= $chosenAgent === null ? ' selected' : '' ?>>All agents</option>
-            <?php foreach ($allGroups as $option): ?>
-                <option value="<?= Html::encode($option->key()) ?>"<?=
-                $chosenAgent === $option->key() ? ' selected' : '' ?>>
-                    <?= Html::encode($option->label()) ?>
-                    (<?= Html::encode((string) $option->tryCount()) ?>)
-                </option>
+<div class="pr-summary">
+    <div class="pr-summary__item">
+        <span class="pr-summary__value"><?= Html::encode((string) $totalPractitioners) ?></span>
+        <span class="pr-summary__label">Practitioners</span>
+    </div>
+    <div class="pr-summary__item">
+        <span class="pr-summary__value"><?= Html::encode((string) $totalResults) ?></span>
+        <span class="pr-summary__label">Imported results</span>
+    </div>
+    <div class="pr-summary__item<?= $unmatchedCount > 0 ? ' pr-summary__item--flagged' : '' ?>">
+        <span class="pr-summary__value"><?= Html::encode((string) $unmatchedCount) ?></span>
+        <span class="pr-summary__label">Unmatched</span>
+    </div>
+</div>
+
+<div class="card a2t-wide">
+    <h2 class="card__title">Practitioners</h2>
+
+    <?php
+    // A GET form: the search and the sort live in the address, which is what makes them survive a
+    // reload, a bookmark, the pager and the browser's Back button without a line of script.
+?>
+    <form class="pr-toolbar" method="get" action="<?= Html::encode($selfUrl) ?>">
+        <label class="util-visually-hidden" for="pr-agent">Search practitioners</label>
+        <input class="field__control pr-toolbar__search" type="search" id="pr-agent"
+               name="<?= PracticeResultsQuery::SEARCH ?>" placeholder="Search by name"
+               value="<?= Html::encode($query->search ?? '') ?>">
+
+        <label class="util-visually-hidden" for="pr-sort">Sort</label>
+        <select class="field__control pr-toolbar__sort" id="pr-sort" name="<?= PracticeResultsQuery::SORT ?>">
+            <?php foreach ([
+                'recent' => 'Latest practice first',
+                'name' => 'Name',
+                'tries' => 'Most tries first',
+            ] as $value => $label): ?>
+                <option value="<?= Html::encode($value) ?>"<?=
+                    $query->sort === $value ? ' selected' : '' ?>><?= Html::encode($label) ?></option>
             <?php endforeach; ?>
         </select>
+
         <button class="btn btn--secondary btn--sm" type="submit">Apply</button>
-        <?php if ($chosenAgent !== null): ?>
-            <a class="btn btn--ghost btn--sm" href="<?= Html::encode($urlGenerator->generate(
-                $routes['self'],
-                ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
-            )) ?>">Clear</a>
+        <?php if ($query->isFiltered()): ?>
+            <a class="btn btn--sm" href="<?= Html::encode($selfUrl) ?>">Clear</a>
         <?php endif; ?>
+
+        <span class="pr-toolbar__count">
+            <?= Html::encode((string) $totalPractitioners) ?>
+            practitioner<?= $totalPractitioners === 1 ? '' : 's' ?>
+        </span>
     </form>
+
+    <?php if ($practitioners === []): ?>
+        <div class="a2t-empty-state">
+            <?php if ($query->isFiltered()): ?>
+                <p>No practitioner matches that search.</p>
+                <a class="btn" href="<?= Html::encode($selfUrl) ?>">Show all practitioners</a>
+            <?php else: ?>
+                <?php
+                // Not "no attempts": somebody may well have pressed Practice Order. What there is
+                // none of is imported results, which is a different and more useful thing to say.
+                ?>
+                <p>No completed practice results yet.</p>
+            <?php endif; ?>
+        </div>
+    <?php else: ?>
+        <div class="a2t-table-scroll">
+            <table class="table pr-table">
+                <colgroup>
+                    <col class="pr-col-agent">
+                    <col class="pr-col-num">
+                    <col class="pr-col-score">
+                    <col class="pr-col-score">
+                    <col class="pr-col-when">
+                    <col class="pr-col-action">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>Practitioner</th>
+                        <th class="pr-num">Tries</th>
+                        <th class="pr-num">Best</th>
+                        <th class="pr-num">Latest</th>
+                        <th>Last practice</th>
+                        <th><span class="util-visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($practitioners as $practitioner): ?>
+                        <?php
+                        $rowScores = $scores[$practitioner->key()] ?? null;
+                        $triesUrl = $urlGenerator->generate($routes['tries'], [
+                            'sourceId' => $sourceId,
+                            'sourceOrderId' => $sourceOrderId,
+                            'realm' => $practitioner->realm->value,
+                            'actorId' => $practitioner->actorId,
+                        ]);
+                        ?>
+                        <tr>
+                            <td data-ot-label="Practitioner">
+                                <span class="pr-agent"><?= Html::encode($practitioner->displayName()) ?></span>
+                                <span class="pr-agent__realm"><?= Html::encode($practitioner->realm->label()) ?></span>
+                            </td>
+                            <td data-ot-label="Tries" class="pr-num"><?=
+                                Html::encode((string) $practitioner->completedTries) ?></td>
+                            <td data-ot-label="Best" class="pr-num">
+                                <?php if ($rowScores !== null && !$rowScores->bestIsExact): ?>
+                                    <?php
+                                    /*
+                                     * The page could not afford to score this practitioner's whole
+                                     * history, so it does not report a best at all.
+                                     *
+                                     * A number computed over part of somebody's results, labelled
+                                     * "Best", is the figure a reviewer compares two people with. An
+                                     * honest blank that points at the drawer — where the history is
+                                     * paged and scored a screenful at a time — is the better answer.
+                                     */
+                                    ?>
+                                    <span class="pr-score pr-score--unknown"
+                                          title="This practitioner has more results than one page can score. Open their tries to see each one.">Not available</span>
+                                <?php else: ?>
+                                    <span class="pr-score pr-score--<?= Html::encode($band($rowScores?->best)) ?>"><?=
+                                        Html::encode($percent($rowScores?->best)) ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td data-ot-label="Latest" class="pr-num">
+                                <span class="pr-score pr-score--<?= Html::encode($band($rowScores?->latest)) ?>"><?=
+                                    Html::encode($percent($rowScores?->latest)) ?></span>
+                            </td>
+                            <td data-ot-label="Last practice">
+                                <?= $practitioner->lastPractisedAt === null
+                                    ? '<span class="util-muted">&mdash;</span>'
+                                    : Html::encode($appTimeZone->format($practitioner->lastPractisedAt, 'M j, Y')) ?>
+                            </td>
+                            <td data-ot-label="Actions" class="pr-actions">
+                                <?php
+                                // A real link, and the drawer is an enhancement over it. With no
+                                // script it opens the same fragment as a page of its own, so the
+                                // history is reachable either way and nothing is script-only.
+                        ?>
+                                <a class="ot-rowaction" href="<?= Html::encode($triesUrl) ?>"
+                                   data-pr-tries="<?= Html::encode($triesUrl) ?>"
+                                   data-pr-agent="<?= Html::encode($practitioner->displayName()) ?>">View Tries</a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+
+        <?php if ($pages > 1): ?>
+            <?php
+            // Server-side paging, and the search and sort ride along in every link — so page two of
+            // a search is page two OF THAT SEARCH, which is the bug a pager that forgets its filter
+            // produces.
+            ?>
+            <nav class="pr-pager" aria-label="Practitioner pages">
+                <?php if ($page > 1): ?>
+                    <a class="btn btn--sm" href="<?= Html::encode($pageUrl(['page' => $page - 1])) ?>">Previous</a>
+                <?php endif; ?>
+                <span class="pr-pager__at">Page <?= Html::encode((string) $page) ?>
+                    of <?= Html::encode((string) $pages) ?></span>
+                <?php if ($page < $pages): ?>
+                    <a class="btn btn--sm" href="<?= Html::encode($pageUrl(['page' => $page + 1])) ?>">Next</a>
+                <?php endif; ?>
+            </nav>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
+
+<?php if ($unmatchedCount > 0): ?>
+    <?php
+    /*
+     * Unmatched results, in a section of their own.
+     *
+     * Never folded into a practitioner's row: an imported order nobody can be shown to have created
+     * is not anybody's, and putting it under a name would be the invented attribution the importer
+     * refuses to make. Listed bounded, because this is a prompt to investigate rather than a report.
+     */
+    ?>
+    <div class="card a2t-wide pr-unmatched">
+        <h2 class="card__title">
+            Unmatched
+            <span class="pr-unmatched__count"><?= Html::encode((string) $unmatchedCount) ?></span>
+        </h2>
+        <p class="util-muted pr-unmatched__note">
+            Imported results that no tracked attempt could be shown to have produced. They are kept
+            and scored, and credited to no one.
+        </p>
+        <div class="a2t-table-scroll">
+            <?php
+            // Its own modifier, so this table and the practitioner table above are distinguishable
+            // to a stylesheet and to a test. Two tables sharing one class is how an assertion about
+            // "the rows" quietly counts both.
+    ?>
+            <table class="table pr-table pr-table--unmatched">
+                <?php
+                // Sized like the practitioner table above it, so the two read as one page
+                // rather than as two tables that happen to share a screen.
+    ?>
+                <colgroup>
+                    <col class="pr-col-agent">
+                    <col class="pr-col-score">
+                    <col class="pr-col-when">
+                    <col class="pr-col-action">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>Demo order</th>
+                        <th class="pr-num">Score</th>
+                        <th>Imported</th>
+                        <th><span class="util-visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($unmatched as $demo): ?>
+                        <?php $unmatchedScore = $unmatchedScores[$demo->demoOrderId] ?? null; ?>
+                        <tr>
+                            <td data-ot-label="Demo order">#<?= Html::encode((string) $demo->demoOrderId) ?></td>
+                            <td data-ot-label="Score" class="pr-num">
+                                <?php
+                    // The same canonical scorer the attributed rows use, and the
+                    // same honesty about an unavailable one: a dash, never a zero.
+                        ?>
+                                <span class="pr-score pr-score--<?= Html::encode($band($unmatchedScore)) ?>"><?=
+                            Html::encode($percent($unmatchedScore)) ?></span>
+                            </td>
+                            <td data-ot-label="Imported"><?= $demo->importedAt === null
+                            ? '<span class="util-muted">&mdash;</span>'
+                            : Html::encode($demo->importedAt) ?></td>
+                            <td data-ot-label="Actions" class="pr-actions">
+                                <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
+                                   href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
+                               'sourceId' => $sourceId,
+                               'sourceOrderId' => $sourceOrderId,
+                               'demoOrderId' => $demo->demoOrderId,
+                           ])) ?>">View Comparison</a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php if ($unmatchedCount > count($unmatched)): ?>
+            <p class="util-muted">
+                Showing <?= Html::encode((string) count($unmatched)) ?>
+                of <?= Html::encode((string) $unmatchedCount) ?>. The rest are on
+                <a href="<?= Html::encode($allDemoUrl) ?>">All Demo Orders</a>.
+            </p>
+        <?php endif; ?>
+    </div>
 <?php endif; ?>
 
-<?php if ($groups === []): ?>
-    <div class="empty">
-        <div class="empty__icon" aria-hidden="true">🎯</div>
-        <div class="empty__title">No completed practice orders yet</div>
-        <p>
-            A try appears here once the order has been recreated in Order58 <em>and</em> imported with
-            Sync demo orders. Starting an attempt on its own does not create one.
-        </p>
-    </div>
-<?php else: ?>
-    <?php foreach ($groups as $group): ?>
-        <section class="card pa-group<?= $group->isUnmatched() ? ' pa-group--unmatched' : '' ?>"
-                 data-pa-group="<?= Html::encode($group->key()) ?>">
-            <header class="pa-group__head">
-                <h2 class="pa-group__name"><?= Html::encode($group->label()) ?></h2>
-                <p class="pa-group__meta">
-                    <?php if ($group->isUnmatched()): ?>
-                        <?= Html::encode((string) $group->tryCount()) ?>
-                        demo order<?= $group->tryCount() === 1 ? '' : 's' ?> with no identified author
-                    <?php else: ?>
-                        <?= Html::encode((string) $group->tryCount()) ?>
-                        <?= $group->tryCount() === 1 ? 'try' : 'tries' ?>
-                        <?php $best = $group->bestPercent(); ?>
-                        <?php if ($best !== null): ?>
-                            · best <?= Html::encode((string) $best) ?>%
-                        <?php endif; ?>
-                    <?php endif; ?>
+<?php
+    /*
+ * The drawer, empty until something is opened into it.
+ *
+ * One element for the whole table rather than one per row: a hundred rows would otherwise ship a
+ * hundred hidden panels, and only ever one can be open. The script fills it from the same URL the
+ * row's link points at, so what it shows and what the link would have shown are the same response.
+ */
+?>
+<div class="pr-drawer" data-pr-drawer hidden>
+    <div class="pr-drawer__scrim" data-pr-drawer-close></div>
+    <aside class="pr-drawer__panel" role="dialog" aria-modal="true"
+           aria-labelledby="pr-drawer-title" tabindex="-1" data-pr-drawer-panel>
+        <header class="pr-drawer__head">
+            <div>
+                <h2 class="pr-drawer__title" id="pr-drawer-title" data-pr-drawer-title>Practitioner</h2>
+                <p class="pr-drawer__meta">
+                    Source order #<?= Html::encode((string) $sourceOrderId) ?>
+                    &middot; <?= Html::encode($storeName) ?>
                 </p>
-            </header>
-            <?php // Three to a row on a desktop, and fewer as the window narrows — see the stylesheet.?>
-            <div class="pa-grid">
-                <?php foreach ($group->tries as $try): ?>
-                    <?= $card($try) ?>
-                <?php endforeach; ?>
             </div>
-        </section>
-    <?php endforeach; ?>
-<?php endif; ?>
+            <button class="pr-drawer__close" type="button" data-pr-drawer-close
+                    aria-label="Close">&times;</button>
+        </header>
+        <div class="pr-drawer__body" data-pr-drawer-body>
+            <p class="util-muted">Loading…</p>
+        </div>
+    </aside>
+</div>

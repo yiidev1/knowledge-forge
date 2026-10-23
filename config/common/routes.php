@@ -726,6 +726,16 @@ return [
                 ->action(OrderTestingModule\PracticeAttempts\Action::class)
                 ->name(OrderTestingRoute::DEMO_ORDERS),
 
+            // One practitioner's tries. The realm is in the path because a practitioner is
+            // `(realm, id)` — two realms number their users separately, and an address carrying
+            // only the number would resolve to whichever row the query happened to find.
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                    . '/demo-orders/tries/{realm:[A-Z]+}/{actorId:\d+}',
+            )
+                ->action(OrderTestingModule\PractitionerTries\Action::class)
+                ->name(OrderTestingRoute::DEMO_ORDERS_TRIES),
+
             // The flat list it used to open, kept and reachable from that page's own toolbar.
             Route::get('/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/demo-orders/all')
                 ->action(OrderTestingModule\DemoOrders\Action::class)
@@ -1043,6 +1053,15 @@ return [
                     )
                         ->action(AgentPracticeOrders\PracticeAttemptsAction::class)
                         ->name('agent.practice-orders.demo-orders'),
+                    // The same endpoint, at the agent's own address. Its subclass refuses any
+                    // practitioner but the signed-in agent, so the realm and id in the path cannot
+                    // be edited into somebody else's results.
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                            . '/demo-orders/tries/{realm:[A-Z]+}/{actorId:\d+}',
+                    )
+                        ->action(AgentPracticeOrders\PractitionerTriesAction::class)
+                        ->name('agent.practice-orders.demo-orders.tries'),
                     Route::get(
                         '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
                             . '/demo-orders/all',

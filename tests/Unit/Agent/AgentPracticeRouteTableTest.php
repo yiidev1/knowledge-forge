@@ -42,6 +42,15 @@ final class AgentPracticeRouteTableTest extends TestCase
          * address.
          */
         'agent.practice-orders.demo-orders.all',
+        /*
+         * One practitioner's tries, for the View Tries drawer.
+         *
+         * A read, and narrower than the page it opens from: the action refuses any practitioner but
+         * the signed-in agent, so the realm and id in its path cannot be edited into a colleague's
+         * results. Added here deliberately rather than quietly — a new agent address is exactly what
+         * this list exists to make somebody state.
+         */
+        'agent.practice-orders.demo-orders.tries',
         'agent.practice-orders.demo-receipt',
         'agent.practice-orders.demo-url',
         'agent.practice-orders.job.ai-audio.file',

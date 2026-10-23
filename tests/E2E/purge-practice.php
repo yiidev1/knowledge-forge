@@ -28,6 +28,11 @@ $c->createCommand()->delete('{{%audio_conversations}}', ['store_source_id' => ST
 $c->createCommand()->delete('{{%order58_orders}}', ['account_id' => STORE])->execute();
 $c->createCommand()->delete('{{%order58_stores}}', ['source_id' => STORE])->execute();
 $c->createCommand()->delete('{{%knowledge_bases}}', ['slug' => SLUG])->execute();
+// The mirrored agents the Practice Results table was seeded with, by the id range they occupy.
+$c->createCommand()->delete(
+    '{{%order58_agents}}',
+    ['between', 'admin_id', 97100, 97199],
+)->execute();
 $c->createCommand()->delete('{{%admin_users}}', ['username' => ADMIN])->execute();
 
 foreach ([JOB, 'beefbeefbeefbeefbeefbeefbeefbeef'] as $job) {

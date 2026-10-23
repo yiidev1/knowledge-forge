@@ -4,14 +4,6 @@ declare(strict_types=1);
 
 namespace App\Agent\Web\PracticeOrders;
 
-use App\OrderTesting\Application\Practice\PracticeHistoryBuilder;
-use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
-use App\OrderTesting\Domain\SourceOrderReaderInterface;
-use App\OrderTesting\Domain\StoreReaderInterface;
-use App\OrderTesting\Domain\TestActorInterface;
-use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
-use App\Shared\Application\Time\AppTimeZone;
-use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 use App\OrderTesting\Web\PracticeAttempts\Action as OrderTestingPracticeAttemptsAction;
 
 /**
@@ -34,33 +26,15 @@ use App\OrderTesting\Web\PracticeAttempts\Action as OrderTestingPracticeAttempts
  */
 final readonly class PracticeAttemptsAction extends OrderTestingPracticeAttemptsAction
 {
-    /**
-     * The signed-in agent, read from the same port that attributes an attempt when it is started.
+    /*
+     * No constructor of its own.
      *
-     * Deliberately the same source: the identity this page filters by and the identity written onto
-     * a new attempt must be one thing, or an agent could start attempts they cannot then see.
+     * It used to restate the parent's dependency list in order to pass them straight through, which
+     * meant every change to that list broke here — and the breakage was the whole value, since the
+     * alternative is a surface quietly constructed with the wrong arguments. Inheriting it removes
+     * the restatement and the breakage together: this class adds no dependency, so it needs no
+     * constructor, and `$actor` is protected on the parent for exactly this reason.
      */
-    public function __construct(
-        WebViewRenderer $viewRenderer,
-        DemoOrderRepositoryInterface $demoOrders,
-        TestAttemptRepositoryInterface $attempts,
-        StoreReaderInterface $stores,
-        SourceOrderReaderInterface $sourceOrders,
-        PracticeHistoryBuilder $history,
-        AppTimeZone $appTimeZone,
-        TestActorInterface $actor,
-    ) {
-        parent::__construct(
-            $viewRenderer,
-            $demoOrders,
-            $attempts,
-            $stores,
-            $sourceOrders,
-            $history,
-            $actor,
-            $appTimeZone,
-        );
-    }
 
     protected function actorFilter(): array
     {

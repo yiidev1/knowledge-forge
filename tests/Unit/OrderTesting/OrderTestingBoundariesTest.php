@@ -293,6 +293,25 @@ final class OrderTestingBoundariesTest extends TestCase
             'src/OrderTesting/Domain/Practice/AttemptGroup.php',
             'src/OrderTesting/Web/PracticeAttempts/Action.php',
             'src/OrderTesting/Web/PracticeAttempts/template.php',
+            /*
+             * Practice Results, added when the grouped cards became a paged table.
+             *
+             * `PractitionerScorer` is the entry that most deserves a second look, because its name
+             * says it scores. It does not. It asks the one `ComparisonScorer` above for a score per
+             * demo order and then CHOOSES among the answers — which is highest, which is newest, and
+             * which it could not afford to compute. Choosing between numbers somebody else produced
+             * is not a second opinion about them; computing one would be, and it does not.
+             *
+             * The rest carry a score without touching it: the history service hands documents to the
+             * same scorer, the two value objects hold what came back, and the three templates print
+             * it. None of them adds, weights or thresholds anything.
+             */
+            'src/OrderTesting/Application/Practice/PractitionerScorer.php',
+            'src/OrderTesting/Application/Practice/PractitionerScores.php',
+            'src/OrderTesting/Application/Practice/PractitionerHistory.php',
+            'src/OrderTesting/Application/Practice/PractitionerTry.php',
+            'src/OrderTesting/Web/PracticeAttempts/own.php',
+            'src/OrderTesting/Web/PractitionerTries/template.php',
         ];
 
         $offenders = [];

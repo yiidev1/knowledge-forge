@@ -154,3 +154,176 @@
             });
     });
 })();
+
+/*
+ * The View Tries drawer.
+ *
+ * ## Why a drawer and not a page
+ *
+ * A reviewer working through a hundred practitioners opens one, reads four results, closes it and
+ * carries on. A page per practitioner costs them their place in the table, their search, their sort
+ * and their scroll position every single time — four navigations to look at one person.
+ *
+ * So the drawer fetches the practitioner's own page and lifts its contents in, and the table behind
+ * it is never touched. Nothing about the table's state can be lost because nothing about the table
+ * changes.
+ *
+ * ## It is an enhancement, never the only way
+ *
+ * Every row's View Tries is a real link to a real page. This intercepts the click; with no script,
+ * or if the fetch fails, the link does what links do. That is also why the endpoint renders a whole
+ * page rather than a bare fragment — one response serves both, so the two cannot drift apart.
+ *
+ * ## Only the practitioner asked for
+ *
+ * One request, for one person, when somebody asks. The table ships no histories at all, which is
+ * what keeps a hundred rows from costing a hundred comparisons — and the server re-checks who may
+ * be read, so this script is a convenience and never the authorization.
+ */
+(function () {
+    'use strict';
+
+    var drawer = document.querySelector('[data-pr-drawer]');
+
+    if (drawer === null) {
+        return;
+    }
+
+    var panel = drawer.querySelector('[data-pr-drawer-panel]');
+    var body = drawer.querySelector('[data-pr-drawer-body]');
+    var title = drawer.querySelector('[data-pr-drawer-title]');
+    // What had focus when the drawer opened, so closing can give it back. Without this the next Tab
+    // starts from the top of the document and the reader loses the row they were on.
+    var opener = null;
+
+    function open(name) {
+        opener = document.activeElement;
+        title.textContent = name;
+        body.innerHTML = '';
+        body.appendChild(loading());
+        drawer.hidden = false;
+        // Focus the panel, not the first control inside it: the contents are still loading, and
+        // moving focus to something that is about to be replaced loses it again a moment later.
+        panel.focus();
+    }
+
+    function close() {
+        drawer.hidden = true;
+        body.innerHTML = '';
+
+        if (opener !== null && typeof opener.focus === 'function') {
+            opener.focus();
+        }
+
+        opener = null;
+    }
+
+    function loading() {
+        var p = document.createElement('p');
+        p.className = 'util-muted';
+        p.textContent = 'Loading…';
+
+        return p;
+    }
+
+    function failed(url) {
+        // A failure says so and leaves the way through: the link still works, and the reader should
+        // not be left with an empty panel wondering whether this person has no results.
+        var p = document.createElement('p');
+        p.className = 'util-muted';
+        p.textContent = 'Could not load these tries. ';
+
+        var a = document.createElement('a');
+        a.href = url;
+        a.textContent = 'Open them as a page';
+        p.appendChild(a);
+
+        return p;
+    }
+
+    /**
+     * Fetch one practitioner's tries and put them in the panel.
+     *
+     * The response is a whole page, so the part that belongs in a drawer is lifted out of it by the
+     * marker the template puts around exactly that. Parsed with DOMParser rather than assigned as
+     * innerHTML: the document never becomes live, so nothing in it can run.
+     */
+    function load(url) {
+        window.fetch(url, {
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'}
+        }).then(function (response) {
+            if (!response.ok) {
+                throw new Error('status ' + response.status);
+            }
+
+            return response.text();
+        }).then(function (html) {
+            var parsed = new DOMParser().parseFromString(html, 'text/html');
+            var content = parsed.querySelector('[data-pr-tries-content]');
+
+            body.innerHTML = '';
+
+            if (content === null) {
+                body.appendChild(failed(url));
+
+                return;
+            }
+
+            body.appendChild(document.importNode(content, true));
+        }).catch(function () {
+            body.innerHTML = '';
+            body.appendChild(failed(url));
+        });
+    }
+
+    document.addEventListener('click', function (event) {
+        var close$ = event.target.closest('[data-pr-drawer-close]');
+
+        if (close$ !== null) {
+            event.preventDefault();
+            close();
+
+            return;
+        }
+
+        // Paging inside the drawer stays inside the drawer.
+        var pageLink = event.target.closest('[data-pr-tries-page]');
+
+        if (pageLink !== null && !drawer.hidden) {
+            event.preventDefault();
+            body.innerHTML = '';
+            body.appendChild(loading());
+            load(pageLink.getAttribute('href'));
+
+            return;
+        }
+
+        var trigger = event.target.closest('[data-pr-tries]');
+
+        if (trigger === null) {
+            return;
+        }
+
+        // Only a plain click. A middle click, or ctrl/cmd, means "open this in a tab" — and it is a
+        // real link, so letting the browser do that is the correct answer.
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+            || event.shiftKey || event.altKey) {
+            return;
+        }
+
+        if (typeof window.fetch !== 'function' || typeof window.DOMParser !== 'function') {
+            return;
+        }
+
+        event.preventDefault();
+        open(trigger.getAttribute('data-pr-agent') || 'Practitioner');
+        load(trigger.getAttribute('data-pr-tries'));
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if ((event.key === 'Escape' || event.key === 'Esc') && !drawer.hidden) {
+            close();
+        }
+    });
+})();

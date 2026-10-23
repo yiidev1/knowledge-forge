@@ -13,11 +13,15 @@ use App\OrderTesting\Application\DemoOrderDirectory;
 use App\OrderTesting\Application\TestAttemptService;
 use App\OrderTesting\Application\DemoOrderSyncService;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
+use App\OrderTesting\Domain\Practice\PracticeResultsReaderInterface;
+use App\OrderTesting\Domain\Practice\PracticeTopicReaderInterface;
 use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
 use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
 use App\OrderTesting\Infrastructure\DbDemoOrderRepository;
+use App\OrderTesting\Infrastructure\DbPracticeResultsReader;
+use App\OrderTesting\Infrastructure\DbPracticeTopicReader;
 use App\OrderTesting\Infrastructure\DbOriginalItemsReader;
 use App\OrderTesting\Infrastructure\DbSourceOrderReader;
 use App\OrderTesting\Infrastructure\DbStoreReader;
@@ -42,6 +46,17 @@ return [
     ComparisonScorer::class => ComparisonScorer::class,
 
     DemoOrderRepositoryInterface::class => DbDemoOrderRepository::class,
+    /*
+     * The Practice Results read side.
+     *
+     * Separate from the repositories above because it answers different questions: those fetch
+     * whole demo orders to import and compare them, this aggregates who practised without
+     * touching a single payload. One interface pointing at both would have made the cheap
+     * question and the expensive one look alike at the call site.
+     */
+    PracticeResultsReaderInterface::class => DbPracticeResultsReader::class,
+    // The source order's current topic, read by table name — this module may not name Practice.
+    PracticeTopicReaderInterface::class => DbPracticeTopicReader::class,
     TestAttemptRepositoryInterface::class => DbTestAttemptRepository::class,
     SourceOrderReaderInterface::class => DbSourceOrderReader::class,
 

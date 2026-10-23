@@ -4,53 +4,77 @@ declare(strict_types=1);
 
 namespace App\OrderTesting\Web\PracticeAttempts;
 
-use App\OrderTesting\Application\Practice\PracticeHistoryBuilder;
-use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
+use App\OrderTesting\Application\Practice\PractitionerHistory;
+use App\OrderTesting\Application\Practice\PractitionerScorer;
 use App\OrderTesting\Domain\InitiatorType;
+use App\OrderTesting\Domain\Practice\PracticeResultsQuery;
+use App\OrderTesting\Domain\Practice\PracticeResultsReaderInterface;
+use App\OrderTesting\Domain\Practice\PracticeTopicReaderInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
 use App\OrderTesting\Domain\TestActorInterface;
-use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
-use App\Shared\Domain\Exception\NotFoundException;
 use App\Shared\Application\Time\AppTimeZone;
+use App\Shared\Domain\Exception\NotFoundException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
-use function is_string;
+use function ceil;
+use function is_numeric;
+use function max;
+use function min;
 
 /**
- * Practice Attempts: who practised this source order, how many times, and how they did.
+ * Practice Results: who practised one source order, and how they did.
  *
- * The destination of the Demo Orders "View (N)" link. The flat listing it used to open is still
- * there, one click away under **All Demo Orders** — this page answers a different question. The
- * listing says what was imported; this says what somebody did.
+ * ## What this replaced, and why
  *
- * ## The agent surface subclasses this
+ * The page used to draw one card per try, grouped under one heading per practitioner, and it built
+ * every one of them on every request: all the attempts, all the demo orders with their whole
+ * documents, and a full comparison scored for each. At the four results this store had, that read
+ * fine. At the hundred practitioners with three or four results each that the client described, it
+ * is four hundred documents parsed and compared to draw a page nobody can scroll through anyway.
  *
- * Exactly as {@see \App\OrderTesting\Web\DemoOrders\Action} is subclassed: the agent realm supplies
- * its own addresses, its own shell, and — the part that matters — its own actor filter. The page
- * body is identical because the difference between the realms is *which rows exist*, not how a card
- * is drawn.
+ * So the page is a table now, and the table is paged. What it costs is set by the page size rather
+ * than by how many people have practised:
  *
- * ## Scope is decided here, not in the template
+ * - **Who practised** — one indexed aggregate, no documents at all.
+ * - **Their scores** — only for the rows on screen, under a budget. See {@see PractitionerScorer}.
+ * - **Their individual tries** — only when somebody opens that practitioner, in the drawer.
  *
- * {@see actorFilter()} is pushed into the repository query. An agent's history never leaves the
- * database with somebody else's rows in it, so a template that rendered the list differently could
- * not leak them.
+ * ## The agent surface subclasses this and shows one person their own results
+ *
+ * Exactly as before: {@see actorFilter()} is the authorization boundary and it is pushed into the
+ * query, so an agent's history is fetched narrowed rather than filtered afterwards. The difference
+ * is that an agent needs no table of practitioners — there is one — so that surface renders its own
+ * template over the same services.
  */
 readonly class Action
 {
+    /** Practitioners per page. Twenty-five is what the rest of this application pages by. */
+    protected const PER_PAGE = 25;
+
+    /**
+     * Unmatched results listed at once.
+     *
+     * Bounded like everything else here, and bounded low: this section is a prompt to go and look
+     * into something, not a report. Its count is exact regardless.
+     */
+    protected const UNMATCHED_SHOWN = 25;
+
     public function __construct(
         private WebViewRenderer $viewRenderer,
-        private DemoOrderRepositoryInterface $demoOrders,
-        private TestAttemptRepositoryInterface $attempts,
+        private PracticeResultsReaderInterface $results,
+        private PractitionerScorer $scorer,
+        /** One practitioner's own tries, for the drawer and for an agent's own page. */
+        private PractitionerHistory $history,
         private StoreReaderInterface $stores,
         private SourceOrderReaderInterface $sourceOrders,
-        private PracticeHistoryBuilder $history,
-        // Who is reading, for deciding whether this is a retry or a first attempt. Protected
-        // so the agent surface can reuse it rather than taking a second copy of the same port.
+        /** The order's current topic, shown as context. Never a filter — see the template. */
+        private PracticeTopicReaderInterface $topics,
+        // Who is reading, for deciding whether this is a retry or a first attempt. Protected so the
+        // agent surface can reuse it rather than taking a second copy of the same port.
         protected TestActorInterface $actor,
         // Timestamps are stored UTC and read in the business timezone, as every other page here does.
         private AppTimeZone $appTimeZone,
@@ -69,146 +93,151 @@ readonly class Action
             throw new NotFoundException('store_not_found', 'No store has that source id.');
         }
 
-        [$actorType, $actorId] = $this->actorFilter();
+        $params = $request->getQueryParams();
+        $query = PracticeResultsQuery::fromParams($params);
 
-        $attempts = $this->attempts->historyFor($sourceId, $sourceOrderId, $actorType, $actorId);
+        [$realm, $actorId] = $this->actorFilter();
 
         /*
-         * The demo orders a reader of this page may see.
+         * An agent's page is their own results, so there is no table of practitioners to page.
          *
-         * An agent gets only the ones attached to their own attempts — filtered here, against the
-         * attempt ids the query above already narrowed, so a demo order belonging to somebody else's
-         * attempt is never carried into the view at all. Administrators and operations users see
-         * every one, including the ones with no owner.
+         * Decided here rather than in the template, because it decides which queries run at all: the
+         * aggregate below is a management question, and asking it on a surface that may not see the
+         * answer would be fetching data to then not show it.
          */
-        $demoOrders = $this->demoOrders->forSourceOrder($sourceId, $sourceOrderId);
-        $seesEverything = $actorType === null;
-
-        if (!$seesEverything) {
-            $mine = [];
-
-            foreach ($attempts as $attempt) {
-                $mine[$attempt->id] = true;
-            }
-
-            $visible = [];
-
-            foreach ($demoOrders as $demo) {
-                if ($demo->matchedAttemptId !== null && isset($mine[$demo->matchedAttemptId])) {
-                    $visible[] = $demo;
-                }
-            }
-
-            $demoOrders = $visible;
+        if ($realm !== null && $actorId !== null) {
+            return $this->renderOwn($sourceId, $sourceOrderId, $storeName, $realm, $actorId);
         }
 
-        $groups = $this->history->build(
+        $total = $this->results->countPractitioners($sourceId, $sourceOrderId, $query);
+        $pages = max(1, (int) ceil($total / self::PER_PAGE));
+        $page = $this->page($params, $pages);
+
+        $unmatched = $this->results->unmatched($sourceId, $sourceOrderId, self::UNMATCHED_SHOWN, 0);
+
+        $practitioners = $this->results->practitioners(
             $sourceId,
             $sourceOrderId,
-            $attempts,
-            $demoOrders,
-            // Unmatched is a management concern: a demo order nobody can be shown to have made is
-            // not an agent's to claim, so that realm is not offered it.
-            $seesEverything,
+            $query,
+            self::PER_PAGE,
+            ($page - 1) * self::PER_PAGE,
         );
-
-        /*
-         * Narrowing to one practitioner, applied after grouping.
-         *
-         * Safe to do here, and only here, because this is a *view* filter over rows the reader is
-         * already entitled to — the authorization narrowing happened in the query above. A chosen
-         * key that matches nothing shows everything rather than erroring: a query string is not a
-         * form, and a stale link should not be a dead end.
-         */
-        $chosen = $request->getQueryParams()['agent'] ?? null;
-        $chosen = is_string($chosen) && $chosen !== '' ? $chosen : null;
-        $shown = $groups;
-
-        if ($chosen !== null) {
-            $matched = [];
-
-            foreach ($groups as $group) {
-                if ($group->key() === $chosen) {
-                    $matched[] = $group;
-                }
-            }
-
-            if ($matched !== []) {
-                $shown = $matched;
-            } else {
-                $chosen = null;
-            }
-        }
 
         return $this->viewRenderer
             ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/template', [
                 'routes' => $this->surfaceRoutes(),
                 'appTimeZone' => $this->appTimeZone,
-                'allGroups' => $groups,
-                'chosenAgent' => $chosen,
                 'sourceId' => $sourceId,
                 'storeName' => $storeName,
                 'sourceOrderId' => $sourceOrderId,
-                'groups' => $shown,
-                'canRetry' => $this->canRetry(),
+                'query' => $query,
+                'practitioners' => $practitioners,
+                // Scored for these rows only, and only as far as the budget reaches.
+                'scores' => $this->scorer->forPage($sourceId, $sourceOrderId, $practitioners),
+                'page' => $page,
+                'pages' => $pages,
+                'perPage' => self::PER_PAGE,
+                'totalPractitioners' => $total,
+                'totalResults' => $this->results->resultCount($sourceId, $sourceOrderId),
+                'unmatchedCount' => $this->results->unmatchedCount($sourceId, $sourceOrderId),
+                'unmatched' => $unmatched,
+                // The same canonical scorer the attributed rows use. An unattributed result is worth
+                // what it is worth; what it has no claim to is a practitioner.
+                'unmatchedScores' => $this->history->scoreEach($sourceId, $sourceOrderId, $unmatched),
                 /*
-                 * Whether this reader has finished this order before.
+                 * The source order's topic, as a fact about the order.
                  *
-                 * "Retry" is a claim about the person reading, not about the page: an administrator
-                 * looking at somebody else's completed history has not practised it themselves, and
-                 * a button offering to *re*try would be wrong. Clicking Practice Order does not earn
-                 * it either — only an imported, attributed demo order does.
-                 *
-                 * Counted over the reader's own attempts, so it is the same evidence the cards are
-                 * built from.
+                 * Not a filter, and deliberately so. A topic is assigned to a source order —
+                 * `practice_order_topics` is unique on `(store, order)` — so every result on this
+                 * page carries the same one, and a dropdown offering it would exclude nothing. It is
+                 * shown here because a reviewer wants to know what the practice was about.
                  */
-                'readerHasPractised' => $this->readerHasCompleted($attempts, $demoOrders),
-                // Only to say whether the left-hand side of each comparison will have anything on it.
+                'topic' => $this->topics->forOrder($sourceId, $sourceOrderId),
+                'canRetry' => $this->canRetry(),
+                'readerHasPractised' => $this->readerHasPractised($sourceId, $sourceOrderId),
                 'sourceOrderIsMirrored' => $this->sourceOrders->find($sourceId, $sourceOrderId) !== null,
             ]);
     }
 
     /**
-     * Has the reader themselves produced an imported demo order for this source order?
+     * One practitioner's own results, for a surface that shows nobody else's.
      *
-     * Only an attempt of *theirs* that a demo order was attributed to counts. A pending attempt, an
-     * expired one, an Unmatched demo order and somebody else's result all answer no.
-     *
-     * @param list<\App\OrderTesting\Domain\TestAttempt> $attempts
-     * @param list<\App\OrderTesting\Domain\DemoOrder>   $demoOrders
+     * The same reader and the same scorer, asked for one person. No practitioner aggregate runs, no
+     * unmatched section is fetched, and no global counts reach the template — an agent is not shown
+     * how many other people practised, because that is management information about colleagues.
      */
-    private function readerHasCompleted(array $attempts, array $demoOrders): bool
-    {
-        [$realm, $id] = $this->readerIdentity();
+    private function renderOwn(
+        int $sourceId,
+        int $sourceOrderId,
+        string $storeName,
+        InitiatorType $realm,
+        int $actorId,
+    ): ResponseInterface {
+        $total = $this->results->countResultsFor($sourceId, $sourceOrderId, $realm, $actorId);
 
-        if ($realm === null || $id === null) {
-            return false;
-        }
-
-        $mine = [];
-
-        foreach ($attempts as $attempt) {
-            if ($attempt->initiatedByType === $realm && $attempt->initiatedById === $id) {
-                $mine[$attempt->id] = true;
-            }
-        }
-
-        foreach ($demoOrders as $demo) {
-            if ($demo->matchedAttemptId !== null && isset($mine[$demo->matchedAttemptId])) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->viewRenderer
+            ->withLayout($this->layoutPath())
+            ->render(__DIR__ . '/own', [
+                'routes' => $this->surfaceRoutes(),
+                'appTimeZone' => $this->appTimeZone,
+                'sourceId' => $sourceId,
+                'storeName' => $storeName,
+                'sourceOrderId' => $sourceOrderId,
+                'tries' => $this->history->forPractitioner($sourceId, $sourceOrderId, $realm, $actorId),
+                'totalTries' => $total,
+                'topic' => $this->topics->forOrder($sourceId, $sourceOrderId),
+                'canRetry' => $this->canRetry(),
+                // An agent has practised when THEY have an imported result, which is exactly what
+                // the count above is. Never another practitioner's.
+                'readerHasPractised' => $total > 0,
+                'sourceOrderIsMirrored' => $this->sourceOrders->find($sourceId, $sourceOrderId) !== null,
+            ]);
     }
 
     /**
-     * Whose history this page shows.
+     * Which page is being asked for, clamped into the range that exists.
      *
-     * `[null, null]` means everybody, which is what Manage Orders and Practice Orders give their
-     * administrators and operations users. The agent surface overrides it with that agent's own
-     * realm and id.
+     * A stale link to page nine of a list that now has two is answered with page two rather than an
+     * empty table: the filter narrowed, and showing nothing would read as "no results" rather than
+     * "you are past the end".
+     *
+     * @param array<array-key, mixed> $params
+     */
+    private function page(array $params, int $pages): int
+    {
+        $raw = $params[PracticeResultsQuery::PAGE] ?? null;
+        $page = is_numeric($raw) ? (int) $raw : 1;
+
+        return min(max(1, $page), $pages);
+    }
+
+    /**
+     * Has the reader themselves produced an imported result for this source order?
+     *
+     * "Retry" is a claim about the person reading, not about the page: an administrator looking at
+     * somebody else's completed history has not practised it, and a button offering to *re*try would
+     * be wrong. Clicking Practice Order does not earn it either — only an imported, attributed
+     * result does, which is what this counts.
+     */
+    protected function readerHasPractised(int $sourceId, int $sourceOrderId): bool
+    {
+        $realm = $this->actor->initiatorType();
+
+        return $this->results->countResultsFor(
+            $sourceId,
+            $sourceOrderId,
+            $realm,
+            $this->actor->initiatorId(),
+        ) > 0;
+    }
+
+    /**
+     * Whose results this page shows.
+     *
+     * `[null, null]` means everybody's, which is what the management surfaces get. The agent surface
+     * overrides it with that agent's own realm and id, and the override is an authorization
+     * boundary: it reaches the query, so somebody else's results are never fetched at all.
      *
      * @return array{0: ?InitiatorType, 1: ?int}
      */
@@ -217,30 +246,10 @@ readonly class Action
         return [null, null];
     }
 
-    /**
-     * Whether this surface may start a practice attempt at all.
-     *
-     * True for every surface whose route group mounts the Practice Order endpoint the button posts
-     * to. Whether that button says **Retry** or **Start** is a separate question, answered per
-     * reader by the action — see below.
-     */
+    /** Whether this surface may start a practice attempt at all. */
     protected function canRetry(): bool
     {
         return true;
-    }
-
-    /**
-     * Who the reader is, for deciding whether they have practised this order before.
-     *
-     * Returns the actor filter when the surface shows one person's history, and `[null, null]` on
-     * the management surfaces — where the page may be full of other people's results and the reader
-     * has their own, separate, standing.
-     *
-     * @return array{0: ?InitiatorType, 1: ?int}
-     */
-    protected function readerIdentity(): array
-    {
-        return [$this->actor->initiatorType(), $this->actor->initiatorId()];
     }
 
     /**
@@ -256,8 +265,8 @@ readonly class Action
             'page' => 'order-testing',
             'pageLabel' => 'Manage Orders',
             'store' => 'order-testing.store',
-            // This page's own address, for the filter's Clear link.
             'self' => 'order-testing.demo-orders',
+            'tries' => 'order-testing.demo-orders.tries',
             'allDemoOrders' => 'order-testing.demo-orders.all',
             'demoCompare' => 'order-testing.demo-compare',
             'demoUrl' => 'order-testing.demo-url',

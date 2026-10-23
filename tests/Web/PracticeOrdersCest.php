@@ -309,7 +309,7 @@ final class PracticeOrdersCest
         $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
 
         $I->seeResponseCodeIs(200);
-        $I->see('Practice Attempts', 'h1');
+        $I->see('Practice Results', 'h1');
         $I->see('Back to Store');
     }
 

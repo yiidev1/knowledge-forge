@@ -180,6 +180,20 @@ final readonly class DbDemoOrderRepository implements DemoOrderRepositoryInterfa
     /** @param array<array-key, mixed> $row */
     private function hydrate(array $row): DemoOrder
     {
+        return self::fromRow($row);
+    }
+
+    /**
+     * One row of this table as a {@see DemoOrder}.
+     *
+     * Static and public so the read side can reuse it rather than keeping a second copy of a
+     * twenty-four-column mapping. Two copies is how a column added to one and not the other becomes
+     * a field that is populated on one page and empty on another, with nothing failing to say so.
+     *
+     * @param array<array-key, mixed> $row
+     */
+    public static function fromRow(array $row): DemoOrder
+    {
         return new DemoOrder(
             storeSourceId: (int) $row['store_source_id'],
             sourceOrderId: (int) $row['source_order_id'],

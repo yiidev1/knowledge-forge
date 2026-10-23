@@ -183,3 +183,341 @@
 .pa-retry__error[hidden] {
     display: none;
 }
+
+/* ===========================================================================================
+   Practice Results: a table of practitioners, and a drawer for one of them.
+
+   Every colour is a token, so light and dark are one set of rules rather than two. Scores carry a
+   band colour, but the number is always printed beside it — colour is never the only signal, and an
+   unavailable comparison says "—" rather than painting a zero.
+   =========================================================================================== */
+
+/* The source order's topic, as context beside the order number. Not a control. */
+.pr-topic {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+    font-size: 0.78rem;
+    color: var(--text);
+}
+
+/*
+ * Three counts, and they are three different things: people, results, and results nobody can be
+ * shown to have produced. Spaced apart rather than boxed in cards — three KPI tiles for three
+ * integers is decoration.
+ */
+.pr-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.75rem;
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+}
+
+.pr-summary__item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.pr-summary__value {
+    font-size: 1.3rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    color: var(--text);
+}
+
+.pr-summary__label {
+    font-size: 0.74rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* Unmatched results are worth noticing, and worth noticing quietly. */
+.pr-summary__item--flagged .pr-summary__value {
+    color: var(--warning-text);
+}
+
+.pr-summary--own {
+    gap: 2.25rem;
+}
+
+/* ---- the toolbar ------------------------------------------------------------------------------ */
+
+.pr-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+/*
+ * Both controls override `.field__control`'s `width: 100%`.
+ *
+ * Without that each one claims the whole row and the toolbar becomes a stack — which is what it did
+ * in the browser, and what no amount of `flex-basis` fixes while the width is still 100%. Measured,
+ * not reasoned about: `flex` sets how the free space is shared, `width` sets what is being shared.
+ */
+.pr-toolbar__search {
+    flex: 0 1 16rem;
+    width: auto;
+    min-width: 9rem;
+}
+
+.pr-toolbar__sort {
+    flex: 0 0 auto;
+    width: auto;
+    /* A select sized to its longest option — "Latest practice first" — and no wider. */
+    max-width: 14rem;
+}
+
+/* Pushed to the far end where there is room, and first to wrap where there is not. */
+.pr-toolbar__count {
+    margin-left: auto;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+@media (max-width: 48rem) {
+    .pr-toolbar__count {
+        margin-left: 0;
+    }
+}
+
+/* ---- the table -------------------------------------------------------------------------------- */
+
+.pr-table {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.pr-table th,
+.pr-table td {
+    vertical-align: middle;
+}
+
+.pr-col-agent { width: 32%; }
+.pr-col-num { width: 9%; }
+.pr-col-score { width: 12%; }
+.pr-col-when { width: 17%; }
+.pr-col-action { width: 18%; }
+
+/* Figures line up digit under digit, which is the whole reason to right-align a number column. */
+.pr-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.pr-actions {
+    text-align: right;
+}
+
+.pr-agent {
+    display: block;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* Which realm somebody practised as. Quiet, because it qualifies the name rather than being it. */
+.pr-agent__realm {
+    display: block;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+/*
+ * A score, with its band.
+ *
+ * The band tints the text rather than filling a badge: a column of filled pills is louder than the
+ * numbers it is meant to help somebody read. The four band tokens are defined once in `admin.css`
+ * and are chosen to stay legible on both surfaces, so there is no per-theme override here.
+ */
+.pr-score {
+    font-variant-numeric: tabular-nums;
+    font-weight: 650;
+}
+
+.pr-score--excellent { color: var(--score-excellent); }
+.pr-score--good { color: var(--score-good); }
+.pr-score--fair { color: var(--score-fair); }
+.pr-score--poor { color: var(--score-poor); }
+
+/* No comparison, so no number — never a zero, which would read as a score somebody earned. */
+.pr-score--none,
+.pr-score--unknown {
+    color: var(--text-faint);
+    font-weight: 500;
+}
+
+.pr-score--unknown {
+    font-size: 0.76rem;
+    cursor: help;
+}
+
+/* ---- pagination ------------------------------------------------------------------------------- */
+
+.pr-pager {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.9rem;
+}
+
+.pr-pager__at {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* ---- unmatched -------------------------------------------------------------------------------- */
+
+.pr-unmatched__count {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    color: var(--warning-text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+.pr-unmatched__note {
+    margin: 0 0 0.8rem;
+    font-size: 0.82rem;
+}
+
+/* ---- the drawer ------------------------------------------------------------------------------- */
+
+.pr-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.pr-drawer[hidden] {
+    display: none;
+}
+
+/* Dimmed rather than blacked out: the table stays legible behind it, which is the point of a drawer. */
+.pr-drawer__scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+}
+
+.pr-drawer__panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(32rem, 100%);
+    max-height: 100%;
+    background: var(--surface);
+    border-left: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-lg);
+    overflow-y: auto;
+}
+
+/* The panel takes focus when it opens, and says so. */
+.pr-drawer__panel:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+}
+
+.pr-drawer__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+}
+
+.pr-drawer__title {
+    margin: 0;
+    font-size: 1.05rem;
+    overflow-wrap: anywhere;
+}
+
+.pr-drawer__meta {
+    margin: 0.15rem 0 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.pr-drawer__close {
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.pr-drawer__close:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.pr-drawer__close:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+}
+
+.pr-drawer__body {
+    padding: 1rem 1.25rem 1.5rem;
+}
+
+.pr-drawer__stats {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.pr-drawer__stats > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.pr-table--tries th,
+.pr-table--tries td {
+    padding-left: 0;
+    font-size: 0.82rem;
+}
+
+/*
+ * Full width on a phone: a 32rem panel on a 390px screen is the whole screen anyway, and pretending
+ * otherwise leaves a sliver of unreachable table beside it.
+ */
+@media (max-width: 36rem) {
+    .pr-drawer__panel {
+        width: 100%;
+        border-left: 0;
+    }
+}

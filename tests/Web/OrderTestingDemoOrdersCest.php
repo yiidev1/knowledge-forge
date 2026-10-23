@@ -209,9 +209,16 @@ final class OrderTestingDemoOrdersCest
 
         $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
 
-        $I->see('Unmatched', '.pa-group--unmatched');
-        $I->see('Unknown', '.pa-card--unmatched');
-        $I->dontSee(self::ADMIN, '.pa-group');
+        /*
+         * Its own section, and no practitioner row at all.
+         *
+         * The grouped cards became a table of practitioners, so the assertion moved with them: an
+         * unattributed result must appear under Unmatched and must leave the practitioner table
+         * empty — which is stronger than it not carrying a name, because the row does not exist.
+         */
+        $I->see('Unmatched', '.pr-unmatched');
+        $I->see('No completed practice results yet');
+        $I->dontSeeElement('.pr-table .pr-agent');
     }
 
     /** And an attributed one is named, under its own practitioner's heading. */
@@ -223,8 +230,12 @@ final class OrderTestingDemoOrdersCest
 
         $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
 
-        $I->see(self::ADMIN, '.pa-group__name');
-        $I->see('Try 1', '.pa-card');
+        // Named in their own row of the practitioner table, with the one result counted.
+        $I->see(self::ADMIN, '.pr-table .pr-agent');
+        $I->see('1', '.pr-table .pr-num');
+
+        // And their tries are one click away rather than expanded into the page.
+        $I->seeElement('.pr-table [data-pr-tries]');
     }
 
     // ------------------------------------------------------------------ the comparison
