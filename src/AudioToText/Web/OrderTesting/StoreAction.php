@@ -152,12 +152,20 @@ readonly class StoreAction extends AudioStoreAction
         return [
             'demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds),
             'routes' => $this->surfaceRoutes(),
-            // One query for the page, bounded by this store: the provider's Seq for each order, and
-            // the fact that the order is mirrored at all — which is what decides whether a receipt can
-            // be offered. Not asked for on surfaces that render neither.
+            /*
+             * One query for the page, bounded by this store: the provider's Seq for each order, and
+             * the fact that the order is mirrored at all — which is what decides whether a receipt
+             * can be offered.
+             *
+             * Asked for when EITHER column is rendered. The two were gated on receipts alone, which
+             * silently meant a surface showing Seq without receipts would have had the column and no
+             * data to put in it. Still skipped entirely where neither is shown, so no surface pays
+             * for a query it does not use.
+             */
             'mirroredOrders' => $this->capabilities()->canViewOrderReceipts
-                ? $this->mirroredOrders->forOrders($sourceId, $orderIds)
-                : [],
+                || $this->capabilities()->canViewOrderSeq
+                    ? $this->mirroredOrders->forOrders($sourceId, $orderIds)
+                    : [],
             // Two queries for the whole page, not two per row: the assignments for the orders being
             // shown, and the assignable topics once.
             'topicAssignments' => $this->topics->forOrders($sourceId, $orderIds),

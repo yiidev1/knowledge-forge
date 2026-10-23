@@ -21,6 +21,18 @@ use App\Order58\Domain\StoreAudioFilter;
  */
 final readonly class PracticeOrdersAction extends Action
 {
+    /**
+     * This surface lists only orders it can resolve, so its card counts only those.
+     *
+     * Without this the card said 4 for a store whose Practice Orders page lists 3: the fourth is a
+     * recording whose order id names nothing, which Manage Orders shows and this page deliberately
+     * does not.
+     */
+    protected function countsLinkedOrdersOnly(): bool
+    {
+        return true;
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/practice-orders';

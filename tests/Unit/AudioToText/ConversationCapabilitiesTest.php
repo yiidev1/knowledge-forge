@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 
 use function array_keys;
 use function get_object_vars;
+use function in_array;
 
 /**
  * The two profiles, asserted as wholes rather than flag by flag.
@@ -46,7 +47,9 @@ final class ConversationCapabilitiesTest extends TestCase
     public function testTheAgentProfileIsReadOnlyPlusTrackingAndNothingElse(): void
     {
         self::assertSame(
-            ['canTrackPlayback'],
+            // Tracking is the one thing this profile does that read-only does not; `canViewOrderSeq`
+            // is true on every surface that lists orders and grants no ability of any kind.
+            ['canTrackPlayback', 'canViewOrderSeq'],
             self::trueFlags(ConversationCapabilities::agentPractice()),
         );
 
@@ -63,7 +66,11 @@ final class ConversationCapabilitiesTest extends TestCase
     /** **The one that matters.** Every flag, false — including any added after this was written. */
     public function testTheReadOnlyProfileAllowsNothing(): void
     {
-        self::assertSame([], self::trueFlags(ConversationCapabilities::readOnly()));
+        self::assertSame(
+            self::NOT_PERMISSIONS === [] ? [] : ['canViewOrderSeq'],
+            self::trueFlags(ConversationCapabilities::readOnly()),
+            'the read-only profile may grant no permission — only the display-only flags',
+        );
     }
 
     /**
@@ -81,9 +88,10 @@ final class ConversationCapabilitiesTest extends TestCase
         self::assertSame(array_keys($full), array_keys($readOnly), 'both profiles answer the same questions');
 
         foreach ($full as $name => $value) {
-            if ($name === 'canTrackPlayback') {
-                self::assertFalse($value);
-                self::assertFalse($readOnly[$name]);
+            if (in_array($name, self::NOT_PERMISSIONS, true)) {
+                // Not a permission, so the two profiles are allowed to agree about it. They must
+                // still agree, which is what keeps a real permission from being hidden in here.
+                self::assertSame($value, $readOnly[$name], $name . ' is not a permission and must match');
 
                 continue;
             }
@@ -111,6 +119,11 @@ final class ConversationCapabilitiesTest extends TestCase
             // has to be added here deliberately, which is the moment to ask whether every profile
             // below answers it correctly — and the agent and read-only profiles both say false.
             'canViewOrderReceipts',
+            // Added with the audio-only practice surfaces: whether the conversation may be read as
+            // words at all, and whether the provider's order number is shown. The second is split
+            // from the receipt above it because they are different decisions — see NOT_PERMISSIONS.
+            'canReadConversation',
+            'canViewOrderSeq',
         ], array_keys(get_object_vars(ConversationCapabilities::full())));
     }
 
@@ -127,6 +140,21 @@ final class ConversationCapabilitiesTest extends TestCase
 
         return $out;
     }
+
+    /**
+     * Flags that are not permissions, and so are exempt from the "opposites" rules below.
+     *
+     * `canTrackPlayback` grants nothing: it records that somebody listened, and only the agent
+     * surface does. `canViewOrderSeq` grants nothing either — the provider's own order number is one
+     * more fact about a row the reader is already looking at, shown on every surface that lists
+     * orders at all. Neither lets anybody change anything, which is what the profiles are about.
+     *
+     * Anything added here must be argued for. A permission that quietly joined this list would be a
+     * permission nobody was asked about.
+     *
+     * @var list<string>
+     */
+    private const NOT_PERMISSIONS = ['canTrackPlayback', 'canViewOrderSeq'];
 
     /** @return list<string> */
     private static function trueFlags(ConversationCapabilities $c): array

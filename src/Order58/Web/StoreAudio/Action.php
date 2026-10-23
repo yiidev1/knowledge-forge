@@ -126,7 +126,10 @@ readonly class Action
                 'letter' => $letter,
                 'page' => min($page, $result->pageCount()),
                 // One query for the whole page, not one per card.
-                'audioCounts' => $this->audioCounts->countsFor($this->shownIds($result->items)),
+                'audioCounts' => $this->audioCounts->countsFor(
+                    $this->shownIds($result->items),
+                    $this->countsLinkedOrdersOnly(),
+                ),
                 // The second card metric, asked the same way and for the same reason.
                 'topicCounts' => $this->topicCounts->assignedOrdersFor($this->shownIds($result->items)),
                 // The transcription default, shown here because this is where an administrator already
@@ -155,6 +158,22 @@ readonly class Action
     }
 
     /** The template this surface renders. Everything above it is the same question on both. */
+    /**
+     * Whether this picker's cards count only orders the store page will actually list.
+     *
+     * False here, because Manage Orders lists every grouped order it has audio for — including one
+     * whose id resolves to nothing, which is a thing an administrator goes there to see and fix. The
+     * Practice Orders picker overrides it: that page applies `linkedOrdersOnly()`, so counting the
+     * unresolvable rows would put a number above a page that then shows fewer.
+     *
+     * A seam rather than a flag threaded through the constructor, matching how these two pickers
+     * already differ — by overriding one small method each.
+     */
+    protected function countsLinkedOrdersOnly(): bool
+    {
+        return false;
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/template';

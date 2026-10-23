@@ -4015,14 +4015,32 @@ window.KFAudioStages = {
         // Whatever was being read aloud belonged to the turns about to be replaced.
         speechStop();
         paintListen(data);
-        empty(reviewScroll);
-        var thread = el('div', 'a2t-thread');
-        data.turns.forEach(function (turn) { thread.appendChild(reviewTurn(turn)); });
-        reviewScroll.appendChild(thread);
+
+        /*
+         * The audio-only surfaces have no turn container, and that is the switch.
+         *
+         * Practice Orders renders the dialog without `[data-a2t-review-scroll]`, because its reader
+         * is meant to hear the call and rebuild the order rather than read the answer. With the node
+         * absent, no turn is built at all — the words never enter the document, so there is nothing
+         * to reveal with a stylesheet or an element inspector.
+         *
+         * Everything above this point still runs: the players, the metadata and the notice are what
+         * that dialog is for. Everything below it is about the words, so it is skipped with them.
+         */
+        if (reviewScroll) {
+            empty(reviewScroll);
+            var thread = el('div', 'a2t-thread');
+            data.turns.forEach(function (turn) { thread.appendChild(reviewTurn(turn)); });
+            reviewScroll.appendChild(thread);
+        }
+
         reviewBody.hidden = false;
-        // Back to where the reader was, once the new turns have a height to scroll through.
-        reviewScroll.scrollTop = resumeAt || 0;
-        loadHistory(data.urls.history, requested, fromCache);
+
+        if (reviewScroll) {
+            // Back to where the reader was, once the new turns have a height to scroll through.
+            reviewScroll.scrollTop = resumeAt || 0;
+            loadHistory(data.urls.history, requested, fromCache);
+        }
 
         if (message) {
             say(reviewStatus, message);

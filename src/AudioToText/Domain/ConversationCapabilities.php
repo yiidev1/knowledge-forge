@@ -86,12 +86,33 @@ final readonly class ConversationCapabilities
          * keeps the link out of the surfaces whose groups would refuse it anyway.
          */
         public bool $canViewOrderReceipts,
+        /**
+         * Whether this reader may see the conversation as **text**.
+         *
+         * Separate from every other flag here because it is the one thing Practice Orders is not
+         * about. That surface exists so somebody can listen to a call and recreate the order from
+         * what they hear; the written transcript beside it is the answer sheet. Audio stays, the
+         * words go.
+         *
+         * False removes the markup rather than hiding it: no "View conversation" button, no turn
+         * container for the script to fill, and no way through to the original transcript.
+         */
+        public bool $canReadConversation,
+        /**
+         * Whether the provider's own order number is shown.
+         *
+         * Split from {@see $canViewOrderReceipts} because the two columns arrived together and are
+         * not the same decision: Seq is one more fact about an order a reader is already looking at,
+         * while a receipt spends a call on a third party and shows a customer's printed order. The
+         * practice surfaces get the first and not the second.
+         */
+        public bool $canViewOrderSeq,
     ) {}
 
     /** Everything — what this page has always offered, and still offers unchanged. */
     public static function full(): self
     {
-        return new self(true, true, true, true, true, true, true, true, true, false, true, true);
+        return new self(true, true, true, true, true, true, true, true, true, false, true, true, true, true);
     }
 
     /**
@@ -111,11 +132,11 @@ final readonly class ConversationCapabilities
      */
     public static function agentPractice(): self
     {
-        return new self(false, false, false, false, false, false, false, false, false, true, false, false);
+        return new self(false, false, false, false, false, false, false, false, false, true, false, false, false, true);
     }
 
     public static function readOnly(): self
     {
-        return new self(false, false, false, false, false, false, false, false, false, false, false, false);
+        return new self(false, false, false, false, false, false, false, false, false, false, false, false, false, true);
     }
 }

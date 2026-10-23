@@ -177,12 +177,63 @@ final class PracticeOrdersCest
         $I->see('Order No#', 'thead');
         $I->see('Topic', 'thead');
         $I->dontSee('Set Topic', 'thead');
-        $I->see('Demo URL', 'thead');
+        $I->see('Practice Order', 'thead');
         $I->see('Demo Orders', 'thead');
         $I->seeElement('[data-a2t-play]');
         $I->seeElement('[data-a2t-details]');
         $I->seeElement('.practice-topic-cell .practice-topic__value');
         $I->seeElement('.practice-filter');
+    }
+
+    // ---------------------------------------------------------------- audio-only, and Seq
+
+    /**
+     * Practice Orders shows the provider's order number, the same one Manage Orders shows.
+     *
+     * Seq and View Receipt arrived together and were gated together, which meant this surface could
+     * have neither. They are different decisions: a sequence number is one more fact about an order
+     * the reader is already looking at, while a receipt calls a third party and shows a customer's
+     * printed order.
+     */
+    public function thePracticeSurfaceShowsSeqButNotTheReceipt(WebTester $I): void
+    {
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->see('Seq', 'thead');
+        $I->dontSee('View Receipt', 'thead');
+        $I->dontSeeElement('a.ot-receipt');
+    }
+
+    /**
+     * The conversation is not readable as text here — and it is absent, not hidden.
+     *
+     * Practice Orders exists so somebody can hear a call and rebuild the order from it. The written
+     * transcript beside it is the answer sheet, so none of it is rendered: no "View conversation"
+     * control, no container for the script to fill with turns, and no way through to the original
+     * transcript. Asserted on the markup, because `display: none` would still put the words in the
+     * document for anyone with an element inspector.
+     */
+    public function thePracticeSurfaceRendersNoConversationText(WebTester $I): void
+    {
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->dontSee('View conversation');
+        // The turn container the script fills. Absent, so no turn is ever built.
+        $I->dontSeeElement('[data-a2t-review-scroll]');
+        // And the door to the full original transcript.
+        $I->dontSeeElement('[data-a2t-review-transcripts]');
+    }
+
+    /** Taking the words away must not take the audio with them. */
+    public function thePracticeSurfaceKeepsItsAudio(WebTester $I): void
+    {
+        $I->amOnPage('/practice-orders/store/' . self::STORE_ID);
+
+        $I->seeElement('[data-a2t-play]');
+        // The dialog still exists and still carries its player area and its channel tabs.
+        $I->seeElement('#a2t-review-dialog');
+        $I->seeElement('[data-a2t-listen]');
+        $I->seeElement('[data-a2t-review-tabs]');
     }
 
     /** Order Testing keeps everything, and gains the management controls. */
@@ -203,6 +254,37 @@ final class PracticeOrdersCest
         $I->see('Verification', 'thead');
         $I->see('Sync demo orders');
         $I->see('Add Audio');
+    }
+
+    /**
+     * Manage Orders keeps the whole conversation. This is the regression half of the change above.
+     *
+     * The transcript was removed from Practice Orders by taking markup out of a template those two
+     * surfaces SHARE, so the only thing standing between that change and Manage Orders losing its
+     * conversation is the capability flag. This asserts the flag works.
+     */
+    public function orderTestingKeepsItsConversation(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->seeElement('[data-a2t-review-scroll]');
+        $I->seeElement('[data-a2t-review-transcripts]');
+        $I->seeElement('[data-a2t-listen]');
+        // And its own columns, unchanged.
+        $I->see('Seq', 'thead');
+        $I->see('View Receipt', 'thead');
+    }
+
+    /** The label changed; the destination did not. */
+    public function theRenamedColumnKeepsItsOriginalDestination(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID);
+
+        $I->see('Practice Order', 'thead');
+        $I->dontSee('Demo URL', 'thead');
+        // The label moved; nothing else did. This fixture's store resolves no demo host, so no link
+        // renders for any row here — the destination itself is covered where a link exists, in
+        // OrderTestingDemoOrdersCest, which this change does not touch.
     }
 
     // ---------------------------------------------------------------- the multi-topic filter

@@ -712,7 +712,9 @@ final class OrderTestingCest
             'Order No#',
             'Recording / Conversation',
             'Status',
-            'Demo URL',
+            // Renamed from "Demo URL": the label says what the link is for, and nothing about where
+            // it goes changed with it.
+            'Practice Order',
             'Demo Orders',
             'Set Topic',
             'Verification',

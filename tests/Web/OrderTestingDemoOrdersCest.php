@@ -71,7 +71,7 @@ final class OrderTestingDemoOrdersCest
 
     // ------------------------------------------------------------------ the column
 
-    /** The new column sits beside Demo URL and says nothing has been created yet. */
+    /** The new column sits beside Practice Order and says nothing has been created yet. */
     public function theStorePageShowsADashWhenNothingHasBeenCreated(WebTester $I): void
     {
         $this->signIn($I);
@@ -80,7 +80,9 @@ final class OrderTestingDemoOrdersCest
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
         $I->seeResponseCodeIs(200);
 
-        $I->see('Demo URL');
+        // The column that opens a practice order. Renamed from "Demo URL"; same control, same
+        // destination, and the Demo Orders column beside it deliberately keeps its own name.
+        $I->see('Practice Order');
         $I->see('Demo Orders');
         // No link to a page that would be empty.
         $I->dontSeeElement('a[href*="/demo-orders"]');
@@ -119,7 +121,7 @@ final class OrderTestingDemoOrdersCest
         $I->amOnPage('/audio-to-text/store/' . self::STORE_ID);
         $I->seeResponseCodeIs(200);
 
-        $I->see('Demo URL');
+        $I->see('Practice Order');
         $I->dontSee('Demo Orders');
         $I->dontSeeElement('form[action*="/demo-url"]');
     }

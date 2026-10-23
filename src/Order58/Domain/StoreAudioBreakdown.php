@@ -35,6 +35,18 @@ use function max;
 final readonly class StoreAudioBreakdown
 {
     public function __construct(
+        /**
+         * Logical ORDERS with audio — what the card shows.
+         *
+         * One order contributes one however many recordings it holds: a call recorded on three
+         * channels is one call. The card used to show {@see $total} and therefore said "14" for a
+         * store whose page lists four rows, which is the same data counted at the wrong level.
+         *
+         * The grouping is the order list's own: an order id when the upload named one, otherwise the
+         * conversation itself — so an upload that named no order is still its own row and still
+         * counts once, exactly as the page renders it.
+         */
+        public int $orders,
         public int $total,
         public int $mixed,
         public int $caller,
@@ -44,7 +56,7 @@ final readonly class StoreAudioBreakdown
     /** The empty case, so a caller can default without a null check. */
     public static function none(): self
     {
-        return new self(0, 0, 0, 0);
+        return new self(0, 0, 0, 0, 0);
     }
 
     /**

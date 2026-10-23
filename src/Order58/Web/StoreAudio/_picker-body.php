@@ -119,7 +119,9 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
             $location = $store->locationLine();
             // Absent key and zero mean the same thing, which is why the reader omits empty stores.
             $breakdown = $audioCounts[$store->sourceId] ?? StoreAudioBreakdown::none();
-            $conversions = $breakdown->total;
+            // Orders, not recordings. A call recorded on three channels is one call, and the page
+            // this card links to lists it as one row — so the card says one too.
+            $conversions = $breakdown->orders;
             // Knowledge is not a gate here — a store with no documents can still have a recording
             // transcribed — but source-active is: a store Order58 reports as inactive is not
             // somewhere new recordings should be sent. Disabled the same way Store chat disables an

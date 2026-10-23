@@ -231,8 +231,8 @@ async function run() {
                 present: true,
                 modal: el.matches(':modal'),
                 players: el.querySelectorAll('audio, [data-a2t-play]').length,
-                // What the dialog is FOR: the two sides of the call, as text. A dialog that opens
-                // with an empty body is the complaint this check exists to catch.
+                // The written conversation. This surface is now audio-only, so the number below is
+                // asserted to be ZERO — see the check further down for why that inverted.
                 turns: el.querySelectorAll(
                     '[data-a2t-segment], .a2t-segment, .a2t-turn, .a2t-message',
                 ).length,
@@ -254,15 +254,21 @@ async function run() {
         check('the conversation dialog opens as a real modal', dialog.present && dialog.modal,
             JSON.stringify(dialog));
         check('with no editing controls in it', dialog.mutators === 0, JSON.stringify(dialog));
-        check('the conversation itself is in it', dialog.turns > 0, String(dialog.turns));
-        // Only the fixture's own words can be named. A real store's call says whatever it says, and the
-        // turn count above is the assertion that applies to both.
-        if (fixtureStore) {
-            check('and both sides of the fixture call are readable',
-                /pepperoni/i.test(dialog.text) && /what can i get you/i.test(dialog.text), dialog.text);
-        } else {
-            check('and the turns carry words', dialog.text.length > 10, dialog.text);
-        }
+        /*
+         * Inverted deliberately, 2026-10-23: Practice Orders is audio-only.
+         *
+         * This check used to assert `turns > 0` — "the conversation itself is in it" — because the
+         * agent surface showed the call as text. It no longer does: an agent is meant to HEAR the
+         * call and rebuild the order from it, and the transcript beside it was the answer sheet.
+         *
+         * The turns are not hidden, they are never built: the template omits the container the
+         * script fills, so there is nothing to read from the element inspector either. That is what
+         * zero here is checking, and why the text must be empty rather than merely invisible.
+         */
+        check('and no written conversation in it', dialog.turns === 0, String(dialog.turns));
+        check('and no transcript text anywhere in the thread', dialog.text === '', dialog.text);
+        // The audio is the point of the dialog now, so it had better be there.
+        check('but the recording is still playable from it', dialog.players > 0, String(dialog.players));
 
         // ---------------------------------------------------------------- does the audio actually play
         // A player is not playback. The dialog can hold a perfectly good <audio> whose source answers

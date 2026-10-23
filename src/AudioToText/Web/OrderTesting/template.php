@@ -136,10 +136,19 @@ $agentPlaybackUrl = $canViewAgentEvents
 /** @var array<string, OrderVerificationStatus> $orderVerifications */
 $orderVerifications = $orderVerifications ?? [];
 
-// Seq and View Receipt, which travel together: both are facts from the mirrored Order58 record, both
-// are read by one query, and neither means anything on a surface that has no access to the provider.
-// Same two conditions as Verification above, for the same reason.
+/*
+ * Seq and View Receipt come from one query and are two separate decisions.
+ *
+ * They shipped together and were gated together, which quietly meant the practice surfaces could
+ * have neither. Seq is one more fact about an order a reader is already looking at; a receipt spends
+ * a call on a third party and shows a customer's printed order. The practice surfaces get the first
+ * and not the second, so the flags are separate and the column tests say which is which.
+ */
+$canViewOrderSeq = $practiceMode && $capabilities->canViewOrderSeq;
 $canViewOrderReceipts = $practiceMode && $capabilities->canViewOrderReceipts;
+
+// Whether the conversation may be read as words. Audio is not governed by this and never is.
+$canReadConversation = $capabilities->canReadConversation;
 
 /**
  * The mirrored order behind each row, keyed by the order id the row shows.
@@ -810,7 +819,8 @@ $channelLine = static function (
 $conversationCell = static function (StoreOrderGroup $group) use (
     $clock,
     $originalUrl,
-    $channelLine
+    $channelLine,
+    $canReadConversation
 ): string {
     // The first line: what there is to listen to, and the one way in. Wrapped together so they stay on
     // one line and the channels below read as a caption to them.
@@ -839,7 +849,11 @@ $conversationCell = static function (StoreOrderGroup $group) use (
 
     // The named way in. It carries `data-a2t-order-open` because that is the attribute the dialog's
     // existing opener reads — the order number keeps working and this is the same door, not a second one.
-    if ($group->orderId !== null && $group->hasReviewableRecording()) {
+    //
+    // Absent where the conversation may not be read as text. The order number still opens the dialog
+    // on those surfaces — there is audio to hear in it — but a control whose label promises a
+    // conversation must not be the way in to a dialog that deliberately shows none.
+    if ($canReadConversation && $group->orderId !== null && $group->hasReviewableRecording()) {
         $html .= '<button class="a2t-slot__link a2t-slot__link--open" type="button"'
             . ' data-a2t-order-open="' . Html::encode($group->orderId) . '">View conversation</button>';
     }
@@ -1173,7 +1187,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                     <col class="a2t-col-order">
                     <?php // Beside the order number, because it is the same order said another way:?>
                     <?php // the provider's own printed number for it.?>
-                    <?php if ($canViewOrderReceipts): ?><col class="ot-col-seq"><?php endif; ?>
+                    <?php if ($canViewOrderSeq): ?><col class="ot-col-seq"><?php endif; ?>
                     <col class="a2t-col-conversation">
                     <col class="a2t-col-status">
                     <?php if ($canVerifyOrders): ?><col class="ot-col-verification"><?php endif; ?>
@@ -1205,7 +1219,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             </th>
                         <?php endif; ?>
                         <th>Order No#</th>
-                        <?php if ($canViewOrderReceipts): ?>
+                        <?php if ($canViewOrderSeq): ?>
                             <?php // The provider's own order number — a printed string such as `31#1`,?>
                             <?php // not a count and not anything this application derives.?>
                             <th>Seq</th>
@@ -1221,7 +1235,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                             <?php // made of it. The actions that change an order stay further right.?>
                             <th>Verification</th>
                         <?php endif; ?>
-                        <th>Demo URL</th>
+                        <th>Practice Order</th>
                         <?php // Immediately after Demo URL, because it is the result of pressing it:?>
                         <?php // the orders a trainee produced from this call, each compared on its own.?>
                         <th>Demo Orders</th>
@@ -1342,7 +1356,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                                 <?= Html::encode($appTimeZone->format($group->latestActivityAt, 'M j, Y g:i A')) ?>
                             </span>
                         </td>
-                        <?php if ($canViewOrderReceipts): ?>
+                        <?php if ($canViewOrderSeq): ?>
                             <?php
                             // The provider's own number for this order, printed exactly as mirrored.
                             // An order this store does not have, and one that has no seq, both read
@@ -1580,7 +1594,7 @@ $conversationCell = static function (StoreOrderGroup $group) use (
                 // carrying the link. The script only spares the operator that second click.
                                 ?>
                                     <button class="ot-linkbutton" type="submit"
-                                            data-ot-demo-url>Demo URL</button>
+                                            data-ot-demo-url>Practice Order</button>
                                 </form>
                                 <?php // Filled by the script on a refusal — most often "somebody else is testing this".?>
                                 <span class="ot-demo-message" role="alert" data-ot-demo-message hidden></span>
@@ -2100,9 +2114,11 @@ $last = min($page * $perPage, $total);
 // the row the dialog was opened on, and a row with nothing transcribed leaves this hidden.
 // No new endpoint, no second copy of the transcript, and no change to who may read one.
 ?>
-            <button class="btn btn--sm" type="button" data-a2t-review-transcripts hidden>
-                Original transcript
-            </button>
+            <?php if ($canReadConversation): ?>
+                <button class="btn btn--sm" type="button" data-a2t-review-transcripts hidden>
+                    Original transcript
+                </button>
+            <?php endif; ?>
         </div>
 
         <?php
@@ -2203,7 +2219,23 @@ $last = min($page * $perPage, $total);
 ?>
         <div class="a2t-listen" data-a2t-listen hidden></div>
         <div class="a2t-mnotice" data-a2t-review-notice></div>
-        <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
+        <?php
+        /*
+         * Where the conversation's turns are drawn — and only where they may be read.
+         *
+         * Omitted rather than hidden. A `display: none` container is still a container: the script
+         * would fill it, the words would be in the document, and anyone could read them from the
+         * element inspector. With the element absent the script skips the whole thread-building
+         * branch (it checks for this node), so on an audio-only surface no turn is ever built.
+         *
+         * The payload the dialog fetches still carries the turns, because it is the same response
+         * that carries the audio URLs this dialog needs. Splitting that would mean a second endpoint
+         * for one surface; it is recorded as a known limit rather than worked around badly.
+         */
+?>
+        <?php if ($canReadConversation): ?>
+            <div class="a2t-chat__scroll a2t-dialog-scroll" data-a2t-review-scroll></div>
+        <?php endif; ?>
     </div>
 </dialog>
 
