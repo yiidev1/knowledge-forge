@@ -1028,7 +1028,11 @@ return [
                         ->action(AgentPracticeOrders\PlaybackEventAction::class)
                         ->name('agent.practice-orders.job.playback'),
                     Route::post('/agent/practice-orders/store/{sourceId:\d+}/demo-url')
-                        ->action(OrderTestingModule\DemoUrl\Action::class)
+                        // The agent surface's own subclass of that endpoint, not the endpoint
+                        // itself. Same attempt, same actor, same URL allow-list — what it changes
+                        // is where a refusal and the no-script continue page send the browser:
+                        // back here, rather than to Manage Orders, which this realm's gate refuses.
+                        ->action(AgentPracticeOrders\DemoUrlAction::class)
                         ->name('agent.practice-orders.demo-url'),
 
                     // What the trainee produced, and how it compares with the original. Read-only.

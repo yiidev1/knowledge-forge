@@ -16,6 +16,7 @@ use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
 use App\AudioToText\Domain\DemoOrderCountReaderInterface;
+use App\Shared\Web\Actor\CurrentActor;
 use App\AudioToText\Domain\MirroredOrderReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\OrderGroupFilter;
@@ -88,6 +89,18 @@ readonly class StoreAction extends AudioStoreAction
         DemoOrderLinkReaderInterface $demoLinks,
         ArrivingRecordingMerger $arriving,
         ClockInterface $clock,
+        /**
+         * The signed-in principal.
+         *
+         * Read by {@see demoCountActor()} on the agent surface and nowhere else, so a realm whose
+         * middleware has not resolved one is never asked. `CurrentActor` is Shared rather than
+         * another business module, so holding it here breaks no isolation rule.
+         *
+         * Declared on this class rather than on the agent subclass because that subclass would
+         * otherwise have to restate all twenty-one of these parameters to add one — a constructor
+         * to keep in step forever, for a single dependency.
+         */
+        protected CurrentActor $currentActor,
         /** This surface's own question: how many demo orders each order on the page produced. */
         private DemoOrderCountReaderInterface $demoOrderCounts,
         /**
@@ -150,7 +163,18 @@ readonly class StoreAction extends AudioStoreAction
     protected function extraTemplateData(int $sourceId, array $orderIds): array
     {
         return [
-            'demoOrderCounts' => $this->demoOrderCounts->countsFor($sourceId, $orderIds),
+            /*
+             * How many demo orders each order produced, for the "View (N)" cell.
+             *
+             * Unfiltered here: the management surfaces answer "what has this order produced?", which
+             * includes everybody's work and the Unmatched ones. The agent surface overrides
+             * {@see demoCountActor()} and asks a narrower question — see that method.
+             */
+            'demoOrderCounts' => $this->demoOrderCounts->countsFor(
+                $sourceId,
+                $orderIds,
+                ...$this->demoCountActor(),
+            ),
             'routes' => $this->surfaceRoutes(),
             /*
              * One query for the page, bounded by this store: the provider's Seq for each order, and
@@ -255,6 +279,23 @@ readonly class StoreAction extends AudioStoreAction
     protected function afterUpload(string $conversationId, int $sourceId): ResponseInterface
     {
         return $this->redirect->afterPost(OrderTestingRoute::STORE, ['sourceId' => $sourceId]);
+    }
+
+    /**
+     * Whose demo orders the "View (N)" cell counts.
+     *
+     * `[null, null]` means everybody's, which is the management question and what Manage Orders and
+     * the administrators' Practice Orders both ask.
+     *
+     * The agent surface narrows it to that agent. Without this an agent saw "View (1)" against an
+     * order they had never completed — the cell was counting every demo order of the source order,
+     * including ones attributed to nobody at all.
+     *
+     * @return array{0: ?string, 1: ?int}
+     */
+    protected function demoCountActor(): array
+    {
+        return [null, null];
     }
 
     protected function templatePath(): string

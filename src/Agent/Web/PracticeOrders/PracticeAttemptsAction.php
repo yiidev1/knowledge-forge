@@ -48,7 +48,7 @@ final readonly class PracticeAttemptsAction extends OrderTestingPracticeAttempts
         SourceOrderReaderInterface $sourceOrders,
         PracticeHistoryBuilder $history,
         AppTimeZone $appTimeZone,
-        private TestActorInterface $actor,
+        TestActorInterface $actor,
     ) {
         parent::__construct(
             $viewRenderer,
@@ -57,6 +57,7 @@ final readonly class PracticeAttemptsAction extends OrderTestingPracticeAttempts
             $stores,
             $sourceOrders,
             $history,
+            $actor,
             $appTimeZone,
         );
     }

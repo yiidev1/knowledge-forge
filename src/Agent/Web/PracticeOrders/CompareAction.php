@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Agent\Web\PracticeOrders;
 
+use App\OrderTesting\Domain\DemoOrder;
+use App\OrderTesting\Domain\TestAttempt;
 use App\OrderTesting\Web\Compare\Action as OrderTestingCompareAction;
 
 /**
@@ -16,11 +18,29 @@ use App\OrderTesting\Web\Compare\Action as OrderTestingCompareAction;
  * the breadcrumbs, the back links and, on the list, the Compare link all named Order Testing addresses,
  * which an agent's gate refuses. The page rendered and its links went nowhere.
  *
- * So this changes two things and nothing else: the map of addresses, and the layout. The action, the
- * repositories, the comparison and the template are the ones Order Testing already uses.
+ * So this changes the map of addresses and the layout — the action, the repositories, the comparison
+ * and the template are the ones Order Testing already uses — and one thing more, which is an
+ * authorization boundary: {@see admits()} narrows this page to the signed-in agent's own work.
  */
 final readonly class CompareAction extends OrderTestingCompareAction
 {
+    /**
+     * One agent's own comparison, and nobody else's.
+     *
+     * The demo order's id is in the path, so this page is reachable by typing one. On a management
+     * surface that is right — a trainer compares practitioners. Here it is not: the row is checked
+     * against the signed-in agent before any of it is read, and a row that is not theirs answers
+     * exactly as a row that does not exist.
+     *
+     * The attempt the page already resolved is not trusted for this. It is resolved again inside
+     * the gate, from the demo order, so the question is asked of the database rather than of a
+     * value that passed through a template key.
+     */
+    protected function admits(DemoOrder $demo, ?TestAttempt $attempt): bool
+    {
+        return $this->visibility->belongsToReader($demo);
+    }
+
     protected function canSyncItems(): bool
     {
         return false;

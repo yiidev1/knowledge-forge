@@ -63,7 +63,13 @@ use const JSON_THROW_ON_ERROR;
  * by nothing at all — without that, this endpoint would be an open redirect handing a customer's
  * phone number to whoever chose the host.
  */
-final readonly class Action
+/*
+ * Not `final`: the agent practice surface posts to this same endpoint from its own route group, and
+ * extends this class to supply its own addresses and shell. Without that it answered an agent with
+ * Manage Orders links — a page their gate refuses, so a refusal or a no-script submission landed
+ * them somewhere unrelated to what they were doing.
+ */
+readonly class Action
 {
     public function __construct(
         private TestAttemptService $attempts,
@@ -123,12 +129,37 @@ final readonly class Action
         }
 
         return $this->viewRenderer
-            ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
+            ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/continue', [
+                'routes' => $this->surfaceRoutes(),
                 'sourceId' => $sourceId,
                 'sourceOrderId' => $orderId,
                 'url' => $url,
             ]);
+    }
+
+    /**
+     * The addresses this endpoint sends a browser back to.
+     *
+     * Only two, and both are this surface's own: where a refusal goes, and what the no-script
+     * continue page links back to. Route names, not classes — a name is not a namespace, so this
+     * module still names nobody.
+     *
+     * @return array<string, string>
+     */
+    protected function surfaceRoutes(): array
+    {
+        return [
+            'store' => 'order-testing.store',
+            'storeLabel' => 'Manage Orders',
+            'page' => 'order-testing',
+        ];
+    }
+
+    /** The shell the no-script continue page is drawn inside. The agent surface has its own. */
+    protected function layoutPath(): string
+    {
+        return '@src/Web/Shared/Layout/Admin/layout.php';
     }
 
     /**
@@ -160,8 +191,10 @@ final readonly class Action
 
         $this->flash->error($message);
 
-        // Same-origin, so `form-action 'self'` permits this one.
-        return $this->redirect->afterPost('order-testing.store', ['sourceId' => $sourceId]);
+        // Same-origin, so `form-action 'self'` permits this one. The route is the SURFACE's, not
+        // Manage Orders': an agent sent to an administrator address is refused by their own gate and
+        // ends up on whatever that refusal leads to, which is not where they were working.
+        return $this->redirect->afterPost($this->surfaceRoutes()['store'], ['sourceId' => $sourceId]);
     }
 
     /**

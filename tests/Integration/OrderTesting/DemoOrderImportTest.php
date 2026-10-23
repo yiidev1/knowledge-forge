@@ -23,17 +23,16 @@ use Psr\Log\NullLogger;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function array_unique;
 use function dirname;
 use function gmdate;
 use function sort;
 use function time;
 use function PHPUnit\Framework\assertCount;
-use function PHPUnit\Framework\assertFalse;
 use function PHPUnit\Framework\assertNotSame;
 use function PHPUnit\Framework\assertNotNull;
 use function PHPUnit\Framework\assertNull;
 use function PHPUnit\Framework\assertSame;
-use function PHPUnit\Framework\assertStringContainsString;
 use function PHPUnit\Framework\assertTrue;
 
 /**
@@ -106,7 +105,7 @@ final class DemoOrderImportTest extends Unit
      * Times are passed explicitly rather than taken from the clock, because the fixtures' creation
      * timestamp is fixed in the past and attribution is decided against it.
      */
-    private function attemptCovering(int $sourceOrderId, int $instant): int
+    private function attemptCovering(int $sourceOrderId, int $instant, ?int $actorId = null): int
     {
         $at = (new DateTimeImmutable('@' . $instant))->setTimezone(new DateTimeZone('UTC'));
 
@@ -114,7 +113,7 @@ final class DemoOrderImportTest extends Unit
             self::STORE,
             $sourceOrderId,
             InitiatorType::Admin,
-            $this->adminId,
+            $actorId ?? $this->adminId,
             $at->modify('-10 minutes'),
             $at->modify('+50 minutes'),
         );
@@ -316,7 +315,19 @@ final class DemoOrderImportTest extends Unit
 
     // ------------------------------------------------------------------ one attempt at a time
 
-    public function testOnlyOneAttemptMayBeOpenForOneSourceOrder(): void
+    /**
+     * Several people may practise one source order at once; one person may not stack attempts.
+     *
+     * Inverted deliberately: this used to assert that a second person was REFUSED. That was never
+     * the business rule — it was how attribution was kept unambiguous, by making overlapping
+     * attempts impossible. The rule is now concurrent practice, and the cost is paid at import,
+     * where two attempts covering one creation instant leave the order Unmatched rather than
+     * guessing between them.
+     *
+     * What the lock still does is stop one person stacking attempts by pressing twice or racing two
+     * tabs, which is asserted first.
+     */
+    public function testEachPersonGetsTheirOwnAttemptAndNobodyStacksTheirs(): void
     {
         $service = new TestAttemptService($this->attempts, new SystemClock(), 60);
 
@@ -328,13 +339,13 @@ final class DemoOrderImportTest extends Unit
         assertTrue($again->isAllowed());
         assertSame($mine->attempt?->id, $again->attempt?->id);
 
-        // A different administrator is refused, and told who holds it — not given an ambiguous second
-        // open attempt, which would make every arriving demo order a coin toss between the two.
+        // A different person is no longer turned away, and gets an attempt of their own.
         $other = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Admin, $this->adminId + 9_000_000);
-        assertFalse($other->isAllowed());
-        assertStringContainsString('already testing this order', (string) $other->refusal);
+        assertTrue($other->isAllowed(), 'concurrent practice is the business rule now');
+        assertNotSame($mine->attempt?->id, $other->attempt?->id);
 
-        assertSame(1, (int) (new Query($this->connection))
+        // Two people, two rows — not one shared slot, and not four from the repeated clicks.
+        assertSame(2, (int) (new Query($this->connection))
             ->from('{{%order_testing_attempts}}')
             ->where([
                 'store_source_id' => self::STORE,
@@ -342,6 +353,78 @@ final class DemoOrderImportTest extends Unit
                 'status' => [AttemptStatus::Started->value, AttemptStatus::Matched->value],
             ])
             ->count());
+    }
+
+    /**
+     * And the consequence, stated: overlapping attempts make an arriving demo order Unmatched.
+     *
+     * Two windows cover the fixture's creation instant, so the lookup has two candidates and answers
+     * null. The order is kept and shown as Unmatched rather than credited to a coin toss.
+     */
+    public function testADemoCreatedWhileTwoPeoplePractisedIsLeftUnmatched(): void
+    {
+        // Two DIFFERENT people: the same person pressing twice resumes one attempt, which is
+        // exactly the case that must stay unambiguous.
+        $this->attemptCovering(self::SOURCE_ORDER, self::FIXTURE_CREATED);
+        $this->attemptCovering(self::SOURCE_ORDER, self::FIXTURE_CREATED, $this->adminId + 9_000_000);
+
+        $this->importer()->import();
+
+        foreach ($this->demoOrders->forSourceOrder(self::STORE, self::SOURCE_ORDER) as $order) {
+            assertNull($order->matchedAttemptId, 'demo #' . $order->demoOrderId);
+        }
+    }
+
+    /**
+     * All three realms practising one source order at the same time, and one number in two of them.
+     *
+     * The case above proves two *administrators* are no longer turned away. This proves the realms
+     * are independent of one another, which is a different claim: an administrator, an operation user
+     * and an agent each hold their own attempt on the same order at the same moment.
+     *
+     * The second half is the one that would bite. `admin_users.id` and Order58's `admin_id` are
+     * separate id spaces, and they overlap in this installation for real — `order58_agents.admin_id
+     * = 1` and `admin_users.id = 1` are two different people. If the lock compared the id without the
+     * realm, the agent who happens to share an administrator's number would be handed that
+     * administrator's attempt: their work would be filed under somebody else's name, and the page
+     * would look perfectly normal.
+     */
+    public function testTheThreeRealmsPractiseTheSameOrderSideBySide(): void
+    {
+        $service = new TestAttemptService($this->attempts, new SystemClock(), 60);
+
+        $admin = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Admin, $this->adminId);
+        $operation = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Operation, 171);
+        $agent = $service->start(self::STORE, self::SOURCE_ORDER, InitiatorType::Agent, 171);
+
+        foreach (['administrator' => $admin, 'operation user' => $operation, 'agent' => $agent] as $who => $start) {
+            assertTrue($start->isAllowed(), $who . ' must not be turned away');
+            assertNotNull($start->attempt, $who . ' must get an attempt');
+        }
+
+        // Three rows, not one shared slot — and the operation user and the agent share the number
+        // 171 without sharing the attempt.
+        $ids = [$admin->attempt?->id, $operation->attempt?->id, $agent->attempt?->id];
+        assertCount(3, array_unique($ids), 'each realm holds its own attempt');
+
+        assertSame(3, (int) (new Query($this->connection))
+            ->from('{{%order_testing_attempts}}')
+            ->where([
+                'store_source_id' => self::STORE,
+                'source_order_id' => self::SOURCE_ORDER,
+                'status' => [AttemptStatus::Started->value, AttemptStatus::Matched->value],
+            ])
+            ->count());
+
+        // And each row says which realm it belongs to, because the id alone does not identify anybody.
+        $realms = (new Query($this->connection))
+            ->select('initiated_by_type')
+            ->from('{{%order_testing_attempts}}')
+            ->where(['store_source_id' => self::STORE, 'source_order_id' => self::SOURCE_ORDER])
+            ->column();
+        sort($realms);
+
+        assertSame(['ADMIN', 'AGENT', 'OPERATION'], $realms);
     }
 
     /** A different source order is a different slot, so one test never blocks another. */

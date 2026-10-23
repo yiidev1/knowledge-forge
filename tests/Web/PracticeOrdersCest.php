@@ -341,10 +341,54 @@ final class PracticeOrdersCest
         $I->seeElement(
             'form.pa-retry[method="post"][action="/order-testing/store/' . self::STORE_ID . '/demo-url"]',
         );
-        $I->see('Retry Practice');
         // The external destination is never named in the page: it is resolved server-side, by the
         // endpoint, after the attempt has been recorded.
         $I->dontSee('order58.com');
+    }
+
+    /**
+     * And it opens the destination in a second tab, leaving this page where it is.
+     *
+     * Asserted on the markup because that is the path this suite exercises: PhpBrowser runs no
+     * script, so what it sees is the native submission — which is exactly the case the attribute
+     * exists for. With the script present the tab is opened by `window.open` inside the click
+     * instead, which only a browser test can show.
+     *
+     * `rel` is asserted with it. The Order58 address carries a customer's phone number in its path,
+     * so a missing `noreferrer` would hand this page's URL to the provider as the Referer.
+     */
+    public function retryPracticeOpensTheProviderInASecondTab(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->seeElement('form.pa-retry[target="_blank"][rel="noopener noreferrer"]');
+    }
+
+    /**
+     * The button says Start, not Retry, until the reader has finished this order themselves.
+     *
+     * Same endpoint either way — this is a label, not a permission. But calling a first attempt a
+     * retry is untrue, and an administrator reading somebody else's completed history has not
+     * practised it. This fixture has no imported result attributed to the signed-in administrator.
+     */
+    public function theActionReadsStartUntilTheReaderHasFinishedThisOrder(WebTester $I): void
+    {
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->see('Start Practice', '.pa-retry');
+        $I->dontSee('Retry Practice');
+    }
+
+    /** And it becomes Retry once one of their own attempts has an imported demo order against it. */
+    public function theActionReadsRetryOnceTheReaderHasAnImportedResult(WebTester $I): void
+    {
+        $attemptId = $this->seedAttemptFor('ADMIN', $this->adminId());
+        $this->seedDemoOrderFor($attemptId);
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::ORDER . '/demo-orders');
+
+        $I->see('Retry Practice', '.pa-retry');
+        $I->dontSee('Start Practice');
     }
 
     /** The summary carries the score and no comparison: the answer is one deliberate click away. */
@@ -823,6 +867,54 @@ final class PracticeOrdersCest
     }
 
     /** Scoped to this suite's own store, order, topic and administrator. Never a blanket delete. */
+    /** The signed-in administrator's own row id — the realm this suite practises as. */
+    private function adminId(): int
+    {
+        return (int) (new Query($this->connection))
+            ->select('id')->from('{{%admin_users}}')->where(['username' => self::USERNAME])->scalar();
+    }
+
+    /** One finished attempt, so a demo order has something of this reader's to attach to. */
+    private function seedAttemptFor(string $realm, int $actorId): int
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order_testing_attempts}}', [
+            'public_id' => str_pad((string) random_int(1, 999999), 32, 'a', STR_PAD_LEFT),
+            'store_source_id' => self::STORE_ID,
+            'source_order_id' => self::ORDER,
+            'initiated_by_type' => $realm,
+            'initiated_by_id' => $actorId,
+            'status' => 'MATCHED',
+            'started_at' => $now,
+            'expires_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+
+        return (int) $this->connection->getLastInsertID();
+    }
+
+    /** An imported demo order attributed to that attempt — the thing that earns "Retry". */
+    private function seedDemoOrderFor(int $attemptId): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order_testing_demo_orders}}', [
+            'public_id' => str_pad((string) random_int(1, 999999), 32, 'b', STR_PAD_LEFT),
+            'store_source_id' => self::STORE_ID,
+            'source_order_id' => self::ORDER,
+            'demo_order_id' => 16639001,
+            'matched_attempt_id' => $attemptId,
+            'source_filename' => 'fixture.json',
+            'content_hash' => str_repeat('0', 64),
+            'raw_payload' => '{}',
+            'imported_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
     private function cleanup(): void
     {
         $this->connection->createCommand()
@@ -849,6 +941,10 @@ final class PracticeOrdersCest
             ->delete('{{%knowledge_bases}}', ['source_store_id' => self::STORE_ID])->execute();
         $this->connection->createCommand()
             ->delete('{{%order58_stores}}', ['source_id' => self::STORE_ID])->execute();
+        $this->connection->createCommand()
+            ->delete('{{%order_testing_demo_orders}}', ['store_source_id' => self::STORE_ID])->execute();
+        $this->connection->createCommand()
+            ->delete('{{%order_testing_attempts}}', ['store_source_id' => self::STORE_ID])->execute();
         $this->connection->createCommand()
             ->delete('{{%admin_users}}', ['username' => self::USERNAME])->execute();
     }

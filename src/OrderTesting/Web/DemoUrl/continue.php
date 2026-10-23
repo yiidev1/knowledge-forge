@@ -10,6 +10,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  *
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
+ * @var array<string, string> $routes this surface's own addresses — never Manage Orders' on the
+ *                                    agent practice surface, whose gate refuses them
  * @var int $sourceId
  * @var int $sourceOrderId
  * @var string $url the Order58 address, built server-side and host-checked. Never from the request.
@@ -17,11 +19,11 @@ use Yiisoft\Router\UrlGeneratorInterface;
 
 $this->setTitle('Opening Order58');
 $this->setParameter('breadcrumbs', [
-    ['label' => 'Manage Orders', 'route' => 'order-testing'],
+    ['label' => $routes['storeLabel'], 'route' => $routes['page']],
     ['label' => 'Opening Order58'],
 ]);
 
-$storeUrl = $urlGenerator->generate('order-testing.store', ['sourceId' => $sourceId]);
+$storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $sourceId]);
 ?>
 
 <div class="page-header">
@@ -49,10 +51,16 @@ $storeUrl = $urlGenerator->generate('order-testing.store', ['sourceId' => $sourc
     <p>
         <a class="btn btn--primary" href="<?= Html::encode($url) ?>"
            target="_blank" rel="noopener noreferrer">Open the Order58 demo page</a>
-        <a class="btn" href="<?= Html::encode($storeUrl) ?>">Back to Manage Orders</a>
+        <a class="btn" href="<?= Html::encode($storeUrl) ?>">Back to
+            <?= Html::encode($routes['storeLabel']) ?></a>
     </p>
     <p class="util-muted">
-        One test at a time can be attributed to a person, so this order is held for you until your
-        attempt expires. You do not need to click Demo URL again.
+        <?php
+        // It no longer says the order is "held for you". It is not: several people may practise the
+        // same source order at once, each with their own tracked attempt. What is still true is that
+        // pressing again inside the window resumes this attempt rather than starting another.
+?>
+        Your attempt is recorded and stays open for a while. Pressing Practice Order again before it
+        expires continues this one rather than starting a new test.
     </p>
 </div>

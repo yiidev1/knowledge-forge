@@ -103,13 +103,48 @@ final readonly class PracticeHistoryBuilder
                 ];
             }
 
-            // Numbered within this person's own group: each practitioner counts their own tries from
-            // one, so two people practising the same order do not share a sequence.
+            $outcomes = $byAttempt[$attempt->id] ?? [];
+
+            /*
+             * An attempt with nothing imported is not a try.
+             *
+             * Pressing Practice Order records that somebody intended to practise; it does not record
+             * that they did. A reader who opened Order58 and closed it, or clicked twice, or is still
+             * working, would otherwise fill the page with cards saying nothing happened — six of them
+             * around one real result, on the live store.
+             *
+             * The attempt row is NOT discarded: it stays in `order_testing_attempts`, where
+             * attribution, auditing and concurrency need it, and it is what a late import attaches
+             * itself to. Only the card is withheld, and only until there is something to show.
+             */
+            if ($outcomes === []) {
+                continue;
+            }
+
+            /*
+             * Numbered from the results, within this person's own group.
+             *
+             * Taking the number from the attempt's position would leave gaps — Try 1, Try 4, Try 7 —
+             * which reads as missing history rather than as unproductive clicks. Counting the cards
+             * instead gives 1, 2, 3.
+             *
+             * It stays stable, because the attempts are ordered oldest-first and a demo order
+             * attaches to the attempt it was created during: a file imported late slots into its own
+             * place in that order rather than onto the end. Numbers only ever appear, never move.
+             */
             $groups[$key]['tries'][] = new PracticeTry(
                 count($groups[$key]['tries']) + 1,
                 $attempt,
-                $byAttempt[$attempt->id] ?? [],
+                $outcomes,
             );
+        }
+
+        // A practitioner whose every attempt is still unproductive has no cards, and therefore no
+        // heading either — an empty group would be a name with nothing under it.
+        foreach ($groups as $key => $group) {
+            if ($group['tries'] === []) {
+                unset($groups[$key]);
+            }
         }
 
         $out = [];

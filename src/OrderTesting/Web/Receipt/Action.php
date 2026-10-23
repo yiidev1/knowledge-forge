@@ -7,6 +7,8 @@ namespace App\OrderTesting\Web\Receipt;
 use App\OrderTesting\Application\Comparison\DemoOrderNormalizer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\ReceiptComparison;
+use App\OrderTesting\Application\Practice\PracticeResultVisibility;
+use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
@@ -60,6 +62,13 @@ readonly class Action
         private StoreReaderInterface $stores,
         private DemoOrderNormalizer $demoNormalizer,
         private OrderComparator $comparator,
+        /*
+         * Whether this demo order is the reader's own.
+         *
+         * Held, not consulted, by this surface, for the reason given on the comparison page beside
+         * it: a manager prints anybody's receipt. The practice surface overrides {@see admits()}.
+         */
+        protected PracticeResultVisibility $visibility,
     ) {}
 
     public function __invoke(
@@ -85,6 +94,15 @@ readonly class Action
             );
         }
 
+        // Asked before the receipt is built, and answered with the same words as a missing row: the
+        // id is in the path, so a reader who may not see it must not learn that it exists.
+        if (!$this->admits($demo)) {
+            throw new NotFoundException(
+                'demo_order_not_found',
+                'No demo order with that id belongs to this store and source order.',
+            );
+        }
+
         $comparison = $this->comparator->compare(
             $this->sourceOrders->find($sourceId, $sourceOrderId),
             $this->demoNormalizer->normalize($demo),
@@ -102,6 +120,17 @@ readonly class Action
                 'demo' => $demo,
                 'receipt' => ReceiptComparison::from($comparison),
             ]);
+    }
+
+    /**
+     * Whether this surface may print this demo order for its reader.
+     *
+     * True here: a trainer may print any practitioner's receipt. The practice surface answers for
+     * one person only.
+     */
+    protected function admits(DemoOrder $demo): bool
+    {
+        return true;
     }
 
     /**

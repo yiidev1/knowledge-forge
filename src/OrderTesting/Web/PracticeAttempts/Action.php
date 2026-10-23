@@ -9,6 +9,7 @@ use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\InitiatorType;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
+use App\OrderTesting\Domain\TestActorInterface;
 use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
 use App\Shared\Domain\Exception\NotFoundException;
 use App\Shared\Application\Time\AppTimeZone;
@@ -48,6 +49,9 @@ readonly class Action
         private StoreReaderInterface $stores,
         private SourceOrderReaderInterface $sourceOrders,
         private PracticeHistoryBuilder $history,
+        // Who is reading, for deciding whether this is a retry or a first attempt. Protected
+        // so the agent surface can reuse it rather than taking a second copy of the same port.
+        protected TestActorInterface $actor,
         // Timestamps are stored UTC and read in the business timezone, as every other page here does.
         private AppTimeZone $appTimeZone,
     ) {}
@@ -148,9 +152,55 @@ readonly class Action
                 'sourceOrderId' => $sourceOrderId,
                 'groups' => $shown,
                 'canRetry' => $this->canRetry(),
+                /*
+                 * Whether this reader has finished this order before.
+                 *
+                 * "Retry" is a claim about the person reading, not about the page: an administrator
+                 * looking at somebody else's completed history has not practised it themselves, and
+                 * a button offering to *re*try would be wrong. Clicking Practice Order does not earn
+                 * it either — only an imported, attributed demo order does.
+                 *
+                 * Counted over the reader's own attempts, so it is the same evidence the cards are
+                 * built from.
+                 */
+                'readerHasPractised' => $this->readerHasCompleted($attempts, $demoOrders),
                 // Only to say whether the left-hand side of each comparison will have anything on it.
                 'sourceOrderIsMirrored' => $this->sourceOrders->find($sourceId, $sourceOrderId) !== null,
             ]);
+    }
+
+    /**
+     * Has the reader themselves produced an imported demo order for this source order?
+     *
+     * Only an attempt of *theirs* that a demo order was attributed to counts. A pending attempt, an
+     * expired one, an Unmatched demo order and somebody else's result all answer no.
+     *
+     * @param list<\App\OrderTesting\Domain\TestAttempt> $attempts
+     * @param list<\App\OrderTesting\Domain\DemoOrder>   $demoOrders
+     */
+    private function readerHasCompleted(array $attempts, array $demoOrders): bool
+    {
+        [$realm, $id] = $this->readerIdentity();
+
+        if ($realm === null || $id === null) {
+            return false;
+        }
+
+        $mine = [];
+
+        foreach ($attempts as $attempt) {
+            if ($attempt->initiatedByType === $realm && $attempt->initiatedById === $id) {
+                $mine[$attempt->id] = true;
+            }
+        }
+
+        foreach ($demoOrders as $demo) {
+            if ($demo->matchedAttemptId !== null && isset($mine[$demo->matchedAttemptId])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -168,15 +218,29 @@ readonly class Action
     }
 
     /**
-     * Whether this surface offers Retry Practice.
+     * Whether this surface may start a practice attempt at all.
      *
-     * True for the administrator and operations surfaces, whose route group mounts the Practice
-     * Order endpoint this posts to. It is a method rather than a constant because the endpoint is
-     * mounted per group, and a button rendered where nothing serves it is a dead control.
+     * True for every surface whose route group mounts the Practice Order endpoint the button posts
+     * to. Whether that button says **Retry** or **Start** is a separate question, answered per
+     * reader by the action — see below.
      */
     protected function canRetry(): bool
     {
         return true;
+    }
+
+    /**
+     * Who the reader is, for deciding whether they have practised this order before.
+     *
+     * Returns the actor filter when the surface shows one person's history, and `[null, null]` on
+     * the management surfaces — where the page may be full of other people's results and the reader
+     * has their own, separate, standing.
+     *
+     * @return array{0: ?InitiatorType, 1: ?int}
+     */
+    protected function readerIdentity(): array
+    {
+        return [$this->actor->initiatorType(), $this->actor->initiatorId()];
     }
 
     /**

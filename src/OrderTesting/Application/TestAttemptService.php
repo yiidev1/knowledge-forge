@@ -9,7 +9,6 @@ use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
 
 use function sprintf;
-use function strtolower;
 
 /**
  * The one place a test attempt is started, and the one place the one-at-a-time rule is stated.
@@ -72,20 +71,24 @@ final readonly class TestAttemptService
 
         $attempt = $start->attempt;
 
-        if ($attempt->initiatedByType === $type && $attempt->initiatedById === $initiatedById) {
-            return $start->created
-                ? StartAttemptOutcome::started($attempt)
-                : StartAttemptOutcome::resumed($attempt);
-        }
-
-        return StartAttemptOutcome::refused(
-            sprintf(
-                'Another %s is already testing this order. Their attempt holds it until %s. '
-                . 'Only one test at a time can be attributed to a person, so this one was not started.',
-                strtolower($attempt->initiatedByType->label()),
-                $attempt->expiresAt->format('H:i'),
-            ),
-            $attempt,
-        );
+        /*
+         * Several people may practise the same source order at once.
+         *
+         * This used to refuse everybody but the first: one attempt per source order, so a second
+         * person was told to wait. That was never the business rule — it was how attribution was
+         * kept unambiguous, by making overlapping attempts impossible.
+         *
+         * The repository now scopes its lock to the actor, so each person gets their own attempt and
+         * nobody is turned away. Pressing twice still resumes rather than stacking, which is what the
+         * lock is actually for.
+         *
+         * The cost is at import: two attempts covering one creation instant are two candidates, and
+         * {@see TestAttemptRepositoryInterface::attemptCoveringInstant()} answers null rather than
+         * choose. Such an order is kept and shown as Unmatched. An honest blank is better than a
+         * training record naming the wrong person.
+         */
+        return $start->created
+            ? StartAttemptOutcome::started($attempt)
+            : StartAttemptOutcome::resumed($attempt);
     }
 }

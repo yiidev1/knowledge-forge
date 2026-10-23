@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\OrderTesting\Web\DemoOrders;
 
+use App\OrderTesting\Application\Practice\PracticeResultVisibility;
+use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
@@ -41,6 +43,14 @@ readonly class Action
         private TestAttemptRepositoryInterface $attempts,
         private StoreReaderInterface $stores,
         private SourceOrderReaderInterface $sourceOrders,
+        /*
+         * Which of these rows the reader may see.
+         *
+         * Held, not consulted, by this surface: the whole point of a management list is that it is
+         * everybody's. The practice surface overrides {@see visibleTo()}, and holding the port here
+         * is what lets it do that without restating this constructor.
+         */
+        protected PracticeResultVisibility $visibility,
     ) {}
 
     public function __invoke(
@@ -55,7 +65,9 @@ readonly class Action
             throw new NotFoundException('store_not_found', 'No store has that source id.');
         }
 
-        $orders = $this->demoOrders->forSourceOrder($sourceId, $sourceOrderId);
+        // Narrowed before anything is read off it, so a row the reader may not see never reaches the
+        // template — nor the attempt query below, nor the count the page prints.
+        $orders = $this->visibleTo($this->demoOrders->forSourceOrder($sourceId, $sourceOrderId));
 
         // One query for every attribution on the page, rather than one per row.
         $attemptIds = [];
@@ -78,6 +90,22 @@ readonly class Action
                 // Resolved once here rather than once per row.
                 'sourceOrderIsMirrored' => $this->sourceOrders->find($sourceId, $sourceOrderId) !== null,
             ]);
+    }
+
+    /**
+     * Which of this source order's demo orders this surface shows.
+     *
+     * All of them here, Unmatched included: a trainer comparing two trainees' work needs both, and an
+     * unattributed row is a thing somebody has to go and look at. The practice surface shows one
+     * person their own.
+     *
+     * @param list<DemoOrder> $orders
+     *
+     * @return list<DemoOrder>
+     */
+    protected function visibleTo(array $orders): array
+    {
+        return $orders;
     }
 
     /**

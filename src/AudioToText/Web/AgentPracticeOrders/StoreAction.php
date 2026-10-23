@@ -47,12 +47,30 @@ use Psr\Http\Message\ResponseInterface;
 final readonly class StoreAction extends PracticeStoreAction
 {
     /**
-     * Read-only, and recorded.
+     * This agent's own demo orders, and nobody else's.
      *
-     * The only surface whose system-voice playback is tracked, and therefore the only one offered the
-     * Message Gap control. Everything that changes a recording stays false — this is `readOnly()` plus
-     * the one capability that writes nothing about the recording and everything about the listening.
+     * The count behind "View (N)" used to be every demo order of the source order, so an agent saw
+     * a link to results they had not produced — including one attributed to nobody at all. It is
+     * narrowed in the query, not in the template: rows that are not this agent's never leave the
+     * database, so a page that rendered the cell differently could not leak them.
+     *
+     * `CurrentActor` is Shared, not another business module, so reading it here breaks no isolation
+     * rule. Its realm is lower case and the attempts table stores upper, which is the one
+     * translation this method does.
+     *
+     * @return array{0: ?string, 1: ?int}
      */
+    protected function demoCountActor(): array
+    {
+        // Only an agent narrows. Any other realm reaching this surface is a misconfiguration, and
+        // showing it nothing is the safe answer to that.
+        if (!$this->currentActor->isAgent()) {
+            return ['AGENT', 0];
+        }
+
+        return ['AGENT', $this->currentActor->agentId()];
+    }
+
     protected function capabilities(): ConversationCapabilities
     {
         return ConversationCapabilities::agentPractice();

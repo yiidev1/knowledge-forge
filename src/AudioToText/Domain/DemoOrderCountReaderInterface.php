@@ -24,9 +24,26 @@ interface DemoOrderCountReaderInterface
      * **Scoped to one store.** `$storeSourceId` bounds the query, so an order id belonging to another
      * merchant cannot be counted onto this page.
      *
+     * `$onlyActorRealm`/`$onlyActorId` narrow the count to demo orders **reliably attributed to one
+     * practitioner**. That filter is an authorization boundary, not a convenience: an agent is shown
+     * what they produced, and the unfiltered count is a different question that the management
+     * surfaces ask.
+     *
+     * Narrowed, the count deliberately excludes **Unmatched** demo orders — ones whose creating
+     * attempt could not be established. They belong to nobody, so they belong to nobody's count;
+     * offering one to whoever happens to be looking is the invented attribution the importer
+     * refuses to make. The realm travels with the id because the three realms number their users
+     * separately: `admin_users.id = 7` and Order58's `admin_id = 7` are different people.
+     *
      * @param list<string> $orderIds the raw `audio_conversations.order_id` values, as typed
+     * @param ?string      $onlyActorRealm an `order_testing_attempts.initiated_by_type` value
      *
      * @return array<string, int> keyed by the order id given, for every id asked about
      */
-    public function countsFor(int $storeSourceId, array $orderIds): array;
+    public function countsFor(
+        int $storeSourceId,
+        array $orderIds,
+        ?string $onlyActorRealm = null,
+        ?int $onlyActorId = null,
+    ): array;
 }

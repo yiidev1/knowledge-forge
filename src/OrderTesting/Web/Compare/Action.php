@@ -7,10 +7,13 @@ namespace App\OrderTesting\Web\Compare;
 use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Application\Comparison\DemoOrderNormalizer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
+use App\OrderTesting\Application\Practice\PracticeResultVisibility;
 use App\OrderTesting\Domain\Comparison\OriginalItemsReaderInterface;
+use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\DemoOrderRepositoryInterface;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 use App\OrderTesting\Domain\StoreReaderInterface;
+use App\OrderTesting\Domain\TestAttempt;
 use App\OrderTesting\Domain\TestAttemptRepositoryInterface;
 use App\Shared\Domain\Exception\NotFoundException;
 use Psr\Http\Message\ResponseInterface;
@@ -65,6 +68,14 @@ readonly class Action
         private DemoOrderNormalizer $demoNormalizer,
         private OrderComparator $comparator,
         private ComparisonScorer $scorer,
+        /*
+         * Whether this demo order is the reader's own.
+         *
+         * Held, not consulted, by this surface: a manager reads everybody's work. The practice
+         * surface subclasses this and overrides {@see admits()}, and holding the port here is what
+         * lets it do that without restating this constructor.
+         */
+        protected PracticeResultVisibility $visibility,
     ) {}
 
     public function __invoke(
@@ -94,6 +105,20 @@ readonly class Action
             ? null
             : ($this->attempts->byIds([$demo->matchedAttemptId])[$demo->matchedAttemptId] ?? null);
 
+        /*
+         * The surface's own answer about this row, asked before any of it is read.
+         *
+         * `demo_order_not_found` again, deliberately: a reader who may not see this row must not
+         * learn from the answer that it exists. The id is in the path, so a different message would
+         * turn a guard into a lookup.
+         */
+        if (!$this->admits($demo, $attempt)) {
+            throw new NotFoundException(
+                'demo_order_not_found',
+                'No demo order with that id belongs to this store and source order.',
+            );
+        }
+
         $comparison = $this->comparator->compare(
             $this->sourceOrders->find($sourceId, $sourceOrderId),
             $this->demoNormalizer->normalize($demo),
@@ -115,6 +140,17 @@ readonly class Action
                 // One comparison, one score, both realms. Nothing about the reader enters this.
                 'score' => $this->scorer->score($comparison),
             ]);
+    }
+
+    /**
+     * Whether this surface may show this demo order to its reader.
+     *
+     * True here, and that is not an oversight: Manage Orders exists so that a trainer can read every
+     * practitioner's work, Unmatched rows included. The practice surface answers differently.
+     */
+    protected function admits(DemoOrder $demo, ?TestAttempt $attempt): bool
+    {
+        return true;
     }
 
     /**

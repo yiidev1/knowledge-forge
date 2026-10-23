@@ -109,8 +109,23 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
         /** @var AttemptStart */
         return $this->connection->transaction(
             function () use ($storeSourceId, $sourceOrderId, $type, $initiatedById, $now, $expiresAt): AttemptStart {
+                /*
+                 * This person's own open attempt, if they already have one.
+                 *
+                 * Scoped to the actor rather than to the source order. The lock used to be
+                 * order-wide — one person at a time, everybody else refused — which is no longer
+                 * the business rule: several people may practise the same order at once, and each
+                 * gets their own independently tracked attempt.
+                 *
+                 * What it still prevents is the same person stacking attempts by pressing twice, or
+                 * by two tabs racing. `FOR UPDATE` is still the whole mechanism for that; without it
+                 * this is a check-then-act race against yourself.
+                 */
                 $held = $this->openQuery($storeSourceId, $sourceOrderId, $now)
-                    // The lock is the whole mechanism; without it this is a check-then-act race.
+                    ->andWhere([
+                        'a.initiated_by_type' => $type->value,
+                        'a.initiated_by_id' => $initiatedById,
+                    ])
                     ->for('UPDATE')
                     ->one();
 
@@ -133,7 +148,12 @@ final readonly class DbTestAttemptRepository implements TestAttemptRepositoryInt
                     'updated_at' => $stamp,
                 ])->execute();
 
-                $row = $this->openQuery($storeSourceId, $sourceOrderId, $now)->one();
+                $row = $this->openQuery($storeSourceId, $sourceOrderId, $now)
+                    ->andWhere([
+                        'a.initiated_by_type' => $type->value,
+                        'a.initiated_by_id' => $initiatedById,
+                    ])
+                    ->one();
 
                 if (!is_array($row)) {
                     // Only reachable if the row vanished between the insert and the read inside one

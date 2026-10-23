@@ -475,13 +475,20 @@ final class OrderTestingDemoOrdersCest
         Assert::assertSame('ADMIN', (string) $row['initiated_by_type']);
     }
 
-    /** A second holder is a 409, so the script closes its blank tab rather than leaving it open. */
-    public function aConflictingAttemptIsRefusedWithoutASecondRow(WebTester $I): void
+    /**
+     * A second person practising the same order gets their own attempt, not a 409.
+     *
+     * Inverted deliberately: this used to assert a refusal, because attribution relied on only one
+     * person holding a source order at a time. Concurrent practice is the business rule now, so the
+     * second click succeeds and two tracked rows exist — and the ambiguity that creates is paid for
+     * at import, where such a demo order is left Unmatched rather than credited to a guess.
+     */
+    public function aSecondPersonGetsTheirOwnAttemptRatherThanAConflict(WebTester $I): void
     {
         $this->signIn($I);
         $this->seedCall(self::SOURCE_ORDER);
 
-        // Somebody else already holds this order.
+        // Somebody else is already practising this order.
         $this->connection->createCommand()->insert('{{%order_testing_attempts}}', [
             'public_id' => bin2hex(random_bytes(16)),
             'store_source_id' => self::STORE_ID,
@@ -504,14 +511,22 @@ final class OrderTestingDemoOrdersCest
             '_csrf' => $token,
         ]);
 
-        $I->seeResponseCodeIs(409);
-        $I->seeInSource('already testing this order');
-        // No URL on a refusal: the script must have nothing to navigate its tab to.
-        $I->dontSeeInSource('/admin/demo/order/make/');
+        $I->seeResponseCodeIs(200);
+        // The destination is returned, so the browser has somewhere to go. Matched on the JSON key
+        // and the host rather than on the path: this is a JSON body, so its slashes are escaped and
+        // a literal `/admin/demo/order/make/` never appears in the source.
+        $I->seeInSource('"url"');
+        $I->seeInSource('order58.com');
+        $I->dontSeeInSource('already testing this order');
 
-        Assert::assertSame(1, (int) (new Query($this->connection))
+        // Two people, two independently tracked rows.
+        Assert::assertSame(2, (int) (new Query($this->connection))
             ->from('{{%order_testing_attempts}}')
-            ->where(['store_source_id' => self::STORE_ID, 'source_order_id' => self::SOURCE_ORDER])
+            ->where([
+                'store_source_id' => self::STORE_ID,
+                'source_order_id' => self::SOURCE_ORDER,
+                'status' => ['STARTED', 'MATCHED'],
+            ])
             ->count());
     }
 

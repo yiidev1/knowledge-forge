@@ -164,3 +164,22 @@
     width: auto;
     min-width: 14rem;
 }
+
+.pa-retry-wrap {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .35rem;
+}
+
+/* A refusal, said where the button is. Never a navigation — see practice-attempts.js. */
+.pa-retry__error {
+    margin: 0;
+    max-width: 22rem;
+    font-size: .8rem;
+    color: var(--error-text);
+}
+
+.pa-retry__error[hidden] {
+    display: none;
+}

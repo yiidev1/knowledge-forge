@@ -34,7 +34,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var list<AttemptGroup> $groups the groups to draw, after the Filter by agent choice
  * @var list<AttemptGroup> $allGroups every group this reader may see, for the filter's own options
  * @var ?string $chosenAgent the selected group key, or null for all of them
- * @var bool $canRetry
+ * @var bool $canRetry whether this surface may start an attempt at all
+ * @var bool $readerHasPractised whether the reader has an imported result of their own here
  * @var bool $sourceOrderIsMirrored
  * @var array<string, string> $routes the addresses this surface builds its links from
  */
@@ -126,21 +127,13 @@ $card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $tes
 
     $attempt = $try->attempt;
 
-    if ($try->isPending()) {
-        return '<article class="pa-card pa-card--pending">'
-            . '<header class="pa-card__head">'
-            . '<span class="pa-card__try">Try ' . Html::encode((string) $try->number) . '</span>'
-            . '<span class="badge badge--warning">Pending demo</span>'
-            . '</header>'
-            . '<p class="pa-card__score pa-card__score--none">—</p>'
-            . '<dl class="pa-card__facts">'
-            . '<dt>Started</dt><dd>' . Html::encode($when($attempt?->startedAt)) . '</dd>'
-            . '</dl>'
-            . '<p class="pa-card__note">This attempt was started but no demo order has been imported '
-            . 'for it yet. Press Sync demo orders once the order has been recreated.</p>'
-            . '</article>';
-    }
-
+    /*
+     * There is no pending card any more.
+     *
+     * A try is only built where a demo order was actually imported — see `PracticeHistoryBuilder`.
+     * An attempt with nothing behind it is still recorded and still auditable; it simply has nothing
+     * to show yet, and a card saying so was six-sevenths of this page on the live store.
+     */
     $demo = $outcome?->demo;
     $percent = $outcome?->score->displayPercent();
     $perfect = $outcome !== null && $outcome->isPerfect();
@@ -200,18 +193,48 @@ $card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $tes
              * the one thing this must not do.
              */
             ?>
-            <form class="pa-retry" method="post"
-                  action="<?= Html::encode($urlGenerator->generate($routes['demoUrl'], ['sourceId' => $sourceId])) ?>">
-                <?= $csrf->hiddenInput() ?>
-                <input type="hidden" name="source_order_id" value="<?= Html::encode((string) $sourceOrderId) ?>">
+            <div class="pa-retry-wrap">
                 <?php
-                            // A plain submit, with no `data-ot-demo-url` hook: this page does not load the table's
-                            // script, so the button must work as the form it is. The endpoint answers a POST
-                            // without one by rendering its own one-click page, which is the no-script path the
-                            // table has always had.
+                /*
+                 * `target="_blank"`, on the form itself, for the path where the script is not there.
+                 *
+                 * The script below takes this submission over and opens the tab itself, so the
+                 * attribute never applies when it loads. When it does not, the browser posts the form
+                 * natively — and without this the endpoint's own page would replace the history the
+                 * reader is looking at. The table's Practice Order button carries the same attribute
+                 * for the same reason.
+                 *
+                 * `rel` is not decoration: the destination carries a customer's phone number in its
+                 * path, and without `noreferrer` the browser hands this page's URL to Order58 as the
+                 * Referer.
+                 */
             ?>
-                <button class="btn btn--primary" type="submit">Retry Practice</button>
-            </form>
+                <form class="pa-retry" method="post" data-pa-retry
+                      target="_blank" rel="noopener noreferrer"
+                      action="<?= Html::encode($urlGenerator->generate($routes['demoUrl'], ['sourceId' => $sourceId])) ?>">
+                    <?= $csrf->hiddenInput() ?>
+                    <input type="hidden" name="source_order_id" value="<?= Html::encode((string) $sourceOrderId) ?>">
+                    <?php
+                    /*
+                     * "Retry" only where the reader has finished this order before.
+                     *
+                     * The action is identical either way — the same tracked endpoint, the same
+                     * attempt — so this is a label, not a permission. But calling a first attempt a
+                     * retry is simply untrue, and an administrator reading somebody else's history
+                     * has not practised it themselves.
+                     */
+            ?>
+                    <button class="btn btn--primary" type="submit"><?=
+                                $readerHasPractised ? 'Retry Practice' : 'Start Practice' ?></button>
+                </form>
+                <?php
+                            // Where a refused or failed start is reported. The script fills this instead of
+                            // navigating, so a refusal never looks like a successful start. With no script the
+                            // form posts normally and the endpoint renders its own page — the path that has
+                            // always existed.
+            ?>
+                <p class="pa-retry__error" data-pa-retry-error hidden></p>
+            </div>
         <?php endif; ?>
         <a class="btn btn--secondary" href="<?= Html::encode($allDemoUrl) ?>">All Demo Orders</a>
         <a class="btn btn--ghost" href="<?= Html::encode($storeUrl) ?>">Back to Store</a>
@@ -226,14 +249,14 @@ $card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $tes
 <?php endif; ?>
 
 <?php
-            /*
- * Filter by agent.
- *
- * Rendered only where there is more than one thing to choose between — a filter over a single group
- * is a control that cannot change anything. A GET form with an explicit Apply, like the topic filter
- * on the store page: no inline script, nothing navigates on change, and the choice survives a reload
- * and a bookmark because it lives in the URL.
- */
+                        /*
+             * Filter by agent.
+             *
+             * Rendered only where there is more than one thing to choose between — a filter over a single group
+             * is a control that cannot change anything. A GET form with an explicit Apply, like the topic filter
+             * on the store page: no inline script, nothing navigates on change, and the choice survives a reload
+             * and a bookmark because it lives in the URL.
+             */
 ?>
 <?php if (count($allGroups) > 1): ?>
     <form class="pa-filter" method="get" role="search">
@@ -261,10 +284,10 @@ $card = static function (PracticeTry $try) use ($compareUrl, $when, $stamp, $tes
 <?php if ($groups === []): ?>
     <div class="empty">
         <div class="empty__icon" aria-hidden="true">🎯</div>
-        <div class="empty__title">Nothing practised yet</div>
+        <div class="empty__title">No completed practice orders yet</div>
         <p>
-            Press Practice Order on this order to start an attempt. Once the recreated order has been
-            imported with Sync demo orders, it appears here.
+            A try appears here once the order has been recreated in Order58 <em>and</em> imported with
+            Sync demo orders. Starting an attempt on its own does not create one.
         </p>
     </div>
 <?php else: ?>
