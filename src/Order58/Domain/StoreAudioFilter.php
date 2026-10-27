@@ -30,6 +30,15 @@ enum StoreAudioFilter: string
     case WithAudio = 'with';
     /** Stores holding at least one imported Case Order. Audio is not consulted. */
     case CaseOrders = 'case-orders';
+    /**
+     * Stores holding at least one Case Order with a call recording link.
+     *
+     * Read from the synchronised recording metadata, never from `audio_conversations`: these
+     * recordings are streamed from the provider on demand, so a store can have hundreds of them and
+     * nothing uploaded at all. Its card counts ORDERS with a recording, not links — an order whose call
+     * was saved as three files is one order to practise.
+     */
+    case CaseRecordings = 'case-recordings';
 
     /**
      * Parse the `audio=` query parameter, falling back to the surface's own landing state.
@@ -74,6 +83,7 @@ enum StoreAudioFilter: string
             self::All => 'All stores',
             self::WithAudio => 'Uploaded audio',
             self::CaseOrders => 'Order58 Case Orders',
+            self::CaseRecordings => 'Case Order recordings',
         };
     }
 
@@ -90,6 +100,7 @@ enum StoreAudioFilter: string
         return match ($this) {
             self::CaseOrders => 'Case Orders',
             self::WithAudio => 'Audio Recordings',
+            self::CaseRecordings => 'Orders With Recordings',
             // Unfiltered, the card follows whatever the page behind it lists.
             self::All => ($caseOrderPrimary ?? true) ? 'Case Orders' : 'Audio Recordings',
         };
@@ -106,7 +117,9 @@ enum StoreAudioFilter: string
     {
         return match ($this) {
             self::CaseOrders => true,
-            self::WithAudio => false,
+            // Counted by its own query — orders with a recording link — rather than by either of the
+            // two this answers for; the picker asks for those counts directly in this mode.
+            self::WithAudio, self::CaseRecordings => false,
             self::All => null,
         };
     }

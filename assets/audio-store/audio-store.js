@@ -571,8 +571,30 @@ window.KFAudioStages = {
             button.setAttribute('data-playing', '');
         } else {
             button.removeAttribute('data-playing');
+            button.removeAttribute('data-loading');
         }
         button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+
+    /*
+     * A recording that would not play says so on its own button, and the next press starts afresh.
+     *
+     * The element is forgotten rather than kept: a media element that has failed stays failed, so
+     * keeping it would make every later press fail instantly without asking the server again. A
+     * streamed recording can fail for a passing reason — the provider busy, a link not yet live.
+     */
+    function broken(button) {
+        if (playing !== null && playing.button === button) {
+            silence();
+        }
+        mark(button, false);
+        players.delete(button);
+        if (!button.hasAttribute('data-a2t-title')) {
+            button.setAttribute('data-a2t-title', button.title);
+        }
+        button.classList.add('is-broken');
+        button.title = 'This recording could not be played. It may be unavailable, or the link may have '
+            + 'expired. Press to try again.';
     }
 
     function silence() {
@@ -610,6 +632,24 @@ window.KFAudioStages = {
                 playing = null;
             }
         });
+        // Loading is shown from the press until sound starts, and again whenever playback has to wait
+        // for more of the file — a recording streamed from the provider can take a moment to arrive.
+        audio.addEventListener('waiting', function () {
+            if (playing !== null && playing.button === button) {
+                button.setAttribute('data-loading', '');
+            }
+        });
+        audio.addEventListener('playing', function () {
+            button.removeAttribute('data-loading');
+            if (button.classList.contains('is-broken')) {
+                button.classList.remove('is-broken');
+                button.title = button.getAttribute('data-a2t-title') || '';
+                button.removeAttribute('data-a2t-title');
+            }
+        });
+        audio.addEventListener('error', function () {
+            broken(button);
+        });
         players.set(button, audio);
         return audio;
     }
@@ -622,15 +662,17 @@ window.KFAudioStages = {
         silence();
         var audio = playerFor(button);
         mark(button, true);
+        button.setAttribute('data-loading', '');
         playing = { button: button, audio: audio };
         var started = audio.play();
         if (started && typeof started.catch === 'function') {
-            started.catch(function () {
-                if (playing !== null && playing.button === button) {
-                    silence();
+            started.catch(function (error) {
+                // A pause pressed before the first byte arrived rejects the promise too, and that is
+                // not a broken recording.
+                if (error && error.name === 'AbortError') {
+                    return;
                 }
-                button.classList.add('is-broken');
-                button.title = 'This recording could not be played.';
+                broken(button);
             });
         }
     }

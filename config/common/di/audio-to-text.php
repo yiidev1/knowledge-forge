@@ -83,6 +83,8 @@ return [
     // Verification state for the orders on a page. Read by name from the table the Order Testing
     // module owns, like the topic and demo-order readers beside it.
     App\AudioToText\Domain\OrderVerificationReaderInterface::class => App\AudioToText\Infrastructure\DbOrderVerificationReader::class,
+    // The Case Order call recordings each order row can play, read by table name like the two above.
+    App\AudioToText\Domain\CaseRecordingReaderInterface::class => App\AudioToText\Infrastructure\DbCaseRecordingReader::class,
 
     // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
     // still on their way in, and the module that imports them answers. Bound here beside its counterpart

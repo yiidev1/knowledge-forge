@@ -66,6 +66,26 @@ return [
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
     CallImportRepositoryInterface::class => DbCallImportRepository::class,
     Order58OrderRepositoryInterface::class => DbOrder58OrderRepository::class,
+    // Case Order call sessions and their WAV links: metadata only, the audio is streamed on demand.
+    App\Order58\Domain\CallRecordings\CallRecordingRepositoryInterface::class
+        => App\Order58\Infrastructure\DbCallRecordingRepository::class,
+
+    // Streaming a recording when somebody presses Play or Download — the Order API viewer's approach,
+    // shared with the order pages. Fixture mode is resolved HERE, against the environment, so it can be
+    // true only in dev or test whatever the setting says; production always streams from the provider.
+    App\Order58\Application\RecordingStream\RecordingStreamSettings::class => [
+        '__construct()' => [
+            'maxConcurrent' => (int) $params['app/order58']['recordingStreamMaxConcurrent'],
+            'fixture' => $params['app/order58']['recordingStreamSource'] === 'fixture'
+                && App\Integration\Order58Recording\FixtureAvailability::isPermitted(),
+            'fixtureDirectory' => DynamicReference::to(
+                static fn(Aliases $aliases): string => $aliases->get('@root/tests/_data/call-recordings'),
+            ),
+            'lockDirectory' => DynamicReference::to(
+                static fn(Aliases $aliases): string => $aliases->get('@runtime/locks'),
+            ),
+        ],
+    ],
     /*
      * The Case Order endpoint: one request a day, returning recent orders with their lines.
      *

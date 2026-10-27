@@ -15,6 +15,7 @@ use App\AudioToText\Application\WorkerHealthService;
 use App\AudioToText\Domain\AudioConversationRepositoryInterface;
 use App\AudioToText\Domain\AudioStoreLookupInterface;
 use App\AudioToText\Domain\AudioToTextSettingsRepositoryInterface;
+use App\AudioToText\Domain\CaseRecordingReaderInterface;
 use App\AudioToText\Domain\DemoOrderCountReaderInterface;
 use App\Shared\Web\Actor\CurrentActor;
 use App\AudioToText\Domain\MirroredOrderReaderInterface;
@@ -129,6 +130,13 @@ readonly class StoreAction extends AudioStoreAction
          * pay a query for it.
          */
         private OrderVerificationReaderInterface $verifications,
+        /**
+         * The Case Order call recordings each row can play and download.
+         *
+         * Metadata only — ids, never the provider's URL — read for the page's own orders in one
+         * query. The audio is fetched when somebody presses Play, not when the page renders.
+         */
+        private CaseRecordingReaderInterface $caseRecordings,
     ) {
         parent::__construct(
             $viewRenderer,
@@ -205,6 +213,9 @@ readonly class StoreAction extends AudioStoreAction
             // The template renders the topic column when this is true; whether that column can be
             // *used* is a separate question, answered by the capabilities.
             'practiceMode' => true,
+            // One query for the page: which Case Order recordings each row can play. Every surface
+            // that renders this template shows the Recording column, so every one of them asks.
+            'caseRecordings' => $this->caseRecordings->forOrders($sourceId, $orderIds),
         ];
     }
 
@@ -259,6 +270,10 @@ readonly class StoreAction extends AudioStoreAction
             // surface's route group — a practice page that inherited the column would render a link
             // its own group does not serve, so the column is gated on capability rather than on luck.
             'orderReceipt' => OrderTestingRoute::ORDER_RECEIPT,
+
+            // A Case Order call recording, streamed on demand. Mounted in this route group, which
+            // Practice Orders shares; the agent surface names its own.
+            'orderRecording' => OrderTestingRoute::ORDER_RECORDING,
 
             // The job-scoped addresses the row controls and the conversation dialog fetch. Here rather
             // than printed from the audio module's constants, because each surface mounts them at its
@@ -323,8 +338,9 @@ readonly class StoreAction extends AudioStoreAction
      * recordings is a business decision rather than a property of the page. The parent returns
      * recordings because it manages audio; this surface has no such claim on either answer.
      *
-     * Practice Orders inherits this, and the agent surface is unaffected either way — its
-     * `requireLinkedOrder` filter requires an order AND its audio whichever mode is configured.
+     * The practice surfaces are unaffected either way: their `requireLinkedOrder` filter always lists
+     * the orders that have something to listen to — an uploaded recording or a Case Order recording
+     * link — whichever mode is configured.
      */
     protected function listingMode(): ?OrderListingMode
     {

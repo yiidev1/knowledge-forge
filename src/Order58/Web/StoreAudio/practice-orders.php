@@ -38,6 +38,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var list<StoreAudioFilter> $audioOptions
  * @var bool $showsPractisable
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
+ * @var array<int, \App\Order58\Domain\StoreCaseRecordingCounts> $caseRecordingCounts
  */
 
 $this->setTitle('Practice Orders');
@@ -135,6 +136,7 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
     'audioOptions' => $audioOptions,
     'showsPractisable' => $showsPractisable,
     'topicCounts' => $topicCounts,
+    'caseRecordingCounts' => $caseRecordingCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'practice-orders.store',

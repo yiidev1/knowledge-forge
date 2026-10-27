@@ -40,6 +40,7 @@ use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Receipt as Order58Receipt;
+use App\Order58\Web\RecordingAudio as Order58RecordingAudio;
 use App\Order58\Web\OrderApiViewer as Order58OrderApiViewer;
 use App\Order58\Web\RecordingApiDiagnostics as Order58RecordingApiDiagnostics;
 use App\Order58\Web\Stores as Order58Stores;
@@ -807,6 +808,16 @@ return [
                 ->action(Order58Receipt\Action::class)
                 ->name(OrderTestingRoute::ORDER_RECEIPT),
 
+            // One Case Order call recording, streamed from the provider when Play or Download is
+            // pressed and kept nowhere. Same group, so the same access rule; the action requires the
+            // store, the order and the recording to belong together, so an edited id serves nothing,
+            // and the provider's URL — which holds a customer's phone number — never reaches the page.
+            Route::get(
+                '/order-testing/store/{sourceId:\d+}/order/{sourceOrderId:\d+}/recording/{recordingId:\d+}',
+            )
+                ->action(Order58RecordingAudio\Action::class)
+                ->name(OrderTestingRoute::ORDER_RECORDING),
+
             // The 32-hex constraint rejects a malformed id before any action runs, and keeps job URLs
             // non-enumerable: the internal database id never appears in a URL.
             Route::get('/audio-to-text/job/{publicId:[0-9a-f]{32}}')
@@ -1061,6 +1072,16 @@ return [
                     Route::get('/agent/practice-orders/job/{publicId:[0-9a-f]{32}}/ai-audio/file')
                         ->action(AudioToText\Job\AiAudio\File\Action::class)
                         ->name('agent.practice-orders.job.ai-audio.file'),
+
+                    // A Case Order call recording, streamed on demand: the agent listens while
+                    // recreating the order. The middleware admits it only when the recording belongs
+                    // to that order of a store this agent may practise on.
+                    Route::get(
+                        '/agent/practice-orders/store/{sourceId:\d+}/order/{sourceOrderId:\d+}'
+                            . '/recording/{recordingId:\d+}',
+                    )
+                        ->action(Order58RecordingAudio\Action::class)
+                        ->name('agent.practice-orders.order-recording'),
 
                     // Read-only data the conversation dialog draws itself from, and the progress poll
                     // a recording still being transcribed uses.

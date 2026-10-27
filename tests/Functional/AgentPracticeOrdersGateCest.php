@@ -59,7 +59,22 @@ final class AgentPracticeOrdersGateCest
             ['GET', $order . '/demo-orders'],
             ['GET', $order . '/demo/1'],
             ['GET', $order . '/demo/1/receipt'],
+            // A Case Order call recording, streamed on demand.
+            ['GET', $order . '/recording/1'],
         ];
+    }
+
+    /**
+     * The administrators' and operation users' recording address is behind their own gate, so a guest
+     * is sent to the administrator login — and fetches nothing from the provider on the way.
+     */
+    public function theManagingRecordingAddressIsBehindTheManagingGate(FunctionalTester $tester): void
+    {
+        $path = '/order-testing/store/' . self::STORE . '/order/' . self::ORDER . '/recording/1';
+        $response = $tester->sendRequest(new ServerRequest(method: 'GET', uri: $path));
+
+        assertSame(302, $response->getStatusCode(), $path);
+        assertSame('/login', $response->getHeaderLine('Location'), $path);
     }
 
     public function everyPracticeAddressRedirectsAGuestToTheAgentLogin(FunctionalTester $tester): void

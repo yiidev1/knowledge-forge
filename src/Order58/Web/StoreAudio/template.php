@@ -211,7 +211,7 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
     <?php endforeach; ?>
     <span class="filter-bar__sep" aria-hidden="true"></span>
     <?php // Independent of the source axis: an inactive store can still hold a year of recordings.?>
-    <?php foreach (StoreAudioFilter::cases() as $option): ?>
+    <?php foreach ([StoreAudioFilter::All, StoreAudioFilter::WithAudio, StoreAudioFilter::CaseOrders] as $option): ?>
         <a class="filter-chip<?= $option === $audio ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['audio' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
     <?php endforeach; ?>
 </div>

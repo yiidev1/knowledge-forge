@@ -262,6 +262,9 @@ return [
         'recordingImportMaxAttempts' => Environment::int('ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS'),
         'recordingImportMinAvailableMb' => Environment::int('ORDER58_IMPORT_MIN_AVAILABLE_MB'),
         'recordingImportMaxLoadPerCore' => Environment::float('ORDER58_IMPORT_MAX_LOAD_PER_CORE'),
+        // Case Order recordings, streamed on demand. See RecordingStreamSettings.
+        'recordingStreamMaxConcurrent' => Environment::int('ORDER58_RECORDING_STREAM_MAX_CONCURRENT'),
+        'recordingStreamSource' => Environment::string('ORDER58_RECORDING_STREAM_SOURCE'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
         // Which rows the store order listings draw. Display only; resolved into an OrderListingMode
         // in config/common/di/audio-to-text.php, because that is the module whose query it decides.

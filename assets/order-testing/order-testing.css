@@ -709,8 +709,9 @@
 /*
  * One line, always.
  *
- * The cell holds a play control OR one short state, never both and never a list, so it has no
- * reason to be taller than its contents. That is most of where the row height went.
+ * The cell holds a play control OR one short state, never both, so it has no reason to be taller than
+ * its contents. That is most of where the row height went. The one exception is a list of Case Order
+ * recordings, and that opens only when somebody asks for it.
  */
 .ot-rec {
     display: flex;
@@ -750,5 +751,102 @@
 .ot-rec__state--none,
 .ot-rec__state--gone {
     color: var(--text-faint);
+}
+
+/*
+ * Case Order call recordings: Play and Download as two icons per recording.
+ *
+ * One recording is one pair. Several are the first pair and a small disclosure listing each of them,
+ * every one with its own pair — so the row keeps its height until somebody opens the list, and never
+ * carries more than one player's worth of controls when closed.
+ */
+.ot-rec__case {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .35rem;
+}
+
+.ot-rec__pair {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+}
+
+.ot-rec__download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.65rem;
+    height: 1.65rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: border-color .15s, color .15s;
+}
+
+.ot-rec__download:hover {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.ot-rec__download:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.ot-rec__download .a2t-icon {
+    width: 13px;
+    height: 13px;
+}
+
+.ot-rec__more-toggle {
+    display: inline-block;
+    padding: .12rem .5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: .74rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    list-style: none;
+    cursor: pointer;
+}
+
+.ot-rec__more-toggle::-webkit-details-marker {
+    display: none;
+}
+
+.ot-rec__more-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.ot-rec__more[open] > .ot-rec__more-toggle {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.ot-rec__list {
+    display: grid;
+    gap: .3rem;
+    margin: .4rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ot-rec__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+}
+
+.ot-rec__number {
+    color: var(--text-muted);
+    font-size: .74rem;
+    white-space: nowrap;
 }
 

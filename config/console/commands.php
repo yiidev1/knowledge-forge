@@ -38,6 +38,10 @@ return [
     // worker is: it downloads megabytes over a third-party network and then waits on the audio
     // pipeline, and running that in the shared worker would stall documents and sync behind it.
     'kf:order58:import-recordings' => App\Order58\Console\ImportRecordingsCommand::class,
+    // Case Order call sessions and WAV links, filled from the payloads already stored. Dry run unless
+    // --write; makes no request to Order58 and touches no order or line. Not scheduled: the Case Order
+    // synchronisation keeps the links current, and this is the one-off for what was stored before.
+    'kf:order58:call-recordings:backfill' => App\Order58\Console\BackfillCallRecordingsCommand::class,
     // Order Testing's demo-order mirror, for a shell: the administrator's route to the same work is
     // the "Sync demo orders" button on /order-testing, and both call one service under one lock.
     //

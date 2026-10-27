@@ -53,6 +53,9 @@ final class AudioToTextIcons
 
     public const STOP = '<rect x="6.5" y="6.5" width="11" height="11" rx="1.6"/>';
 
+    /** An arrow into a tray: save this recording to the reader's own machine. */
+    public const DOWNLOAD = '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>';
+
     public static function svg(string $paths, string $label): string
     {
         return '<svg class="a2t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '

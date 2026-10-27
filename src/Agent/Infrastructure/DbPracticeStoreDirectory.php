@@ -58,7 +58,21 @@ final readonly class DbPracticeStoreDirectory implements PracticeStoreDirectoryI
                     . ' ON `ro`.`account_id` = `rc`.`store_source_id`'
                     . ' AND `ro`.`source_order_id` = CAST(`rc`.`order_id` AS UNSIGNED)'
                     . ' WHERE `rc`.`store_source_id` = `s`.`source_id`'
-                    . " AND `rc`.`order_id` REGEXP '^[1-9][0-9]{0,18}$')",
+                    . " AND `rc`.`order_id` REGEXP '^[1-9][0-9]{0,18}$')"
+                    /*
+                     * Plus the Case Order call recordings, counted only for orders with no uploaded
+                     * recording — the page plays the uploaded one for those, so counting both would
+                     * offer the agent the same call twice.
+                     */
+                    . ' + (SELECT COUNT(*) FROM `order58_call_sessions` `cs`'
+                    . ' JOIN `order58_call_recordings` `cr`'
+                    . ' ON `cr`.`session_id` = `cs`.`id` AND `cr`.`delisted_at` IS NULL'
+                    . ' WHERE `cs`.`store_source_id` = `s`.`source_id`'
+                    . ' AND NOT EXISTS (SELECT 1 FROM `audio_conversations` `nc`'
+                    . ' JOIN `audio_transcription_jobs` `nj`'
+                    . ' ON `nj`.`conversation_id` = `nc`.`id` AND `nj`.`retained_audio_path` IS NOT NULL'
+                    . ' WHERE `nc`.`store_source_id` = `cs`.`store_source_id`'
+                    . ' AND `nc`.`order_id` = CAST(`cs`.`source_order_id` AS CHAR)))',
                 ),
             ])
             ->from(['s' => self::STORES])

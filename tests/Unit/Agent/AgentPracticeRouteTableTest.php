@@ -55,6 +55,14 @@ final class AgentPracticeRouteTableTest extends TestCase
         'agent.practice-orders.demo-url',
         'agent.practice-orders.job.ai-audio.file',
         'agent.practice-orders.job.original.file',
+        /*
+         * A Case Order call recording, streamed on demand so an agent can listen while recreating the
+         * order. A read: it writes nothing and stores nothing. Its `?download=1` saves the same bytes
+         * to the agent's own machine, which the 27 October 2026 brief asked for explicitly ("Agent
+         * clicks Download icon"); uploaded audio's download route stays forbidden below. The
+         * middleware admits it only for a recording of that order of a store the agent may practise on.
+         */
+        'agent.practice-orders.order-recording',
         // The second write this surface has, approved with playback tracking. It records what the
         // agent's browser played and changes nothing about the recording — no transcript, no audio,
         // no demo order — and it is scoped per recording by the same middleware as every address

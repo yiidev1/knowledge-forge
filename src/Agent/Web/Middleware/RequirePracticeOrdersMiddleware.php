@@ -100,9 +100,10 @@ final readonly class RequirePracticeOrdersMiddleware implements MiddlewareInterf
     /**
      * Whatever object this route names, does the agent's predicate admit it?
      *
-     * Both argument names are checked, not one: a store-addressed route carries `sourceId`, a
-     * recording-addressed one carries `publicId`, and the audio file routes carry only the latter. A
-     * route carrying neither is page-level and has no object to scope.
+     * Every argument name is checked, not one: a store-addressed route carries `sourceId`, a
+     * recording-addressed one carries `publicId`, the uploaded-audio file routes carry only the latter,
+     * and a Case Order recording route carries `recordingId` with its store and order. A route carrying
+     * none of them is page-level and has no object to scope.
      */
     private function assertWithinScope(): void
     {
@@ -116,6 +117,20 @@ final readonly class RequirePracticeOrdersMiddleware implements MiddlewareInterf
 
         if (is_string($publicId) && $publicId !== '' && !$this->scope->admitsJob($publicId)) {
             throw new NotFoundException('practice_job_not_found', 'No such recording.');
+        }
+
+        // A Case Order recording is named by the store, the order and the recording together, and all
+        // three must belong to one another. A route that carried a recording id without the other two
+        // would be a wiring mistake, and it is refused rather than half-checked.
+        $recordingId = $this->currentRoute->getArgument('recordingId');
+
+        if (is_string($recordingId) && $recordingId !== '') {
+            $sourceOrderId = $this->currentRoute->getArgument('sourceOrderId');
+
+            if (!is_string($sourceId) || !is_string($sourceOrderId)
+                || !$this->scope->admitsCaseRecording((int) $sourceId, (int) $sourceOrderId, (int) $recordingId)) {
+                throw new NotFoundException('practice_recording_not_found', 'No such recording.');
+            }
         }
     }
 }

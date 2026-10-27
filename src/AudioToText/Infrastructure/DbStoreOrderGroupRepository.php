@@ -19,6 +19,7 @@ use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Domain\Tts\TtsRendition;
 use App\AudioToText\Domain\Tts\TtsRenditionRepositoryInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
+use App\Shared\Web\Actor\PracticeStoreScope;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Expression\Expression;
@@ -87,10 +88,10 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
      * This repository lists a store's orders, and an order exists whether or not anything was recorded
      * against it — so the orders table is one of the two populations a listing can be a list of. It is
      * still read by name rather than through the Order58 module: nothing outside that module may name
-     * its code, and `narrow()` already read this table by name for the agent predicate.
+     * its code.
      *
-     * It is the primary table in {@see OrderListingMode::CaseOrderPrimary} and is not read at all in
-     * the other mode, except by the agent predicate in {@see narrow()}, which already named it.
+     * It is the primary table in {@see OrderListingMode::CaseOrderPrimary} — which the practice
+     * surfaces always run under, see {@see modeFor()} — and is not read at all in the other mode.
      */
     private const ORDERS = '{{%order58_orders}}';
 
@@ -203,32 +204,33 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
     /**
      * The mode this call runs under, which is not always the configured one.
      *
-     * **The agent practice surface requires an order AND its audio, whichever mode is configured,**
-     * and that is enforced here rather than trusted to a caller. `requireLinkedOrder` is its
-     * eligibility predicate: an order must exist in this store and the recording must still hold its
-     * audio. Both halves are already in the recording-primary query, proven case by case in
-     * `StoreOrderGroupRepositoryTest`, so that mode is forced and the agent runs the query it has
-     * always run — byte for byte, including under `ORDER58_CASE_ORDER_PRIMARY=true`.
+     * **The practice surfaces require an order AND something to listen to, whichever mode is
+     * configured,** and that is enforced here rather than trusted to a caller. `requireLinkedOrder` is
+     * their eligibility predicate: the order must exist in this store, and it must have either an
+     * uploaded recording that still holds its audio or a current Case Order call recording link.
      *
-     * Expressed as "which mode" rather than as an extra `AND` on the order-primary query on purpose.
-     * Two queries that both claimed to implement the same authorization rule would be two places for
-     * it to be weakened, and only one of them would be the one with the tests.
+     * It is answered from the orders table, narrowed by {@see PracticeStoreScope::orderSql()} — the
+     * same rule the agent's store list and the middleware's object checks are built from, one level
+     * down. It used to force the recording-primary query instead, which could only ever see uploaded
+     * audio: an order whose recording arrives as a Case Order link has no row in `audio_conversations`
+     * at all, and would have been hidden however playable it was. Driving the list from the orders also
+     * gives it the order pages' own sort, newest order first.
      *
      * ## The order of precedence, and why it is this way round
      *
      * ```
-     * 1. requireLinkedOrder  the agent predicate. Beats everything, including an explicit $asked.
+     * 1. requireLinkedOrder  the practice predicate. Beats everything, including an explicit $asked.
      * 2. $asked              a surface whose subject is settled rather than configurable.
      * 3. $this->mode         ORDER58_CASE_ORDER_PRIMARY.
      * ```
      *
-     * The agent predicate is first because it is authorization: a caller must not be able to widen it
-     * by asking for a mode, even by accident.
+     * The practice predicate is first because it is authorization: a caller must not be able to widen
+     * it by asking for a mode, even by accident.
      */
     private function modeFor(?OrderGroupFilter $filter, ?OrderListingMode $asked = null): OrderListingMode
     {
         if ($filter !== null && $filter->requireLinkedOrder) {
-            return OrderListingMode::RecordingPrimary;
+            return OrderListingMode::CaseOrderPrimary;
         }
 
         return $asked ?? $this->mode;
@@ -324,11 +326,16 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
      * columns: this query reads the orders table, where the order id is a `BIGINT` rather than the
      * free text a conversation carries, so there is nothing to guard or cast.
      *
-     * `requireLinkedOrder` is not handled here at all, and must not be: a filter carrying it never
-     * reaches this query, because {@see modeFor()} answers recording-primary for it.
+     * `requireLinkedOrder` is applied here too, and only here: {@see modeFor()} routes every filter
+     * carrying it to this query, and the predicate is {@see PracticeStoreScope::orderSql()} rather
+     * than a copy of it.
      */
     private function narrowOrders(Query $query, ?OrderGroupFilter $filter): Query
     {
+        if ($filter !== null && $filter->requireLinkedOrder) {
+            $query = $query->andWhere(new Expression(PracticeStoreScope::orderSql('o')));
+        }
+
         if ($filter === null || !$filter->narrowsTopics()) {
             return $query;
         }
@@ -464,27 +471,10 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             . ' AND p.source_order_id = CAST(c.order_id AS UNSIGNED)';
         $numeric = "c.order_id REGEXP '^[1-9][0-9]{0,18}$'";
 
-        // The agent surface's own half: keep only groups that can actually be practised. This is the
-        // store-visibility predicate one row further down — the order must exist in THIS store and the
-        // recording must still have its audio. Without it a store qualified on the strength of one good
-        // recording and then listed every recording it had, including ones whose order id names nothing.
-        //
-        // The administrator surfaces never set this. They list what was uploaded, including the broken
-        // rows, because seeing them is how they get fixed.
-        if ($filter->requireLinkedOrder) {
-            $query = $query
-                ->andWhere(new Expression($numeric))
-                ->andWhere(new Expression(
-                    'EXISTS (SELECT 1 FROM `order58_orders` `lo`'
-                        . ' WHERE `lo`.`account_id` = `c`.`store_source_id`'
-                        . ' AND `lo`.`source_order_id` = CAST(`c`.`order_id` AS UNSIGNED))',
-                ))
-                ->andWhere(new Expression(
-                    'EXISTS (SELECT 1 FROM `audio_transcription_jobs` `lj`'
-                        . ' WHERE `lj`.`conversation_id` = `c`.`id`'
-                        . ' AND `lj`.`retained_audio_path` IS NOT NULL)',
-                ));
-        }
+        // `requireLinkedOrder` never reaches this query: {@see modeFor()} sends it to the orders-driven
+        // one, where {@see narrowOrders()} applies the practice predicate. The administrator surfaces
+        // that do reach here list what was uploaded, including the broken rows, because seeing them is
+        // how they get fixed.
 
         if (!$filter->narrowsTopics()) {
             // Eligibility only, with no topic narrowing asked for.

@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace App\Order58\Application\CaseOrders;
 
+use App\Order58\Application\CallRecordings\CallRecordingCatalog;
+use App\Order58\Application\CallRecordings\CallRecordingReport;
 use App\Order58\Client\CaseOrders\CaseOrderClientInterface;
 use App\Order58\Client\CaseOrders\CaseOrderFetchFailed;
 use App\Order58\Client\CaseOrders\CaseOrderSettings;
+use App\Order58\Domain\CallRecordings\OrderCalls;
+use App\Order58\Domain\CaseOrders\CaseOrder;
 use App\Order58\Domain\CaseOrders\CaseOrderSyncRun;
 use App\Order58\Domain\CaseOrders\CaseOrderSyncRunRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
@@ -15,6 +19,7 @@ use JsonException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
+use function array_map;
 use function count;
 use function implode;
 use function is_array;
@@ -62,6 +67,14 @@ final readonly class CaseOrderSyncService
         private CaseOrderImporter $importer,
         private ClockInterface $clock,
         private LoggerInterface $logger,
+        /**
+         * The call sessions and WAV links each order carries, stored after the orders themselves.
+         *
+         * A step of its own rather than part of the importer, because the importer skips an order whose
+         * hash has not moved — and an order synchronised before its recording was known would then
+         * never gain one. See {@see CallRecordingCatalog}.
+         */
+        private CallRecordingCatalog $recordings,
     ) {}
 
     /*
@@ -208,6 +221,10 @@ final readonly class CaseOrderSyncService
             'failures' => $report->failed,
         ];
 
+        // After the orders, because a session row needs its order to exist — and for every parsed
+        // order, unchanged ones included. It cannot fail the run: see recordCalls().
+        $recordings = $this->recordCalls($parsed);
+
         // Kept on a successful run too: "199 of 200, and here is the one" is a success with something
         // to read rather than a failure.
         $summary = $report->problems === [] ? null : implode(' ', $report->problems);
@@ -258,7 +275,32 @@ final readonly class CaseOrderSyncService
 
         $settled = $this->runs->find($run->id) ?? $run;
 
-        return CaseOrderSyncOutcome::started($settled, $this->describe($report));
+        return CaseOrderSyncOutcome::started($settled, $this->describe($report, $recordings));
+    }
+
+    /**
+     * Store each order's call sessions and WAV links.
+     *
+     * Never allowed to fail the run. The orders and their lines are already written by the time this
+     * runs, and a recording link is not a reason to report them as lost: the catalog steps over an order
+     * it cannot write, and anything worse is logged here by class name — a driver message would quote
+     * the URLs back, and they carry a customer's phone number.
+     */
+    private function recordCalls(CaseOrderParseResult $parsed): ?CallRecordingReport
+    {
+        try {
+            return $this->recordings->record(
+                array_map(static fn(CaseOrder $order): OrderCalls => $order->orderCalls(), $parsed->orders),
+                $this->clock->now(),
+            );
+        } catch (Throwable $e) {
+            $this->logger->error('Case Order call recordings could not be stored.', [
+                'reason' => 'order58_call_recordings_failed',
+                'error_class' => $e::class,
+            ]);
+
+            return null;
+        }
     }
 
     private function importStaged(
@@ -291,13 +333,16 @@ final readonly class CaseOrderSyncService
         return $this->import($run, $orders, $now);
     }
 
-    private function describe(CaseOrderImportReport $report): string
+    private function describe(CaseOrderImportReport $report, ?CallRecordingReport $recordings = null): string
     {
+        $calls = $recordings === null ? 'call recordings could not be stored' : $recordings->describe();
+
         return $report->inserted . ' new, ' . $report->updated . ' updated, '
             . $report->unchanged . ' unchanged, '
             . $report->itemsImported . ' line(s) imported'
             . ($report->skipped > 0 ? ', ' . $report->skipped . ' skipped' : '')
             . ($report->failed > 0 ? ', ' . $report->failed . ' failed' : '')
+            . ($calls !== '' ? '; ' . $calls : '')
             . '.';
     }
 

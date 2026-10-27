@@ -105,10 +105,13 @@ final readonly class OrderTestingAction extends Action
     /**
      * Manage Orders is the surface that works both populations, so it offers all three.
      *
+     * Named rather than `cases()`, so a filter added for another surface — Practice Orders' Case
+     * Order recordings — does not appear here as a chip nobody asked for.
+     *
      * @return list<StoreAudioFilter>
      */
     protected function audioFilterOptions(): array
     {
-        return StoreAudioFilter::cases();
+        return [StoreAudioFilter::All, StoreAudioFilter::WithAudio, StoreAudioFilter::CaseOrders];
     }
 }

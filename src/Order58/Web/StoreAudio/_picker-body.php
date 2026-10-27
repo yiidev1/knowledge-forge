@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioFilter;
+use App\Order58\Domain\StoreCaseRecordingCounts;
 use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryResult;
 use App\Order58\Domain\StoreSourceStatusFilter;
@@ -37,6 +38,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var list<StoreAudioFilter> $audioOptions the data-source chips this surface advertises
  * @var bool $showsPractisable whether to name how many of the orders can be practised
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic; absent means none
+ * @var array<int, StoreCaseRecordingCounts>|null $caseRecordingCounts orders, calls and files per store, in
+ *      the Case Order recordings mode only; absent everywhere else
  * @var string $base the surface's own landing address, which the search form posts back to
  * @var callable(array): string $dirUrl builds a URL carrying the current filters
  * @var string $storeRoute route NAME a card links to; a name is not a namespace, so isolation holds
@@ -108,6 +111,9 @@ use Yiisoft\Router\UrlGeneratorInterface;
         <?php elseif ($audio === StoreAudioFilter::CaseOrders): ?>
             <p>No store has any imported Case Orders under these filters. Synchronise case orders
                 from the Call Recordings page, or choose another data source above.</p>
+        <?php elseif ($audio === StoreAudioFilter::CaseRecordings): ?>
+            <p>No store has a Case Order with a call recording under these filters. Recording links
+                arrive with the Case Order synchronisation; choose another data source above.</p>
         <?php else: ?>
             <p>Try a different letter or search term.</p>
         <?php endif; ?>
@@ -145,7 +151,11 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
              * the existing behaviour exactly, and the store page enforces the upload rule again
              * either way, because a disabled button has always been a hint rather than the rule.
              */
-            $usable = $store->sourceActive || $audio === StoreAudioFilter::CaseOrders;
+            $usable = $store->sourceActive
+                || $audio === StoreAudioFilter::CaseOrders
+                || $audio === StoreAudioFilter::CaseRecordings;
+            // Calls and files, in the Case Order recordings mode only; null everywhere else.
+            $caseCount = ($caseRecordingCounts ?? [])[$store->sourceId] ?? null;
             $tag = $usable ? 'a' : 'div';
             $attrs = $usable
                 ? 'class="store-card store-card--link" href="' . Html::encode($audioUrl) . '"'
@@ -203,19 +213,27 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                                     <?= Html::encode((string) $breakdown->practisable) ?> available to practise
                                 </dd>
                             <?php endif; ?>
+                            <?php
+                            // The headline counts orders; this names the calls and files behind them, and only
+                            // when they differ — an order recorded as three files is still one order.
+            ?>
+                            <?php if ($caseCount !== null && ($caseCount->calls !== $caseCount->orders || $caseCount->files !== $caseCount->orders)): ?>
+                                <dd class="store-card__metric-note">
+                                    <?= Html::encode($caseCount->calls . ' ' . ($caseCount->calls === 1 ? 'call' : 'calls')
+                                        . ' · ' . $caseCount->files . ' ' . ($caseCount->files === 1 ? 'recording' : 'recordings')) ?>
+                                </dd>
+                            <?php endif; ?>
                         </div>
                         <div class="store-card__metric">
                             <dd class="store-card__metric-value<?= $topics === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
                 $topics ?></dd>
                             <?php
-            // "Topics Assigned" over "Orders with topics": the label is what the number
-            // is called, the line under it is what the number counts. Said here because
-            // the two are easy to confuse — the first version of this counted distinct
-            // topics and a store with three orders under one topic read as 1.
+            // The label alone. The number counts ORDERS that carry a topic, not distinct
+            // topics — a store with three orders under one topic reads 3 — and the
+            // "Orders with topics" line that used to say so under it was removed at the
+            // owner's request on 27 October 2026.
             ?>
-                            <dt class="store-card__metric-label">Topics Assigned
-                                <span class="store-card__metric-note">Orders with topics</span>
-                            </dt>
+                            <dt class="store-card__metric-label">Topics Assigned</dt>
                         </div>
                     </dl>
                     <div class="store-card__badges">

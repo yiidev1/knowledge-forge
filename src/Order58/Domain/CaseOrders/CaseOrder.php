@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Order58\Domain\CaseOrders;
 
+use App\Order58\Domain\CallRecordings\ListedCall;
+use App\Order58\Domain\CallRecordings\OrderCalls;
 use App\Order58\Domain\Items\Order58OrderItem;
 use App\Order58\Domain\Orders\Order58Order;
 
@@ -44,7 +46,27 @@ final readonly class CaseOrder
         public Order58Order $order,
         /** @var list<Order58OrderItem> its lines, in the order the provider listed them */
         public array $items,
+        /**
+         * @var list<ListedCall> the call sessions and WAV links the order carried in `calls`
+         *
+         * Not part of the order or its lines: they are stored by the call recording catalog, which
+         * runs for every order whether or not the import found anything else changed.
+         */
+        public array $calls = [],
+        /** Links in `calls` that were not recording URLs and were dropped. */
+        public int $rejectedRecordingLinks = 0,
     ) {}
+
+    /** What this order said about its calls, in the shape the recording catalog compares. */
+    public function orderCalls(): OrderCalls
+    {
+        return new OrderCalls(
+            $this->storeSourceId(),
+            $this->sourceOrderId(),
+            $this->calls,
+            $this->rejectedRecordingLinks,
+        );
+    }
 
     /** The store this order belongs to: the provider's `account_id`. */
     public function storeSourceId(): int

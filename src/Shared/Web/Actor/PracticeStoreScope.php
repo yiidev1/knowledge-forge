@@ -18,7 +18,13 @@ use function sprintf;
  * ## The rule, stated once
  *
  * **A store is visible to an agent when it holds at least one uploaded recording that still has its
- * audio and names a source order that exists in that same store.**
+ * audio and names a source order that exists in that same store — or at least one Case Order call
+ * recording link on one of its orders.**
+ *
+ * The second half arrived with the Case Order `calls` data. Those recordings are not uploaded: their
+ * links are stored in `order58_call_sessions` / `order58_call_recordings` and the audio is streamed from
+ * the provider when somebody presses Play. A link exists only on a stored order of the same store — the
+ * foreign key guarantees it — so the "names a real order of this store" half holds by construction.
  *
  * That is the whole predicate. Deliberately *not* part of it: `knowledge_bases.agent_enabled`, chat
  * eligibility, vector-store readiness and `source_active`. Those govern Store Chat and answer a
@@ -44,11 +50,13 @@ use function sprintf;
  * says so outright. Correlating on the order id alone would let one merchant's order number make
  * another merchant's store visible to an agent who has no business with it.
  *
- * ## One predicate, three callers
+ * ## One predicate, every caller
  *
- * {@see storeSql()} is the SQL; {@see admitsStore()} and {@see admitsJob()} are the object-level
- * answers. The directory listing builds its query from `storeSql()` too, so a store that passes the
- * list cannot fail the row check or the other way round — the hole a second copy would open.
+ * {@see storeSql()} is the SQL; {@see admitsStore()}, {@see admitsJob()} and
+ * {@see admitsCaseRecording()} are the object-level answers. The directory listing builds its query
+ * from `storeSql()` too, and the practice listing narrows its orders with {@see orderSql()}, the same
+ * rule one level down — so a store that passes the list cannot fail the row check or the other way
+ * round, the hole a second copy would open.
  *
  * ## Fails closed
  *
@@ -65,6 +73,8 @@ final readonly class PracticeStoreScope
     private const CONVERSATIONS = '{{%audio_conversations}}';
     private const ORDERS = '{{%order58_orders}}';
     private const STORES = '{{%order58_stores}}';
+    private const SESSIONS = '{{%order58_call_sessions}}';
+    private const RECORDINGS = '{{%order58_call_recordings}}';
 
     /** The free-text guard every reader of `audio_conversations.order_id` applies before casting. */
     private const NUMERIC_ORDER = "REGEXP '^[1-9][0-9]{0,18}$'";
@@ -80,17 +90,49 @@ final readonly class PracticeStoreScope
     public static function storeSql(string $alias = 's', string $column = 'source_id'): string
     {
         return sprintf(
-            'EXISTS (SELECT 1 FROM `audio_conversations` `c`'
+            '(EXISTS (SELECT 1 FROM `audio_conversations` `c`'
                 . ' JOIN `audio_transcription_jobs` `j`'
                 . ' ON `j`.`conversation_id` = `c`.`id` AND `j`.`retained_audio_path` IS NOT NULL'
                 . ' JOIN `order58_orders` `o`'
                 . ' ON `o`.`account_id` = `c`.`store_source_id`'
                 . ' AND `o`.`source_order_id` = CAST(`c`.`order_id` AS UNSIGNED)'
-                . ' WHERE `c`.`store_source_id` = `%s`.`%s`'
-                . ' AND `c`.`order_id` %s)',
+                . ' WHERE `c`.`store_source_id` = `%1$s`.`%2$s`'
+                . ' AND `c`.`order_id` %3$s)'
+                . ' OR EXISTS (SELECT 1 FROM `order58_call_sessions` `cs`'
+                . ' JOIN `order58_call_recordings` `cr`'
+                . ' ON `cr`.`session_id` = `cs`.`id` AND `cr`.`delisted_at` IS NULL'
+                . ' WHERE `cs`.`store_source_id` = `%1$s`.`%2$s`))',
             $alias,
             $column,
             self::NUMERIC_ORDER,
+        );
+    }
+
+    /**
+     * The same predicate one level down: does THIS order have something to practise on?
+     *
+     * Correlated on an `order58_orders` row the caller has aliased, so the practice listing can be
+     * driven from the orders table and narrowed by this, rather than restating the rule. An uploaded
+     * recording counts when its free-text order id is exactly this order's number (the digits form every
+     * reader of that column accepts, so `CAST(... AS CHAR)` matches it and the index on
+     * `(store_source_id, order_id)` serves the lookup); a Case Order link counts when it is current.
+     *
+     * @param string $alias the alias of the `order58_orders` row to correlate against
+     */
+    public static function orderSql(string $alias = 'o'): string
+    {
+        return sprintf(
+            '(EXISTS (SELECT 1 FROM `audio_conversations` `pc`'
+                . ' JOIN `audio_transcription_jobs` `pj`'
+                . ' ON `pj`.`conversation_id` = `pc`.`id` AND `pj`.`retained_audio_path` IS NOT NULL'
+                . ' WHERE `pc`.`store_source_id` = `%1$s`.`account_id`'
+                . ' AND `pc`.`order_id` = CAST(`%1$s`.`source_order_id` AS CHAR))'
+                . ' OR EXISTS (SELECT 1 FROM `order58_call_sessions` `ps`'
+                . ' JOIN `order58_call_recordings` `pr`'
+                . ' ON `pr`.`session_id` = `ps`.`id` AND `pr`.`delisted_at` IS NULL'
+                . ' WHERE `ps`.`store_source_id` = `%1$s`.`account_id`'
+                . ' AND `ps`.`source_order_id` = `%1$s`.`source_order_id`))',
+            $alias,
         );
     }
 
@@ -157,5 +199,34 @@ final readonly class PracticeStoreScope
         }
 
         return $this->admitsStore((int) $storeSourceId);
+    }
+
+    /**
+     * May an agent play this Case Order recording?
+     *
+     * The store, the order and the recording must all belong together, and the link must be current:
+     * an id read off one order's row cannot be replayed against another order or another store. The
+     * store's own admission is checked separately, by the store argument every such route carries.
+     */
+    public function admitsCaseRecording(int $storeSourceId, int $sourceOrderId, int $recordingId): bool
+    {
+        if ($storeSourceId <= 0 || $sourceOrderId <= 0 || $recordingId <= 0) {
+            return false;
+        }
+
+        try {
+            return (new Query($this->connection))
+                ->from(['r' => self::RECORDINGS])
+                ->innerJoin(['s' => self::SESSIONS], 's.id = r.session_id')
+                ->where([
+                    'r.id' => $recordingId,
+                    's.store_source_id' => $storeSourceId,
+                    's.source_order_id' => $sourceOrderId,
+                    'r.delisted_at' => null,
+                ])
+                ->exists();
+        } catch (Throwable) {
+            return false;
+        }
     }
 }

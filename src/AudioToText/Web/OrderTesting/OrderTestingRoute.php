@@ -111,6 +111,14 @@ final class OrderTestingRoute
     public const ORDER_RECEIPT = 'order-testing.order-receipt';
 
     /**
+     * One Case Order call recording, streamed from the provider on demand; `?download=1` saves it.
+     *
+     * Served by the Order58 module, which owns the recording links, and named here only as a string.
+     * Practice Orders shares it, being in the same route group; the agent surface mounts its own.
+     */
+    public const ORDER_RECORDING = 'order-testing.order-recording';
+
+    /**
      * Run the demo-order import now, from the picker.
      *
      * Manual because nothing schedules it yet. When something does, it will call the same service

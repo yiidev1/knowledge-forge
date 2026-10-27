@@ -6,6 +6,7 @@ namespace App\Order58\Infrastructure;
 
 use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioCountsInterface;
+use App\Order58\Domain\StoreCaseRecordingCounts;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
@@ -39,6 +40,10 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
 
     /** Where the Case Order sync writes. Addressed by name, as this module owns it. */
     private const ORDERS = '{{%order58_orders}}';
+
+    /** The Case Order call recording metadata the same sync writes. Metadata only; no audio. */
+    private const SESSIONS = '{{%order58_call_sessions}}';
+    private const RECORDINGS = '{{%order58_call_recordings}}';
 
     public function __construct(
         private ConnectionInterface $connection,
@@ -257,6 +262,71 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
             ->groupBy('account_id')
             ->orderBy(['account_id' => SORT_ASC])
             ->column();
+
+        return array_map(static fn(mixed $id): int => (int) $id, $ids);
+    }
+
+    public function caseRecordingCountsFor(array $sourceIds): array
+    {
+        if ($sourceIds === []) {
+            return [];
+        }
+
+        /**
+         * Orders, calls and files in one grouped scan over the page's stores.
+         *
+         * `COUNT(DISTINCT s.source_order_id)` is the headline: the join produces a row per link, and an
+         * order with three links must still count once. The sessions are reached through the unique
+         * key's `store_source_id` prefix, the links through theirs, and only current links count — a
+         * link the provider replaced is kept, but it is not a recording anyone can play.
+         *
+         * @var list<array<string, mixed>> $rows
+         */
+        $rows = (new Query($this->connection))
+            ->select([
+                'store_source_id' => 's.store_source_id',
+                'orders' => new Expression('COUNT(DISTINCT s.source_order_id)'),
+                'calls' => new Expression('COUNT(DISTINCT s.id)'),
+                'files' => new Expression('COUNT(*)'),
+            ])
+            ->from(['s' => self::SESSIONS])
+            ->innerJoin(['r' => self::RECORDINGS], 'r.session_id = s.id AND r.delisted_at IS NULL')
+            ->where(['s.store_source_id' => $sourceIds])
+            ->groupBy('s.store_source_id')
+            ->all();
+
+        $counts = [];
+
+        foreach ($rows as $row) {
+            $counts[(int) $row['store_source_id']] = new StoreCaseRecordingCounts(
+                (int) $row['orders'],
+                (int) $row['calls'],
+                (int) $row['files'],
+            );
+        }
+
+        return $counts;
+    }
+
+    public function storesWithCaseRecordings(): array
+    {
+        /*
+         * One row per store first, then one early-exit check per store.
+         *
+         * The distinct stores come off the sessions' unique key by a range scan, and each is kept if
+         * any one of its sessions has a current link — the dependent subquery stops at the first. Left
+         * to itself the optimiser turns the EXISTS into a semi-join that reads every recording row;
+         * measured on 126,000 links across 300 stores that was 150 ms, against 14 ms like this.
+         */
+        /** @var list<mixed> $ids */
+        $ids = $this->connection->createCommand(
+            'SELECT st.store_source_id'
+            . ' FROM (SELECT DISTINCT store_source_id FROM `order58_call_sessions`) st'
+            . ' WHERE EXISTS (SELECT /*+ NO_SEMIJOIN() */ 1 FROM `order58_call_sessions` s'
+            . ' INNER JOIN `order58_call_recordings` r ON r.session_id = s.id AND r.delisted_at IS NULL'
+            . ' WHERE s.store_source_id = st.store_source_id)'
+            . ' ORDER BY st.store_source_id',
+        )->queryColumn();
 
         return array_map(static fn(mixed $id): int => (int) $id, $ids);
     }

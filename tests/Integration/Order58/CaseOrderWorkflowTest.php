@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\Order58;
 
+use App\Order58\Application\CallRecordings\CallRecordingCatalog;
 use App\Order58\Application\CaseOrders\CaseOrderImporter;
 use App\Order58\Application\CaseOrders\CaseOrderParser;
 use App\Order58\Application\CaseOrders\CaseOrderSyncCoordinator;
@@ -15,6 +16,7 @@ use App\Order58\Client\CaseOrders\CaseOrderFetchFailed;
 use App\Order58\Client\CaseOrders\CaseOrderResponse;
 use App\Order58\Client\CaseOrders\CaseOrderSettings;
 use App\Order58\Domain\CaseOrders\CaseOrderSyncStatus;
+use App\Order58\Infrastructure\DbCallRecordingRepository;
 use App\Order58\Infrastructure\DbCaseOrderSyncRunRepository;
 use App\Order58\Infrastructure\DbItemSyncStateRepository;
 use App\Order58\Infrastructure\DbOrder58OrderItemRepository;
@@ -28,6 +30,8 @@ use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
 use function json_encode;
+
+use const SORT_ASC;
 
 /**
  * The whole case order workflow against real MySQL: claim, worker, import, repeat.
@@ -49,6 +53,7 @@ final class CaseOrderWorkflowTest extends Unit
     private const STORE = 987655980;
     private const ORDER_ONE = 919900001;
     private const ORDER_TWO = 919900002;
+    private const SESSION = '919900771';
 
     private ConnectionInterface $connection;
     private DbCaseOrderSyncRunRepository $runs;
@@ -217,6 +222,79 @@ final class CaseOrderWorkflowTest extends Unit
         $this->assertSame(0, $run->ordersInserted);
     }
 
+    // ----------------------------------------------------------------------- call recordings
+
+    /**
+     * **The case the importer's hash check would have missed.**
+     *
+     * The order and its line are already stored and unchanged — the importer writes nothing — but its
+     * recording link is not stored (it was synchronised before the link existed here). The recording
+     * step runs for every order regardless, so the link is added, and the order and its line are not
+     * duplicated or rewritten.
+     */
+    public function testAnUnchangedOrderStillGainsItsRecordingLink(): void
+    {
+        $payload = $this->payload([self::ORDER_ONE], [self::recordingUrl(1)]);
+
+        $first = $this->coordinator()->request('manual', manual: true);
+        $this->createdRunIds[] = (int) $first->run?->id;
+        $this->drainer($this->client($payload))->drain(1);
+
+        // As though the order had been stored before recordings were: its links are not there.
+        $this->connection->createCommand()
+            ->delete('{{%order58_call_sessions}}', ['store_source_id' => self::STORE])->execute();
+        $before = $this->orderUpdatedAt();
+
+        $second = $this->coordinator()->request('manual', manual: true);
+        $this->createdRunIds[] = (int) $second->run?->id;
+        $this->drainer($this->client($payload))->drain(1);
+
+        $run = $this->runs->find((int) $second->run?->id);
+        $this->assertSame(1, $run?->ordersUnchanged, 'the importer saw nothing new');
+        $this->assertSame($before, $this->orderUpdatedAt(), 'the order row was not rewritten');
+        $this->assertSame(1, $this->orderCount());
+        $this->assertSame(1, $this->itemCount());
+        $this->assertSame([self::recordingUrl(1)], $this->recordingUrls(), 'but the link was added');
+    }
+
+    /** One link, then two, on the same order: the second is added, nothing is duplicated. */
+    public function testASecondLinkIsAddedWithoutDuplicatingTheOrderOrItsLine(): void
+    {
+        $first = $this->coordinator()->request('manual', manual: true);
+        $this->createdRunIds[] = (int) $first->run?->id;
+        $this->drainer($this->client($this->payload([self::ORDER_ONE], [self::recordingUrl(1)])))->drain(1);
+
+        $second = $this->coordinator()->request('manual', manual: true);
+        $this->createdRunIds[] = (int) $second->run?->id;
+        $this->drainer($this->client(
+            $this->payload([self::ORDER_ONE], [self::recordingUrl(1), self::recordingUrl(2)]),
+        ))->drain(1);
+
+        $this->assertSame(1, $this->orderCount());
+        $this->assertSame(1, $this->itemCount());
+        $this->assertSame(1, $this->sessionCount());
+        $this->assertSame([self::recordingUrl(1), self::recordingUrl(2)], $this->recordingUrls());
+    }
+
+    /** The same response a third time: no recording row is inserted or touched. */
+    public function testTheSameResponseAgainLeavesEveryRecordingRowAlone(): void
+    {
+        $payload = $this->payload([self::ORDER_ONE], [self::recordingUrl(1), self::recordingUrl(2)]);
+
+        foreach ([1, 2] as $pass) {
+            $run = $this->coordinator()->request('manual', manual: true);
+            $this->createdRunIds[] = (int) $run->run?->id;
+            $this->drainer($this->client($payload))->drain(1);
+
+            if ($pass === 1) {
+                $before = $this->recordingRows();
+            }
+        }
+
+        $this->assertSame($before ?? [], $this->recordingRows(), 'same ids, same timestamps, same positions');
+        $this->assertSame(1, $this->sessionCount());
+    }
+
     // ------------------------------------------------------- no repeated calls, no duplicate work
 
     /**
@@ -352,6 +430,7 @@ final class CaseOrderWorkflowTest extends Unit
             ),
             $clock,
             new NullLogger(),
+            new CallRecordingCatalog(new DbCallRecordingRepository($this->connection), new NullLogger()),
         );
     }
 
@@ -363,13 +442,18 @@ final class CaseOrderWorkflowTest extends Unit
         );
     }
 
-    /** @param list<int> $orderIds @return list<array<array-key, mixed>> */
-    private function payload(array $orderIds): array
+    /**
+     * @param list<int>    $orderIds
+     * @param list<string> $recordingUrls `calls.wav_download_urls` for every order; none when empty
+     *
+     * @return list<array<array-key, mixed>>
+     */
+    private function payload(array $orderIds, array $recordingUrls = []): array
     {
         $orders = [];
 
         foreach ($orderIds as $orderId) {
-            $orders[] = [
+            $order = [
                 'id' => $orderId,
                 'account_id' => self::STORE,
                 'status' => 'completed',
@@ -382,9 +466,55 @@ final class CaseOrderWorkflowTest extends Unit
                     'price' => '12.00000',
                 ]],
             ];
+
+            if ($recordingUrls !== []) {
+                $order['calls'] = ['session_id' => self::SESSION, 'wav_download_urls' => $recordingUrls];
+            }
+
+            $orders[] = $order;
         }
 
         return $orders;
+    }
+
+    private static function recordingUrl(int $n): string
+    {
+        return 'https://order58.xrainbow.com/api/external/recording/fetch/' . self::SESSION
+            . '?time=2026-10-26&company=SWCC&name=' . self::ORDER_ONE . '-' . $n;
+    }
+
+    private function sessionCount(): int
+    {
+        return (int) (new Query($this->connection))
+            ->from('{{%order58_call_sessions}}')
+            ->where(['store_source_id' => self::STORE])
+            ->count();
+    }
+
+    /** @return list<string> the current links of the fixture store, in session and position order */
+    private function recordingUrls(): array
+    {
+        /** @var list<string> */
+        return (new Query($this->connection))
+            ->select('r.url')
+            ->from(['r' => '{{%order58_call_recordings}}'])
+            ->innerJoin(['s' => '{{%order58_call_sessions}}'], 's.id = r.session_id')
+            ->where(['s.store_source_id' => self::STORE, 'r.delisted_at' => null])
+            ->orderBy(['s.id' => SORT_ASC, 'r.position' => SORT_ASC])
+            ->column();
+    }
+
+    /** @return list<array<string, mixed>> every recording row of the fixture store, as stored */
+    private function recordingRows(): array
+    {
+        /** @var list<array<string, mixed>> */
+        return (new Query($this->connection))
+            ->select(['r.id', 'r.position', 'r.url_hash', 'r.delisted_at', 'r.created_at', 'r.updated_at'])
+            ->from(['r' => '{{%order58_call_recordings}}'])
+            ->innerJoin(['s' => '{{%order58_call_sessions}}'], 's.id = r.session_id')
+            ->where(['s.store_source_id' => self::STORE])
+            ->orderBy(['r.id' => SORT_ASC])
+            ->all();
     }
 
     /** @param list<array<array-key, mixed>> $orders */

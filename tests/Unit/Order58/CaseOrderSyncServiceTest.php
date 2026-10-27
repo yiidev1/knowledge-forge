@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Order58;
 
+use App\Order58\Application\CallRecordings\CallRecordingCatalog;
 use App\Order58\Application\CaseOrders\CaseOrderImporter;
 use App\Order58\Application\CaseOrders\CaseOrderParser;
 use App\Order58\Application\CaseOrders\CaseOrderSyncCoordinator;
@@ -24,6 +25,7 @@ use App\Order58\Domain\Items\OrderItemRepositoryInterface;
 use App\Order58\Domain\Orders\Order58Order;
 use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
 use App\Order58\Domain\Orders\OrderListQuery;
+use App\Tests\Support\Fake\Order58\InMemoryCallRecordingRepository;
 use App\Tests\Support\MutableClock;
 use Codeception\Test\Unit;
 use DateTimeImmutable;
@@ -505,6 +507,7 @@ final class CaseOrderSyncServiceTest extends Unit
             ),
             $clock,
             new NullLogger(),
+            new CallRecordingCatalog(new InMemoryCallRecordingRepository(), new NullLogger()),
         );
 
         (new CaseOrderSyncDrainer($service, $runs, $clock, new NullLogger()))->drain(1);

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Order58\Web\StoreAudio;
 
 use App\Order58\Domain\AudioProviderDefaultInterface;
+use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioCountsInterface;
+use App\Order58\Domain\StoreCaseRecordingCounts;
 use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryFilter;
@@ -95,6 +97,9 @@ readonly class Action
             // A different table and no audio consulted: a store with orders and nothing recorded
             // belongs here, which is the entire point of offering the filter separately.
             StoreAudioFilter::CaseOrders => $this->audioCounts->storesWithCaseOrders(),
+            // The Case Order recording metadata, and nothing uploaded: the same rule the cards below
+            // count by, so a listed store never shows zero and a counted store is never missing.
+            StoreAudioFilter::CaseRecordings => $this->audioCounts->storesWithCaseRecordings(),
             StoreAudioFilter::All => null,
         };
 
@@ -115,6 +120,11 @@ readonly class Action
         if ($page > $result->pageCount()) {
             $result = $this->reader->search($build($result->pageCount()));
         }
+
+        // One grouped query for the page, and only in the mode that shows it.
+        $caseRecordingCounts = $audio === StoreAudioFilter::CaseRecordings
+            ? $this->audioCounts->caseRecordingCountsFor($this->shownIds($result->items))
+            : [];
 
         return $this->viewRenderer
             ->withLayout('@src/Web/Shared/Layout/Admin/layout.php')
@@ -141,10 +151,14 @@ readonly class Action
                  * wrong word. Only `All stores` still defers to the surface's own seam, because only
                  * there has nobody said which population they meant.
                  */
-                'audioCounts' => $this->audioCounts->countsFor(
-                    $this->shownIds($result->items),
-                    $audio->countsImportedOrders() ?? $this->cardsCountImportedOrders(),
-                ),
+                'audioCounts' => $audio === StoreAudioFilter::CaseRecordings
+                    ? $this->caseRecordingBreakdowns($caseRecordingCounts)
+                    : $this->audioCounts->countsFor(
+                        $this->shownIds($result->items),
+                        $audio->countsImportedOrders() ?? $this->cardsCountImportedOrders(),
+                    ),
+                // Calls and files beside the order headline, in the Case Order recordings mode only.
+                'caseRecordingCounts' => $caseRecordingCounts,
                 // The word above that number, decided with it so the two cannot disagree.
                 'audioCountLabel' => $audio->cardMetricLabel($this->cardsCountImportedOrders()),
                 // Which chips to draw. See audioFilterOptions() for why this is not just cases().
@@ -162,6 +176,27 @@ readonly class Action
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
             ]);
+    }
+
+    /**
+     * The Case Order recording counts as the card's headline: orders with a recording, twice.
+     *
+     * The headline and "available to practise" are the same number here — every such order is a stored
+     * order of the store, which is all practising needs — so the second line correctly stays hidden.
+     *
+     * @param array<int, StoreCaseRecordingCounts> $counts
+     *
+     * @return array<int, StoreAudioBreakdown>
+     */
+    private function caseRecordingBreakdowns(array $counts): array
+    {
+        $breakdowns = [];
+
+        foreach ($counts as $sourceId => $count) {
+            $breakdowns[$sourceId] = new StoreAudioBreakdown($count->orders, $count->orders, $count->files, 0, 0, 0);
+        }
+
+        return $breakdowns;
     }
 
     /**

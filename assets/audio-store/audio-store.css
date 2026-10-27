@@ -306,6 +306,28 @@ tr:hover .a2t-slot__add,
 }
 .a2t-play[data-playing] { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
 .a2t-play--sm { padding: .2rem .4rem; }
+/* Icon only — no duration to show, because a streamed recording's length is not known until it plays. */
+.a2t-play--icon { padding: .32rem .42rem; }
+
+/* Waiting for sound: the press has been taken, the recording is on its way. A ring, not a word, so the
+   control keeps its size and the row its height. */
+.a2t-play[data-loading] .a2t-play__icon {
+    width: 10px;
+    height: 10px;
+    border: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    background: none;
+    animation: a2t-play-wait .8s linear infinite;
+}
+@keyframes a2t-play-wait { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .a2t-play[data-loading] .a2t-play__icon { animation: none; }
+}
+
+/* It would not play. The title says why in words; colour is never the only signal. */
+.a2t-play.is-broken { border-color: var(--error-border); color: var(--error-text); }
+.a2t-play.is-broken .a2t-play__icon { border-left-color: var(--error-text); }
 
 /* One call's recordings as one cell: what to do with the call on the first line, what it is made of on
    the second. Two rows rather than one column per channel — three recordings of one conversation are

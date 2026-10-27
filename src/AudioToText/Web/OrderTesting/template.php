@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\AudioToText\Domain\AssignedTopic;
 use App\AudioToText\Domain\MirroredOrder;
 use App\AudioToText\Domain\AudioStore;
+use App\AudioToText\Domain\CaseRecording;
 use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\GroupKey;
@@ -170,6 +171,17 @@ $canReadConversation = $capabilities->canReadConversation;
  * @var array<string, MirroredOrder> $mirroredOrders
  */
 $mirroredOrders = $mirroredOrders ?? [];
+
+/**
+ * The Case Order call recordings each row can play, keyed by the order id the row shows.
+ *
+ * Ids only. The provider's URL carries the customer's phone number and never reaches this page: the
+ * Play and Download addresses name the store, the order and the recording, and the server looks the
+ * link up and streams the audio when one of them is pressed.
+ *
+ * @var array<string, list<CaseRecording>> $caseRecordings
+ */
+$caseRecordings = $caseRecordings ?? [];
 
 // The store being active is a fact about the store; being allowed to upload is a fact about the
 // reader. Both must hold, and ANDing them means the upload dialog, both Add Audio buttons and the
@@ -413,6 +425,75 @@ $fullReviewUrl = static fn(string $jobPublicId): string => $urlGenerator->genera
     $routes['jobReview'],
     ['publicId' => $jobPublicId],
 );
+// A Case Order recording's own address on this surface. Nothing is fetched until it is used.
+$caseRecordingUrl = static fn(string $orderId, CaseRecording $recording, bool $download = false): string
+    => $urlGenerator->generate($routes['orderRecording'], [
+        'sourceId' => $store->sourceId,
+        'sourceOrderId' => $orderId,
+        'recordingId' => $recording->recordingId,
+    ]) . ($download ? '?download=1' : '');
+
+/**
+ * Play and Download for one Case Order recording: two icons, no words, no native player.
+ *
+ * Play is the same control every other recording on this page uses, driven by the same script — so
+ * only one recording plays at a time, nothing loads until it is pressed, and the floating player beside
+ * a demo order picks it up. Download is a plain link the server answers as an attachment.
+ */
+$caseRecordingControls = static function (string $orderId, CaseRecording $recording, int $count) use (
+    $caseRecordingUrl
+): string {
+    $which = $count > 1 ? 'recording ' . $recording->number . ' of ' . $count : 'the call recording';
+    $label = ' ' . $which . ' of order #' . $orderId;
+
+    return '<span class="ot-rec__pair">'
+        . '<button class="a2t-play a2t-play--icon" type="button"'
+        . ' data-a2t-play="' . Html::encode($caseRecordingUrl($orderId, $recording)) . '"'
+        . ' title="' . Html::encode('Play' . $label) . '"'
+        . ' aria-label="' . Html::encode('Play' . $label) . '">'
+        . '<span class="a2t-play__icon" aria-hidden="true"></span>'
+        . '</button>'
+        . '<a class="ot-rec__download" download'
+        . ' href="' . Html::encode($caseRecordingUrl($orderId, $recording, true)) . '"'
+        . ' title="' . Html::encode('Download' . $label) . '">'
+        . AudioToTextIcons::svg(AudioToTextIcons::DOWNLOAD, 'Download' . $label)
+        . '</a>'
+        . '</span>';
+};
+
+/**
+ * Every Case Order recording of one order, as compactly as the row allows.
+ *
+ * One recording is one pair of icons. Several are the first pair — what the row's floating player picks
+ * up — and a small disclosure listing each of them by number, every one with its own Play and Download.
+ * Native `<details>`, so it needs no script, and it opens only when somebody asks; the row keeps its
+ * height otherwise.
+ *
+ * @param list<CaseRecording> $recordings
+ */
+$caseRecordingCell = static function (string $orderId, array $recordings) use ($caseRecordingControls): string {
+    /** @var non-empty-list<CaseRecording> $recordings */
+    $count = count($recordings);
+    $html = '<div class="ot-rec__case">' . $caseRecordingControls($orderId, $recordings[0], $count);
+
+    if ($count > 1) {
+        $html .= '<details class="ot-rec__more">'
+            . '<summary class="ot-rec__more-toggle" title="' . Html::encode('Choose one of ' . $count . ' recordings') . '">'
+            . Html::encode($count . ' recordings') . '</summary>'
+            . '<ol class="ot-rec__list">';
+
+        foreach ($recordings as $recording) {
+            $html .= '<li class="ot-rec__item">'
+                . '<span class="ot-rec__number">Recording ' . $recording->number . '</span>'
+                . $caseRecordingControls($orderId, $recording, $count)
+                . '</li>';
+        }
+
+        $html .= '</ol></details>';
+    }
+
+    return $html . '</div>';
+};
 $groupUrl = static fn(string $route, GroupKey $key): string => $urlGenerator->generate(
     $route,
     ['sourceId' => $store->sourceId, 'groupKey' => $key->value],
@@ -890,11 +971,14 @@ $orderWhen = static function (StoreOrderGroup $group) use ($appTimeZone): string
 $conversationCell = static function (StoreOrderGroup $group) use (
     $clock,
     $originalUrl,
-    $channelIndicator
+    $channelIndicator,
+    $caseRecordings,
+    $caseRecordingCell
 ): string {
     $html = '<div class="ot-rec">';
 
     $mix = $group->mixed;
+    $case = $group->orderId !== null ? ($caseRecordings[$group->orderId] ?? []) : [];
     // The acquisition reader keys its channels by the lower-cased recording type, the same spelling
     // the empty-slot note uses — so the arriving poller updates this cell in place by the same
     // selector it has always used.
@@ -910,6 +994,16 @@ $conversationCell = static function (StoreOrderGroup $group) use (
             . '<span class="a2t-play__icon" aria-hidden="true"></span>'
             . '<span class="a2t-play__time">' . Html::encode($clock($mix->durationSeconds)) . '</span>'
             . '</button>';
+    } elseif ($case !== [] && $group->orderId !== null) {
+        /*
+         * The order's Case Order call recordings, from the synchronised metadata.
+         *
+         * After an uploaded Mix recording and never instead of one: a row that already plays its own
+         * uploaded audio keeps exactly the control it has always had, so the same call is not offered
+         * twice. Before every other branch, because a recording that can be played now is a better
+         * answer than a download in progress or a dash.
+         */
+        $html .= $caseRecordingCell($group->orderId, $case);
     } elseif ($arriving !== null && !$arriving->isSettled()) {
         // Still coming. `data-a2t-arriving-channel` is what the poller already rewrites as each state
         // changes, so this line follows the download without the page reloading.

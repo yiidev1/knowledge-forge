@@ -276,8 +276,9 @@ async function run() {
         check('named for what they count',
             /Audio Recordings/.test(card[0].label) && /Topics Assigned/.test(card[1].label),
             JSON.stringify(card.map((c) => c.label)));
-        check('with the subtitle that disambiguates the second',
-            /Orders with topics/.test(card[1].label), card[1].label);
+        // The label alone — the "Orders with topics" subtitle was removed at the owner's request.
+        check('the second is labelled Topics Assigned and nothing else',
+            card[1].label === 'Topics Assigned', card[1].label);
         check('both panels the same height', card[0].height === card[1].height,
             card.map((c) => c.height).join(' vs '));
 

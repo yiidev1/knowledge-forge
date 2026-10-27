@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Order58\Application\CaseOrders;
 
+use App\Order58\Application\CallRecordings\CallListParser;
 use App\Order58\Application\Items\OrderItemMapper;
 use App\Order58\Application\Orders\OrderMapper;
 use App\Order58\Domain\CaseOrders\CaseOrder;
@@ -71,6 +72,7 @@ final readonly class CaseOrderParser
     public function __construct(
         private OrderMapper $orders = new OrderMapper(),
         private OrderItemMapper $items = new OrderItemMapper(),
+        private CallListParser $calls = new CallListParser(),
     ) {}
 
     /**
@@ -151,8 +153,22 @@ final readonly class CaseOrderParser
             return null;
         }
 
+        /*
+         * The call sessions and WAV links, read beside the order rather than into it.
+         *
+         * `calls` stays in the payload the order mapper keeps, exactly as before; this only picks the
+         * links out so the recording catalog can store them. A link that is not a recording URL is
+         * dropped and counted — never a reason to skip the order it arrived on.
+         */
+        $calls = $this->calls->parse($raw['calls'] ?? null);
+
         // The order half, by the application's own mapper — redaction, money and hash included.
-        return new CaseOrder($this->orders->toOrder($storeSourceId, $raw), $items);
+        return new CaseOrder(
+            $this->orders->toOrder($storeSourceId, $raw),
+            $items,
+            $calls->calls,
+            $calls->rejectedLinks,
+        );
     }
 
     /**

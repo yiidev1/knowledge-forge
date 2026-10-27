@@ -202,11 +202,10 @@ final class OrderTestingCest
         // channels were still missing, which mattered when channels arrived one at a time; the card
         // now answers the two questions a directory is actually scanned for.
         $I->see('Audio Recordings', '.store-card__metric-label');
-        // "Topics Assigned" over "Orders with topics": the label names the number, the line under it
-        // says what the number counts. The first version of this metric counted distinct topics and a
-        // store with three orders under one topic read as 1.
+        // The label alone: the "Orders with topics" line under it was removed at the owner's request
+        // (27 October 2026). The number still counts orders carrying a topic, not distinct topics.
         $I->see('Topics Assigned', '.store-card__metric-label');
-        $I->see('Orders with topics', '.store-card__metric-note');
+        $I->dontSee('Orders with topics');
         $I->dontSeeElement('.store-card__kb-count');
         $I->dontSeeElement('.store-card__audio');
 

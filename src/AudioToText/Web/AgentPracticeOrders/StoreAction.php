@@ -105,6 +105,10 @@ final readonly class StoreAction extends PracticeStoreAction
             'jobFragment' => 'agent.practice-orders.job.review.fragment',
             'jobStatus' => 'agent.practice-orders.job.status',
 
+            // A Case Order call recording at this surface's own address, which the middleware scopes
+            // to the agent's practice stores. The administrator address would simply be refused.
+            'orderRecording' => 'agent.practice-orders.order-recording',
+
             // Not mounted for an agent, and never rendered for one either: the capabilities answer no
             // to transcribing and to the full editor, so no control carries these. They are named so
             // the map is complete rather than half-inherited.

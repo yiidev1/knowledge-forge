@@ -80,7 +80,9 @@ final class PracticeOrdersCest
 
     public function thePickerListsStoresAndLinksIntoPracticeOrders(WebTester $I): void
     {
-        $I->amOnPage('/practice-orders?q=' . urlencode(self::STORE_NAME));
+        // Uploaded audio named outright: the fixture store's recording is an upload, and the picker now
+        // lands on Case Order recordings instead (27 October 2026).
+        $I->amOnPage('/practice-orders?audio=with&q=' . urlencode(self::STORE_NAME));
 
         $I->seeResponseCodeIs(200);
         $I->see('Practice Orders', '.page-header__title');

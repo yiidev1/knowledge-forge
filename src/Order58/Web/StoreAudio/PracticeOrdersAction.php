@@ -59,8 +59,31 @@ final readonly class PracticeOrdersAction extends Action
         return __DIR__ . '/practice-orders';
     }
 
+    /**
+     * Lands on the Case Order recordings: the stores whose orders carry a call recording to practise
+     * with, counted as orders with a recording.
+     *
+     * Set at the owner's request on 27 October 2026; it was Uploaded audio before. The filter links
+     * omit whatever equals this, so the bare `/practice-orders` the menu links to is this view, and the
+     * Uploaded audio chip now carries `?audio=with`.
+     */
     protected function defaultAudioFilter(): StoreAudioFilter
     {
-        return StoreAudioFilter::WithAudio;
+        return StoreAudioFilter::CaseRecordings;
+    }
+
+    /**
+     * The two audio sources this page can practise with, each a chip of its own.
+     *
+     * "Case Order recordings" lists the stores whose Case Orders carry a call recording link, counted
+     * as orders with a recording. It is a separate chip rather than a change to "Uploaded audio",
+     * which keeps counting exactly what it always counted, so neither number can absorb the other and
+     * nothing that already worked moves.
+     *
+     * @return list<StoreAudioFilter>
+     */
+    protected function audioFilterOptions(): array
+    {
+        return [StoreAudioFilter::All, StoreAudioFilter::WithAudio, StoreAudioFilter::CaseRecordings];
     }
 }

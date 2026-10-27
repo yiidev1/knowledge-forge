@@ -133,6 +133,18 @@ final class Environment
         // deploying. Attempts match the sync budget so two background features retry alike.
         'ORDER58_RECORDING_IMPORT_ENABLED' => ['type' => 'bool', 'default' => false],
         'ORDER58_RECORDING_IMPORT_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
+        // Case Order recordings are streamed from the provider when somebody presses Play or Download,
+        // never stored. This caps how many such fetches run at once across every PHP worker, so a burst
+        // of listeners cannot take every worker the rest of the application needs.
+        'ORDER58_RECORDING_STREAM_MAX_CONCURRENT' => ['type' => 'int', 'default' => 4, 'min' => 1, 'max' => 64],
+        // `fixture` answers every recording from local test files instead of the provider — so playback
+        // can be exercised on a machine outside the client's IP allowlist without a single request
+        // leaving it. Honoured ONLY when APP_ENV is dev or test; production always streams live.
+        'ORDER58_RECORDING_STREAM_SOURCE' => [
+            'type' => 'enum',
+            'default' => 'live',
+            'values' => ['live', 'fixture'],
+        ],
         // Machine headroom the importer wants before it claims a recording. Sized from the work, not from
         // the box: a tick was measured at 44 MB steady and about 92 MB while ffprobe runs, so 350 MB is
         // roughly 3.8x the peak. Deliberately far below the transcription worker's threshold — that one

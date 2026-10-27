@@ -80,4 +80,26 @@ interface StoreAudioCountsInterface
      * @return list<int>
      */
     public function storesWithCaseOrders(): array;
+
+    /**
+     * Case Order call recording counts for the stores on one page, keyed by store source id.
+     *
+     * One grouped query for the page, from the recording metadata alone — `audio_conversations` is not
+     * consulted. Stores with no current recording link are absent rather than present as zero.
+     *
+     * @param list<int> $sourceIds
+     *
+     * @return array<int, StoreCaseRecordingCounts>
+     */
+    public function caseRecordingCountsFor(array $sourceIds): array;
+
+    /**
+     * Every store with at least one Case Order that has a current call recording link.
+     *
+     * The same rule as {@see caseRecordingCountsFor()}, so a store listed under the filter always shows
+     * a non-zero card and a store with a non-zero card is always listed.
+     *
+     * @return list<int>
+     */
+    public function storesWithCaseRecordings(): array;
 }
