@@ -37,6 +37,9 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
 
     private const CONVERSATIONS = '{{%audio_conversations}}';
 
+    /** Where the Case Order sync writes. Addressed by name, as this module owns it. */
+    private const ORDERS = '{{%order58_orders}}';
+
     public function __construct(
         private ConnectionInterface $connection,
         /**
@@ -196,7 +199,7 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
         /** @var list<array<string, mixed>> $rows */
         $rows = (new Query($this->connection))
             ->select(['account_id', 'orders' => 'COUNT(*)'])
-            ->from('{{%order58_orders}}')
+            ->from(self::ORDERS)
             ->where(['account_id' => $sourceIds])
             ->groupBy('account_id')
             ->all();
@@ -234,6 +237,28 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
         }
 
         return 'CASE WHEN ' . self::LINKED_PREDICATE . ' THEN ' . $key . ' ELSE NULL END';
+    }
+
+    public function storesWithCaseOrders(): array
+    {
+        /*
+         * `order58_orders`, not the audio tables.
+         *
+         * The Case Order sync writes here, and this filter's promise is that a store appears because
+         * it has orders — whether or not anybody has ever uploaded a recording for it. Grouping
+         * rather than DISTINCT for the same reason the sibling does: the index serves the group, and
+         * the two reads then look alike to anyone comparing them.
+         */
+
+        /** @var list<mixed> $ids */
+        $ids = (new Query($this->connection))
+            ->select('account_id')
+            ->from(self::ORDERS)
+            ->groupBy('account_id')
+            ->orderBy(['account_id' => SORT_ASC])
+            ->column();
+
+        return array_map(static fn(mixed $id): int => (int) $id, $ids);
     }
 
     public function storesWithAudio(): array

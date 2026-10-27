@@ -68,4 +68,16 @@ interface StoreAudioCountsInterface
      * @return list<int>
      */
     public function storesWithAudio(): array;
+
+    /**
+     * Every store that has at least one imported Case Order.
+     *
+     * The same job as {@see storesWithAudio()} for the other data source, and deliberately a separate
+     * question rather than a parameter on that one: it reads a different table and consults no audio
+     * at all. A store with four hundred orders and nothing ever recorded belongs in this list, which
+     * is the whole reason the filter exists.
+     *
+     * @return list<int>
+     */
+    public function storesWithCaseOrders(): array;
 }

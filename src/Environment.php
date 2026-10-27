@@ -256,6 +256,19 @@ final class Environment
         // How long a claim is believed before recovery may close it. Concurrency, not rationing.
         'ORDER58_CASE_ORDER_LEASE_SECONDS' => ['type' => 'int', 'default' => 900, 'min' => 60, 'max' => 7200],
 
+        /*
+         * Which data source the Manage Orders picker opens on: `case_orders`, `uploaded_audio` or `all`.
+         *
+         * The ONE place this default lives. An explicit `?audio=` in the URL always wins, so this
+         * decides nothing but the landing state of a page opened with no parameters.
+         *
+         * `string` rather than `enum` on purpose: an unrecognised enum value throws at startup, and a
+         * typo in which chip a page opens on must not be able to stop the application. The value is
+         * normalised — with a safe fallback to `case_orders` — in
+         * {@see \App\Order58\Domain\StoreAudioFilter::fromConfiguredDefault()}.
+         */
+        'MANAGE_ORDERS_DEFAULT_SOURCE' => ['type' => 'string', 'default' => 'case_orders'],
+
         // How long before the Orders page shows a per-operation batch as stalled. A display state,
         // never a verdict. Local only — nothing is fetched to decide it.
         'ORDER58_ITEM_BATCH_STALLED_SECONDS' => ['type' => 'int', 'default' => 180, 'min' => 30, 'max' => 3600],

@@ -239,7 +239,122 @@ final class StoreAudioCountsTest extends Unit
         self::assertNotContains(self::STORE_EMPTY, $withAudio);
     }
 
+    // -------------------------------------------------- the Case Orders data source
+
+    /**
+     * **Only stores that actually have an order, and audio has no say in it.**
+     *
+     * The filter's whole promise. A store with two hundred orders and nothing ever recorded is the
+     * normal case since the Case Order sync — it was invisible on this page before, because the only
+     * narrowing available read `audio_conversations`.
+     */
+    public function testStoresWithCaseOrdersListsOnlyStoresHoldingOrders(): void
+    {
+        // Orders, no audio.
+        $this->order(self::STORE_A, 5001);
+        $this->order(self::STORE_A, 5002);
+        // Audio, no orders.
+        $this->conversation(self::STORE_B, 'MIXED');
+
+        $stores = $this->counts->storesWithCaseOrders();
+
+        self::assertContains(self::STORE_A, $stores, 'orders and no audio still qualifies');
+        self::assertNotContains(self::STORE_B, $stores, 'audio alone must not qualify');
+        self::assertNotContains(self::STORE_EMPTY, $stores);
+    }
+
+    /** Several orders for one store list that store once — the directory must not show duplicates. */
+    public function testAStoreWithManyOrdersAppearsOnce(): void
+    {
+        foreach ([6001, 6002, 6003, 6004] as $orderId) {
+            $this->order(self::STORE_A, $orderId);
+        }
+
+        $stores = $this->counts->storesWithCaseOrders();
+
+        self::assertSame(
+            [self::STORE_A],
+            array_values(array_filter($stores, static fn(int $id): bool => $id === self::STORE_A)),
+            'four orders, one store entry',
+        );
+    }
+
+    /** The two data sources answer independently: neither narrows by the other's table. */
+    public function testTheTwoDataSourcesAreIndependent(): void
+    {
+        $this->order(self::STORE_A, 7001);
+        $this->conversation(self::STORE_B, 'MIXED');
+
+        $counts = $this->counts;
+
+        self::assertContains(self::STORE_A, $counts->storesWithCaseOrders());
+        self::assertNotContains(self::STORE_A, $counts->storesWithAudio());
+
+        self::assertContains(self::STORE_B, $counts->storesWithAudio());
+        self::assertNotContains(self::STORE_B, $counts->storesWithCaseOrders());
+    }
+
+    /**
+     * In Case Orders mode the headline is the order count, not the recording count.
+     *
+     * The specific defect this feature removes: the card read `order58_orders` under the words
+     * "Audio Recordings". The number was right; it was being described as the other thing.
+     */
+    public function testTheHeadlineCountsOrdersInCaseOrdersMode(): void
+    {
+        $this->order(self::STORE_A, 8001);
+        $this->order(self::STORE_A, 8002);
+        $this->order(self::STORE_A, 8003);
+        // Two recordings as well, so the two numbers are distinguishable.
+        $this->conversation(self::STORE_A, 'MIXED');
+        $this->conversation(self::STORE_A, 'CALLER');
+
+        $breakdown = $this->counts->countsFor([self::STORE_A], true)[self::STORE_A] ?? null;
+
+        self::assertNotNull($breakdown);
+        self::assertSame(3, $breakdown->orders, 'the headline is the order count');
+        self::assertSame(2, $breakdown->total, 'and the recordings are still reported beside it');
+    }
+
+    /** And in Uploaded Audio mode it is the recording count, from the same reader. */
+    public function testTheHeadlineCountsRecordingsInAudioMode(): void
+    {
+        $this->order(self::STORE_A, 9001);
+        $this->order(self::STORE_A, 9002);
+        $this->conversation(self::STORE_A, 'MIXED');
+        $this->conversation(self::STORE_A, 'CALLER');
+
+        $breakdown = $this->counts->countsFor([self::STORE_A], false)[self::STORE_A] ?? null;
+
+        self::assertNotNull($breakdown);
+        self::assertSame(2, $breakdown->total, 'two recordings');
+        self::assertNotSame(2, 3, 'and the order count is not what the card shows here');
+    }
+
     // ------------------------------------------------------------------ plumbing
+
+    /** One mirrored order for a store. Only the columns the counts actually read. */
+    private function order(int $store, int $sourceOrderId): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_orders}}', [
+            'account_id' => $store,
+            'source_order_id' => $sourceOrderId,
+            'is_test' => 0,
+            'frontend' => 0,
+            'paid' => 0,
+            'payload_json' => '{}',
+            'content_hash' => str_repeat('a', 64),
+            'synced_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+            'items_status' => 'PENDING',
+            'items_count' => 0,
+            'items_attempts' => 0,
+        ])->execute();
+    }
+
 
     private function conversation(int $store, ?string $recordingType, string $mode = 'COMMON'): void
     {
@@ -276,6 +391,8 @@ final class StoreAudioCountsTest extends Unit
         }
 
         $connection->createCommand()->delete('{{%audio_conversations}}', ['store_source_id' => $ids])->execute();
+        // The orders these cases seed, by the same fixture ids and nothing else.
+        $connection->createCommand()->delete('{{%order58_orders}}', ['account_id' => $ids])->execute();
         IntegrationDb::cleanup($connection, '{{%admin_users}}', ['username' => self::USERNAME]);
     }
 }

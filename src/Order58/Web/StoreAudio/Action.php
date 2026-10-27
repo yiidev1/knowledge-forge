@@ -90,9 +90,13 @@ readonly class Action
         // Resolved once, before the directory query, and handed to it as a plain id restriction. The
         // reader then narrows its rows, its total and its letter counts together — a filter applied
         // afterwards would leave the pager promising pages that render empty.
-        $restrictTo = $audio === StoreAudioFilter::WithAudio
-            ? $this->audioCounts->storesWithAudio()
-            : null;
+        $restrictTo = match ($audio) {
+            StoreAudioFilter::WithAudio => $this->audioCounts->storesWithAudio(),
+            // A different table and no audio consulted: a store with orders and nothing recorded
+            // belongs here, which is the entire point of offering the filter separately.
+            StoreAudioFilter::CaseOrders => $this->audioCounts->storesWithCaseOrders(),
+            StoreAudioFilter::All => null,
+        };
 
         $build = static fn(int $p): StoreDirectoryQuery => new StoreDirectoryQuery(
             $search,
@@ -128,10 +132,23 @@ readonly class Action
                 // One query for the whole page, not one per card.
                 'showsPractisable' => $this->showsPractisableCount(),
                 // One query for the whole page, not one per card, and it carries both figures.
+                /*
+                 * Counted for the filter in force, not for the configured default.
+                 *
+                 * Each named filter says which population it is about, so its cards must count that
+                 * one: "Uploaded audio" showing an order count — which is what
+                 * `ORDER58_CASE_ORDER_PRIMARY` produced on every card — is a right number under the
+                 * wrong word. Only `All stores` still defers to the surface's own seam, because only
+                 * there has nobody said which population they meant.
+                 */
                 'audioCounts' => $this->audioCounts->countsFor(
                     $this->shownIds($result->items),
-                    $this->cardsCountImportedOrders(),
+                    $audio->countsImportedOrders() ?? $this->cardsCountImportedOrders(),
                 ),
+                // The word above that number, decided with it so the two cannot disagree.
+                'audioCountLabel' => $audio->cardMetricLabel($this->cardsCountImportedOrders()),
+                // Which chips to draw. See audioFilterOptions() for why this is not just cases().
+                'audioOptions' => $this->audioFilterOptions(),
                 // The second card metric, asked the same way and for the same reason.
                 'topicCounts' => $this->topicCounts->assignedOrdersFor($this->shownIds($result->items)),
                 // The transcription default, shown here because this is where an administrator already
@@ -213,5 +230,23 @@ readonly class Action
     protected function defaultAudioFilter(): StoreAudioFilter
     {
         return StoreAudioFilter::All;
+    }
+
+    /**
+     * Which data-source chips this surface offers.
+     *
+     * The historical two by default, so adding a third case to the enum does not put a chip on every
+     * picker that happens to share this partial. Practice Orders in particular requires a store to
+     * have an order **and** audio, so a "Case Orders" chip there would list stores whose practice
+     * page then shows nothing — a filter that promises rows it cannot deliver.
+     *
+     * A surface that offers a filter it does not list is still reachable by URL; this decides what is
+     * advertised, not what is accepted, which keeps old links working everywhere.
+     *
+     * @return list<StoreAudioFilter>
+     */
+    protected function audioFilterOptions(): array
+    {
+        return [StoreAudioFilter::All, StoreAudioFilter::WithAudio];
     }
 }

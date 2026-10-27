@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\StoreAudio;
 
+use App\Order58\Domain\AudioProviderDefaultInterface;
+use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreAudioFilter;
+use App\Order58\Domain\StoreDirectoryReaderInterface;
+use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
+use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
  * The store picker, for the Order Testing surface.
@@ -28,6 +33,30 @@ use App\Order58\Domain\StoreAudioFilter;
  */
 final readonly class OrderTestingAction extends Action
 {
+    /**
+     * Everything the picker needs, plus the one setting this surface adds.
+     *
+     * Spelled out rather than inherited because a subclass that adds a dependency has to: the parent
+     * promotes its five, and PHP gives a child no way to append to that list. They are passed
+     * straight through, so the two cannot diverge on anything but the new value.
+     */
+    public function __construct(
+        WebViewRenderer $viewRenderer,
+        StoreDirectoryReaderInterface $reader,
+        StoreAudioCountsInterface $audioCounts,
+        StoreTopicAssignmentCountsInterface $topicCounts,
+        AudioProviderDefaultInterface $providerDefault,
+        /**
+         * The configured landing data source, as written in `.env`.
+         *
+         * Injected as the raw string and interpreted in the domain, so this class carries
+         * configuration rather than policy — a fourth data source later changes the enum, not this.
+         */
+        private string $defaultSource = 'case_orders',
+    ) {
+        parent::__construct($viewRenderer, $reader, $audioCounts, $topicCounts, $providerDefault);
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/order-testing';
@@ -57,8 +86,29 @@ final readonly class OrderTestingAction extends Action
         return null;
     }
 
+    /**
+     * The landing filter, read from configuration rather than decided here.
+     *
+     * `MANAGE_ORDERS_DEFAULT_SOURCE` is the one value that moves it, and nothing below this line
+     * knows what it can say — the words are normalised once, in
+     * {@see StoreAudioFilter::fromConfiguredDefault()}. Switching the page back to opening on
+     * uploaded audio is therefore one line of `.env` and no code at all.
+     *
+     * This decides only the *landing* state. An explicit `?audio=` always wins, so a bookmark, a
+     * chip the operator clicked, and the Back button all keep working exactly as before.
+     */
     protected function defaultAudioFilter(): StoreAudioFilter
     {
-        return StoreAudioFilter::WithAudio;
+        return StoreAudioFilter::fromConfiguredDefault($this->defaultSource);
+    }
+
+    /**
+     * Manage Orders is the surface that works both populations, so it offers all three.
+     *
+     * @return list<StoreAudioFilter>
+     */
+    protected function audioFilterOptions(): array
+    {
+        return StoreAudioFilter::cases();
     }
 }

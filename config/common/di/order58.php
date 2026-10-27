@@ -132,6 +132,19 @@ return [
         ],
     ],
 
+    /*
+     * Manage Orders: which data source the picker opens on.
+     *
+     * The single place the default is wired. `MANAGE_ORDERS_DEFAULT_SOURCE` in `.env` moves it;
+     * the words are normalised in StoreAudioFilter::fromConfiguredDefault(), which also decides what
+     * an unrecognised value falls back to. Nothing else in the application reads the setting.
+     */
+    App\Order58\Web\StoreAudio\OrderTestingAction::class => [
+        '__construct()' => [
+            'defaultSource' => (string) $params['app/order58-case-orders']['manageOrdersDefaultSource'],
+        ],
+    ],
+
     StoreAudioCountsInterface::class => [
         'class' => DbStoreAudioCounts::class,
         '__construct()' => [

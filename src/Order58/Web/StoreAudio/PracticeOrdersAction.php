@@ -35,15 +35,23 @@ final readonly class PracticeOrdersAction extends Action
     }
 
     /**
-     * This picker's cards follow `ORDER58_CASE_ORDER_PRIMARY`, like the page they link to.
+     * **Always recordings here, whatever `ORDER58_CASE_ORDER_PRIMARY` says.**
      *
-     * Stated here rather than inherited because this class extends the audio picker directly, not
-     * {@see OrderTestingAction} — so without it these cards would count recordings while the Practice
-     * Orders page they lead to listed imported orders.
+     * This used to answer `null`, meaning "follow the configured default" — and with that setting on,
+     * the headline became `COUNT(*)` of `order58_orders` under the words "Audio Recordings". A store
+     * with eight orders and nothing uploaded therefore advertised eight recordings it did not have.
+     *
+     * Practising needs a recording to listen to: an order with no audio is nothing to practise
+     * against, which is exactly what the smaller "available to practise" figure beside this one has
+     * always said. So the headline is the audio, and it is stated here rather than configured,
+     * because no setting should be able to turn this card into a count of something else.
+     *
+     * Deliberately NOT the global setting and NOT the shared reader's default: `DbStoreAudioCounts`
+     * is used by the Manage Orders picker too, and its behaviour there is unchanged.
      */
     protected function cardsCountImportedOrders(): ?bool
     {
-        return null;
+        return false;
     }
 
     protected function templatePath(): string

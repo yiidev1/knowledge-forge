@@ -24,6 +24,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var string $audioCountLabel
+ * @var list<StoreAudioFilter> $audioOptions
  * @var bool $showsPractisable
  *      absent when the store has none. `total` is the same conversation count it always was.
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
@@ -208,10 +210,20 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    // Decided with the counts, so the word and the number always describe one population.
+    'audioCountLabel' => $audioCountLabel,
+    'audioOptions' => $audioOptions,
     'showsPractisable' => $showsPractisable,
     'topicCounts' => $topicCounts,
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'order-testing.store',
-    'cta' => 'Manage audio',
+    /*
+     * The action names what the card is about, which is now two things.
+     *
+     * The page behind it is the same either way — it lists a store's orders and its recordings — but
+     * an operator who filtered to Case Orders and sees "Manage audio" has been told the card is
+     * about the other population. Same destination, honest word.
+     */
+    'cta' => $audio === StoreAudioFilter::CaseOrders ? 'Manage orders' : 'Manage audio',
 ]) ?>

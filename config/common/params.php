@@ -237,6 +237,8 @@ return [
         'minRefreshSeconds' => Environment::int('ORDER58_CASE_ORDER_MIN_REFRESH_SECONDS'),
         'minProviderGapSeconds' => Environment::int('ORDER58_CASE_ORDER_MIN_PROVIDER_GAP_SECONDS'),
         'leaseSeconds' => Environment::int('ORDER58_CASE_ORDER_LEASE_SECONDS'),
+        // Which chip the Manage Orders picker opens on. Transport only; normalised in the domain.
+        'manageOrdersDefaultSource' => Environment::string('MANAGE_ORDERS_DEFAULT_SOURCE'),
     ],
 
     // Order Testing: the demo-order mirror and the attempt window. Transport only — every value is

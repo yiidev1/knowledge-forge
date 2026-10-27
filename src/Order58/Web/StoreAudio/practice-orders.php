@@ -34,6 +34,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var string $audioCountLabel
+ * @var list<StoreAudioFilter> $audioOptions
  * @var bool $showsPractisable
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  */
@@ -128,6 +130,9 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
     'letter' => $letter,
     'page' => $page,
     'audioCounts' => $audioCounts,
+    // Decided with the counts, so the word and the number always describe one population.
+    'audioCountLabel' => $audioCountLabel,
+    'audioOptions' => $audioOptions,
     'showsPractisable' => $showsPractisable,
     'topicCounts' => $topicCounts,
     'base' => $base,

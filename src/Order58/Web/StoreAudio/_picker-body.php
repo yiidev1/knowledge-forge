@@ -33,6 +33,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var string $letter
  * @var int $page
  * @var array<int, StoreAudioBreakdown> $audioCounts
+ * @var string $audioCountLabel the word above the headline, decided with the number it describes
+ * @var list<StoreAudioFilter> $audioOptions the data-source chips this surface advertises
  * @var bool $showsPractisable whether to name how many of the orders can be practised
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic; absent means none
  * @var string $base the surface's own landing address, which the search form posts back to
@@ -77,7 +79,7 @@ use Yiisoft\Router\UrlGeneratorInterface;
     <?php endforeach; ?>
     <span class="filter-bar__sep" aria-hidden="true"></span>
     <?php // Independent of the source axis: an inactive store can still hold a year of recordings.?>
-    <?php foreach (StoreAudioFilter::cases() as $option): ?>
+    <?php foreach ($audioOptions as $option): ?>
         <a class="filter-chip<?= $option === $audio ? ' filter-chip--active' : '' ?>" href="<?= Html::encode($dirUrl(['audio' => $option->value, 'page' => 1])) ?>"><?= Html::encode($option->label()) ?></a>
     <?php endforeach; ?>
 </div>
@@ -103,6 +105,9 @@ use Yiisoft\Router\UrlGeneratorInterface;
         <div class="empty__title">No stores match</div>
         <?php if ($audio === StoreAudioFilter::WithAudio): ?>
             <p>No store has any conversions yet under these filters.</p>
+        <?php elseif ($audio === StoreAudioFilter::CaseOrders): ?>
+            <p>No store has any imported Case Orders under these filters. Synchronise case orders
+                from the Call Recordings page, or choose another data source above.</p>
         <?php else: ?>
             <p>Try a different letter or search term.</p>
         <?php endif; ?>
@@ -131,7 +136,16 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
             //
             // An inactive store's existing conversions stay reachable: the Store column on the global
             // conversions list links straight to its page.
-            $usable = $store->sourceActive;
+            /*
+             * Source-inactive gates UPLOADING, which is an audio concern.
+             *
+             * Case Orders are already imported and reading them asks nothing of Order58, so an
+             * inactive store's orders stay reachable in that mode — otherwise a store with two
+             * hundred orders would show them on the card and refuse to open. The audio modes keep
+             * the existing behaviour exactly, and the store page enforces the upload rule again
+             * either way, because a disabled button has always been a hint rather than the rule.
+             */
+            $usable = $store->sourceActive || $audio === StoreAudioFilter::CaseOrders;
             $tag = $usable ? 'a' : 'div';
             $attrs = $usable
                 ? 'class="store-card store-card--link" href="' . Html::encode($audioUrl) . '"'
@@ -172,7 +186,7 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                         <div class="store-card__metric">
                             <dd class="store-card__metric-value<?= $conversions === 0 ? ' store-card__metric-value--zero' : '' ?>"><?=
                                 $conversions ?></dd>
-                            <dt class="store-card__metric-label">Audio Recordings</dt>
+                            <dt class="store-card__metric-label"><?= Html::encode($audioCountLabel) ?></dt>
                             <?php
                             /*
                              * How much of that audio this surface can actually offer.
@@ -215,6 +229,7 @@ $audioUrl = $urlGenerator->generate($storeRoute, ['sourceId' => $store->sourceId
                         <span class="btn btn--primary btn--block"><?= Html::encode($cta) ?></span>
                     <?php else: ?>
                         <span class="btn btn--primary btn--block" aria-disabled="true">Audio unavailable — source inactive</span>
+                        <?php // Reached only in the audio modes now; Case Orders never disables.?>
                     <?php endif; ?>
                 </div>
             </<?= $tag ?>>
