@@ -968,14 +968,6 @@ $conversationCell = static function (StoreOrderGroup $group) use (
     </div>
     <div class="page-header__actions">
         <?php
-        // A real link, so the dialog is reachable with scripts off: the server answers `?upload=1` by
-        // rendering the dialog already open. The script upgrades the same element to `showModal()`.
-?>
-        <?php if ($canUpload): ?>
-            <a class="btn btn--primary" href="<?= Html::encode($storeUrl . '?upload=1') ?>"
-                data-a2t-open="a2t-upload-dialog">+ Add Audio</a>
-        <?php endif; ?>
-        <?php
 // The same button, the same endpoint and the same importer as the picker's — the only
 // difference is the `return` field, which brings the operator back to this store rather than
 // to the picker. The import itself stays global: one configured directory, and the store is
