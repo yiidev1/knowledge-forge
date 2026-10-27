@@ -40,6 +40,8 @@ use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Receipt as Order58Receipt;
+use App\Order58\Web\OrderApiViewer as Order58OrderApiViewer;
+use App\Order58\Web\RecordingApiDiagnostics as Order58RecordingApiDiagnostics;
 use App\Order58\Web\Stores as Order58Stores;
 use App\Order58\Web\TestRecordingApis as Order58TestRecordingApis;
 use App\Order58\Web\TestRecordingChannels as Order58TestRecordingChannels;
@@ -424,6 +426,28 @@ return [
             Route::get('/admin/order58/test-recording-channels')
                 ->action(Order58TestRecordingChannels\Action::class)
                 ->name('order58.test-recording-channels'),
+
+            // Server-side ACCESS diagnostics for the recording host — a separate tool answering a
+            // separate question from the page above. That one asks "is this recording usable?"; this
+            // asks "can this server reach the host, and from which outbound address?", which is what an
+            // IP allowlist question needs. Conflating a 404 with a blocked IP is the specific mistake
+            // it exists to stop. URL-only, in no navigation; reads and writes nothing.
+            Route::get('/admin/order58/recording-api-diagnostics')
+                ->action(Order58RecordingApiDiagnostics\Action::class)
+                ->name('order58.recording-api-diagnostics'),
+
+            // Read-only viewer for the case-order endpoint: six fields per order and a player for each
+            // call recording. It reuses the synchronisation's HTTP client and NOTHING else of it — no
+            // run is claimed, nothing is staged, nothing is imported — so the daily Case Order sync
+            // behaves exactly as it did before. URL-only, in no navigation.
+            Route::get('/admin/order-api-viewer')
+                ->action(Order58OrderApiViewer\Action::class)
+                ->name('order58.order-api-viewer'),
+            // The only route here that hands back audio. Takes a session id and a date, never a URL:
+            // the address is rebuilt from constants, so this cannot be aimed at another host.
+            Route::get('/admin/order-api-viewer/audio')
+                ->action(Order58OrderApiViewer\AudioAction::class)
+                ->name('order58.order-api-viewer.audio'),
             // The only route here that hands back a file. Also serves the page's Play button, inline.
             Route::get('/admin/order58/test-recording-channels/download')
                 ->action(Order58TestRecordingChannels\DownloadAction::class)
