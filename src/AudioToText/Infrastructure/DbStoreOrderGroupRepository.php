@@ -8,6 +8,7 @@ use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\JobStatus;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\OrderListingMode;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
 use App\AudioToText\Domain\StoreOrderGroup;
@@ -29,6 +30,7 @@ use function array_map;
 use function array_values;
 use function count;
 use function implode;
+use function is_numeric;
 use function is_string;
 
 use const SORT_DESC;
@@ -79,12 +81,165 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
      */
     private const TOPIC_ASSIGNMENTS = '`practice_order_topics`';
 
+    /**
+     * The original orders, named the same way and for the same reason.
+     *
+     * This repository lists a store's orders, and an order exists whether or not anything was recorded
+     * against it — so the orders table is one of the two populations a listing can be a list of. It is
+     * still read by name rather than through the Order58 module: nothing outside that module may name
+     * its code, and `narrow()` already read this table by name for the agent predicate.
+     *
+     * It is the primary table in {@see OrderListingMode::CaseOrderPrimary} and is not read at all in
+     * the other mode, except by the agent predicate in {@see narrow()}, which already named it.
+     */
+    private const ORDERS = '{{%order58_orders}}';
+
     public function __construct(
         private ConnectionInterface $connection,
         private TtsRenditionRepositoryInterface $renditions,
+        /**
+         * Which population this listing is a list OF. See {@see OrderListingMode}.
+         *
+         * Injected once, from one setting, and read nowhere else in the application — so Manage
+         * Orders, Practice Orders and the audio store page cannot drift apart, and flipping the
+         * setting needs no change to any query, action or template.
+         */
+        private OrderListingMode $mode = OrderListingMode::CaseOrderPrimary,
     ) {}
 
-    public function pageFor(int $storeSourceId, int $limit, int $offset = 0, ?OrderGroupFilter $filter = null): array
+    /**
+     * One page of a store's rows, from whichever population the mode names.
+     *
+     * ## One query per mode, never a union of both
+     *
+     * In {@see OrderListingMode::RecordingPrimary} this is the query these pages have always used:
+     * conversations grouped by {@see GroupKey}, newest activity first. Not a variant of it — the same
+     * SQL, so every row appears exactly where it appears today.
+     *
+     * In {@see OrderListingMode::CaseOrderPrimary} the primary table is the orders mirror instead:
+     * one row per imported order, newest order first, and the recordings are then attached to those
+     * rows by the same `build()` that attaches them in the other mode.
+     *
+     * A union of the two was the obvious shape and is the wrong one. It would have to invent a sort
+     * key meaning the same thing for a conversation id and for an order, and "how many rows are
+     * there" would become two numbers to reconcile — which is how a pager starts offering pages that
+     * come back empty. One primary table per mode means the count is `COUNT(*)` of that table's
+     * matching rows and the paging is its own `LIMIT`.
+     *
+     * ## Several recordings of one order are still one row, in both modes
+     *
+     * In recording-primary mode because the query groups by key, which is what it always did. In
+     * case-order-primary mode because the primary table has one row per order by construction —
+     * `order58_orders` is unique on `(account_id, source_order_id)` — so there is nothing for a second
+     * recording to duplicate.
+     */
+    public function pageFor(
+        int $storeSourceId,
+        int $limit,
+        int $offset = 0,
+        ?OrderGroupFilter $filter = null,
+        ?OrderListingMode $mode = null,
+    ): array {
+        if (!$this->modeFor($filter, $mode)->listsOrdersWithoutRecordings()) {
+            $keys = $this->recordingKeys($storeSourceId, $limit, $offset, $filter);
+
+            return $keys === [] ? [] : $this->build($storeSourceId, $keys);
+        }
+
+        $keys = $this->orderKeys($storeSourceId, $limit, $offset, $filter);
+
+        if ($keys === []) {
+            return [];
+        }
+
+        $built = [];
+
+        foreach ($this->build($storeSourceId, $keys) as $group) {
+            $built[$group->key->value] = $group;
+        }
+
+        /*
+         * The orders on this page that have no recording, built from what the orders table knows.
+         *
+         * `build()` is left exactly as it is — it answers "assemble the recordings behind these keys"
+         * and is also what `groupFor()` calls for the row modals, which must keep returning nothing
+         * for a row that has no recording to show. A row with no recordings is not a recording this
+         * page failed to find; it is an order, and it is assembled from the order.
+         */
+        $missing = [];
+
+        foreach ($keys as $key) {
+            if (!isset($built[$key])) {
+                $missing[] = $key;
+            }
+        }
+
+        $empty = $missing === [] ? [] : $this->emptyGroups($storeSourceId, $missing);
+
+        // Rebuilt from $keys rather than from either map, so the page order is the query's order.
+        $groups = [];
+
+        foreach ($keys as $key) {
+            $group = $built[$key] ?? $empty[$key] ?? null;
+
+            if ($group !== null) {
+                $groups[] = $group;
+            }
+        }
+
+        return $groups;
+    }
+
+    public function countFor(
+        int $storeSourceId,
+        ?OrderGroupFilter $filter = null,
+        ?OrderListingMode $mode = null,
+    ): int {
+        return $this->modeFor($filter, $mode)->listsOrdersWithoutRecordings()
+            ? $this->countOrders($storeSourceId, $filter)
+            : $this->countRecordings($storeSourceId, $filter);
+    }
+
+    /**
+     * The mode this call runs under, which is not always the configured one.
+     *
+     * **The agent practice surface requires an order AND its audio, whichever mode is configured,**
+     * and that is enforced here rather than trusted to a caller. `requireLinkedOrder` is its
+     * eligibility predicate: an order must exist in this store and the recording must still hold its
+     * audio. Both halves are already in the recording-primary query, proven case by case in
+     * `StoreOrderGroupRepositoryTest`, so that mode is forced and the agent runs the query it has
+     * always run — byte for byte, including under `ORDER58_CASE_ORDER_PRIMARY=true`.
+     *
+     * Expressed as "which mode" rather than as an extra `AND` on the order-primary query on purpose.
+     * Two queries that both claimed to implement the same authorization rule would be two places for
+     * it to be weakened, and only one of them would be the one with the tests.
+     *
+     * ## The order of precedence, and why it is this way round
+     *
+     * ```
+     * 1. requireLinkedOrder  the agent predicate. Beats everything, including an explicit $asked.
+     * 2. $asked              a surface whose subject is settled rather than configurable.
+     * 3. $this->mode         ORDER58_CASE_ORDER_PRIMARY.
+     * ```
+     *
+     * The agent predicate is first because it is authorization: a caller must not be able to widen it
+     * by asking for a mode, even by accident.
+     */
+    private function modeFor(?OrderGroupFilter $filter, ?OrderListingMode $asked = null): OrderListingMode
+    {
+        if ($filter !== null && $filter->requireLinkedOrder) {
+            return OrderListingMode::RecordingPrimary;
+        }
+
+        return $asked ?? $this->mode;
+    }
+
+    /**
+     * Recording-primary keys: the query every one of these pages used before case orders existed.
+     *
+     * @return list<string>
+     */
+    private function recordingKeys(int $storeSourceId, int $limit, int $offset, ?OrderGroupFilter $filter): array
     {
         $query = (new Query($this->connection))
             ->select([
@@ -103,17 +258,10 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
             ->offset($offset)
             ->all();
 
-        if ($keyRows === []) {
-            return [];
-        }
-
-        /** @var list<string> $keys */
-        $keys = array_map(static fn(array $row): string => (string) $row['group_key'], $keyRows);
-
-        return $this->build($storeSourceId, $keys);
+        return array_map(static fn(array $row): string => (string) $row['group_key'], $keyRows);
     }
 
-    public function countFor(int $storeSourceId, ?OrderGroupFilter $filter = null): int
+    private function countRecordings(int $storeSourceId, ?OrderGroupFilter $filter): int
     {
         $query = (new Query($this->connection))
             ->from(['c' => self::CONVERSATIONS])
@@ -122,6 +270,173 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
         return (int) $this->narrow($query, $filter)
             ->count('DISTINCT ' . GroupKey::sqlExpression('c'));
     }
+
+    /**
+     * Case-order-primary keys: every imported order for this store, newest first.
+     *
+     * Every order, not only the ones with nothing recorded — the recordings are attached afterwards.
+     * So an order with three recordings is one row here and one row on the page.
+     *
+     * Ordered by the provider's own time for the order with the order number breaking ties, which
+     * makes the sequence stable across pages even for orders the provider timestamped identically. An
+     * unstable sort would show one order twice and skip another, which on a practice catalogue reads
+     * as missing data rather than as paging.
+     *
+     * This is a different sort from the other mode's, and it has to be: "newest recording activity"
+     * is not a fact an order without a recording has. The intent — newest first — is the same.
+     *
+     * @return list<string>
+     */
+    private function orderKeys(int $storeSourceId, int $limit, int $offset, ?OrderGroupFilter $filter): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->narrowOrders($this->ordersOf($storeSourceId), $filter)
+            ->select(['source_order_id' => 'o.source_order_id'])
+            ->orderBy(['o.source_created_at' => SORT_DESC, 'o.source_order_id' => SORT_DESC])
+            ->limit($limit)
+            ->offset($offset)
+            ->all();
+
+        return array_map(
+            static fn(array $row): string => GroupKey::forOrder((string) $row['source_order_id'])->value,
+            $rows,
+        );
+    }
+
+    private function countOrders(int $storeSourceId, ?OrderGroupFilter $filter): int
+    {
+        // COUNT(*) of a table that is unique on (account_id, source_order_id): one row per order, so
+        // the total cannot be inflated by an order that was recorded more than once.
+        return (int) $this->narrowOrders($this->ordersOf($storeSourceId), $filter)->count();
+    }
+
+    private function ordersOf(int $storeSourceId): Query
+    {
+        return (new Query($this->connection))
+            ->from(['o' => self::ORDERS])
+            ->where(['o.account_id' => $storeSourceId]);
+    }
+
+    /**
+     * The topic filter, as the order-primary query expresses it.
+     *
+     * The same two clauses {@see narrow()} applies, correlated straight onto the order's own integer
+     * columns: this query reads the orders table, where the order id is a `BIGINT` rather than the
+     * free text a conversation carries, so there is nothing to guard or cast.
+     *
+     * `requireLinkedOrder` is not handled here at all, and must not be: a filter carrying it never
+     * reaches this query, because {@see modeFor()} answers recording-primary for it.
+     */
+    private function narrowOrders(Query $query, ?OrderGroupFilter $filter): Query
+    {
+        if ($filter === null || !$filter->narrowsTopics()) {
+            return $query;
+        }
+
+        $correlation = 'p.store_source_id = o.account_id AND p.source_order_id = o.source_order_id';
+
+        $clauses = [];
+        $params = [];
+
+        if ($filter->topicIds !== []) {
+            $placeholders = [];
+
+            foreach ($filter->topicIds as $index => $topicId) {
+                $name = ':orderTopicId' . $index;
+                $placeholders[] = $name;
+                $params[$name] = $topicId;
+            }
+
+            $clauses[] = 'EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
+                . ' WHERE ' . $correlation
+                . ' AND p.topic_id IN (' . implode(', ', $placeholders) . '))';
+        }
+
+        if ($filter->includeUnassigned) {
+            $clauses[] = 'NOT EXISTS (SELECT 1 FROM ' . self::TOPIC_ASSIGNMENTS . ' p'
+                . ' WHERE ' . $correlation . ')';
+        }
+
+        return $query->andWhere(new Expression('(' . implode(' OR ', $clauses) . ')', $params));
+    }
+
+    /**
+     * One row per order that has no recording, keyed by its group key.
+     *
+     * `latestActivityAt` is the order's own time — the provider's if it sent one, this application's
+     * import instant otherwise. The template prints it as "Added …", which is what it is: for a row
+     * with no recording nothing was downloaded, and calling the import of an order a download would
+     * describe something that never happened.
+     *
+     * `callTimeRaw` stays null for the same reason. It is when the *call* was recorded, and there is
+     * no recording.
+     *
+     * @param list<string> $keys order keys, each known to have no conversation behind it
+     *
+     * @return array<string, StoreOrderGroup>
+     */
+    private function emptyGroups(int $storeSourceId, array $keys): array
+    {
+        $orderIds = [];
+
+        foreach ($keys as $key) {
+            $orderId = GroupKey::fromInput($key)?->orderId();
+
+            if ($orderId !== null) {
+                $orderIds[] = (int) $orderId;
+            }
+        }
+
+        if ($orderIds === []) {
+            return [];
+        }
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = (new Query($this->connection))
+            ->select([
+                'source_order_id' => 'o.source_order_id',
+                'source_created_at' => 'o.source_created_at',
+                'created_at' => 'o.created_at',
+            ])
+            ->from(['o' => self::ORDERS])
+            ->where(['o.account_id' => $storeSourceId, 'o.source_order_id' => $orderIds])
+            ->all();
+
+        $groups = [];
+
+        foreach ($rows as $row) {
+            $orderId = (string) $row['source_order_id'];
+            $key = GroupKey::forOrder($orderId);
+
+            $groups[$key->value] = new StoreOrderGroup($key, $orderId, $this->orderTime($row));
+        }
+
+        // An order that vanished between the two queries is simply absent from the map, and the caller
+        // skips it rather than drawing a row with an invented timestamp.
+        return $groups;
+    }
+
+    /**
+     * When an order happened, preferring the provider's own instant.
+     *
+     * `source_created_at` is a unix timestamp from the provider and is what a reader means by "when
+     * was this order". `created_at` is when this application first stored it, which is the honest
+     * fallback for an order whose provider timestamp is missing or zero — never a guess.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function orderTime(array $row): DateTimeImmutable
+    {
+        $source = $row['source_created_at'] ?? null;
+        $unix = is_numeric($source) ? (int) $source : 0;
+
+        if ($unix > 0) {
+            return new DateTimeImmutable('@' . $unix);
+        }
+
+        return DbDateTime::parse((string) $row['created_at']);
+    }
+
 
     /**
      * The filter, applied to whichever of the two queries above is asking.

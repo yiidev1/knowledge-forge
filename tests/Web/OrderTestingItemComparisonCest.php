@@ -1048,7 +1048,14 @@ final class OrderTestingItemComparisonCest
         $I->see('Rafal Zieba', '.ot-book--original');
     }
 
-    /** Both existing controls survive the redesign; losing either would strand the page. */
+    /**
+     * The controls that remain survive the redesign; losing either would strand the page.
+     *
+     * "Sync Original Order Items" was the third, and it went with the per-order items endpoint in
+     * Stage 7a: it posted to a route that no longer exists, because an order's lines now arrive
+     * inside the order from the Case Order response. Its absence is asserted here rather than left
+     * untested, so a reintroduced button that posts nowhere fails this instead of an operator's click.
+     */
     public function theExistingControlsAreStillThere(WebTester $I): void
     {
         $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
@@ -1058,11 +1065,13 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->seeElement('form[action*="order-items/sync"] button[type="submit"]');
-        $I->see('Sync Original Order Items');
         // Shortened on screen and whole in the accessible name, which is what a screen reader reads.
         $I->see('All Demo Orders');
         $I->seeElement('a.btn--secondary[aria-label="All demo orders for this call"]');
+        $I->see('View Receipt');
+
+        $I->dontSee('Sync Original Order Items');
+        $I->dontSeeElement('form[action*="order-items/sync"]');
     }
 
     /**

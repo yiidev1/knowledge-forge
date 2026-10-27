@@ -38,6 +38,10 @@ final class CallRecordingsAsset extends AssetBundle
      *
      * `order58-recordings.js` is not shared: the calls page has nothing to poll, and giving it a script
      * that looks for a status endpoint it does not render would be dead weight on every load.
+     *
+     * `order58-case-orders.js` is the same arrangement for the case order synchronisation: it upgrades
+     * the confirmation link to a modal and watches the run while the POST is in flight. It returns
+     * immediately on a page that renders neither, so it costs nothing where it is not wanted.
      */
-    public array $js = ['order58-calls.js', 'order58-recordings.js'];
+    public array $js = ['order58-calls.js', 'order58-recordings.js', 'order58-case-orders.js'];
 }

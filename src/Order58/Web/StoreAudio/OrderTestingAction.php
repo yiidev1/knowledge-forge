@@ -45,6 +45,18 @@ final readonly class OrderTestingAction extends Action
      * `?audio=all` rather than the bare address — which is what made the same default unworkable on
      * the page above. {@see Action::defaultAudioFilter()}.
      */
+    /**
+     * The practice pickers' cards follow `ORDER58_CASE_ORDER_PRIMARY`.
+     *
+     * Null means "whatever is configured", matching the page this card links to — whose own
+     * `listingMode()` seam answers the same way, and which this module may not name. Practice Orders
+     * inherits this, so the two practice pickers and their two pages all count one population.
+     */
+    protected function cardsCountImportedOrders(): ?bool
+    {
+        return null;
+    }
+
     protected function defaultAudioFilter(): StoreAudioFilter
     {
         return StoreAudioFilter::WithAudio;

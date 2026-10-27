@@ -78,21 +78,41 @@ final readonly class ArrivingRecordingMerger
 
         $merged = [];
         $matched = [];
+        $new = [];
 
         foreach ($groups as $group) {
             $orderId = $group->orderId;
 
             if ($orderId !== null && array_key_exists($orderId, $byOrder)) {
                 $matched[$orderId] = true;
-                $merged[] = $this->withArriving($group, $byOrder[$orderId]);
+                $with = $this->withArriving($group, $byOrder[$orderId]);
+
+                /*
+                 * A row with nothing recorded yet goes to the top, exactly where this merger used to
+                 * put it.
+                 *
+                 * It used to put it there by *creating* it: an order being downloaded had no
+                 * conversations, so it was not in `$groups` at all and arrived through `rowFor()`
+                 * below. The listing now includes a store's orders whether or not anything was
+                 * recorded against them, so that same order IS in `$groups` — and leaving it in place
+                 * would mean pressing Download moved the progress to wherever that order happens to
+                 * sort, several pages down for a store with a few hundred orders.
+                 *
+                 * So the hoist is conditional on {@see StoreOrderGroup::isArrivingOnly()}, which is
+                 * precisely "this row is only what is being fetched". An order that already has a
+                 * recording and is fetching another stays where it is, which is what it did before.
+                 */
+                if ($with->isArrivingOnly()) {
+                    $new[] = $with;
+                } else {
+                    $merged[] = $with;
+                }
 
                 continue;
             }
 
             $merged[] = $group;
         }
-
-        $new = [];
 
         foreach ($byOrder as $acquisition) {
             // Read off the object rather than the array key: an order id is all digits, and PHP turns

@@ -22,20 +22,21 @@ use function random_bytes;
 use function str_repeat;
 
 /**
- * The Original Order Items column and its two manual buttons, over real HTTP.
+ * The Original Order Items column, over real HTTP.
  *
- * **No test here reaches the Order58 API.** `ORDER58_ITEM_SYNC_ENABLED` is off, and the client's first
- * gate is the kill switch — it throws before a socket is opened. So a POST that gets all the way
- * through still makes no request, which is exactly the state this feature ships in.
+ * **No test here reaches any API**, and since Stage 7a there is nothing it could reach: the per-order
+ * items endpoint, its two manual buttons and its POST route were removed, because the Case Order
+ * response carries each order's lines inside the order.
  *
  * ## What is really being guarded
  *
- * The authorization boundary, over HTTP rather than in a unit test. `account_id` and `source_order_id`
- * are both posted, so the thing worth proving is that posting another store's order reaches nothing —
- * an endpoint that fetched any id anybody typed would leak data and spend somebody else's quota.
+ * That the column distinguishes its six states. `No items` and `Failed` must never render the same
+ * way: one means the order has no lines, the other means we do not know — and that distinction is
+ * what the comparison reads to decide whether it has anything to compare against. It outlived the
+ * endpoint that used to set those states, and now describes what the Case Order import sets.
  *
- * And that the column distinguishes its six states. `No items` and `Failed` must never render the same
- * way: one means the order has no lines, the other means we do not know.
+ * The authorization cases that used to live here went with the endpoint: a POST route that does not
+ * exist cannot be asked for another store's order.
  */
 final class Order58OrderItemsCest
 {
@@ -213,172 +214,6 @@ final class Order58OrderItemsCest
         $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
 
         $I->see('Syncing', '.o58-items-cell');
-    }
-
-    // ------------------------------------------------------------------ the buttons
-
-    public function eachRowCarriesItsOwnSyncButton(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-
-        $I->seeElement('.o58-items-form input[name="source_order_id"][value="' . self::ORDER . '"]');
-        $I->seeElement('.o58-items-form input[name="account_id"][value="' . self::STORE_ID . '"]');
-        $I->see('Sync Order Items', '.o58-items-form');
-    }
-
-    /** It writes, so it is a POST with a token — not a link somebody could be made to follow. */
-    public function theRowButtonPostsWithACsrfToken(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-
-        $I->seeElement('.o58-items-form[method="post"]');
-        $I->seeElement('.o58-items-form input[name="_csrf"]');
-    }
-
-    /** A sync must return the operator to the page they were reading, filters intact. */
-    public function theRowButtonCarriesTheCurrentFilters(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->amOnPage(
-            '/admin/order58/orders?account_id=' . self::STORE_ID
-            . '&list_from=2026-10-01&list_to=2026-10-08&status=completed',
-        );
-
-        $I->seeElement('.o58-items-form input[name="list_from"][value="2026-10-01"]');
-        $I->seeElement('.o58-items-form input[name="list_to"][value="2026-10-08"]');
-        $I->seeElement('.o58-items-form input[name="status"][value="completed"]');
-        $I->seeElement('.o58-items-form input[name="return"][value="order58.orders"]');
-    }
-
-    /** The comparison page refreshes the ORIGINAL side only, and says which comparison to return to. */
-    public function theComparisonPageOffersToSyncTheOriginalItems(WebTester $I): void
-    {
-        $this->seedDemoOrder(self::DEMO_ORDER);
-
-        $this->signIn($I);
-        $I->amOnPage($this->comparisonUrl());
-
-        $I->see('Sync Original Order Items');
-        $I->seeElement('input[name="demo_order_id"][value="' . self::DEMO_ORDER . '"]');
-        $I->seeElement('input[name="return"][value="order-testing.demo-compare"]');
-    }
-
-    // ------------------------------------------------------------------ authorization over HTTP
-
-    /**
-     * The boundary. Another store's order id, posted under our account, must reach nothing.
-     *
-     * Asserted on the row itself rather than on the flash: a refusal that still claimed the order would
-     * have left `items_status` as `PROCESSING` or `FAILED`.
-     */
-    public function anOrderBelongingToAnotherStoreIsRefused(WebTester $I): void
-    {
-        $this->setItemState(self::OTHER_STORE_ORDER, 'PENDING', store: self::OTHER_STORE_ID);
-
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-        $I->submitForm('.o58-items-form', [
-            'account_id' => (string) self::STORE_ID,
-            'source_order_id' => (string) self::OTHER_STORE_ORDER,
-        ]);
-
-        $I->see('not an order this page can synchronise');
-        Assert::assertSame(
-            'PENDING',
-            $this->itemStatus(self::OTHER_STORE_ORDER, self::OTHER_STORE_ID),
-            'A refused sync must not have claimed the row.',
-        );
-    }
-
-    /** An id that is not an id is refused in the same words, so existence is not leaked. */
-    public function aMalformedOrderIdIsRefusedInTheSameWords(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-        $I->submitForm('.o58-items-form', [
-            'account_id' => (string) self::STORE_ID,
-            'source_order_id' => 'not-an-id',
-        ]);
-
-        $I->see('not an order this page can synchronise');
-    }
-
-    public function theSyncPostRequiresCsrf(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->sendAjaxPostRequest('/admin/order58/order-items/sync', [
-            'account_id' => (string) self::STORE_ID,
-            'source_order_id' => (string) self::ORDER,
-        ]);
-
-        // Asserted on the row, not on a status code: what matters is that nothing was claimed, and the
-        // middleware's choice of code is its own business.
-        Assert::assertSame('PENDING', $this->itemStatus(self::ORDER), 'No token must mean no claim.');
-    }
-
-    public function aGuestCannotSyncAnything(WebTester $I): void
-    {
-        $I->amOnPage('/admin/order58/orders');
-        $I->seeCurrentUrlEquals('/login');
-
-        Assert::assertSame('PENDING', $this->itemStatus(self::ORDER));
-    }
-
-    /**
-     * The feature ships off, and off must leave the order exactly as it was.
-     *
-     * This asserted the opposite until the Phase 4 correction: the click claimed the order, spent an
-     * attempt and recorded `FAILED` with a retry clock — a provider problem that never happened. An
-     * administrator who presses a button before configuration exists must not end up with a listing
-     * full of orders marked as having failed something nobody attempted.
-     */
-    public function withTheFeatureOffTheButtonChangesNothingAboutTheOrder(WebTester $I): void
-    {
-        $this->skipWhileTheFeatureIsOn($I);
-
-        $this->setItemState(self::ORDER, 'SYNCED', count: 2, syncedAt: '2026-10-08 09:00:00');
-
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-        $I->submitForm('.o58-items-form', []);
-
-        $I->see('not enabled or configured');
-        $I->dontSee('Previously saved items were preserved');
-
-        Assert::assertSame('SYNCED', $this->itemStatus(self::ORDER), 'The status must be untouched.');
-        Assert::assertSame('0', (string) $this->column(self::ORDER, 'items_attempts'), 'No attempt spent.');
-        Assert::assertSame('2', (string) $this->column(self::ORDER, 'items_count'));
-        Assert::assertSame('2026-10-08 09:00:00', (string) $this->column(self::ORDER, 'items_synced_at'));
-        Assert::assertNull($this->column(self::ORDER, 'items_retry_after'), 'No retry clock started.');
-        Assert::assertNull($this->column(self::ORDER, 'items_lease_owner'), 'The order must not be claimed.');
-    }
-
-    /** And a never-synced order stays never-synced rather than becoming a failed one. */
-    public function withTheFeatureOffAPendingOrderStaysPending(WebTester $I): void
-    {
-        $this->skipWhileTheFeatureIsOn($I);
-
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID);
-        $I->submitForm('.o58-items-form', []);
-
-        Assert::assertSame('PENDING', $this->itemStatus(self::ORDER));
-        Assert::assertSame('0', (string) $this->column(self::ORDER, 'items_attempts'));
-        Assert::assertNull($this->column(self::ORDER, 'items_synced_at'));
-        $I->see('Not synced', '.o58-items-cell');
-    }
-
-    /** And it comes back to the listing it was pressed from, not to an unfiltered page one. */
-    public function theButtonReturnsToTheFilteredListing(WebTester $I): void
-    {
-        $this->signIn($I);
-        $I->amOnPage('/admin/order58/orders?account_id=' . self::STORE_ID . '&list_from=2026-10-01');
-        $I->submitForm('.o58-items-form', []);
-
-        $I->seeInCurrentUrl('account_id=' . self::STORE_ID);
-        $I->seeInCurrentUrl('list_from=2026-10-01');
     }
 
     // ------------------------------------------------------------------ harness
@@ -570,5 +405,37 @@ final class Order58OrderItemsCest
             ->delete('{{%knowledge_bases}}', ['source_store_id' => $stores])->execute();
         $this->connection->createCommand()
             ->delete('{{%order58_stores}}', ['source_id' => $stores])->execute();
+    }
+
+    /**
+     * The removed controls stay removed, and the route stays unmounted.
+     *
+     * Worth a test rather than a note: the status column still says "Not synced", which is exactly the
+     * state a button would seem to fix. Reintroducing one would post to a route that no longer exists
+     * — a dead control on a management page, failing only when somebody pressed it.
+     */
+    public function theRemovedItemSyncControlsAreGone(WebTester $I): void
+    {
+        $this->signIn($I);
+
+        // `_before` already seeded this store's order at PENDING, which is the state a button would
+        // appear to fix.
+        $I->amOnPage('/admin/order58/orders');
+
+        // The column and its status survive; the control does not.
+        $I->see('Order items');
+        $I->dontSee('Sync Order Items');
+        $I->dontSeeElement('form.o58-items-form');
+
+        /*
+         * And posting to the old endpoint is refused rather than acted on.
+         *
+         * The exact code is deliberately not pinned. CSRF is checked before routing, so a POST with
+         * no token is refused as 422 whether or not the route exists; without routing in the picture
+         * it would be 404. Either is a refusal, and what this asserts is that nothing succeeds — a
+         * 2xx or the 303 the old action redirected with would mean the endpoint came back.
+         */
+        $I->sendAjaxPostRequest('/admin/order58/order-items/sync', ['account_id' => self::STORE_ID]);
+        $I->seeResponseCodeIsClientError();
     }
 }

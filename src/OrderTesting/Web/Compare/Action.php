@@ -131,7 +131,6 @@ readonly class Action
             ->withLayout($this->layoutPath())
             ->render(__DIR__ . '/template', [
                 'routes' => $this->surfaceRoutes(),
-                'canSyncItems' => $this->canSyncItems(),
                 'sourceId' => $sourceId,
                 'storeName' => $storeName,
                 'demo' => $demo,
@@ -174,17 +173,6 @@ readonly class Action
             'demoCompare' => 'order-testing.demo-compare',
             'demoReceipt' => 'order-testing.demo-receipt',
         ];
-    }
-
-    /**
-     * May this surface's reader re-import the original order's items?
-     *
-     * A management action — it talks to Order58 and rewrites mirrored rows — so it belongs with the
-     * realms that manage. The agent surface answers no, and the form is not rendered at all.
-     */
-    protected function canSyncItems(): bool
-    {
-        return true;
     }
 
     /** The shell this page is drawn inside. The agent surface has its own. */

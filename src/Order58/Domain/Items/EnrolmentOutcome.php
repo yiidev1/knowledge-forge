@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace App\Order58\Domain\Items;
 
-use App\Order58\Application\Items\ItemSyncResult;
-
 /**
  * What one batch's interest in one order came to.
  *
- * Separate from {@see ItemSyncResult} on purpose. That describes what a provider request did; this
- * describes what a BATCH is owed. The difference is `Skipped`: an order already synchronised with an
- * unmoved parent was never going to be fetched for this batch, and recording it as `Unchanged` would
- * claim a request that never happened.
+ * It describes what a BATCH is owed rather than what a request did, and the difference is `Skipped`:
+ * an order already synchronised with an unmoved parent was never going to be fetched for this batch,
+ * and recording it as `Unchanged` would claim a request that never happened.
+ *
+ * ## Why it outlived the endpoint it was written beside
+ *
+ * It used to be built from the per-order items request's own result, through a `fromSyncResult()`
+ * translator that went with that endpoint in Stage 7a. The batches themselves did not go: the Orders
+ * page still reports per-operation progress from them. So the enum stays and is set directly by
+ * whatever settles a batch.
  */
 enum EnrolmentOutcome: string
 {
@@ -29,23 +33,5 @@ enum EnrolmentOutcome: string
     public function isFailure(): bool
     {
         return $this === self::Failed;
-    }
-
-    /**
-     * The enrolment outcome for a finished provider request.
-     *
-     * `Busy` and `Unavailable` are deliberately absent: neither is terminal. Busy means somebody else
-     * holds the order and will settle it; unavailable means the feature is switched off and nothing was
-     * attempted. Settling on either would close a batch over work that has not happened.
-     */
-    public static function fromSyncResult(ItemSyncResult $result): ?self
-    {
-        return match ($result) {
-            ItemSyncResult::Synced => self::Synced,
-            ItemSyncResult::Empty => self::Empty,
-            ItemSyncResult::Unchanged => self::Unchanged,
-            ItemSyncResult::Failed => self::Failed,
-            ItemSyncResult::Busy, ItemSyncResult::Unavailable => null,
-        };
     }
 }

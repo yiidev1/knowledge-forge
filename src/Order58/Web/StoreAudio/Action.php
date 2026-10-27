@@ -128,7 +128,10 @@ readonly class Action
                 // One query for the whole page, not one per card.
                 'showsPractisable' => $this->showsPractisableCount(),
                 // One query for the whole page, not one per card, and it carries both figures.
-                'audioCounts' => $this->audioCounts->countsFor($this->shownIds($result->items)),
+                'audioCounts' => $this->audioCounts->countsFor(
+                    $this->shownIds($result->items),
+                    $this->cardsCountImportedOrders(),
+                ),
                 // The second card metric, asked the same way and for the same reason.
                 'topicCounts' => $this->topicCounts->assignedOrdersFor($this->shownIds($result->items)),
                 // The transcription default, shown here because this is where an administrator already
@@ -190,6 +193,23 @@ readonly class Action
      * caller above does — the omit rule and the parse rule are then the same fact, and the click that
      * broke last time cannot break again. {@see OrderTestingAction}, which lands on Uploaded audio.
      */
+    /**
+     * Which population this picker's cards count.
+     *
+     * `false` here, and for the same reason the audio store page itself answers recordings — see its
+     * own `listingMode()` seam, which this module may not name: this picker leads to that page, whose
+     * rows are recordings. A card is the headline for the page behind it, so counting imported orders
+     * here would put a number on the card that the page does not list.
+     *
+     * {@see OrderTestingAction} overrides it to null — "whatever is configured" — because the practice
+     * catalogue is the surface `ORDER58_CASE_ORDER_PRIMARY` governs. `StoreAudioOrderCountTest`
+     * asserts that each card equals the page it links to, under both settings.
+     */
+    protected function cardsCountImportedOrders(): ?bool
+    {
+        return false;
+    }
+
     protected function defaultAudioFilter(): StoreAudioFilter
     {
         return StoreAudioFilter::All;

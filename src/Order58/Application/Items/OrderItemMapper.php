@@ -23,6 +23,22 @@ use const JSON_THROW_ON_ERROR;
 /**
  * One provider item becomes one row, with every value preserved and nothing interpreted in place.
  *
+ * ## Two integrations use this, and that is deliberate
+ *
+ * It was written for the per-order items endpoint, whose response is a list of lines for one order. The
+ * Case Order endpoint sends the same lines nested inside the order instead, and
+ * {@see \App\Order58\Application\CaseOrders\CaseOrderParser} hands each of them here rather than
+ * mapping them itself — so `comparison_json` and `content_hash` are derived one way whichever endpoint
+ * the row came from.
+ *
+ * That matters more than saving code. `comparison_json` is what a trainee's work is scored against, and
+ * it is built by the canonicaliser the demo side also uses; a second mapping would have been a second
+ * answer to "what did the customer order", and the comparison would have reported the difference
+ * between the two mappings as something the trainee got wrong.
+ *
+ * **So this file outlives the endpoint it was written for.** It is not part of the per-order items
+ * integration to be removed with it.
+ *
  * ## The division of labour
  *
  * The **columns** are the provider's values, untouched: `name` keeps `[F7]`, `account_id` keeps `0`,

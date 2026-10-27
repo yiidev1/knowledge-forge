@@ -39,7 +39,24 @@ interface StoreAudioCountsInterface
      *
      * @return array<int, StoreAudioBreakdown>
      */
-    public function countsFor(array $sourceIds): array;
+    public function countsFor(
+        array $sourceIds,
+        /**
+         * Whether the headline counts imported orders rather than recordings, or null for the
+         * configured default.
+         *
+         * The card is the headline for the page it links to, so the two have to count the same
+         * population: a card reading "4" beside a page listing 336 is worse than either number alone.
+         * `ORDER58_CASE_ORDER_PRIMARY` decides it for the practice pickers and is injected once;
+         * `false` is passed by the audio picker, whose page lists recordings because managing them is
+         * what it is for.
+         *
+         * A boolean rather than the audio module's own listing-mode enum, because
+         * `ModuleIsolationTest` forbids this module from naming that one — the same reason the
+         * grouping expression in the implementation is a copy rather than a call.
+         */
+        ?bool $caseOrderPrimary = null,
+    ): array;
 
     /**
      * Every store that has at least one conversion.

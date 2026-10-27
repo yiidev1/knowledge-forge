@@ -51,13 +51,13 @@ $items = [
     // The match list covers both the picker's own route and the whole `audio-to-text` namespace (job,
     // list, status, download, review), so the entry stays lit across all of them — including the picker
     // itself, which it did not before.
-    [
-        'label' => 'Audio to Text',
-        'icon' => '🎙',
-        'route' => 'order58.store-audio',
-        'query' => ['audio' => StoreAudioFilter::WithAudio->value],
-        'match' => ['order58.store-audio', 'audio-to-text'],
-    ],
+    // [
+    //     'label' => 'Audio to Text',
+    //     'icon' => '🎙',
+    //     'route' => 'order58.store-audio',
+    //     'query' => ['audio' => StoreAudioFilter::WithAudio->value],
+    //     'match' => ['order58.store-audio', 'audio-to-text'],
+    // ],
     // Directly under Audio to Text, because it is the same recordings seen a different way: that page is
     // about converting audio, this one about working through the orders it belongs to. A separate entry
     // rather than a tab inside the other, so the two surfaces can diverge without the menu implying one

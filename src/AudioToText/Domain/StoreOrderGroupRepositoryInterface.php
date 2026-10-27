@@ -41,10 +41,28 @@ interface StoreOrderGroupRepositoryInterface
      *
      * @return list<StoreOrderGroup>
      */
-    public function pageFor(int $storeSourceId, int $limit, int $offset = 0, ?OrderGroupFilter $filter = null): array;
+    public function pageFor(
+        int $storeSourceId,
+        int $limit,
+        int $offset = 0,
+        ?OrderGroupFilter $filter = null,
+        /**
+         * Which population this surface is a list of, or null for the configured default.
+         *
+         * Null is what almost everything passes: the mode comes from `ORDER58_CASE_ORDER_PRIMARY` and
+         * is injected once. The exception is a surface whose subject is settled rather than
+         * configurable — the audio management page lists recordings because recordings are what it
+         * manages — and it says so here, in one word, rather than by a second query.
+         */
+        ?OrderListingMode $mode = null,
+    ): array;
 
     /** How many orders this store has, for the pager — under the same filter the page used. */
-    public function countFor(int $storeSourceId, ?OrderGroupFilter $filter = null): int;
+    public function countFor(
+        int $storeSourceId,
+        ?OrderGroupFilter $filter = null,
+        ?OrderListingMode $mode = null,
+    ): int;
 
     /**
      * One group of this store's, or null when the key names nothing this store owns.

@@ -31,17 +31,6 @@ use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use Psr\Log\NullLogger;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
-use App\Order58\Application\Orders\OrderMapper;
-use App\Worker\Application\DrainResult;
-use App\Worker\Application\DrainerInterface;
-use App\Order58\Application\Orders\OrderSyncService;
-use App\Tests\Support\Fake\Order58\FakeOrderSyncLock;
-use App\Tests\Support\Fake\Order58\RecordingItemSyncState;
-use App\Order58\Client\Orders\OrderDataClientInterface;
-use App\Order58\Domain\Orders\Order58Order;
-use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
-use App\Order58\Domain\Orders\OrderListQuery;
-use PHPUnit\Framework\Assert;
 use Yiisoft\Yii\Console\ExitCode;
 
 use function array_key_first;
@@ -53,6 +42,7 @@ use function tempnam;
 use function unlink;
 use function PHPUnit\Framework\assertSame;
 use function PHPUnit\Framework\assertStringContainsString;
+use function PHPUnit\Framework\assertStringNotContainsString;
 
 use const LOCK_EX;
 use const LOCK_NB;
@@ -289,74 +279,57 @@ final class ImportRecordingsCommandTest extends Unit
     // ------------------------------------------------------------------ plumbing
 
     /** @return array{ImportRecordingsCommand, BufferedOutput} */
-    // ------------------------------------------------------------------ the item pass
+    /*
+     * The item-pass cases went with the drain itself in Stage 7a.
+     *
+     * They described `drainItems()`: that a pass never began without room for a whole provider
+     * request, that passes were bounded by the configured size, and that a size of zero turned the
+     * whole thing off. There is no per-order item request any more — an order's lines arrive inside
+     * the order — so there is no budget, no pass and nothing for those cases to protect.
+     *
+     * This command is now about recordings only, which is what every case above already covers.
+     */
 
     /**
-     * Items run only with time genuinely left, and the check happens BEFORE a request is started.
+     * A finished batch no longer reaches the Orders API, because nothing in this command can.
      *
-     * One item request can cost a whole provider timeout, so a budget tested only after a request
-     * could start one with seconds to spare and be killed mid-write by the unit's `TimeoutStartSec`.
-     * Here the ceiling is already spent, so no pass may begin at all.
+     * This is the guard for the Stage 7b removal, and it is structural rather than a spy on a method:
+     * the command's constructor no longer accepts an order-sync collaborator at all, so there is no
+     * seam through which `/api/order-data/list` could be called. What this case adds is the scenario
+     * that used to trigger it — a batch settling with real call times — and the proof that the run
+     * still succeeds and still imports its recordings.
+     *
+     * The recordings are the point: an order that is not in the local mirror must never cost a
+     * recording. It is downloaded, written and listed; the link appears if and when a Case Order
+     * import covers that order.
      */
-    public function testNoItemRequestStartsWithoutRoomForAWholeOne(): void
+    public function testASettledBatchImportsItsRecordingsAndReachesNoOrdersApi(): void
     {
-        $drainer = new CountingDrainer();
+        $repository = new SpyCallImportRepository(3);
+        $repository->settledCalls = [
+            ['storeSourceId' => 1731, 'callTimeRaw' => '2026-10-05 18:40:00'],
+            ['storeSourceId' => 1731, 'callTimeRaw' => '2026-10-05 19:10:00'],
+        ];
 
-        // Ceiling 300s, request cost 30s, safety margin 20s: a run that has already used 280s has
-        // nothing like room for one request.
-        [$command, $output] = $this->command(
-            new SpyCallImportRepository(0),
-            self::MIN_MB * 4,
-            0.1,
-            itemDrainer: $drainer,
-            itemDrainPerRun: 5,
-            elapsedSeconds: 280,
-        );
+        [$command, $output] = $this->command($repository, self::MIN_MB + 100, 0.1);
 
-        $command->run(new ArrayInput(['--once' => true]), $output);
+        $code = $command->run(new ArrayInput(['--once' => true]), $output);
 
-        self::assertSame(0, $drainer->drains, 'No pass may begin without room for a full request.');
-        self::assertStringContainsString('no time left', $output->fetch());
+        assertSame(ExitCode::OK, $code, 'a settled batch must not fail the run');
+        assertSame(3, $repository->claims, 'the call it claimed is still imported');
+
+        // The command does not ask about settled batches any more: that lookup existed only to decide
+        // which business dates to fetch orders for.
+        assertSame(0, $repository->settledBatchLookups);
+
+        assertStringNotContainsString('orders', $output->fetch(), 'no order step is reported');
     }
 
-    /** With a whole run's budget available, the queue is drained in bounded passes. */
-    public function testItemsAreDrainedInBoundedPassesWhenThereIsTime(): void
-    {
-        $drainer = new CountingDrainer(processedPerDrain: [3, 2, 0]);
-
-        [$command, $output] = $this->command(
-            new SpyCallImportRepository(0),
-            self::MIN_MB * 4,
-            0.1,
-            itemDrainer: $drainer,
-            itemDrainPerRun: 5,
-        );
-
-        $command->run(new ArrayInput(['--once' => true]), $output);
-
-        // Three passes: two that moved something, and one empty pass that ends the loop.
-        self::assertSame(3, $drainer->drains);
-        self::assertSame([5, 5, 5], $drainer->limits, 'Each pass is bounded by the configured size.');
-    }
-
-    /** A drain size of zero turns the whole thing off without touching anything else. */
-    public function testADrainSizeOfZeroDisablesTheItemPassEntirely(): void
-    {
-        $drainer = new CountingDrainer();
-
-        [$command, $output] = $this->command(
-            new SpyCallImportRepository(0),
-            self::MIN_MB * 4,
-            0.1,
-            itemDrainer: $drainer,
-            itemDrainPerRun: 0,
-        );
-
-        $command->run(new ArrayInput(['--once' => true]), $output);
-
-        self::assertSame(0, $drainer->drains);
-    }
-
+    /**
+     * The command under test, with its machine probe and clock controlled.
+     *
+     * @return array{ImportRecordingsCommand, BufferedOutput}
+     */
     private function command(
         SpyCallImportRepository $repository,
         int $availableMb,
@@ -364,10 +337,6 @@ final class ImportRecordingsCommandTest extends Unit
         ?string $lockFile = null,
         bool $enabled = true,
         ?string $temporaryDirectory = null,
-        ?OrderSyncService $orderSync = null,
-        ?DrainerInterface $itemDrainer = null,
-        int $itemDrainPerRun = 0,
-        /** Seconds the run has already spent by the time the item pass is reached. */
         int $elapsedSeconds = 0,
     ): array {
         // The first reading is when the run started; every later one is that plus however long the
@@ -412,10 +381,9 @@ final class ImportRecordingsCommandTest extends Unit
 
         $command = new ImportRecordingsCommand(
             $processor,
-            // The same repository the processor writes through, so a batch this run settles is the batch
-            // the order step then asks about — exactly as production shares one connection.
+            // The same repository the processor writes through, so what this run settles is what the
+            // rest of the application then reads — exactly as production shares one connection.
             $repository,
-            $orderSync ?? neverCalledOrderSync(),
             $clock,
             new ResourceAdmission($this->probe($availableMb, $load)),
             new ResourceBudget(self::MIN_MB, self::MAX_LOAD),
@@ -423,13 +391,6 @@ final class ImportRecordingsCommandTest extends Unit
             $lockFile ?? $this->temporaryPath(),
             $temporaryDirectory ?? sys_get_temp_dir(),
             $enabled,
-            // Item draining is off in these tests: they are about recordings, and a drainer that could
-            // run would make "no network" a promise this file cannot keep. Its own tests cover it.
-            $itemDrainer ?? neverCalledItemDrainer(),
-            $itemDrainPerRun,
-            120,
-            300,
-            30,
         );
 
         return [$command, new BufferedOutput()];
@@ -484,61 +445,6 @@ final class ImportRecordingsCommandTest extends Unit
  * distinction worth testing. So the pending rows are laid out as real calls: three channels each, in
  * the order the provider offers them.
  */
-/**
- * A real {@see OrderSyncService} whose provider cannot be reached without failing the test.
- *
- * The class is final, so this builds the genuine thing and makes its one outbound dependency explode.
- * That is the stronger guard anyway: it proves no order request is made, rather than that one particular
- * method was not called.
- *
- * Every existing case in this file is about recording admission, locking and the one-call bound, and
- * none of them settles a batch — so reaching the provider at all would mean the order step fired when
- * nothing finished.
- */
-function neverCalledOrderSync(): OrderSyncService
-{
-    return new OrderSyncService(
-        new class implements OrderDataClientInterface {
-            public function listOrders(int $accountId, string $dateFrom, string $dateTo): array
-            {
-                Assert::fail('The Orders API must not be reached when no call batch finished.');
-            }
-        },
-        new class implements Order58OrderRepositoryInterface {
-            public function hashesFor(int $accountId, array $sourceOrderIds): array
-            {
-                return [];
-            }
-
-            public function upsert(Order58Order $order, DateTimeImmutable $now): bool
-            {
-                return false;
-            }
-
-            public function page(OrderListQuery $query): array
-            {
-                return [];
-            }
-        },
-        new OrderMapper(),
-        new class implements ClockInterface {
-            public function now(): DateTimeImmutable
-            {
-                return new DateTimeImmutable('2026-10-05 12:00:00');
-            }
-        },
-        new NullLogger(),
-        // Granted freely: these cases are about recording admission and the one-call bound, not about
-        // lock contention. A test that wanted contention would pass FakeOrderSyncLock(false).
-        new FakeOrderSyncLock(),
-        new RecordingItemSyncState(),
-        new \App\Tests\Support\Fake\Order58\RecordingItemSyncBatches(),
-        new \App\Order58\Application\ImportRunRequest('/dev/null', new NullLogger()),
-        30,
-        3,
-    );
-}
-
 final class SpyCallImportRepository implements CallImportRepositoryInterface
 {
     public int $claims = 0;
@@ -710,13 +616,20 @@ final class SpyCallImportRepository implements CallImportRepositoryInterface
     }
 
     /**
-     * Empty: no batch finishes in these tests, which is what makes the order step's absence provable.
+     * Calls whose batch this run settled. Reported, and read by nobody in this command any more.
      *
-     * @return list<array{storeSourceId: int, callTimeRaw: string}>
+     * @var list<array{storeSourceId: int, callTimeRaw: string}>
      */
+    public array $settledCalls = [];
+
+    public int $settledBatchLookups = 0;
+
+    /** @return list<array{storeSourceId: int, callTimeRaw: string}> */
     public function settledBatchCalls(DateTimeImmutable $since): array
     {
-        return [];
+        ++$this->settledBatchLookups;
+
+        return $this->settledCalls;
     }
 
     public function findItem(int $id): ?CallImportItem
@@ -757,66 +670,5 @@ final class AlwaysQueuesIngestion implements AudioIngestionPortInterface
         ];
 
         return AudioIngestionOutcome::queued('c0ffee00c0ffee00c0ffee00c0ffee00');
-    }
-}
-
-/**
- * An item drainer that must never be reached.
- *
- * `itemDrainPerRun` defaults to 0 in these tests, which short-circuits the item pass before this could
- * be called. If a change ever removes that guard, this fails loudly rather than letting a recording
- * test quietly start fetching items.
- */
-function neverCalledItemDrainer(): DrainerInterface
-{
-    return new class implements DrainerInterface {
-        public function name(): string
-        {
-            return 'order58-order-items';
-        }
-
-        public function recover(): void
-        {
-            Assert::fail('The item drainer must not run in a recordings test.');
-        }
-
-        public function drain(int $limit): DrainResult
-        {
-            Assert::fail('The item drainer must not run in a recordings test.');
-        }
-    };
-}
-
-/**
- * A drainer that counts what it was asked to do, and never touches a network.
- *
- * `processedPerDrain` is the sequence of pass results: the importer keeps draining while a pass moves
- * something and stops on the first that does not, so the final zero is what ends the loop.
- */
-final class CountingDrainer implements DrainerInterface
-{
-    public int $drains = 0;
-
-    /** @var list<int> the limit each pass was given */
-    public array $limits = [];
-
-    /** @param list<int> $processedPerDrain */
-    public function __construct(private readonly array $processedPerDrain = [0]) {}
-
-    public function name(): string
-    {
-        return 'order58-order-items';
-    }
-
-    public function recover(): void {}
-
-    public function drain(int $limit): DrainResult
-    {
-        $processed = $this->processedPerDrain[$this->drains] ?? 0;
-
-        ++$this->drains;
-        $this->limits[] = $limit;
-
-        return new DrainResult($processed, 0);
     }
 }

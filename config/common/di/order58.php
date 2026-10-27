@@ -4,17 +4,7 @@ declare(strict_types=1);
 
 use App\Order58\Client\HttpOrder58Client;
 use App\Order58\Client\HttpOrder58CredentialValidator;
-use App\Order58\Application\Items\OrderItemSyncInterface;
-use App\Order58\Application\Items\OriginalOrderItemSyncService;
-use App\Order58\Application\Orders\OrderSyncLockInterface;
-use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Client\Order58RetryPolicy;
-use App\Order58\Client\Orders\HttpOrderDataClient;
-use App\Order58\Client\Items\HttpOrderItemClient;
-use App\Order58\Client\Items\OrderItemClientInterface;
-use App\Order58\Client\Items\OrderItemSettings;
-use App\Order58\Client\Orders\OrderDataClientInterface;
-use App\Order58\Client\Orders\OrderDataSettings;
 use App\Order58\Client\Receipt\HttpReceiptClient;
 use App\Order58\Client\Receipt\ReceiptClientInterface;
 use App\Order58\Client\Receipt\ReceiptSettings;
@@ -40,7 +30,6 @@ use App\Order58\Domain\SyncRunRepositoryInterface;
 use App\Order58\Infrastructure\DbOrder58AgentRepository;
 use App\Order58\Infrastructure\DbItemSyncStateRepository;
 use App\Order58\Infrastructure\DbOrder58OrderItemRepository;
-use App\Order58\Infrastructure\DbOrderSyncLock;
 use App\Order58\Infrastructure\DbOrder58KnowledgeRepository;
 use App\Order58\Infrastructure\DbOrder58RuleRepository;
 use App\Order58\Infrastructure\DbOrder58StoreRepository;
@@ -77,7 +66,80 @@ return [
     StoreDirectoryReaderInterface::class => DbStoreDirectoryReader::class,
     CallImportRepositoryInterface::class => DbCallImportRepository::class,
     Order58OrderRepositoryInterface::class => DbOrder58OrderRepository::class,
-    StoreAudioCountsInterface::class => DbStoreAudioCounts::class,
+    /*
+     * The Case Order endpoint: one request a day, returning recent orders with their lines.
+     *
+     * Three objects, assembled here because this is where the environment is read: the settings, the
+     * HTTP client that uses them, and the run repository that rations the allowance with a unique
+     * index on the business day.
+     */
+    App\Order58\Client\CaseOrders\CaseOrderSettings::class => [
+        '__construct()' => [
+            'url' => $params['app/order58-case-orders']['url'],
+            'token' => $params['app/order58-case-orders']['token'],
+            // The provider's own example uses the query string; a bearer header also answered 200.
+            // Switchable so a change of provider mind is a setting rather than an edit.
+            'auth' => App\Order58\Client\CaseOrders\CaseOrderAuth::fromConfig(
+                (string) $params['app/order58-case-orders']['auth'],
+            ),
+            'timezone' => $params['app/order58-case-orders']['timezone'],
+        ],
+    ],
+    App\Order58\Client\CaseOrders\CaseOrderClientInterface::class => [
+        'class' => App\Order58\Client\CaseOrders\HttpCaseOrderClient::class,
+        '__construct()' => [
+            /*
+             * Its own Guzzle instance, like every other Order58 client here — there is no shared
+             * PSR-18 binding in this application, by design: each endpoint has its own timeouts and
+             * one of them must not be able to change another's.
+             *
+             * The timeout is the long one. This endpoint returned 1.18 MB for two hundred orders with
+             * their lines, so it is a slower call than the per-order one it replaces, and it is made
+             * once a day rather than per click. `CaseOrderSettings::TIMEOUT_SECONDS` is where that
+             * number is written down.
+             *
+             * `stream: true` so the body is read in bounded chunks rather than buffered whole: the
+             * client enforces a ceiling as it reads, which only works if Guzzle has not already
+             * loaded the response into memory.
+             *
+             * `http_errors: false` so a refusal arrives as a status code the client turns into its own
+             * sanitized message, rather than as a Guzzle exception whose text carries the request URI
+             * — and in query-string mode that URI carries the credential.
+             */
+            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
+                'connect_timeout' => 10,
+                'timeout' => App\Order58\Client\CaseOrders\CaseOrderSettings::TIMEOUT_SECONDS,
+                'http_errors' => false,
+                'stream' => true,
+            ])),
+            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
+            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
+        ],
+    ],
+    App\Order58\Domain\CaseOrders\CaseOrderListReaderInterface::class
+        => App\Order58\Infrastructure\DbCaseOrderListReader::class,
+
+    App\Order58\Domain\CaseOrders\CaseOrderSyncRunRepositoryInterface::class
+        => App\Order58\Infrastructure\DbCaseOrderSyncRunRepository::class,
+
+    // Freshness, the provider's rate and the concurrency lease — three limits, read once, kept apart.
+    App\Order58\Application\CaseOrders\CaseOrderSyncPolicy::class => [
+        '__construct()' => [
+            'autoSyncEnabled' => (bool) $params['app/order58-case-orders']['autoSyncEnabled'],
+            'minRefreshSeconds' => (int) $params['app/order58-case-orders']['minRefreshSeconds'],
+            'minProviderGapSeconds' => (int) $params['app/order58-case-orders']['minProviderGapSeconds'],
+            'leaseSeconds' => (int) $params['app/order58-case-orders']['leaseSeconds'],
+        ],
+    ],
+
+    StoreAudioCountsInterface::class => [
+        'class' => DbStoreAudioCounts::class,
+        '__construct()' => [
+            // The same setting the listing reads, so a store card and the page it links to count the
+            // same population. See DbStoreAudioCounts and OrderListingMode.
+            'caseOrderPrimary' => (bool) $params['app/order58']['caseOrderPrimary'],
+        ],
+    ],
 
     // Orders carrying a topic, per store, for the second number on a store card.
     App\Order58\Domain\StoreTopicAssignmentCountsInterface::class
@@ -102,14 +164,6 @@ return [
             // systemd unit so the temporary file shares a filesystem with its destination.
             'temporaryDirectory' => DynamicReference::to(static fn(): string => sys_get_temp_dir()),
             'enabled' => $params['app/order58']['recordingImportEnabled'],
-            // Item work rides along with this command rather than needing a worker of its own. The
-            // bounds keep it strictly subordinate to the recordings: see drainItems().
-            // The concrete drainer, named here because the command asks only for a DrainerInterface.
-            'itemDrainer' => Reference::to(App\Order58\Application\Items\OrderItemSyncDrainer::class),
-            'itemDrainPerRun' => $params['app/order58-items']['drainPerRun'],
-            'itemBudgetSeconds' => $params['app/order58-items']['drainBudgetSeconds'],
-            'itemRunCeilingSeconds' => $params['app/order58-items']['runCeilingSeconds'],
-            'itemRequestCostSeconds' => $params['app/order58-items']['requestCostSeconds'],
         ],
     ],
 
@@ -197,29 +251,6 @@ return [
     // The Orders API: a separate host, verb and credential from the accounts client above, and the only
     // Order58 call that runs inside a web request. Its timeouts are therefore its own and are kept under
     // the web server's, so a slow provider ends the call rather than the request.
-    OrderDataSettings::class => DynamicReference::to(static fn(): OrderDataSettings => new OrderDataSettings(
-        url: $params['app/order58']['ordersUrl'],
-        token: $params['app/order58']['ordersToken'],
-        connectTimeoutSeconds: $params['app/order58']['ordersConnectTimeoutSeconds'],
-        timeoutSeconds: $params['app/order58']['ordersTimeoutSeconds'],
-        maxResponseBytes: $params['app/order58']['ordersMaxResponseMb'] * 1048576,
-    )),
-
-    OrderDataClientInterface::class => [
-        'class' => HttpOrderDataClient::class,
-        '__construct()' => [
-            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
-                'connect_timeout' => $params['app/order58']['ordersConnectTimeoutSeconds'],
-                'timeout' => $params['app/order58']['ordersTimeoutSeconds'],
-                'http_errors' => false,
-                // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
-                'stream' => true,
-            ])),
-            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
-            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
-        ],
-    ],
-
     // The Receipt endpoint of that same order-data API, wired exactly like the Orders client beside it
     // and for the same reasons: a POST from inside a web request, so its timeouts are its own and are
     // kept under the web server's. Its credential is separate so it can be rotated on its own.
@@ -253,76 +284,21 @@ return [
         ],
     ],
 
-    // ---------------------------------------------------------------- original order ITEMS (Phase 2)
-    //
-    // A fourth Order58 endpoint with its own credential and its own kill switch. SHIPS OFF:
-    // ORDER58_ITEM_SYNC_ENABLED defaults to false, and the client refuses before opening a socket, so
-    // wiring it up sends no traffic.
-    OrderItemSettings::class => DynamicReference::to(static fn(): OrderItemSettings => new OrderItemSettings(
-        url: $params['app/order58-items']['url'],
-        token: $params['app/order58-items']['token'],
-        authScheme: $params['app/order58-items']['authScheme'],
-        connectTimeoutSeconds: $params['app/order58-items']['connectTimeoutSeconds'],
-        timeoutSeconds: $params['app/order58-items']['timeoutSeconds'],
-        maxResponseBytes: $params['app/order58-items']['maxResponseBytes'],
-        enabled: $params['app/order58-items']['enabled'],
-    )),
-
-    OrderItemClientInterface::class => [
-        'class' => HttpOrderItemClient::class,
-        '__construct()' => [
-            // Its own Guzzle instance, like the orders client: a shorter timeout, because a manual
-            // click waits on this inside a web request.
-            'httpClient' => DynamicReference::to(static fn(): PsrHttpClient => new GuzzleClient([
-                'connect_timeout' => $params['app/order58-items']['connectTimeoutSeconds'],
-                'timeout' => $params['app/order58-items']['timeoutSeconds'],
-                'http_errors' => false,
-                // Read in bounded chunks rather than letting Guzzle buffer a response of unknown size.
-                'stream' => true,
-            ])),
-            'requestFactory' => DynamicReference::to(static fn(): RequestFactoryInterface => $psr7),
-            'streamFactory' => DynamicReference::to(static fn(): StreamFactoryInterface => $psr7),
-        ],
-    ],
-
+    /*
+     * ---------------------------------------------------------------- original order ITEMS
+     *
+     * The per-order items ENDPOINT is gone (Stage 7a): the Case Order response carries each order's
+     * lines inside the order, so there is nothing left to fetch one order at a time. What remains here
+     * is local only — the rows, their sync state, and the batch progress the Orders page reads.
+     */
     // The progress bar above the orders listing: one grouped count, local tables only.
     ItemSyncSummaryReaderInterface::class => DbItemSyncSummaryReader::class,
 
-    // Per-operation progress. Settled from OriginalOrderItemSyncService, so one provider
-    // request settles every batch waiting on that order.
+    // Per-operation progress for the Orders page. Local only: the batches are settled by whatever
+    // writes an order's items, which since Stage 7a is the Case Order import.
     ItemSyncBatchRepositoryInterface::class => DbItemSyncBatchRepository::class,
-
-    App\Order58\Web\Orders\SyncStatusAction::class => [
-        '__construct()' => [
-            'stalledAfterSeconds' => $params['app/order58-items']['batchStalledSeconds'],
-        ],
-    ],
 
     OrderItemRepositoryInterface::class => DbOrder58OrderItemRepository::class,
     ItemSyncStateRepositoryInterface::class => DbItemSyncStateRepository::class,
 
-    // The drainer and both manual actions depend on the interface, so none of them names the concrete
-    // service — and the service stays final.
-    OrderItemSyncInterface::class => OriginalOrderItemSyncService::class,
-
-    OriginalOrderItemSyncService::class => [
-        '__construct()' => [
-            'leaseSeconds' => $params['app/order58-items']['leaseSeconds'],
-            'maxAttempts' => $params['app/order58-items']['maxAttempts'],
-        ],
-    ],
-
-    // The order-sync lock, which lives in the service so BOTH callers are covered: the Orders page
-    // button and kf:order58:import-recordings. It used to be two lines in the web action, leaving the
-    // recording path unprotected.
-    OrderSyncLockInterface::class => DbOrderSyncLock::class,
-
-    OrderSyncService::class => [
-        'class' => OrderSyncService::class,
-        '__construct()' => [
-            'deadlineSeconds' => $params['app/order58']['ordersDeadlineSeconds'],
-            // Shared with the item sync service so "due a retry" means one thing in both.
-            'itemMaxAttempts' => $params['app/order58-items']['maxAttempts'],
-        ],
-    ],
 ];

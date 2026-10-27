@@ -20,6 +20,7 @@ use App\Shared\Web\Actor\CurrentActor;
 use App\AudioToText\Domain\MirroredOrderReaderInterface;
 use App\AudioToText\Domain\DemoOrderLinkReaderInterface;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\OrderListingMode;
 use App\AudioToText\Domain\OrderVerificationReaderInterface;
 use App\AudioToText\Domain\StoreOrderGroupRepositoryInterface;
 use App\AudioToText\Domain\TopicAssignmentReaderInterface;
@@ -312,6 +313,22 @@ readonly class StoreAction extends AudioStoreAction
     protected function allowsRecordingTypeChoice(): bool
     {
         return false;
+    }
+
+    /**
+     * The practice catalogue follows `ORDER58_CASE_ORDER_PRIMARY`.
+     *
+     * Null means "whatever is configured", which is the point of the setting: a row here is an order
+     * somebody is going to re-enter in Order58, so whether the list is of imported orders or of
+     * recordings is a business decision rather than a property of the page. The parent returns
+     * recordings because it manages audio; this surface has no such claim on either answer.
+     *
+     * Practice Orders inherits this, and the agent surface is unaffected either way — its
+     * `requireLinkedOrder` filter requires an order AND its audio whichever mode is configured.
+     */
+    protected function listingMode(): ?OrderListingMode
+    {
+        return null;
     }
 
     protected function templatePath(): string

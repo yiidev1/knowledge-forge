@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\Orders;
 
-use App\Order58\Application\Orders\OrderDateRange;
 use App\Order58\Domain\Items\ItemSyncSummaryReaderInterface;
 use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
 use App\Order58\Domain\Orders\OrderListQuery;
@@ -68,7 +67,6 @@ final readonly class Action
                 'total' => $page['total'],
                 'listQuery' => $listQuery,
                 'perPage' => OrderListQuery::PER_PAGE,
-                'maxDates' => OrderDateRange::MAX_DATES,
                 // The form's own selections, carried back so a sync does not reset the operator's choices.
                 'formAccountId' => $this->positiveInt($query['form_account_id'] ?? null),
                 'formFrom' => $this->date($query['form_from'] ?? null),
@@ -80,7 +78,6 @@ final readonly class Action
                 'itemSyncSummary' => $this->itemSyncSummary->summaryFor($accountId),
                 // The operation the redirect pointed at, if any. One extra read, only when a batch id
                 // is actually present, so an ordinary page view costs nothing for it.
-                'syncBatchId' => $this->positiveInt($query['batch'] ?? null),
                 'syncStatusUrl' => $this->urlGenerator->generate('order58.orders.sync-status'),
             ])
             ->withHeader('Cache-Control', 'no-store, private');

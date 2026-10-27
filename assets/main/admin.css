@@ -1018,6 +1018,100 @@ a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 /* The page body must never scroll sideways: if the table cannot fit, it scrolls inside its own box. */
 .o58-table-scroll { overflow-x: auto; }
 
+/* Case Orders earns the full content column, like the store pages it sits beside.
+
+   The default 1240px column is a READING width — right for prose, wrong for a thirteen-column table
+   that then scrolls inside its own box while the page leaves a third of the screen empty. `:has()`
+   keeps the widening scoped to this one page, and a browser without it simply gets the normal column
+   and the inner scroll, which is the same graceful fallback `.a2t-wide` relies on. */
+.content:has(.o58-wide) { max-width: 1600px; }
+
+/* The Case Orders filter: the same problem as `.o58-filters` above, with nine controls instead of
+   five. A flex row that wrapped them arbitrarily put a date box alone on a line and left the row
+   ragged, so this one is a grid: every control sits in a track, and the tracks reflow together.
+
+   `auto-fit` with a floor rather than fixed columns, so the row goes 4-up on a wide screen and 2-up
+   on a laptop without a breakpoint for each width. */
+.o58-co-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: .6rem .75rem;
+    align-items: end;
+}
+/* Same reason as `.o58-filters`: `.field__control` is 100% by design, which in a grid cell is
+   exactly what is wanted — the cell sizes the control, not the other way round. */
+.o58-co-filters .field__control { width: 100%; min-width: 0; }
+
+/* A from/to pair is ONE idea and occupies one track, with its own label above the two boxes. Split
+   across two tracks they drifted apart and stopped reading as a range. */
+.o58-co-filters__range { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.o58-co-filters__range-inputs { display: flex; gap: .35rem; min-width: 0; }
+.o58-co-filters__range-inputs .field__control { flex: 1 1 0; }
+.o58-co-filters__label { font-size: .78rem; color: var(--text-muted); }
+
+/* The store select earns a wider track than a date: a restaurant name plus its id is long. */
+.o58-co-filters__store { grid-column: span 2; }
+
+/* Actions sit on their own full-width line, left-aligned, so Apply never ends up stranded in a
+   half-empty track beside a date box. */
+/* The Case Orders detail dialog.
+
+   `dialog.o58-co-detail-dialog`, not the bare class: this reuses `.a2t-confirm` for its frame, and
+   that rule caps the width at 32rem. Two single classes carry equal specificity, so the one written
+   later would win — and `.a2t-confirm` cannot be moved or followed, because every selector below the
+   transcription section's own marker is required to stay under the `a2t-` prefix. Adding the element
+   name raises this to (0,1,1) and settles it by specificity instead, wherever either rule sits.
+
+   `width` as well as `max-width`: a <dialog> sizes to fit-content, so max-width alone cannot widen
+   one. The body scrolls rather than the dialog growing, so a fifty-line order cannot push Close off
+   the screen. */
+dialog.o58-co-detail-dialog {
+    width: min(94vw, 56rem);
+    max-width: min(94vw, 56rem);
+    max-height: 88vh;
+}
+/* `display` ONLY while open.
+   The browser hides a closed <dialog> with `dialog:not([open]) { display: none }` from its own
+   stylesheet. Setting `display: flex` on the element unconditionally outranks that, so the dialog
+   rendered as a visible block at the foot of the page with its heading and Close button showing.
+   Scoping the display to `[open]` gives the closed state back to the browser. */
+dialog.o58-co-detail-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+.o58-co-detail-dialog__head {
+    display: flex;
+    gap: .75rem;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: .4rem;
+}
+.o58-co-detail-dialog__head .a2t-confirm__title { margin: 0; }
+.o58-co-detail-dialog__body { overflow: auto; min-height: 0; }
+/* The fragment brings its own cards; inside a dialog they are already on a panel, so they lose the
+   second border and the outer margin that would double it. */
+.o58-co-detail-dialog__body .card { border: 0; padding: 0; margin: 0 0 1.1rem; background: none; }
+.o58-co-detail-dialog__body .card:last-child { margin-bottom: 0; }
+.o58-co-detail-dialog__body .card__title { font-size: .92rem; }
+
+.o58-co-filters__actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+}
+
+@media (max-width: 720px) {
+    /* One idea per line. Two date boxes still share their own row inside the range group. */
+    .o58-co-filters { grid-template-columns: 1fr; }
+    .o58-co-filters__store { grid-column: auto; }
+}
+
+/* The history table carries eleven numeric columns. Nowrap keeps each figure on one line, and the
+   note column takes the slack instead of widening the rest. */
+.o58-co-history th, .o58-co-history td { white-space: nowrap; }
+.o58-co-history .o58-co-note { white-space: normal; min-width: 14rem; }
+
 .btn--ghost { background: transparent; color: var(--text-muted); border-color: transparent; }
 .btn--ghost:hover { background: var(--surface-2); color: var(--text); }
 
@@ -1462,6 +1556,11 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    Visually a sibling of it rather than a variant: the two answer different questions, and making them
    look interchangeable is how a reader conflates them. Theme variables only. */
 .o58-sync-op { display: flex; flex-direction: column; gap: .45rem; }
+/* `display` above is an AUTHOR rule, so it beats the user agent's `[hidden] { display: none }` and the
+   panel stayed on screen whenever the template marked it hidden — which is how a run's counts were
+   visible in the confirmation dialog before anything had been confirmed. Same idiom as `.badge[hidden]`
+   and `.a2t-dropzone[hidden]`; without it, `hidden` here means nothing at all. */
+.o58-sync-op[hidden] { display: none; }
 .o58-sync-op__heading { align-items: baseline; display: flex; gap: .75rem; justify-content: space-between; }
 .o58-sync-op__title { margin: 0; }
 
@@ -2279,6 +2378,7 @@ a.pager__item:hover { background: var(--surface-2, #1c2433); border-color: var(-
    whose longest option ("Deepgram (cloud)") should not wrap, and `width` as well as `max-width`
    because a <dialog> sizes to fit-content and would otherwise collapse to the select's own width. */
 .a2t-settings { width: min(94vw, 34rem); max-width: min(94vw, 34rem); }
+
 .a2t-settings .field { margin-bottom: 0; }
 /* The no-JavaScript path prints `open`, which a plain <dialog> renders in flow rather than centred.
    Positioning it here means that fallback still looks like a dialog instead of a stray panel. */

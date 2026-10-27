@@ -15,9 +15,9 @@ use DateTimeImmutable;
  * the stored rows equal the response in one transaction: anything missing from the response is gone
  * because the provider says it is gone, not because a merge failed to notice it.
  *
- * That is only safe because the caller has already proved the response complete — see
- * {@see \App\Order58\Client\Items\HttpOrderItemClient}, which refuses anything partial. A repository
- * that replaced on a half-read body would delete real lines.
+ * That is only safe because the caller has already proved the response complete. The Case Order
+ * parser maps an order's whole `items[]` or skips that order entirely, so a half-read body never
+ * reaches here — a repository that replaced on one would delete real lines.
  */
 interface OrderItemRepositoryInterface
 {
@@ -36,7 +36,14 @@ interface OrderItemRepositoryInterface
         int $storeAccountId,
         int $sourceOrderId,
         array $items,
-        string $leaseOwner,
+        /**
+         * The holder writing these items, or null when the caller is guarded some other way.
+         *
+         * Null is for the Case Order import, which claims the day's single API allowance before it
+         * starts and is therefore the only writer by construction. The per-order queue still passes
+         * its owner, and is still checked against it.
+         */
+        ?string $leaseOwner,
         DateTimeImmutable $now,
     ): bool;
 

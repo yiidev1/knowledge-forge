@@ -4,15 +4,9 @@ declare(strict_types=1);
 
 namespace App\Order58\Console;
 
-use App\Order58\Application\Orders\CallOrderDates;
-use App\Order58\Application\Orders\OrderDateRange;
-use App\Order58\Application\Orders\OrderSyncInProgress;
-use App\Worker\Application\DrainerInterface;
-use App\Order58\Application\Orders\OrderSyncService;
 use App\Order58\Application\RecordingImportProcessor;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Shared\Domain\Clock\ClockInterface;
-use DateTimeImmutable;
 use App\Shared\Machine\ResourceAdmission;
 use App\Shared\Machine\ResourceBudget;
 use Psr\Log\LoggerInterface;
@@ -34,7 +28,6 @@ use function getmypid;
 use function is_dir;
 use function is_resource;
 use function is_writable;
-use function min;
 use function sprintf;
 use function usleep;
 
@@ -92,15 +85,7 @@ use const LOCK_UN;
 )]
 final class ImportRecordingsCommand extends Command
 {
-    /**
-     * Slack left between the last item request and the unit's own timeout.
-     *
-     * Not configurable: it exists so a run ends by choice rather than by SIGTERM, and a value an
-     * operator could set to zero would defeat the only thing it is for.
-     */
-    private const ITEM_SAFETY_MARGIN_SECONDS = 20;
-
-    /** A claimed item older than this was left behind by a killed process. */
+    /** A claimed recording older than this was left behind by a killed process. */
     private const STALE_AFTER_SECONDS = 900;
 
     /** Between empty polls, so a long-running invocation does not spin. */
@@ -123,7 +108,6 @@ final class ImportRecordingsCommand extends Command
          * chunking, deadline, hash comparison, named lock and all. Duplicating any of that would be a
          * second opinion about when an order has changed.
          */
-        private readonly OrderSyncService $orderSync,
         private readonly ClockInterface $clock,
         private readonly ResourceAdmission $admission,
         private readonly ResourceBudget $budget,
@@ -139,29 +123,6 @@ final class ImportRecordingsCommand extends Command
          */
         private readonly string $temporaryDirectory,
         private readonly bool $enabled,
-        /**
-         * The item queue, drained after the recordings and only with time to spare.
-         *
-         * The SAME drainer the general worker registers — injected as the interface so this command
-         * depends on what a drainer DOES rather than on which one it is, and so a recordings test can
-         * substitute one that refuses to run. Running it from here is what removes the need for a separately
-         * scheduled item worker — this process is already started by the `.path` unit a download
-         * writes to, and by the timer behind it.
-         */
-        private readonly DrainerInterface $itemDrainer,
-        /** Orders per pass. Small, because each one can cost a full provider timeout. */
-        private readonly int $itemDrainPerRun,
-        /** The most time one run may spend on items, before the ceiling below is applied. */
-        private readonly int $itemBudgetSeconds,
-        /**
-         * `TimeoutStartSec` of the systemd unit that runs this, as the application understands it.
-         *
-         * Configured rather than discovered: a process cannot read its own unit's timeout, and
-         * guessing it is how a run gets killed mid-write. If the unit changes, this changes with it.
-         */
-        private readonly int $itemRunCeilingSeconds,
-        /** What one item request may cost — its timeout plus the write that follows. */
-        private readonly int $itemRequestCostSeconds,
     ) {
         parent::__construct();
     }
@@ -263,11 +224,19 @@ final class ImportRecordingsCommand extends Command
 
             $io->writeln(sprintf('Processed %d recording(s).', $processed));
 
-            // After the recordings, never instead of them, and never inside the loop. See syncOrders().
-            $this->syncOrders($runStartedAt, $io);
+            /*
+             * The Order58 Orders API call that used to happen here is gone.
+             *
+             * It mirrored the orders of each finished batch's business dates so a freshly downloaded
+             * recording had an order to link to. Original orders now come from the Case Order import,
+             * which is global and runs on its own schedule — so this command downloads recordings and
+             * nothing else, and never contacts the orders endpoint.
+             *
+             * A recording whose order is not in the mirror is still imported and still listed. The
+             * link is resolved by reading the local orders table, so it simply appears once an import
+             * covers that order.
+             */
 
-            // And item work last of all, with whatever time is genuinely left. See drainItems().
-            $this->drainItems($runStartedAt, $io);
         } catch (Throwable $e) {
             // The processor already handles a failure of one item. Reaching here means something outside
             // that — a database gone away — so the run ends rather than looping against it.
@@ -285,217 +254,6 @@ final class ImportRecordingsCommand extends Command
         }
 
         return ExitCode::OK;
-    }
-
-    /**
-     * Synchronise the Order58 orders of every call batch this run finished.
-     *
-     * ## Why here and not in the web request
-     *
-     * The Orders API is a POST to a third party with a configured timeout, and the response for a busy
-     * store is tens of orders to map and upsert. "Sync Recordings" writes rows and returns; putting an
-     * external call into it would reintroduce exactly the wait that every other part of this feature is
-     * arranged to avoid. Nothing here runs in a web request.
-     *
-     * ## Why once per batch, not once per call or once per run
-     *
-     * {@see CallImportRepositoryInterface::settledBatchCalls()} returns a batch's calls in the single
-     * run that settles it, so a fifty-call selection costs **one** request per business day rather than
-     * fifty. The dates are then deduplicated again here, because fifty calls on one evening are one
-     * day's orders.
-     *
-     * ## Why a failure here cannot cost a recording
-     *
-     * The recordings are already downloaded and their rows already written by the time this runs. An
-     * Orders API that is down, refuses, or answers something unreadable is logged and the run still
-     * reports success. The two are independent on purpose: an order that did not arrive can be fetched
-     * again from the Orders page, while a recording lost to an unrelated failure cannot.
-     *
-     * A date with no orders at all is one of those failures rather than an empty list — the provider
-     * answers without an `Orders` key and the client raises. It is logged at info rather than warning
-     * for that reason: on a quiet day it is the normal answer, and a warning that fires routinely is a
-     * warning nobody reads.
-     *
-     * Concurrency is the named lock inside {@see OrderSyncService}, which is what stops this colliding
-     * with an administrator pressing "Sync Order58 Orders" for the same day. That lock used to live in
-     * the web action only, so this path was in fact unprotected; it was moved into the service so both
-     * callers are covered by construction rather than by remembering.
-     */
-    private function syncOrders(DateTimeImmutable $runStartedAt, SymfonyStyle $io): void
-    {
-        try {
-            $calls = $this->imports->settledBatchCalls($runStartedAt);
-        } catch (Throwable $e) {
-            $this->logger->warning('Order58 order sync could not be scheduled after a recording run.', [
-                'reason' => 'order58_order_sync_lookup_failed',
-                'error_class' => $e::class,
-                'error_message' => $e->getMessage(),
-            ]);
-
-            return;
-        }
-
-        if ($calls === []) {
-            return;
-        }
-
-        // Grouped by store first: an account id is half of what the Orders API is asked, and two stores
-        // settling in one run are two different questions.
-        /** @var array<int, list<string>> $byStore */
-        $byStore = [];
-
-        foreach ($calls as $call) {
-            $byStore[$call['storeSourceId']][] = $call['callTimeRaw'];
-        }
-
-        foreach ($byStore as $storeSourceId => $callTimes) {
-            foreach (CallOrderDates::fromCallTimes($callTimes) as $date) {
-                $this->syncOneDate($storeSourceId, $date, $io);
-            }
-        }
-    }
-
-    /**
-     * One store, one business day, one call to the existing service — reused exactly as the manual
-     * button uses it, including its chunking, deadline, hash comparison and named lock.
-     */
-    /**
-     * Fetch original order items for queued orders, with whatever time this run has left.
-     *
-     * ## Last, and only with time to spare
-     *
-     * Recordings are the reason this command exists; items are a convenience that rides along so an
-     * operator does not have to press anything afterwards. So this runs after both the downloads and
-     * the Orders sync, and takes only the budget that remains:
-     *
-     *     remaining = TimeoutStartSec − elapsed − safety margin
-     *
-     * A run that spent everything on recordings does no item work at all, and the existing timer picks
-     * the queue up a minute later. That ordering is the whole guarantee that items cannot delay a
-     * download.
-     *
-     * ## The budget is checked BEFORE each request, not after
-     *
-     * One item request can take the full `ORDER58_ITEM_API_TIMEOUT_SECONDS`, so a check that only
-     * happened afterwards could start a request with two seconds left and be killed mid-write by
-     * `TimeoutStartSec`. Each pass therefore has to prove it has room for a whole request, its
-     * persistence, and the margin — before it starts one.
-     *
-     * ## Why there is no self-retrigger
-     *
-     * Writing the trigger file from inside this process does nothing: systemd's `.path` unit ignores
-     * writes that arrive while the unit it starts is still active. That was measured, not assumed.
-     * Anything still queued when the budget runs out is left for the existing timer, which is exactly
-     * why that timer is required rather than optional.
-     */
-    private function drainItems(DateTimeImmutable $runStartedAt, SymfonyStyle $io): void
-    {
-        if ($this->itemDrainPerRun < 1) {
-            return;
-        }
-
-        $elapsed = $this->clock->now()->getTimestamp() - $runStartedAt->getTimestamp();
-        $budget = min(
-            $this->itemBudgetSeconds,
-            $this->itemRunCeilingSeconds - $elapsed - self::ITEM_SAFETY_MARGIN_SECONDS,
-        );
-
-        // One whole request has to fit, or there is no point starting the pass at all.
-        if ($budget < $this->itemRequestCostSeconds) {
-            $io->writeln('Order items: no time left in this run; the timer will pick them up.');
-
-            return;
-        }
-
-        $deadline = $this->clock->now()->getTimestamp() + $budget;
-        $processed = 0;
-        $failed = 0;
-
-        while (true) {
-            // BEFORE the request, not after: a pass must own enough time for a full timeout plus the
-            // write that follows it.
-            if ($this->clock->now()->getTimestamp() + $this->itemRequestCostSeconds > $deadline) {
-                break;
-            }
-
-            $result = $this->itemDrainer->drain($this->itemDrainPerRun);
-            $processed += $result->processed;
-            $failed += $result->failed;
-
-            // Nothing claimed means the queue is empty, or every candidate is held elsewhere. Either
-            // way another pass would make no progress.
-            if ($result->processed === 0 && $result->failed === 0) {
-                break;
-            }
-        }
-
-        if ($processed > 0 || $failed > 0) {
-            $io->writeln(sprintf('Order items: %d processed, %d failed.', $processed, $failed));
-        }
-    }
-
-    private function syncOneDate(int $storeSourceId, string $date, SymfonyStyle $io): void
-    {
-        $ranges = OrderDateRange::create($date, $date);
-        $range = $ranges[0] ?? null;
-
-        if (!$range instanceof OrderDateRange) {
-            // Unreachable for a date this application derived, and refused rather than guessed at.
-            return;
-        }
-
-        try {
-            // Labelled as the recording flow's own, so the Call Recordings page can show this
-            // operation separately from one an administrator started on the Orders page.
-            $summary = $this->orderSync->sync($storeSourceId, $range, 'recording_sync');
-        } catch (OrderSyncInProgress) {
-            // An administrator is syncing this exact store and day from the Orders page, or a previous
-            // tick still holds it. Not a problem and not worth a warning: the orders will be fetched by
-            // whoever holds the lock, or by the next run.
-            $this->logger->info('Order58 orders were already being synchronised by somebody else.', [
-                'reason' => 'order58_order_sync_locked',
-                'store_source_id' => $storeSourceId,
-                'business_date' => $date,
-            ]);
-
-            $io->writeln(sprintf('  orders %s %s: already running elsewhere', $storeSourceId, $date));
-
-            return;
-        } catch (Throwable $e) {
-            // Never fatal to the run. The message carries no body and no header - see OrderDataFailed.
-            $this->logger->info('Order58 orders were not synchronised for a finished call batch.', [
-                'reason' => 'order58_order_sync_skipped',
-                'store_source_id' => $storeSourceId,
-                'business_date' => $date,
-                'error_class' => $e::class,
-                'error_message' => $e->getMessage(),
-            ]);
-
-            $io->writeln(sprintf('  orders %s %s: not synchronised', $storeSourceId, $date));
-
-            return;
-        }
-
-        // Counts only. No order id, no customer, no payload.
-        $this->logger->info('Order58 orders synchronised after a call batch finished.', [
-            'reason' => 'order58_order_sync_done',
-            'store_source_id' => $storeSourceId,
-            'business_date' => $date,
-            'received' => $summary->received,
-            'created' => $summary->created,
-            'updated' => $summary->updated,
-            'unchanged' => $summary->unchanged,
-        ]);
-
-        $io->writeln(sprintf(
-            '  orders %s %s: %d received, %d created, %d updated, %d unchanged',
-            $storeSourceId,
-            $date,
-            $summary->received,
-            $summary->created,
-            $summary->updated,
-            $summary->unchanged,
-        ));
     }
 
     /**

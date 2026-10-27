@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Integration\AudioToText;
 
+use App\AudioToText\Domain\OrderListingMode;
 use App\AudioToText\Infrastructure\DbStoreOrderGroupRepository;
 use App\AudioToText\Infrastructure\Tts\DbTtsRenditionRepository;
 use App\Shared\Domain\Clock\SystemClock;
@@ -42,8 +43,14 @@ final class StoreAudioOrderCountTest extends Unit
     private const OTHER_STORE = 987655971;
 
     private ConnectionInterface $connection;
+
+    /** The card and the page as recordings produce them: `ORDER58_CASE_ORDER_PRIMARY=false`. */
     private DbStoreAudioCounts $cards;
     private DbStoreOrderGroupRepository $page;
+
+    /** The same pair as imported orders produce them: `ORDER58_CASE_ORDER_PRIMARY=true`, the default. */
+    private DbStoreAudioCounts $cardsByOrder;
+    private DbStoreOrderGroupRepository $pageByOrder;
 
     private int $seq = 0;
 
@@ -52,12 +59,29 @@ final class StoreAudioOrderCountTest extends Unit
         $this->connection = IntegrationDb::connectOrSkip();
         $this->cleanup();
 
-        $this->cards = new DbStoreAudioCounts($this->connection);
         // The renditions repository is only consulted for the page's audio slots; `countFor()`
         // never reaches it, but the constructor requires one.
+        $renditions = new DbTtsRenditionRepository($this->connection, new SystemClock());
+
+        /*
+         * Two pairs, because the card has to agree with the page under BOTH settings.
+         *
+         * Every case above the agreement test is about how recordings become rows, so it uses the
+         * recording-primary pair — that is the rule those cases describe. The agreement test itself
+         * asks both pairs the same question about the same store.
+         */
+        $this->cards = new DbStoreAudioCounts($this->connection, caseOrderPrimary: false);
         $this->page = new DbStoreOrderGroupRepository(
             $this->connection,
-            new DbTtsRenditionRepository($this->connection, new SystemClock()),
+            $renditions,
+            OrderListingMode::RecordingPrimary,
+        );
+
+        $this->cardsByOrder = new DbStoreAudioCounts($this->connection, caseOrderPrimary: true);
+        $this->pageByOrder = new DbStoreOrderGroupRepository(
+            $this->connection,
+            $renditions,
+            OrderListingMode::CaseOrderPrimary,
         );
     }
 
@@ -170,6 +194,14 @@ final class StoreAudioOrderCountTest extends Unit
      * The card and the page count with two separate copies of one rule, because the module isolation
      * tests forbid them from sharing code. Here they are asked about the same store and must agree —
      * so the number on the card is always the number of rows behind it.
+     *
+     * ## Both settings, same data, one assertion each
+     *
+     * `ORDER58_CASE_ORDER_PRIMARY` decides which population a listing is a list of, and the card is
+     * the headline for that listing — so the setting reaches both copies of the rule, and both copies
+     * can now drift in two ways instead of one. The store below is deliberately seeded so the two
+     * settings give *different* answers: four recording groups, two imported orders, overlapping in
+     * one. A change that made either pair agree with the other pair would be the bug.
      */
     public function testTheCardAgreesWithThePageItLinksTo(): void
     {
@@ -180,11 +212,45 @@ final class StoreAudioOrderCountTest extends Unit
         $this->seed('111', 'MIXED');
         $this->seed(null, 'MIXED');
 
+        // One of the recorded orders is mirrored, and one mirrored order was never recorded.
+        $this->seedMirroredOrder(16800901);
+        $this->seedMirroredOrder(16800903);
+
         $this->assertSame(
             $this->page->countFor(self::STORE),
             $this->cardCount(),
-            'The store card and the store page must count the same things.',
+            'recording-primary: the card and the page must count the same things',
         );
+
+        $this->assertSame(
+            $this->pageByOrder->countFor(self::STORE),
+            $this->cardCountByOrder(),
+            'case-order-primary: the card and the page must count the same things',
+        );
+
+        /*
+         * And the audio management surface, which answers for itself rather than from the setting.
+         *
+         * It asks both readers for recordings explicitly — see
+         * `AudioToText\Web\Job\Store\Action::listingMode()` and
+         * `Order58\Web\StoreAudio\Action::cardsCountImportedOrders()` — because its rows ARE
+         * recordings: an upload that named no order can never be given one by an import, and that
+         * page is the only place it can be replaced or transcribed.
+         *
+         * Asserted through the configured-for-orders pair, which is what makes this meaningful: both
+         * objects are the ones a server with the setting ON would have, and they still agree on
+         * recordings when a caller asks for them.
+         */
+        $this->assertSame(
+            $this->pageByOrder->countFor(self::STORE, null, OrderListingMode::RecordingPrimary),
+            $this->cardsByOrder->countsFor([self::STORE], false)[self::STORE]->orders,
+            'the audio page and its card must agree even against the other setting',
+        );
+
+        // And the two settings really are being told apart, rather than both happening to be right
+        // about one number.
+        $this->assertSame(4, $this->cardCount(), 'three channels of one order, plus three more rows');
+        $this->assertSame(2, $this->cardCountByOrder(), 'the two imported orders');
     }
 
     // ------------------------------------------------------------------ the two cards differ on purpose
@@ -301,6 +367,14 @@ final class StoreAudioOrderCountTest extends Unit
     private function cardCount(): int
     {
         $counts = $this->cards->countsFor([self::STORE]);
+
+        return isset($counts[self::STORE]) ? $counts[self::STORE]->orders : 0;
+    }
+
+    /** The same headline when the listing is a list of imported orders instead. */
+    private function cardCountByOrder(): int
+    {
+        $counts = $this->cardsByOrder->countsFor([self::STORE]);
 
         return isset($counts[self::STORE]) ? $counts[self::STORE]->orders : 0;
     }

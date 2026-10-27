@@ -6,6 +6,7 @@ namespace App\Tests\Integration\AudioToText;
 
 use App\AudioToText\Domain\GroupKey;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\OrderListingMode;
 use App\AudioToText\Domain\StoreOrderGroup;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
@@ -19,6 +20,8 @@ use Codeception\Test\Unit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
 use function array_map;
+use function array_unique;
+use function array_values;
 use function bin2hex;
 use function gmdate;
 use function sprintf;
@@ -53,7 +56,12 @@ final class StoreOrderGroupRepositoryTest extends Unit
     private const OTHER_STORE = 987654902;
 
     private ConnectionInterface $connection;
+
+    /** The listing as recordings produce it: `ORDER58_CASE_ORDER_PRIMARY=false`. */
     private DbStoreOrderGroupRepository $repository;
+
+    /** The listing as imported orders produce it: `ORDER58_CASE_ORDER_PRIMARY=true`, the default. */
+    private DbStoreOrderGroupRepository $caseOrderFirst;
     private int $adminId;
 
     /** @var list<string> */
@@ -77,9 +85,29 @@ final class StoreOrderGroupRepositoryTest extends Unit
     protected function _before(): void
     {
         $this->connection = IntegrationDb::connectOrSkip();
+
+        $renditions = new DbTtsRenditionRepository($this->connection, new SystemClock());
+
+        /*
+         * `$this->repository` is the RECORDING-primary listing, and deliberately so.
+         *
+         * Everything above the mode section — grouping, replacement history, legacy pairs, aggregate
+         * status, the agent predicate — describes how recordings become rows, which is what that mode
+         * is. Running those cases under the other mode would be asking a question about recordings
+         * through a query whose primary table is orders.
+         *
+         * The case-order-primary listing gets its own instance, and the mode cases below use both.
+         */
         $this->repository = new DbStoreOrderGroupRepository(
             $this->connection,
-            new DbTtsRenditionRepository($this->connection, new SystemClock()),
+            $renditions,
+            OrderListingMode::RecordingPrimary,
+        );
+
+        $this->caseOrderFirst = new DbStoreOrderGroupRepository(
+            $this->connection,
+            $renditions,
+            OrderListingMode::CaseOrderPrimary,
         );
 
         $username = 'a2t-groups-' . bin2hex(random_bytes(4));
@@ -893,6 +921,324 @@ final class StoreOrderGroupRepositoryTest extends Unit
         return $filter;
     }
 
+    // ------------------------------------------------- which population a listing is a list of
+
+    /*
+     * `ORDER58_CASE_ORDER_PRIMARY` decides which of two overlapping populations a store listing has a
+     * row for. The cases below fix the three records that tell the modes apart — an order with no
+     * recording, a recording with no order, and one of each matched — and then fix the two things that
+     * must not depend on the setting at all: the agent predicate, and store isolation.
+     *
+     * Both modes are exercised against the same seeded data wherever that is possible, because the
+     * interesting claim is not "each mode works" but "the two disagree in exactly one way".
+     */
+
+    // --- true: orders are the rows ------------------------------------------------------------
+
+    /** An order with no recording is listed. It is what the setting exists for. */
+    public function testCaseOrderPrimaryListsAnOrderWithNoRecording(): void
+    {
+        $this->mirrorOrder('910000001');
+
+        $groups = $this->caseOrderFirst->pageFor(self::STORE, 20);
+
+        self::assertCount(1, $groups);
+        self::assertSame('910000001', $groups[0]->orderId);
+        self::assertSame('order:910000001', $groups[0]->key->value);
+        self::assertSame(1, $this->caseOrderFirst->countFor(self::STORE));
+    }
+
+    /**
+     * And it is listed as an order with nothing recorded, not as a broken recording.
+     *
+     * Every one of these is read by the template to decide what a cell says. A row that claimed to
+     * have a recording and then had none would draw a player with nothing behind it.
+     */
+    public function testAnOrderWithNoRecordingHasNoRecordings(): void
+    {
+        $this->mirrorOrder('910000002');
+
+        $group = $this->caseOrderFirst->pageFor(self::STORE, 20)[0];
+
+        self::assertSame([], $group->primaries());
+        self::assertNull($group->mixed);
+        self::assertNull($group->caller);
+        self::assertNull($group->callee);
+        self::assertSame(0, $group->recordingCount());
+        self::assertFalse($group->hasReviewableRecording(), 'there is nothing to open');
+        self::assertFalse($group->hasAnyTranscript());
+        self::assertFalse($group->isSettling(), 'and nothing to wait for');
+        self::assertNull($group->callTimeRaw, 'no recording means no recorded call time');
+    }
+
+    /** An order that does have recordings shows them, on the one row the order gets. */
+    public function testCaseOrderPrimaryAttachesTheRecordingsToTheOrder(): void
+    {
+        $this->upload(RecordingType::Mixed, '910000003');
+        $this->upload(RecordingType::Caller, '910000003');
+        $this->mirrorOrder('910000003');
+
+        $groups = $this->caseOrderFirst->pageFor(self::STORE, 20);
+
+        self::assertCount(1, $groups, 'two recordings of one order are one row');
+        self::assertSame(1, $this->caseOrderFirst->countFor(self::STORE), 'and one row in the total');
+        self::assertNotNull($groups[0]->mixed);
+        self::assertNotNull($groups[0]->caller);
+    }
+
+    /**
+     * A recording whose order is not in the mirror is **not** listed in this mode.
+     *
+     * There is no order for it to be a row about. It stays reachable from the recording screens,
+     * whose subject is the recording rather than the order.
+     */
+    public function testCaseOrderPrimaryExcludesARecordingWithNoOrder(): void
+    {
+        $this->upload(RecordingType::Mixed, '910000004');
+
+        self::assertSame([], $this->caseOrderFirst->pageFor(self::STORE, 20));
+        self::assertSame(0, $this->caseOrderFirst->countFor(self::STORE));
+    }
+
+    /** Including an upload that named no order at all, which can never match one. */
+    public function testCaseOrderPrimaryExcludesAnUploadWithNoOrderId(): void
+    {
+        $this->upload(RecordingType::Mixed, null);
+
+        self::assertSame([], $this->caseOrderFirst->pageFor(self::STORE, 20));
+        self::assertSame(0, $this->caseOrderFirst->countFor(self::STORE));
+    }
+
+    // --- false: recordings are the rows, exactly as before --------------------------------------
+
+    /** The recording with no order IS listed in the other mode, which is what it did before. */
+    public function testRecordingPrimaryListsARecordingWithNoOrder(): void
+    {
+        $this->upload(RecordingType::Mixed, '910000005');
+
+        $groups = $this->repository->pageFor(self::STORE, 20);
+
+        self::assertCount(1, $groups);
+        self::assertSame('910000005', $groups[0]->orderId);
+        self::assertSame(1, $this->repository->countFor(self::STORE));
+    }
+
+    /** And the order with no recording is not. */
+    public function testRecordingPrimaryExcludesAnOrderWithNoRecording(): void
+    {
+        $this->mirrorOrder('910000006');
+
+        self::assertSame([], $this->repository->pageFor(self::STORE, 20));
+        self::assertSame(0, $this->repository->countFor(self::STORE));
+    }
+
+    /**
+     * The one disagreement, on one seeded store, in one test.
+     *
+     * Three records: an order nobody recorded, a recording whose order was never imported, and a
+     * matched pair. Each mode shows the match plus its own population, and neither shows the other's.
+     * If a change ever makes both modes agree, this is the case that says so.
+     */
+    public function testTheTwoModesDifferOnlyInWhichUnmatchedRecordsTheyShow(): void
+    {
+        $this->mirrorOrder('910000007');                      // order only
+        $this->upload(RecordingType::Mixed, '910000008');     // recording only
+        $this->upload(RecordingType::Mixed, '910000009');     // both
+        $this->mirrorOrder('910000009');
+
+        self::assertSame(
+            ['order:910000009', 'order:910000007'],
+            $this->keysOf($this->caseOrderFirst->pageFor(self::STORE, 20)),
+            'orders: the matched one and the one with no recording',
+        );
+        self::assertSame(2, $this->caseOrderFirst->countFor(self::STORE));
+
+        self::assertSame(
+            ['order:910000009', 'order:910000008'],
+            $this->keysOf($this->repository->pageFor(self::STORE, 20)),
+            'recordings: the matched one and the one with no order',
+        );
+        self::assertSame(2, $this->repository->countFor(self::STORE));
+    }
+
+    // --- the agent predicate, which the setting must not touch ----------------------------------
+
+    /**
+     * **The agent practice surface requires an order AND its audio, in both modes.**
+     *
+     * Run twice against identical data, once through each configured mode, because the requirement is
+     * about the *setting* having no effect here. `requireLinkedOrder` is an authorization boundary; a
+     * display setting that could widen it would be a display setting that grants access.
+     *
+     * Four records, one per quadrant of "order?" × "audio?", and only the full one is admitted.
+     */
+    public function testTheAgentSurfaceRequiresBothWhicheverModeIsConfigured(): void
+    {
+        $this->upload(RecordingType::Mixed, '910000080');     // both
+        $this->mirrorOrder('910000080');
+        $this->mirrorOrder('910000081');                      // order, no audio
+        $this->upload(RecordingType::Mixed, '910000082');     // audio, no order
+        // The fourth quadrant — neither — is every order number nobody has mentioned.
+
+        $filter = OrderGroupFilter::linkedOrdersOnly();
+
+        foreach (['case-order-primary' => $this->caseOrderFirst, 'recording-primary' => $this->repository] as $mode => $repository) {
+            self::assertSame(
+                ['order:910000080'],
+                $this->keysOf($repository->pageFor(self::STORE, 20, 0, $filter)),
+                'under ' . $mode . ', only the order whose audio is in hand',
+            );
+
+            self::assertSame(
+                1,
+                $repository->countFor(self::STORE, $filter),
+                'and under ' . $mode . ' the count agrees with the page',
+            );
+        }
+    }
+
+    /** An order whose audio is no longer held is not practisable either, in both modes. */
+    public function testTheAgentSurfaceStillDropsAnOrderWhoseAudioIsGone(): void
+    {
+        $this->upload(RecordingType::Mixed, '910000085');
+        $this->mirrorOrder('910000085');
+
+        // Retention took the file. The conversation and its job remain; the audio does not.
+        $this->connection->createCommand()
+            ->update('{{%audio_transcription_jobs}}', ['retained_audio_path' => null], [
+                'public_id' => $this->createdJobs,
+            ])->execute();
+
+        $filter = OrderGroupFilter::linkedOrdersOnly();
+
+        self::assertSame([], $this->caseOrderFirst->pageFor(self::STORE, 20, 0, $filter));
+        self::assertSame([], $this->repository->pageFor(self::STORE, 20, 0, $filter));
+        self::assertSame(0, $this->caseOrderFirst->countFor(self::STORE, $filter));
+        self::assertSame(0, $this->repository->countFor(self::STORE, $filter));
+    }
+
+    // --- store isolation, counts and paging, in both modes --------------------------------------
+
+    /** Another store's order is no more visible here than another store's recording. */
+    public function testAnotherStoresOrderIsNotListedHere(): void
+    {
+        $this->mirrorOrder('910000040', self::OTHER_STORE);
+
+        self::assertSame(0, $this->caseOrderFirst->countFor(self::STORE));
+        self::assertSame([], $this->caseOrderFirst->pageFor(self::STORE, 20));
+    }
+
+    /**
+     * Paging in case-order-primary mode lists every order once, across pages.
+     *
+     * Five orders, one of which has two recordings. The recorded order must not consume two rows, or
+     * one order would be pushed off the last page and the total would disagree with what is listed.
+     */
+    public function testCaseOrderPrimaryPagesEveryOrderExactlyOnce(): void
+    {
+        foreach (['910000060', '910000061', '910000062', '910000063', '910000064'] as $orderId) {
+            $this->mirrorOrder($orderId);
+        }
+
+        $this->upload(RecordingType::Mixed, '910000062');
+        $this->upload(RecordingType::Caller, '910000062');
+
+        self::assertSame(5, $this->caseOrderFirst->countFor(self::STORE));
+
+        $seen = [];
+
+        for ($page = 0; $page < 3; $page++) {
+            foreach ($this->caseOrderFirst->pageFor(self::STORE, 2, $page * 2) as $group) {
+                $seen[] = $group->key->value;
+            }
+        }
+
+        self::assertCount(5, $seen, 'five orders across three pages of two');
+        self::assertSame($seen, array_values(array_unique($seen)), 'and none of them twice');
+    }
+
+    /** The topic filter narrows the order-primary query too, or a filtered page would hide rows. */
+    public function testTheTopicFilterNarrowsTheCaseOrderPrimaryListing(): void
+    {
+        $topicId = $this->topic('Groups case order topic');
+
+        $this->mirrorOrder('910000090');
+        $this->mirrorOrder('910000091');
+        $this->assignTopic('910000090', $topicId);
+
+        $filter = self::topicFilter([$topicId]);
+
+        $groups = $this->caseOrderFirst->pageFor(self::STORE, 20, 0, $filter);
+
+        self::assertCount(1, $groups);
+        self::assertSame('910000090', $groups[0]->orderId);
+        self::assertSame(1, $this->caseOrderFirst->countFor(self::STORE, $filter));
+    }
+
+    /** And "not assigned" reaches them, which is the filter that exists to find work to do. */
+    public function testUnassignedReachesOrdersWithNoRecording(): void
+    {
+        $topicId = $this->topic('Groups case order unassigned');
+
+        $this->mirrorOrder('910000100');
+        $this->mirrorOrder('910000101');
+        $this->assignTopic('910000100', $topicId);
+
+        $groups = $this->caseOrderFirst->pageFor(self::STORE, 20, 0, self::topicFilter([], true));
+
+        self::assertCount(1, $groups);
+        self::assertSame('910000101', $groups[0]->orderId, 'the one with no topic yet');
+    }
+
+    /**
+     * `groupFor()` answers nothing for an order with no recording, in either mode.
+     *
+     * It is what the row's modals resolve through — the transcript and recordings dialogs — and they
+     * have nothing to show for a row with no recording. Answering with an empty group would open an
+     * empty dialog instead of the 404 those endpoints already give for a key with nothing behind it.
+     */
+    public function testGroupForStillResolvesNothingForAnOrderWithNoRecording(): void
+    {
+        $this->mirrorOrder('910000110');
+
+        $key = GroupKey::fromInput('order:910000110');
+        self::assertNotNull($key);
+
+        self::assertNull($this->caseOrderFirst->groupFor(self::STORE, $key));
+        self::assertNull($this->repository->groupFor(self::STORE, $key));
+    }
+
+    /**
+     * An order number typed with leading zeros is its own recording row, and its order is its own row.
+     *
+     * Measured rather than assumed, because the opposite is the intuitive guess. `order_id` is free
+     * text an operator typed, and `GroupKey` keys a group by that text — so `0910000030` is a
+     * different group from `910000030`, and was before any of this existed. Each mode therefore lists
+     * the record it is a list of, and the pair is visible across the two: a recording whose number
+     * matches no order, and an order with no recording.
+     */
+    public function testAnOrderIdTypedWithLeadingZerosDoesNotMatchItsOrder(): void
+    {
+        $this->upload(RecordingType::Mixed, '0910000030');
+        $this->mirrorOrder('910000030');
+
+        self::assertSame(
+            ['order:0910000030'],
+            $this->keysOf($this->repository->pageFor(self::STORE, 20)),
+        );
+
+        self::assertSame(
+            ['order:910000030'],
+            $this->keysOf($this->caseOrderFirst->pageFor(self::STORE, 20)),
+        );
+    }
+
+    /** @param list<StoreOrderGroup> $groups @return list<string> */
+    private function keysOf(array $groups): array
+    {
+        return array_map(static fn(StoreOrderGroup $group): string => $group->key->value, $groups);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /**
@@ -908,14 +1254,29 @@ final class StoreOrderGroupRepositoryTest extends Unit
      */
     public function testAPageOfTwentyOrdersCostsWhatAPageOfOneCosts(): void
     {
-        $this->upload(RecordingType::Mixed, '900000001');
-        $one = $this->countQueries(function (): void {
-            $this->readFully($this->repository->pageFor(self::STORE, 20));
-        });
-
-        for ($n = 2; $n <= 20; $n++) {
+        for ($n = 1; $n <= 20; $n++) {
             $this->upload(RecordingType::Mixed, '9000000' . str_pad((string) $n, 2, '0', STR_PAD_LEFT));
         }
+
+        /*
+         * Both measurements are of a FULL page, and only the number of rows on it differs.
+         *
+         * That is the whole point of the test and it is worth stating, because the obvious way to write
+         * it — one order in the store against twenty — varies two things at once. A page that asks for
+         * twenty and is handed one is not full, and this repository asks one further constant question
+         * when a page is not full: whether the store has orders with no recording at all to append (see
+         * `pageFor()`). Comparing a full page against a partial one would therefore measure that
+         * question rather than the per-row cost this guard exists to protect.
+         *
+         * So the store is seeded once and the page size is what changes. One row and twenty rows,
+         * both complete pages. A loop containing a query shows up immediately: the twenty-row page
+         * would cost twenty-odd statements against the one-row page's four.
+         */
+        $one = $this->countQueries(function (): void {
+            $groups = $this->repository->pageFor(self::STORE, 1);
+            self::assertCount(1, $groups);
+            $this->readFully($groups);
+        });
 
         $many = $this->countQueries(function (): void {
             $groups = $this->repository->pageFor(self::STORE, 20);
@@ -926,7 +1287,7 @@ final class StoreOrderGroupRepositoryTest extends Unit
         self::assertSame(
             $one,
             $many,
-            sprintf('One order cost %d queries and twenty cost %d — the listing is paying per row.', $one, $many),
+            sprintf('One row cost %d queries and twenty cost %d — the listing is paying per row.', $one, $many),
         );
     }
 

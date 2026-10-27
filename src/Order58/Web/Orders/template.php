@@ -30,10 +30,8 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var int $total
  * @var OrderListQuery $listQuery
  * @var \App\Order58\Domain\Items\ItemSyncSummary $itemSyncSummary item progress for the store filter
- * @var int|null $syncBatchId the operation this page was redirected from, if any
  * @var string $syncStatusUrl where the panel polls for that operation's progress
  * @var int $perPage
- * @var int $maxDates
  * @var int|null $formAccountId
  * @var string|null $formFrom
  * @var string|null $formTo
@@ -119,38 +117,19 @@ $itemsLabel = static function (array $row) use ($syncedAt): string {
     };
 };
 
-$itemsCell = static function (array $row) use ($itemsLabel, $csrf, $urlGenerator, $listQuery): string {
-    $action = $urlGenerator->generate('order58.order-items.sync');
-
-    // Every filter the listing is currently showing, so a sync returns the operator to the page they
-    // were reading rather than to an unfiltered page one.
-    $carried = [
-        'account_id' => $listQuery->accountId,
-        'order_id' => $listQuery->sourceOrderId,
-        'status' => $listQuery->status,
-        'list_from' => $listQuery->dateFrom,
-        'list_to' => $listQuery->dateTo,
-        'page' => $listQuery->page > 1 ? $listQuery->page : null,
-    ];
-
-    $hidden = '';
-    foreach ($carried as $name => $value) {
-        if ($value !== null && $value !== '') {
-            $hidden .= '<input type="hidden" name="' . Html::encode($name)
-                . '" value="' . Html::encode((string) $value) . '">';
-        }
-    }
-
-    return $itemsLabel($row)
-        . '<form class="o58-items-form" method="post" action="' . Html::encode($action) . '">'
-        . $csrf->hiddenInput()
-        . '<input type="hidden" name="account_id" value="' . Html::encode((string) $row['account_id']) . '">'
-        . '<input type="hidden" name="source_order_id" value="'
-        . Html::encode((string) $row['source_order_id']) . '">'
-        . '<input type="hidden" name="return" value="order58.orders">'
-        . $hidden
-        . '<button class="btn btn--sm" type="submit" data-busy-label="Syncing…">Sync Order Items</button>'
-        . '</form>';
+/*
+ * The items column: a status, and no longer a button.
+ *
+ * The per-order items endpoint is gone (Stage 7a). An order's lines now arrive inside the order from
+ * the Case Order response, so there is nothing a per-row control could fetch — and a button that
+ * posted to a removed endpoint would be worse than none.
+ *
+ * The STATUS stays, and is still the useful half: `items_status` is what the comparison reads, so an
+ * order showing "Not synced" here is an order whose comparison has nothing to compare against. The
+ * remedy is a Case Order synchronisation, which covers every order the provider returns at once.
+ */
+$itemsCell = static function (array $row) use ($itemsLabel): string {
+    return $itemsLabel($row);
 };
 ?>
 <div class="page-header">
@@ -163,90 +142,18 @@ $itemsCell = static function (array $row) use ($itemsLabel, $csrf, $urlGenerator
     </div>
 </div>
 
-<section class="card">
-    <h2 class="card__title">Synchronise orders</h2>
-
-    <?php
-// POST, because it writes. The sync happens in this request and the result is reported on the page it
-// redirects to — there is no worker and nothing to wait for afterwards.
-?>
-    <form method="post" action="<?= Html::encode($urlGenerator->generate('order58.orders.sync')) ?>"
-          class="store-picker" role="group" data-o58-orders-sync>
-        <?= $csrf->hiddenInput() ?>
-
-        <label class="util-visually-hidden" for="o58o-store">Store</label>
-        <select class="field__control store-picker__select" id="o58o-store" name="account_id" required>
-            <option value="">Choose a store…</option>
-            <?php foreach ($storeOptions as $sourceId => $name): ?>
-                <?php // The source id is in the label because store names repeat; picking the wrong row syncs the wrong account.?>
-                <option value="<?= Html::encode((string) $sourceId) ?>"
-                    <?= $formAccountId === $sourceId ? ' selected' : '' ?>>
-                    <?= Html::encode($name . ' — #' . $sourceId) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-
-        <label class="field__label store-picker__label" for="o58o-from">Start</label>
-        <input class="field__control store-picker__date" type="date" id="o58o-from" name="date_from"
-               value="<?= Html::encode((string) $formFrom) ?>" required>
-
-        <label class="field__label store-picker__label" for="o58o-to">End</label>
-        <input class="field__control store-picker__date" type="date" id="o58o-to" name="date_to"
-               value="<?= Html::encode((string) $formTo) ?>" required>
-
-        <button class="btn btn--primary" type="submit">Sync orders</button>
-    </form>
-
-    <p class="field__hint">
-        At most <?= $maxDates ?> dates at a time. Use the same date twice to sync a single day.
-        The orders are fetched and saved while you wait, so the page takes a moment to come back.
-    </p>
-
-    <?php if ($storeOptions === []): ?>
-        <p class="field__hint">
-            No active Order58 stores are mirrored yet. Run a store sync from Order58 Data Management first.
-        </p>
-    <?php endif; ?>
-</section>
-
 <?php
-// THIS OPERATION's progress, which is a different question from the bar below it.
-//
-// The bar underneath answers "how much of this store's history has its items", and is unchanged. This
-// panel answers "what is the sync I just started doing", and exists only after one. Keeping them apart
-// is the point: a figure that sometimes meant one and sometimes the other would be worse than either.
-//
-// Rendered server-side from the batch id carried back by the redirect, then refreshed in place by
-// polling, so it is correct with scripts off and live with them on.
+/*
+ * The "Synchronise orders" card and its progress panel are gone (Stage 7b).
+ *
+ * They posted a store and a date range to the legacy orders endpoint, which no longer exists:
+ * original orders now come from the global Case Order endpoint, which takes no store and no dates and
+ * is started from the Call Recordings page. A form posting to a removed route would be a control that
+ * failed only when somebody pressed it.
+ *
+ * This page keeps its purpose — reading the mirrored orders — and the listing below is unchanged.
+ */
 ?>
-<?php if ($syncBatchId !== null): ?>
-    <section class="card o58-sync-op"
-             data-o58-sync-batch="<?= Html::encode((string) $syncBatchId) ?>"
-             data-o58-sync-url="<?= Html::encode($syncStatusUrl) ?>">
-        <div class="o58-sync-op__heading">
-            <h2 class="card__title o58-sync-op__title">This synchronisation</h2>
-            <span class="ot-verdict ot-verdict--info" data-o58-sync-state>Starting…</span>
-        </div>
-
-        <progress class="o58-sync-op__bar" data-o58-sync-bar value="0" max="100"></progress>
-
-        <p class="o58-sync-op__detail">
-            <span class="badge badge--muted" data-o58-sync-orders>Orders: —</span>
-            <span class="badge badge--success" data-o58-sync-done hidden></span>
-            <span class="badge badge--info" data-o58-sync-remaining hidden></span>
-            <span class="badge badge--error" data-o58-sync-failed hidden></span>
-            <span class="badge badge--muted" data-o58-sync-skipped hidden></span>
-        </p>
-
-        <p class="o58-sync-op__note" data-o58-sync-note hidden></p>
-
-        <p class="o58-sync-op__scope">
-            Item requests are made by the Order58 importer, not by this page. If nothing moves for a
-            few minutes the importer is probably not running — its systemd units have to be installed
-            and enabled for items to be fetched automatically.
-        </p>
-    </section>
-<?php endif; ?>
 
 <?php
 // Original order items, across the orders this listing covers.

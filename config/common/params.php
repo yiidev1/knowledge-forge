@@ -203,34 +203,40 @@ return [
         'minDurationMs' => Environment::int('AUDIO_UTTERANCE_MIN_MS'),
     ],
 
-    // Order58 original order items. Transport only — every value comes from the environment SPEC
-    // and is resolved in config/common/di/order58.php.
+    /*
+     * Order58 original order items — what is LEFT of it.
+     *
+     * The per-order items endpoint went in Stage 7a: the Case Order response carries each order's
+     * lines inside the order, so there is nothing to fetch one order at a time and nothing here
+     * describes a request any more. These two are local bookkeeping that outlived it.
+     */
     'app/order58-items' => [
-        'url' => Environment::string('ORDER58_ITEM_API_URL'),
-        // ONE credential, not two copies of it.
-        //
-        // The client has confirmed the items endpoint takes the same token as the orders endpoint, and
-        // both live on order58.com. Writing that secret into a second variable would mean two places to
-        // rotate it and one of them silently going stale — so `ORDER58_ITEM_API_TOKEN` is an OVERRIDE,
-        // empty by default, and the orders token is what is actually used. If the provider ever issues
-        // an items-specific credential, setting that variable takes precedence with no code change.
-        'token' => Environment::string('ORDER58_ITEM_API_TOKEN') !== ''
-            ? Environment::string('ORDER58_ITEM_API_TOKEN')
-            : Environment::string('ORDER58_ORDERS_API_TOKEN'),
-        'authScheme' => Environment::string('ORDER58_ITEM_API_AUTH_SCHEME'),
-        'connectTimeoutSeconds' => Environment::int('ORDER58_ITEM_API_CONNECT_TIMEOUT_SECONDS'),
-        'timeoutSeconds' => Environment::int('ORDER58_ITEM_API_TIMEOUT_SECONDS'),
-        'maxResponseBytes' => Environment::int('ORDER58_ITEM_API_MAX_RESPONSE_MB') * 1048576,
-        'leaseSeconds' => Environment::int('ORDER58_ITEM_LEASE_SECONDS'),
+        // How many item-sync attempts an order may carry before the ORDERS sync stops treating it as
+        // due. It reads `items_attempts`, a column the removed endpoint used to write and the Case
+        // Order import does not — so this now only ever sees values left behind by past runs.
         'maxAttempts' => Environment::int('ORDER58_ITEM_MAX_ATTEMPTS'),
-        'enabled' => Environment::bool('ORDER58_ITEM_SYNC_ENABLED'),
-        'drainPerRun' => Environment::int('ORDER58_ITEM_DRAIN_PER_RUN'),
-        'drainBudgetSeconds' => Environment::int('ORDER58_ITEM_DRAIN_BUDGET_SECONDS'),
-        'runCeilingSeconds' => Environment::int('ORDER58_ITEM_RUN_CEILING_SECONDS'),
+        // When the Orders page calls a per-operation batch stalled. Local only; nothing is fetched.
         'batchStalledSeconds' => Environment::int('ORDER58_ITEM_BATCH_STALLED_SECONDS'),
-        // One request's worst case: the read timeout plus the write that follows it. Derived rather
-        // than configured, so it cannot drift away from the timeout it is protecting.
-        'requestCostSeconds' => Environment::int('ORDER58_ITEM_API_TIMEOUT_SECONDS') + 5,
+    ],
+
+    // Order58 CASE ORDER MIXED — the endpoint that replaces the orders + items pair. Transport only;
+    // assembled into a CaseOrderSettings in config/common/di/order58.php.
+    'app/order58-case-orders' => [
+        'url' => Environment::string('ORDER58_CASE_ORDER_API_URL'),
+        // An OVERRIDE, empty by default, falling back to the orders credential — the same arrangement
+        // the items endpoint uses, and for the same reason: the provider has issued one token for
+        // order58.com so far, and writing it into a second variable would mean two places to rotate
+        // it and one of them silently going stale.
+        'token' => Environment::string('ORDER58_CASE_ORDER_API_TOKEN') !== ''
+            ? Environment::string('ORDER58_CASE_ORDER_API_TOKEN')
+            : Environment::string('ORDER58_ORDERS_API_TOKEN'),
+        'auth' => Environment::string('ORDER58_CASE_ORDER_API_AUTH'),
+        'timezone' => Environment::string('ORDER58_CASE_ORDER_TIMEZONE'),
+        // The three independent limits. See CaseOrderSyncPolicy for why they are not one number.
+        'autoSyncEnabled' => Environment::bool('ORDER58_CASE_ORDER_AUTO_SYNC_ENABLED'),
+        'minRefreshSeconds' => Environment::int('ORDER58_CASE_ORDER_MIN_REFRESH_SECONDS'),
+        'minProviderGapSeconds' => Environment::int('ORDER58_CASE_ORDER_MIN_PROVIDER_GAP_SECONDS'),
+        'leaseSeconds' => Environment::int('ORDER58_CASE_ORDER_LEASE_SECONDS'),
     ],
 
     // Order Testing: the demo-order mirror and the attempt window. Transport only — every value is
@@ -255,6 +261,9 @@ return [
         'recordingImportMinAvailableMb' => Environment::int('ORDER58_IMPORT_MIN_AVAILABLE_MB'),
         'recordingImportMaxLoadPerCore' => Environment::float('ORDER58_IMPORT_MAX_LOAD_PER_CORE'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
+        // Which rows the store order listings draw. Display only; resolved into an OrderListingMode
+        // in config/common/di/audio-to-text.php, because that is the module whose query it decides.
+        'caseOrderPrimary' => Environment::bool('ORDER58_CASE_ORDER_PRIMARY'),
         // Orders API (a separate Order58 API; see Order58\Client\Orders\HttpOrderDataClient).
         'ordersUrl' => Environment::string('ORDER58_ORDERS_API_URL'),
         'ordersToken' => Environment::string('ORDER58_ORDERS_API_TOKEN'),

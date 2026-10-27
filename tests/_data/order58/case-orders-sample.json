@@ -1,0 +1,242 @@
+[
+    {
+        "id": "17066031",
+        "seq": "23#1",
+        "type": "delivery",
+        "payment_method": "credit card",
+        "store": null,
+        "account_id": "1121",
+        "user_id": "2451",
+        "customer_id": "4471781",
+        "total_cost": "29.85000",
+        "discount": "0.00000",
+        "created_at": "1792708938",
+        "updated_at": "1792708938",
+        "status": "completed",
+        "total_amount": "36.63000",
+        "shipping_fee": "4.99000",
+        "tax": "1.79100",
+        "tip": "0.00000",
+        "is_test": "0",
+        "uid": "1121202610222235493840001",
+        "call_id": "4747961",
+        "data": {
+            "card_num": "PLACEHOLDER-NOT-REAL|0000",
+            "exp_date": "01/2099",
+            "cvv": "000",
+            "street1": "",
+            "billing_zip": "",
+            "cc": {
+                "card_num": "PLACEHOLDER-NOT-REAL|0000",
+                "exp_date": "01/2099",
+                "cvv": "000"
+            },
+            "reservation": {
+                "id": 17360181,
+                "phone": "15550000000",
+                "order_id": 17066031,
+                "special_instruction": "Customer said no tip for the driver. Thank you"
+            },
+            "payment_method": "credit card",
+            "total_amount": 36.63,
+            "type": "delivery"
+        },
+        "items": [
+            {
+                "id": 45934271,
+                "name": "Steak & Cheese",
+                "qty": 1,
+                "price": "12.28000",
+                "cost_price": "12.28000",
+                "account_id": 0,
+                "order_id": 17066031,
+                "product_id": 317251,
+                "customer_id": 4471781,
+                "pack_idx": 1,
+                "flag": "ADDED",
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 317251,
+                        "name": "Steak & Cheese",
+                        "price": "11.28"
+                    },
+                    "additionals": [
+                        {
+                            "option_id": 108841,
+                            "option_name": "Lettuce",
+                            "unit_price": 0
+                        },
+                        {
+                            "option_id": 234911,
+                            "option_name": "Provolone Cheese",
+                            "unit_price": 1
+                        }
+                    ],
+                    "combinations": {
+                        "id": 240901,
+                        "options": [
+                            {
+                                "attribute_name": "Size",
+                                "option_name": "Half"
+                            }
+                        ]
+                    },
+                    "comment": "more mayo, grilled onions please"
+                }
+            },
+            {
+                "id": 45934281,
+                "name": "Steak & Cheese",
+                "qty": 1,
+                "price": "11.28000",
+                "account_id": 0,
+                "order_id": 17066031,
+                "product_id": 317251,
+                "pack_idx": 2,
+                "flag": "ADDED",
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 317251,
+                        "name": "Steak & Cheese"
+                    },
+                    "additionals": [
+                        {
+                            "option_id": 108841,
+                            "option_name": "Lettuce"
+                        }
+                    ],
+                    "combinations": {
+                        "id": 240901,
+                        "options": [
+                            {
+                                "attribute_name": "Size",
+                                "option_name": "Half"
+                            }
+                        ]
+                    },
+                    "comment": "more mayo, grilled onions add hot peppers please"
+                }
+            },
+            {
+                "id": 45934291,
+                "name": "French Fries",
+                "qty": 1,
+                "price": "2.79000",
+                "order_id": 17066031,
+                "product_id": 316751,
+                "pack_idx": 1,
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 316751,
+                        "name": "French Fries"
+                    },
+                    "additionals": null,
+                    "combinations": {
+                        "id": 240801,
+                        "options": [
+                            {
+                                "attribute_name": "Size",
+                                "option_name": "Sm"
+                            }
+                        ]
+                    },
+                    "comment": "salt and pepper on it"
+                }
+            },
+            {
+                "id": 45934301,
+                "name": "Mambo Sauce (1 oz)",
+                "qty": 1,
+                "price": "0.50000",
+                "order_id": 17066031,
+                "product_id": 316871,
+                "pack_idx": 1,
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 316871,
+                        "name": "Mambo Sauce (1 oz)"
+                    },
+                    "additionals": null,
+                    "combinations": null
+                }
+            },
+            {
+                "id": 45934311,
+                "name": "Can Pepsi (for Delivery Order)",
+                "qty": 2,
+                "price": "1.50000",
+                "order_id": 17066031,
+                "product_id": 317051,
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 317051
+                    },
+                    "additionals": null,
+                    "combinations": null
+                }
+            }
+        ]
+    },
+    {
+        "id": "17055781",
+        "seq": "4#1",
+        "type": "take-out",
+        "payment_method": "cash",
+        "store": null,
+        "account_id": "431",
+        "customer_id": "445431",
+        "status": "completed",
+        "total_amount": "10.08000",
+        "total_cost": "9.45000",
+        "tax": "0.62606",
+        "is_test": "0",
+        "created_at": "1792685379",
+        "updated_at": "1792685379",
+        "call_id": "4734791",
+        "uid": "431202610221608524390001",
+        "data": {
+            "cc": null,
+            "reservation": {
+                "id": 17349981,
+                "phone": "15550000001",
+                "order_id": 17055781
+            },
+            "payment_method": "cash",
+            "type": "take-out"
+        },
+        "items": [
+            {
+                "id": 45909251,
+                "name": "Chicken Wings (4)",
+                "qty": 1,
+                "price": "9.45000",
+                "order_id": 17055781,
+                "product_id": 112351,
+                "pack_idx": 1,
+                "deleted": "0",
+                "data": {
+                    "product": {
+                        "id": 112351,
+                        "name": "Chicken Wings (4) Combo"
+                    },
+                    "additionals": null,
+                    "combinations": {
+                        "id": 109061,
+                        "options": [
+                            {
+                                "attribute_name": "Special Fries Combination",
+                                "option_name": "Roast Pork FR"
+                            }
+                        ]
+                    },
+                    "comment": "Make it Gravy"
+                }
+            }
+        ]
+    }
+]

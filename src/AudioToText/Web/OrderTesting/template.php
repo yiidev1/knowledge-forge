@@ -927,10 +927,22 @@ $conversationCell = static function (StoreOrderGroup $group) use (
         // The recording is known but its file is not here — retention took it, or it was never kept.
         // Distinct from both "none exists" and "the download failed", because it is neither.
         $html .= '<span class="ot-rec__state ot-rec__state--gone">Mix audio not stored</span>';
+    } elseif ($group->primaries() === []) {
+        /*
+         * No recording of any kind. A dash, not a sentence.
+         *
+         * This is an ordinary row of a case-order-primary listing: the order was imported and nothing
+         * has been recorded against it yet. "No Mix audio" would be answering a question nobody asked
+         * — it distinguishes the mixed channel from the other two, and this row has no channels at
+         * all. The dash is the same answer the Demo orders column already gives for "none yet", and
+         * the reason is on the `title` for anyone who wonders.
+         */
+        $html .= '<span class="ot-rec__state ot-rec__state--none"'
+            . ' title="' . Html::encode('No call recording has been imported for this order.') . '">'
+            . '&mdash;</span>';
     } else {
-        // Nothing to play and nothing went wrong: either the provider has no Mix recording for this
-        // call, or none was ever uploaded. `Unavailable` is the provider having answered that it has
-        // none, which is the same thing to a reader.
+        // Nothing to play and nothing went wrong, but this row DOES have recordings — the other
+        // channels. Naming the missing one is the useful answer here, and is what it has always said.
         $html .= '<span class="ot-rec__state ot-rec__state--none">No Mix audio</span>';
     }
 

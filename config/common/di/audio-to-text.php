@@ -94,7 +94,22 @@ return [
     // Who is acting, for the actor columns on uploads, reviews and TTS requests.
     App\AudioToText\Domain\AudioActorInterface::class
         => App\AudioToText\Infrastructure\CurrentActorAudioActor::class,
-    StoreOrderGroupRepositoryInterface::class => DbStoreOrderGroupRepository::class,
+    StoreOrderGroupRepositoryInterface::class => [
+        'class' => DbStoreOrderGroupRepository::class,
+        '__construct()' => [
+            /*
+             * Which population the store listings are a list OF. One setting, read once, here.
+             *
+             * It is resolved from the boolean the operator was given rather than passed around as
+             * one, so no query and no template has to know which way round `true` means — and the
+             * surfaces that are not configurable (the audio management page, which lists recordings
+             * because recordings are its subject) override it at the call site, in words.
+             */
+            'mode' => App\AudioToText\Domain\OrderListingMode::fromCaseOrderPrimary(
+                (bool) $params['app/order58']['caseOrderPrimary'],
+            ),
+        ],
+    ],
     AudioStoreLookupInterface::class => DbAudioStoreLookup::class,
     SegmentRevisionRepositoryInterface::class => DbSegmentRevisionRepository::class,
     WorkerHeartbeatRepositoryInterface::class => DbWorkerHeartbeatRepository::class,

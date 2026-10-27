@@ -48,7 +48,6 @@ return [
 
     // ONE order's original line items, from a shell. The same service both manual buttons call; two
     // required arguments and no "all" mode, so it cannot turn into a backfill.
-    'kf:order58:sync-order-items' => App\Order58\Console\SyncOrderItemsCommand::class,
     'kf:rules:reconcile-global' => App\Rules\Console\ReconcileGlobalProjectionsCommand::class,
     'kf:rules:repair-lifecycle' => App\Rules\Console\RepairRuleLifecycleCommand::class,
     'kf:rules:retire-store-projections' => App\Rules\Console\RetireStoreRuleProjectionsCommand::class,

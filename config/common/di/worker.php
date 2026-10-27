@@ -5,7 +5,6 @@ declare(strict_types=1);
 use App\Document\Application\Processing\DocumentProcessingDrainer;
 use App\Document\Application\RemoteCleanupDrainer;
 use App\KnowledgeBase\Application\KnowledgeBaseProvisioningDrainer;
-use App\Order58\Application\Items\OrderItemSyncDrainer;
 use App\Order58\Application\Sync\IntegrationSyncDrainer;
 use App\Worker\Application\WorkerLockInterface;
 use App\Worker\Application\WorkerParams;
@@ -38,10 +37,9 @@ return [
         '__construct()' => [
             'drainers' => [
                 Reference::to(IntegrationSyncDrainer::class),
-                // Original Order58 items, early and cheap: one small POST plus local writes per order.
-                // Ahead of document processing so a trainee's items do not wait behind an indexing run.
-                // Does nothing while ORDER58_ITEM_SYNC_ENABLED is false.
-                Reference::to(OrderItemSyncDrainer::class),
+                // Case orders: executes a run a web request already claimed. It decides nothing, so
+                // an unattended worker can never talk itself into a provider request.
+                Reference::to(App\Order58\Application\CaseOrders\CaseOrderSyncDrainer::class),
                 Reference::to(KnowledgeBaseProvisioningDrainer::class),
                 Reference::to(DocumentProcessingDrainer::class),
                 Reference::to(RemoteCleanupDrainer::class),

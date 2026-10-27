@@ -35,7 +35,19 @@ final readonly class DbOrder58OrderItemRepository implements OrderItemRepository
         int $storeAccountId,
         int $sourceOrderId,
         array $items,
-        string $leaseOwner,
+        /**
+         * Which holder is writing, or null when the caller is guarded some other way.
+         *
+         * The lease exists because the legacy integration fetched items one order at a time, from a
+         * queue several workers could draw from at once: without it a slow holder could overwrite a
+         * newer snapshot. The Case Order import has no such race — it claims the day's single
+         * allowance before it starts, so there is exactly one importer by construction and no second
+         * writer for a lease to exclude.
+         *
+         * Null therefore means "the caller already holds something stronger", not "skip the check
+         * because it is inconvenient". The queue path still passes its owner and is still checked.
+         */
+        ?string $leaseOwner,
         DateTimeImmutable $now,
     ): bool {
         /** @var bool */
@@ -53,7 +65,7 @@ final readonly class DbOrder58OrderItemRepository implements OrderItemRepository
                     ->for('UPDATE')
                     ->scalar();
 
-                if (!is_string($owner) || $owner !== $leaseOwner) {
+                if ($leaseOwner !== null && (!is_string($owner) || $owner !== $leaseOwner)) {
                     // Nothing deleted, nothing inserted. The caller reports a lost race.
                     return false;
                 }

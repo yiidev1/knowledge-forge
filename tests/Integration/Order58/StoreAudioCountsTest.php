@@ -175,8 +175,20 @@ final class StoreAudioCountsTest extends Unit
      * A page shows up to 36 stores. If the breakdown ever became a query per card this would be 36
      * round trips to print a few dozen numbers, and nothing on screen would look different - which is
      * exactly why it needs a test rather than a code review.
+     *
+     * ## Measured as "does the cost grow", not as an exact number
+     *
+     * It used to assert exactly one query, which was the same thing while there was one population to
+     * count. There are two now — recordings, and the imported orders the card headlines when
+     * `ORDER58_CASE_ORDER_PRIMARY` is on — so a correct implementation issues a small fixed number
+     * rather than one. Pinning the number would make adding an honest second grouped query fail a
+     * test about N+1, and the next person would widen the number rather than ask why.
+     *
+     * So one store and twelve are measured, and they must cost the same. That is the property: the
+     * cost is set by the page, not by how many cards are on it. A query per card still fails
+     * immediately — twelve cards would cost eleven more statements than one.
      */
-    public function testTheBreakdownForManyStoresIsOneQuery(): void
+    public function testTheBreakdownForManyStoresCostsWhatOneStoreCosts(): void
     {
         $ids = [];
 
@@ -193,14 +205,19 @@ final class StoreAudioCountsTest extends Unit
         $overhead = $this->queryCount() - $calibrationStart;
 
         $before = $this->queryCount();
-        $result = $this->counts->countsFor($ids);
-        $issued = $this->queryCount() - $before - $overhead;
+        $one = $this->counts->countsFor([$ids[0]]);
+        $forOne = $this->queryCount() - $before - $overhead;
 
+        $before = $this->queryCount();
+        $result = $this->counts->countsFor($ids);
+        $forTwelve = $this->queryCount() - $before - $overhead;
+
+        assertSame(1, count($one));
         assertSame(12, count($result));
         assertSame(
-            1,
-            $issued,
-            'countsFor() must stay ONE grouped query however many stores a page shows.',
+            $forOne,
+            $forTwelve,
+            'countsFor() must cost the same however many stores a page shows.',
         );
     }
 

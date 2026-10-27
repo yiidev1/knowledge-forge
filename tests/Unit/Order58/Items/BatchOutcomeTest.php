@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Order58\Items;
 
-use App\Order58\Application\Items\ItemSyncResult;
 use App\Order58\Domain\Items\BatchOutcome;
 use App\Order58\Domain\Items\EnrolmentOutcome;
 use PHPUnit\Framework\TestCase;
@@ -68,45 +67,18 @@ final class BatchOutcomeTest extends TestCase
 
     // ------------------------------------------------------------------ enrolment mapping
 
-    /**
-     * Only a terminal result settles an enrolment.
+    /*
+     * The `fromSyncResult()` cases went with the endpoint in Stage 7a.
      *
-     * `Busy` means another caller holds the order and will settle it; `Unavailable` means nothing was
-     * attempted. Settling on either would close a batch over work that has not happened — which is the
-     * one failure mode this whole design exists to prevent.
+     * They described the translation from a per-order items REQUEST's result into a batch enrolment,
+     * and there is no such request any more — an order's lines arrive inside the order. Deleted rather
+     * than rewritten against the enum directly, because what they were protecting was the translation
+     * itself: that `Busy` and `Unavailable` settled nothing. With no caller, there is nothing to get
+     * wrong.
      *
-     * @dataProvider nonTerminalResults
+     * What still matters about the enum is below, and is unchanged: which outcomes count as failures,
+     * and that `Skipped` means "nobody asked", which the batch repository sets directly.
      */
-    public function testANonTerminalResultSettlesNothing(ItemSyncResult $result): void
-    {
-        $this->assertNull(EnrolmentOutcome::fromSyncResult($result));
-    }
-
-    /** @return iterable<string, array{ItemSyncResult}> */
-    public static function nonTerminalResults(): iterable
-    {
-        yield 'busy' => [ItemSyncResult::Busy];
-        yield 'unavailable' => [ItemSyncResult::Unavailable];
-    }
-
-    /**
-     * @dataProvider terminalResults
-     */
-    public function testATerminalResultMapsToItsEnrolmentOutcome(
-        ItemSyncResult $result,
-        EnrolmentOutcome $expected,
-    ): void {
-        $this->assertSame($expected, EnrolmentOutcome::fromSyncResult($result));
-    }
-
-    /** @return iterable<string, array{ItemSyncResult, EnrolmentOutcome}> */
-    public static function terminalResults(): iterable
-    {
-        yield 'synced' => [ItemSyncResult::Synced, EnrolmentOutcome::Synced];
-        yield 'empty' => [ItemSyncResult::Empty, EnrolmentOutcome::Empty];
-        yield 'unchanged' => [ItemSyncResult::Unchanged, EnrolmentOutcome::Unchanged];
-        yield 'failed' => [ItemSyncResult::Failed, EnrolmentOutcome::Failed];
-    }
 
     /** Only a failure counts against a batch's verdict. */
     public function testOnlyFailedCountsAsAFailure(): void
@@ -118,15 +90,25 @@ final class BatchOutcomeTest extends TestCase
         }
     }
 
-    /** `Skipped` exists so "already current" is not reported as a request that never happened. */
-    public function testSkippedIsNotReachableFromAProviderResult(): void
+    /**
+     * `Skipped` means "nobody asked", and nothing else produces it.
+     *
+     * It used to be asserted against every provider result. With the provider request gone, the claim
+     * worth keeping is that it stays distinct from the four outcomes that DO describe work: an order
+     * that was already current must never be counted as one that was fetched, which is what would
+     * make a batch report requests it never made.
+     */
+    public function testSkippedIsDistinctFromEveryOutcomeThatDescribesWork(): void
     {
-        foreach (ItemSyncResult::cases() as $result) {
-            $this->assertNotSame(
-                EnrolmentOutcome::Skipped,
-                EnrolmentOutcome::fromSyncResult($result),
-                'Skipped describes an order nobody asked about; no request can produce it.',
-            );
+        foreach ([
+            EnrolmentOutcome::Synced,
+            EnrolmentOutcome::Empty,
+            EnrolmentOutcome::Unchanged,
+            EnrolmentOutcome::Failed,
+        ] as $didWork) {
+            $this->assertNotSame(EnrolmentOutcome::Skipped, $didWork);
         }
+
+        $this->assertFalse(EnrolmentOutcome::Skipped->isFailure());
     }
 }

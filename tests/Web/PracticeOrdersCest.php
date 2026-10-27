@@ -683,15 +683,31 @@ final class PracticeOrdersCest
         $I->see((string) self::ORDER, 'tbody');
     }
 
-    /** And Order Testing still lists it, because that is where it can be fixed. */
-    public function orderTestingStillListsARecordingWithNoSourceOrder(WebTester $I): void
+    /**
+     * Order Testing does not list it either, because the listing is a list of imported orders.
+     *
+     * **This expectation was reversed on purpose.** It used to assert the opposite — Order Testing
+     * listed the orphan, on the reasoning that it is where the typo could be seen and fixed. The
+     * `ORDER58_CASE_ORDER_PRIMARY` setting, which defaults to on, makes imported case orders the rows
+     * of both listings, and a recording whose order was never imported has no order to be a row about.
+     *
+     * The setting is what decides this, and it decides it in one place: see `OrderListingMode` and
+     * `DbStoreOrderGroupRepository`. With it off, this recording is listed again and an order with no
+     * recording is not — the two modes are covered case by case in
+     * `tests/Integration/AudioToText/StoreOrderGroupRepositoryTest.php`, which can configure both,
+     * where a Web test can only see the one this server is running.
+     *
+     * The orphan has not become unreachable: the Call Recordings and download-history screens list
+     * recordings, which is their subject, and this one is still there.
+     */
+    public function orderTestingDoesNotListARecordingWithNoSourceOrderEither(WebTester $I): void
     {
         $I->amOnPage('/order-testing/store/' . self::STORE_ID);
 
-        $I->see((string) self::ORPHAN_ORDER, 'tbody');
-        // Listed, with a dash where a topic would be. The explanation that used to sit beside the
-        // dash is gone; what it said is still said by Practice Order in the same row.
-        $I->dontSee('No matching source order');
+        $I->dontSee((string) self::ORPHAN_ORDER, 'tbody');
+        // And the order that WAS imported is still listed, so this is the rule working rather than
+        // the page having broken.
+        $I->see((string) self::ORDER, 'tbody');
     }
 
     /**

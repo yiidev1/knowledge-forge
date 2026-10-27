@@ -11,6 +11,8 @@ use App\Order58\Domain\CallImportMode;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use DateTimeImmutable;
+use DateTimeZone;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
@@ -20,7 +22,9 @@ use function gmdate;
 use function unlink;
 use function implode;
 use function json_decode;
+use function count;
 use function str_contains;
+use function time;
 use function substr_count;
 use function str_repeat;
 
@@ -66,6 +70,9 @@ final class Order58CallRecordingsCest
     private const SESSION_COOKIE = 'KFSESSID';
 
     /** Far outside the mirrored range, so nothing here can collide with real store data. */
+    /** The zone the case order allowance is counted in. Matches ORDER58_CASE_ORDER_TIMEZONE. */
+    private const CASE_ORDER_ZONE = 'America/New_York';
+
     private const STORE = 987655300;
     private const STORE_NAME = '__KF Recordings Store__';
     private const COMPANY = 'KFRS';
@@ -88,6 +95,17 @@ final class Order58CallRecordingsCest
     private const CALLS = ['22487129', '22487119', '22487109'];
 
     private ConnectionInterface $connection;
+
+    /**
+     * Sync-run ids this suite inserted.
+     *
+     * Cleanup deletes BY ID and nothing else. It used to delete by `timezone`, which matched every
+     * real run as well — and did: it destroyed a genuine synchronisation record. A fixture teardown
+     * must only ever remove rows the fixture created.
+     *
+     * @var list<int>
+     */
+    private array $createdRunIds = [];
 
     public function _before(WebTester $I): void
     {
@@ -1182,6 +1200,666 @@ final class Order58CallRecordingsCest
             ->count();
     }
 
+    // -------------------------------------------------- the case order synchronisation panel
+
+    /*
+     * Stage 4: the button that replaced "Sync Order58 Orders", its confirmation, its progress panel
+     * and its error handling.
+     *
+     * **No test here posts the synchronisation.** The provider permits one request a day, and a suite
+     * that spent it would breach the client's agreement rather than merely be rude — so every case
+     * below reads the page or seeds a run row directly. The service's own behaviour, including the
+     * claim, the stages and the failure paths, is covered without a socket in
+     * `tests/Unit/Order58/CaseOrderSyncServiceTest.php`.
+     */
+
+    /** The old button is gone and the new one is in its place. */
+    public function theCaseOrderSyncButtonReplacedTheOrdersSyncLink(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->see('Sync Order58 Case Orders', '.page-header__actions');
+        $I->dontSee('Sync Order58 Orders', '.page-header__actions');
+
+        // The two controls that were already there are untouched.
+        $I->see('View Download History', '.page-header__actions');
+        $I->see('Sync demo orders', '.page-header__actions');
+    }
+
+    /**
+     * The confirmation exists in the DOM, holds a real form, and is closed.
+     *
+     * Asserted by markup rather than by clicking, because that is what survives with scripts off: the
+     * trigger is a real link to `?confirm-case-orders=1` and the dialog is a real `<dialog>` with a
+     * real POST inside it. A confirmation that only existed once JavaScript ran would mean the only
+     * way to import orders depended on JavaScript.
+     */
+    public function theConfirmationIsARealDialogHoldingARealForm(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('dialog[data-o58-case-order-dialog]');
+        $I->see('Synchronise Order58 case orders?', 'dialog[data-o58-case-order-dialog]');
+
+        // It says what pressing it costs, and — since the daily cooldown was removed — that doing it
+        // again is allowed. Both are facts the operator needs before confirming.
+        $I->see('one request to the provider', 'dialog[data-o58-case-order-dialog]');
+        $I->see('as often as you need', 'dialog[data-o58-case-order-dialog]');
+
+        $I->seeElement('dialog[data-o58-case-order-dialog] form[method="post"]');
+        $I->seeElement('dialog[data-o58-case-order-dialog] button[data-o58-case-order-start]');
+
+        // Closed. `open` is printed only for the scriptless path, which is the next case.
+        $I->dontSeeElement('dialog[data-o58-case-order-dialog][open]');
+    }
+
+    /**
+     * Asking for the confirmation does not open it when there is nothing to confirm.
+     *
+     * The scriptless path renders the dialog `open` server-side when `?confirm-case-orders=1` is
+     * asked for — that is what makes the feature work without JavaScript. It is gated on the run
+     * being possible, and this machine has no endpoint configured, so what is assertable here is the
+     * gate: a confirmation for an action that cannot be taken is not offered, however the URL is
+     * typed. The open path is covered by {@see theConfirmationIsARealDialogHoldingARealForm()} for the
+     * markup and by the two `canRunNow()` cases in `CaseOrderSyncServiceTest` for the condition; it
+     * needs a configured endpoint to see end to end, which a test must not arrange.
+     */
+    public function askingForTheConfirmationDoesNotOpenItWhenNothingCanRun(WebTester $I): void
+    {
+        /*
+         * "Nothing can run" has to be arranged now, not assumed.
+         *
+         * This case used to need no setup: a completed run was enough to make the button inert, so
+         * the flag was ignored by default. Since a finished run no longer blocks anything, the only
+         * states that refuse are a run in flight and a limit the provider set — so one is seeded.
+         */
+        $this->seedCaseOrderRun('PROCESSING', [
+            'lease_expires_at' => gmdate('Y-m-d H:i:s', time() + 600),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?confirm-case-orders=1');
+
+        $I->seeElement('dialog[data-o58-case-order-dialog]');
+        $I->dontSeeElement('dialog[data-o58-case-order-dialog][open]');
+    }
+
+    /** And when it CAN run, the same flag opens it — which is the scriptless path working. */
+    public function askingForTheConfirmationOpensItWhenARunIsPossible(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE . '?confirm-case-orders=1');
+
+        $I->seeElement('dialog[data-o58-case-order-dialog][open]');
+    }
+
+    /**
+     * With no endpoint configured the control is inert and the page says why.
+     *
+     * This is the state of this machine — `ORDER58_CASE_ORDER_API_URL` is deliberately empty here, so
+     * nothing can reach the provider by accident — which makes it the state worth pinning: an operator
+     * must be told the feature is not set up rather than given a button that fails.
+     */
+    public function anUnconfiguredEndpointDisablesTheControlAndExplainsItself(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        /*
+         * Only meaningful where the endpoint really is unset.
+         *
+         * It was written when this machine had no Case Order URL; one has since been configured, and
+         * a configured server correctly shows no warning. Asserting the banner anyway would fail for
+         * being set up properly. The behaviour is still worth pinning for the machines that are not,
+         * so the case guards instead of being deleted or weakened into testing nothing.
+         */
+        if (!str_contains($I->grabPageSource(), 'Case order synchronisation is not configured')) {
+            return;
+        }
+
+        $I->see('Case order synchronisation is not configured', '.alert--warning');
+        $I->see('ORDER58_CASE_ORDER_API_URL', '.alert--warning');
+
+        // Not a clickable control at all, rather than one that would post and fail.
+        $I->seeElement('.page-header__actions span[aria-disabled="true"]');
+        $I->dontSeeElement('.page-header__actions a[data-o58-case-order-open]');
+    }
+
+    /**
+     * The progress region lives inside the confirmation dialog, not on the page behind it.
+     *
+     * It used to be a panel below the button, which reported a run the operator had to go and find
+     * while the dialog they pressed in closed and said nothing. Asserted both ways round: present in
+     * the dialog, absent from the page.
+     */
+    public function theProgressRegionIsInsideTheDialogAndNotOnThePage(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('dialog[data-o58-case-order-dialog] [data-o58-case-order-panel]');
+        $I->seeElement('dialog[data-o58-case-order-dialog] progress[data-o58-case-order-bar]');
+
+        // The standalone card is gone.
+        $I->dontSeeElement('section.card[data-o58-case-order-panel]');
+        $I->dontSee('Case order synchronisation', 'section.card > .card__title');
+    }
+
+    /**
+     * A completed run is reported with its counts, and the day is named as spent.
+     *
+     * The row is seeded rather than produced, so this is about the panel reading it correctly. The
+     * counts are the ones an operator checks against; the allowance sentence is the one they act on.
+     */
+    public function acompletedRunIsReportedWithItsCounts(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('COMPLETED', [
+            'orders_received' => 200,
+            'orders_inserted' => 180,
+            'orders_updated' => 19,
+            'orders_skipped' => 1,
+            'items_imported' => 940,
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->pageForLastRun());
+
+        $I->see('Completed', '[data-o58-case-order-state]');
+        $I->see('Received: 200', '[data-o58-case-order-received]');
+        $I->see('New: 180', '[data-o58-case-order-inserted]');
+        $I->see('Updated: 19', '[data-o58-case-order-updated]');
+        $I->see('Lines: 940', '[data-o58-case-order-items]');
+        $I->see('The provider was contacted for this run', '[data-o58-case-order-allowance]');
+
+        // The bar is finished, and it is a real progressbar rather than a styled div.
+        $I->seeElement('progress[data-o58-case-order-bar][value="100"]');
+    }
+
+    /**
+     * A failure after the response arrived offers a local re-import, and says it costs nothing.
+     *
+     * The most important case on this page. The alternative reading — "it failed, wait until
+     * tomorrow" — would be wrong and expensive, because the response is still stored.
+     */
+    public function aFailedImportOffersAReImportThatCostsNoRequest(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('FAILED', [
+            'stage' => 'import',
+            'http_status' => 200,
+            'error_summary' => 'The response was received but could not be imported.',
+            'staged_payload' => '[{"id":1}]',
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->pageForLastRun());
+
+        $I->see('Failed', '[data-o58-case-order-state]');
+        $I->see('could not be imported', '[data-o58-case-order-message]');
+        // The message region now lives inside the dialog, styled as the panel's note rather than a
+        // page-level alert — it moved with the progress it belongs to.
+        $I->seeElement('dialog[data-o58-case-order-dialog] [data-o58-case-order-message]');
+
+        // Offered, and it carries the run it is about.
+        $I->see('Import the stored response again');
+        $I->seeElement('input[name="reimport"]');
+    }
+
+    /** A failure before the request says the day is still available, which is the opposite advice. */
+    public function aFailureBeforeTheRequestSaysTheDayIsStillAvailable(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('FAILED', [
+            'stage' => 'request',
+            'error_summary' => 'The Case Order API could not be reached.',
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->pageForLastRun());
+
+        // Read off the run rather than the status: `FAILED` alone cannot say which side of the socket
+        // it stopped on, and `stage` is the only record of it. See `CaseOrderSyncRun::allowanceSpent()`.
+        $I->see('stopped before the provider was contacted', '[data-o58-case-order-allowance]');
+
+        // Nothing staged, so re-importing is not offered — it would have nothing to import.
+        $I->dontSee('Import the stored response again');
+    }
+
+    /** A run in flight marks the panel active, which is what starts the polling. */
+    public function aRunInFlightMarksThePanelActive(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('PROCESSING', ['orders_received' => 200]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('[data-o58-case-order-panel][data-o58-case-order-active="1"]');
+        $I->see('Importing orders', '[data-o58-case-order-state]');
+        $I->see('Leaving this page does not stop it', '[data-o58-case-order-allowance]');
+    }
+
+    /**
+     * **A completed run leaves the button available.** Changed deliberately; this is the pin.
+     *
+     * This case previously asserted the opposite, on the reading that the day's single allowance was
+     * spent. The requirement is now that an administrator may synchronise as often as they need, so a
+     * finished run — however recent — is not a reason to refuse another.
+     */
+    public function aCompletedRunLeavesTheButtonAvailable(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('COMPLETED', ['completed_at' => gmdate('Y-m-d H:i:s')]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('.page-header__actions a[data-o58-case-order-open]');
+        $I->dontSeeElement('.page-header__actions span[aria-disabled="true"]');
+    }
+
+    /**
+     * The sync endpoint is reachable and builds, which is not as obvious as it sounds.
+     *
+     * `SyncAction` gained a dependency when it stopped delegating to the worker, and a web action that
+     * cannot be constructed fails at the moment of the press — the one moment nothing else exercises.
+     * So this posts a `reimport` for a run that does not exist: the action is built and answers, and
+     * that branch returns before any provider is involved. **No request leaves this machine.**
+     */
+    public function theSyncEndpointBuildsAndAnswersWithoutCallingTheProvider(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
+
+        // The redirect is the proof the action built and answered, so it must not be followed away.
+        $I->stopFollowingRedirects();
+
+        $I->sendAjaxPostRequest('/admin/order58/case-orders/sync', [
+            '_csrf' => $token,
+            // A run id that cannot exist, so the action takes the local branch and asks nobody.
+            'reimport' => '999999999',
+        ]);
+
+        // 303, the POST-redirect-GET the Redirect helper issues — not 302.
+        $I->seeResponseCodeIs(303);
+        $I->startFollowingRedirects();
+    }
+
+    /**
+     * **A previous run's result is not shown as the operation about to be confirmed.**
+     *
+     * The reported bug: opening the dialog displayed `Completed`, a full bar and 200 received / 723
+     * lines before anything had been confirmed — a finished run from hours earlier, rendered as
+     * though it were the synchronisation being started. A finished run is history; it belongs to the
+     * Case Orders page's table.
+     *
+     * Asserted structurally rather than by text. The panel's markup is always present so the script
+     * can fill it; what must be true is that it is `hidden` and names no run, which no amount of
+     * text matching can distinguish from a panel that is merely empty.
+     */
+    public function theConfirmationShowsNoResultFromAPreviousRun(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('COMPLETED', [
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+            'orders_received' => 200,
+            'orders_inserted' => 200,
+            'items_imported' => 723,
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        // The dialog is there, with its question and its controls…
+        $I->seeElement('dialog[data-o58-case-order-dialog]');
+        $I->seeElement('dialog[data-o58-case-order-dialog] button[data-o58-case-order-start]');
+
+        // …and the progress panel describes nothing, because nothing is running.
+        $I->seeElement('[data-o58-case-order-panel][hidden]');
+        $I->dontSeeElement('[data-o58-case-order-run]');
+    }
+
+    /** A run actually in flight IS described, and the panel names it so polling cannot drift. */
+    public function aRunInFlightIsDescribedAndNamedOnThePanel(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('PROCESSING', [
+            'lease_expires_at' => gmdate('Y-m-d H:i:s', time() + 600),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('[data-o58-case-order-panel][data-o58-case-order-run]');
+        $I->dontSeeElement('[data-o58-case-order-panel][hidden]');
+    }
+
+    /**
+     * The status endpoint reports the run it was asked about, and no other.
+     *
+     * The second half of the same defect: polling asked "what is the latest run?", so a quiet page
+     * was answered with the last finished one. Asked about a run that does not exist it must say so,
+     * rather than substituting whichever run it has.
+     */
+    public function theStatusEndpointDoesNotSubstituteAnotherRun(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('COMPLETED', [
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+            'orders_received' => 200,
+        ]);
+
+        $this->signIn($I);
+
+        // No run in flight and none named: nothing to report, rather than the finished one.
+        $I->amOnPage('/admin/order58/case-orders/status');
+        $I->see('"hasRun":false');
+        $I->dontSee('"ordersReceived":200');
+
+        // A named run that does not exist is also nothing, not a fallback to the one that does.
+        $I->amOnPage('/admin/order58/case-orders/status?run=999999999');
+        $I->see('"hasRun":false');
+        $I->dontSee('"ordersReceived":200');
+    }
+
+    /**
+     * **The confirmation POST answers in JSON, so the dialog never has to discover its own run.**
+     *
+     * The `Starting…` that never changed: the press submitted a form and the panel polled to find out
+     * what had happened, but a poll landing before the claim row was written answered "no run", which
+     * the panel could only read as "nothing is happening". The reply now carries the run and its
+     * counts, so there is nothing to discover.
+     *
+     * Exercised through `reimport`, which takes the local branch and contacts no provider.
+     */
+    public function theConfirmationPostAnswersJsonForTheScript(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('FAILED', [
+            'stage' => 'import',
+            'http_status' => 200,
+            'error_summary' => 'The response was received but could not be imported.',
+            'staged_payload' => '[]',
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
+
+        $I->haveHttpHeader('X-Requested-With', 'fetch');
+        $I->haveHttpHeader('Accept', 'application/json');
+        $I->sendAjaxPostRequest('/admin/order58/case-orders/sync', [
+            '_csrf' => $token,
+            'reimport' => (string) $this->lastSeededRunId(),
+        ]);
+
+        // JSON, not a page — and it names the run it acted on rather than leaving it to be guessed.
+        $I->seeResponseCodeIs(200);
+        $I->see('"hasRun":true');
+        $I->see('"id":' . $this->lastSeededRunId());
+
+        // The fields the panel renders, so a silent `undefined` cannot read as zero.
+        $I->see('"statusLabel"');
+        $I->see('"ordersReceived"');
+        $I->see('"itemsImported"');
+    }
+
+    /** A refusal is JSON too, so the dialog can say why instead of waiting for ever. */
+    public function aRefusedConfirmationAnswersJsonRatherThanHanging(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $token = $I->grabAttributeFrom('input[name="_csrf"]', 'value');
+
+        $I->haveHttpHeader('X-Requested-With', 'fetch');
+        $I->sendAjaxPostRequest('/admin/order58/case-orders/sync', [
+            '_csrf' => $token,
+            // A run that cannot exist: the local branch refuses it without contacting anybody.
+            'reimport' => '999999999',
+        ]);
+
+        $I->seeResponseCodeIs(200);
+        $I->see('"success":false');
+        $I->see('"hasRun":false');
+    }
+
+    /** A run still going does disable it: pressing again would only watch that one. */
+    public function aRunInFlightDisablesTheButton(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('PROCESSING', [
+            'lease_expires_at' => gmdate('Y-m-d H:i:s', time() + 600),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->dontSeeElement('.page-header__actions a[data-o58-case-order-open]');
+        $I->seeElement('.page-header__actions span[aria-disabled="true"]');
+    }
+
+    /**
+     * And so does a limit the PROVIDER set, which a manual press may not lift.
+     *
+     * The counterpart to the case above it: this application stopped rationing itself, and that
+     * changed nothing about the provider's own answer. A 429 with an unexpired `Retry-After` holds
+     * the button exactly as the daily gap used to.
+     */
+    public function aProviderRateLimitStillDisablesTheButton(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('FAILED', [
+            'completed_at' => gmdate('Y-m-d H:i:s'),
+            'http_status' => 429,
+            'provider_retry_after' => gmdate('Y-m-d H:i:s', time() + 3600),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->dontSeeElement('.page-header__actions a[data-o58-case-order-open]');
+        $I->seeElement('.page-header__actions span[aria-disabled="true"]');
+    }
+
+    /** An elapsed provider wait is no restriction at all; it lapses without anyone clearing it. */
+    public function anElapsedProviderWaitDoesNotDisableTheButton(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('FAILED', [
+            'completed_at' => gmdate('Y-m-d H:i:s', time() - 7200),
+            'http_status' => 429,
+            'provider_retry_after' => gmdate('Y-m-d H:i:s', time() - 3600),
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('.page-header__actions a[data-o58-case-order-open]');
+    }
+
+    /**
+     * The status endpoint answers JSON and never the staged payload or the credential.
+     *
+     * Polled every two seconds by every open tab, so what it returns is what leaks if anything does.
+     */
+    public function theStatusEndpointReportsTheRunWithoutItsPayload(WebTester $I): void
+    {
+        $this->seedCaseOrderRun('PROCESSING', [
+            'orders_received' => 200,
+            'staged_payload' => '[{"card_num":"4111111111111111"}]',
+        ]);
+
+        $this->signIn($I);
+        $I->amOnPage('/admin/order58/case-orders/status');
+
+        $body = (string) $I->grabPageSource();
+
+        Assert::assertStringContainsString('"running":true', $body);
+        Assert::assertStringContainsString('"ordersReceived":200', $body);
+        Assert::assertStringContainsString('"allowanceSpent":true', $body);
+
+        // Neither the response nor anything from it.
+        Assert::assertStringNotContainsString('card_num', $body);
+        Assert::assertStringNotContainsString('4111111111111111', $body);
+        Assert::assertStringNotContainsString('stagedPayload', $body);
+        Assert::assertStringNotContainsString('access-token', $body);
+    }
+
+    // ------------------------------------------------------- Load Calls does not block or re-trigger
+
+    /**
+     * Load Calls is a POST that redirects, so a refresh re-reads instead of re-posting.
+     *
+     * It was a GET. Pressing it can now ASK for a global case order refresh, and a GET that starts
+     * work is one a refresh repeats, a prefetch fires and a crawler triggers.
+     */
+    public function loadCallsPostsAndRedirectsToAReadableAddress(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->seeElement('form[action="/admin/order58/call-recordings/load"][method="post"]');
+        $I->seeElement('form[action="/admin/order58/call-recordings/load"] input[name="_csrf"]');
+    }
+
+    /**
+     * **Opening, filtering and polling never start a synchronisation.**
+     *
+     * The rule the whole case order design turns on, asserted against the run table rather than a
+     * mock: a GET that claimed a run would leave a row behind.
+     */
+    public function noGetRequestEverStartsASynchronisation(WebTester $I): void
+    {
+        $before = $this->runRowCount();
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+        $I->amOnPage(self::PAGE . '?store=' . self::STORE);
+        $I->amOnPage(self::PAGE . '?store=' . self::STORE . '&load=1&source=fixture');
+        $I->amOnPage(self::PAGE . '?confirm-case-orders=1');
+        $I->amOnPage('/admin/order58/case-orders/status');
+        $I->amOnPage('/admin/order58/call-recordings/history');
+
+        Assert::assertSame(
+            $before,
+            $this->runRowCount(),
+            'No GET — page, filter, confirmation or status poll — may claim a synchronisation run.',
+        );
+    }
+
+    /**
+     * Load Calls returns straight to the listing.
+     *
+     * The provider call happens in the worker, so this request is a claim and a redirect whatever the
+     * provider is doing. A page that waited on a remote request is what this was rebuilt to avoid.
+     */
+    public function loadCallsReturnsStraightToTheListing(WebTester $I): void
+    {
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+
+        $I->submitForm('form[action="/admin/order58/call-recordings/load"]', [
+            'store' => (string) self::STORE,
+            'date' => '2026-10-01',
+        ]);
+
+        $I->seeInCurrentUrl('/admin/order58/call-recordings');
+        $I->seeInCurrentUrl('store=' . self::STORE);
+        $I->see('Order58 Call Recordings');
+    }
+
+    /** Load Calls with nothing chosen asks for no synchronisation at all. */
+    public function loadCallsWithoutAStoreStartsNothing(WebTester $I): void
+    {
+        $before = $this->runRowCount();
+
+        $this->signIn($I);
+        $I->amOnPage(self::PAGE);
+        $I->submitForm('form[action="/admin/order58/call-recordings/load"]', ['store' => '']);
+
+        Assert::assertSame($before, $this->runRowCount());
+        $I->see('Choose a store');
+    }
+
+    /** How many synchronisation runs exist right now. Counted, never deleted. */
+    private function runRowCount(): int
+    {
+        return (int) (new Query($this->connection))
+            ->from('{{%order58_case_order_sync_runs}}')
+            ->count();
+    }
+
+
+    /**
+     * Today's run, written straight to the table.
+     *
+     * It coexists with any real run recorded for the same day.
+     *
+     * These cases used to skip: `business_day` was UNIQUE, so a genuine run left no room for a
+     * fixture one, and the fixture must never remove a real row to make space. The run-keyed schema
+     * removed that conflict — several runs may share a date — so they execute again, and the row is
+     * still torn down by its own id.
+     *
+     * @param array<string, mixed> $values
+     */
+    private function seedCaseOrderRun(string $status, array $values = []): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_case_order_sync_runs}}', [
+            // The panel asks for TODAY in the configured business zone, so the row has to be that day
+            // or the page would correctly report nothing.
+            'business_day' => $this->businessDay(),
+            'timezone' => self::CASE_ORDER_ZONE,
+            'status' => $status,
+            'started_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ] + $values)->execute();
+
+        $id = (int) $this->connection->getLastInsertID();
+
+        /*
+         * Fail loudly rather than orphan the row.
+         *
+         * Cleanup removes exactly the ids recorded here, so an id that never arrives leaves the
+         * fixture in the table permanently — and a fixture run left CLAIMED holds the application's
+         * global synchronisation claim, which silently disables the Sync button for every later test
+         * AND for the browser until its lease expires. That happened; it cost a suite-wide failure
+         * that looked nothing like its cause.
+         */
+        if ($id <= 0) {
+            Assert::fail('Could not read the seeded run id, so this fixture would be orphaned.');
+        }
+
+        $this->createdRunIds[] = $id;
+    }
+
+    /**
+     * The run `seedCaseOrderRun()` just wrote.
+     *
+     * A finished run is only described on the page when the URL names it — which is how an operator
+     * arrives, because the synchronisation POST redirects to `?sync-run=<id>`. These cases therefore
+     * ask for the run they seeded instead of loading a bare page and expecting the newest one.
+     */
+    private function lastSeededRunId(): int
+    {
+        return $this->createdRunIds === [] ? 0 : $this->createdRunIds[count($this->createdRunIds) - 1];
+    }
+
+    /** The page as the operator reaches it after confirming: their own run, named. */
+    private function pageForLastRun(): string
+    {
+        return self::PAGE . '?sync-run=' . $this->lastSeededRunId();
+    }
+
+    /** Today in the zone the application counts the allowance against. */
+    private function businessDay(): string
+    {
+        return (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->setTimezone(new DateTimeZone(self::CASE_ORDER_ZONE))
+            ->format('Y-m-d');
+    }
+
     private function cleanup(): void
     {
         $connection = $this->connection ?? IntegrationDb::connectOrSkip();
@@ -1192,6 +1870,15 @@ final class Order58CallRecordingsCest
         $connection->createCommand()
             ->delete('{{%order58_call_import_batches}}', ['store_source_id' => $stores])->execute();
         $connection->createCommand()->delete('{{%knowledge_bases}}', ['source_store_id' => $stores])->execute();
+
+        // BY ID, and only ids this suite inserted. Anything broader reaches real synchronisation
+        // history, which is not this suite's to remove.
+        if ($this->createdRunIds !== []) {
+            $connection->createCommand()
+                ->delete('{{%order58_case_order_sync_runs}}', ['id' => $this->createdRunIds])
+                ->execute();
+            $this->createdRunIds = [];
+        }
         IntegrationDb::cleanup($connection, '{{%order58_stores}}', ['source_id' => $stores]);
         IntegrationDb::cleanup($connection, '{{%admin_users}}', ['username' => self::USERNAME]);
     }

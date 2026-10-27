@@ -21,12 +21,14 @@ use function fopen;
 use function gmdate;
 use function urlencode;
 use function json_encode;
+use function str_pad;
 use function str_repeat;
 use function substr_count;
 
 use const LOCK_EX;
 use const LOCK_NB;
 use const LOCK_UN;
+use const STR_PAD_LEFT;
 
 /**
  * Order Testing: a second administrative surface over the recordings Audio-to-Text already holds.
@@ -47,6 +49,9 @@ final class OrderTestingCest
 
     private const STORE_ID = 987655900;
     private const STORE_NAME = 'Order Testing Fixture Store';
+
+    /** The order the transcribed fixture is about — in `audio_conversations` AND in `order58_orders`. */
+    private const ORDER_ID = 16800401;
 
     /**
      * A second store that never gets a recording, and the only way to prove the landing filter.
@@ -845,9 +850,22 @@ final class OrderTestingCest
 
         $this->connection->createCommand()->update(
             '{{%audio_conversations}}',
-            ['order_id' => '16800401'],
+            ['order_id' => (string) self::ORDER_ID],
             ['public_id' => $conversationId],
         )->execute();
+
+        /*
+         * And the order itself, in the mirror.
+         *
+         * Added when `ORDER58_CASE_ORDER_PRIMARY` arrived: the listing is a list of imported orders by
+         * default, so a recording whose order was never imported has no row to appear on. That is the
+         * configured behaviour rather than a gap — see `OrderListingMode` — and it makes this fixture
+         * the shape production now has: an imported order with a recording against it.
+         *
+         * Written straight to the table rather than through the Order58 module, which this file may
+         * not name; `StoreOrderGroupRepositoryTest` does the same for the same reason.
+         */
+        $this->mirrorOrder(self::ORDER_ID);
 
         $this->connection->createCommand()->update(
             '{{%audio_transcription_jobs}}',
@@ -918,6 +936,22 @@ final class OrderTestingCest
         return $conversationId;
     }
 
+    /** The order the transcribed fixture is about, in `order58_orders`. */
+    private function mirrorOrder(int $sourceOrderId): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+
+        $this->connection->createCommand()->insert('{{%order58_orders}}', [
+            'account_id' => self::STORE_ID,
+            'source_order_id' => $sourceOrderId,
+            'payload_json' => '{}',
+            'content_hash' => str_pad((string) $sourceOrderId, 64, '0', STR_PAD_LEFT),
+            'synced_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->execute();
+    }
+
     private function adminId(): int
     {
         return (int) (new Query($this->connection))
@@ -983,6 +1017,10 @@ final class OrderTestingCest
 
         $stores = [self::STORE_ID, self::SILENT_STORE_ID];
 
+        // Before the stores, and before the conversations' own cleanup would matter: the items table
+        // cascades from here, and nothing else in this file writes an order.
+        $this->connection->createCommand()
+            ->delete('{{%order58_orders}}', ['account_id' => $stores])->execute();
         $this->connection->createCommand()
             ->delete('{{%knowledge_bases}}', ['source_store_id' => $stores])->execute();
         $this->connection->createCommand()

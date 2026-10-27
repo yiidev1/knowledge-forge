@@ -48,14 +48,38 @@ interface ItemSyncStateRepositoryInterface
      * Always sets `items_synced_at`, including when the response was unchanged — "nothing was written"
      * must still mean "we checked just now", or freshness would stop moving the moment an order
      * stopped changing.
+     *
+     * ## Why this has to be called by the Case Order import too
+     *
+     * It is not bookkeeping. `ItemAvailability::of()` reads `items_status`, and an order left at the
+     * column default reports "the items were never fetched" — so an order whose lines are sitting in
+     * the table would still compare against nothing and tell a trainee every product was missing.
+     * Writing the lines and settling this state are two halves of one fact.
      */
     public function markSynced(
         int $accountId,
         int $sourceOrderId,
-        string $leaseOwner,
+        /**
+         * The holder of the per-order lease, or null when the caller is guarded some other way.
+         *
+         * Null is for the Case Order import, which claims the day's single API allowance before it
+         * starts and is therefore the only writer by construction — the same reason
+         * {@see OrderItemRepositoryInterface::replace()} takes a nullable owner. The per-order queue
+         * still passes its own, and is still checked against it.
+         */
+        ?string $leaseOwner,
         int $itemCount,
         string $responseHash,
-        string $responseJson,
+        /**
+         * The sanitized response this snapshot came from, or null to leave the stored one alone.
+         *
+         * Null is for the Case Order import: there is no per-order response to keep, because one
+         * request returns every order. The day's whole sanitized payload is staged on its sync run
+         * instead, which is also what lets the local half be retried without spending the allowance
+         * again. The column is written and never read — only the hash beside it is — so omitting it
+         * costs no behaviour.
+         */
+        ?string $responseJson,
         DateTimeImmutable $now,
     ): void;
 

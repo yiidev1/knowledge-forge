@@ -19,6 +19,7 @@ use App\AudioToText\Domain\AudioTranscriptionException;
 use App\AudioToText\Domain\ConversationCapabilities;
 use App\AudioToText\Domain\ConversationMode;
 use App\AudioToText\Domain\OrderGroupFilter;
+use App\AudioToText\Domain\OrderListingMode;
 use App\AudioToText\Domain\OrderId;
 use App\AudioToText\Domain\RecordingType;
 use App\AudioToText\Domain\SourceRole;
@@ -250,13 +251,20 @@ readonly class Action
         // Counted and paged as GROUPS: twenty rows means twenty orders, however many recordings they
         // hold between them. Paging conversations and grouping them afterwards would put half an order
         // on one page and the rest on the next.
-        $total = $this->groups->countFor($store->sourceId, $filter);
+        $mode = $this->listingMode();
+        $total = $this->groups->countFor($store->sourceId, $filter, $mode);
         $pageCount = max(1, (int) ceil($total / self::PER_PAGE));
         $page = min($this->requestedPage($request), $pageCount);
 
         $groups = $this->arriving->merge(
             $store->sourceId,
-            $this->groups->pageFor($store->sourceId, self::PER_PAGE, ($page - 1) * self::PER_PAGE, $filter),
+            $this->groups->pageFor(
+                $store->sourceId,
+                self::PER_PAGE,
+                ($page - 1) * self::PER_PAGE,
+                $filter,
+                $mode,
+            ),
             $this->clock->now(),
         );
 
@@ -380,6 +388,30 @@ readonly class Action
     protected function groupFilter(ServerRequestInterface $request): ?OrderGroupFilter
     {
         return null;
+    }
+
+    /**
+     * Which population THIS page is a list of.
+     *
+     * Recordings, always, and not because of a setting. This is the audio management page: an
+     * administrator comes here to upload a recording, replace one, transcribe one or correct its
+     * speakers, and every one of those controls lives on a row. A listing of imported orders would
+     * leave two kinds of recording with no row at all — one whose order number matches nothing, and
+     * one that named no order in the first place, which no import can ever give an order to — and
+     * those are precisely the recordings somebody needs to find in order to fix.
+     *
+     * `ORDER58_CASE_ORDER_PRIMARY` therefore does not reach this page. It governs the practice
+     * catalogue, where the row is an order somebody is going to re-enter, and
+     * {@see \App\AudioToText\Web\OrderTesting\StoreAction} overrides this to return null so that
+     * surface follows the setting.
+     *
+     * A seam rather than a constructor flag, like {@see templatePath()} and {@see groupFilter()}: the
+     * surfaces differ by what they override, not by a mode they are configured into. One line here is
+     * also all it takes to put this page back under the setting, if that is ever wanted.
+     */
+    protected function listingMode(): ?OrderListingMode
+    {
+        return OrderListingMode::RecordingPrimary;
     }
 
     /**

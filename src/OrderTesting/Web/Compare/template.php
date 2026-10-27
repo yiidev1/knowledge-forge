@@ -50,7 +50,6 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var OrderComparison $comparison
  * @var ComparisonScore $score how closely the demo reproduced the original, section by section
  * @var array<string, string> $routes the addresses this surface builds its links from
- * @var bool $canSyncItems whether this surface offers the item re-import
  */
 
 $assetManager->register(DemoOrdersAsset::class);
@@ -82,14 +81,6 @@ $receiptUrl = $urlGenerator->generate($routes['demoReceipt'], [
     'sourceOrderId' => $demo->sourceOrderId,
     'demoOrderId' => $demo->demoOrderId,
 ]);
-
-// Fetches the ORIGINAL order's items — the left-hand panel — and nothing else. The demo order on the
-// right is a file somebody's listener wrote and is never touched here; its id travels with the form
-// only so that this exact comparison is what reloads afterwards.
-//
-// The literal route name, not a constant: this module may not name `App\Order58`, which owns the
-// action. A name is not a namespace, so the module boundary holds.
-$syncItemsUrl = $urlGenerator->generate('order58.order-items.sync');
 
 /** A value as the document recorded it, or an explicit blank. Never guessed at, never reformatted. */
 $value = static fn(?string $v): string => $v === null || $v === ''
@@ -500,23 +491,16 @@ $panel = static function (
 <div class="ot-toolbar">
     <div class="ot-toolbar__actions">
         <?php
-        // Re-importing the original order's items talks to Order58 and rewrites mirrored rows. It is
-        // management, so it is offered only where this page is a management surface — the endpoint is
-        // not mounted for the others either.
+        /*
+         * "Sync Original Order Items" is gone (Stage 7a).
+         *
+         * It posted to the per-order items endpoint, which no longer exists: an order's lines now
+         * arrive inside the order from the Case Order response, so there is nothing for a per-order
+         * control to fetch. The availability notice above still says when the left-hand panel has no
+         * items — see `ItemAvailability` — and the remedy is a Case Order synchronisation, which
+         * covers every order the provider returns in one request.
+         */
 ?>
-        <?php if ($canSyncItems): ?>
-            <form method="post" action="<?= Html::encode($syncItemsUrl) ?>">
-                <?= $csrf->hiddenInput() ?>
-                <input type="hidden" name="account_id" value="<?= Html::encode((string) $sourceId) ?>">
-                <input type="hidden" name="source_order_id"
-                       value="<?= Html::encode((string) $demo->sourceOrderId) ?>">
-                <input type="hidden" name="demo_order_id"
-                       value="<?= Html::encode((string) $demo->demoOrderId) ?>">
-                <input type="hidden" name="return" value="order-testing.demo-compare">
-                <button class="btn btn--secondary" type="submit"
-                        data-busy-label="Syncing…">Sync Original Order Items</button>
-            </form>
-        <?php endif; ?>
         <?php
 // `btn` alone draws no box — the base class is layout and typography, and a variant supplies
 // the surface. Without one this sat in a row of buttons as bare link text. `btn--secondary` is

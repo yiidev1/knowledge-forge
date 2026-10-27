@@ -71,10 +71,10 @@ final class InMemoryItemSyncState implements ItemSyncStateRepositoryInterface
     public function markSynced(
         int $accountId,
         int $sourceOrderId,
-        string $leaseOwner,
+        ?string $leaseOwner,
         int $itemCount,
         string $responseHash,
-        string $responseJson,
+        ?string $responseJson,
         DateTimeImmutable $now,
     ): void {
         if ($this->owner !== $leaseOwner) {

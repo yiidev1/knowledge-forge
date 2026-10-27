@@ -37,9 +37,25 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
 
     private const CONVERSATIONS = '{{%audio_conversations}}';
 
-    public function __construct(private ConnectionInterface $connection) {}
+    public function __construct(
+        private ConnectionInterface $connection,
+        /**
+         * Whether the store pages list imported orders rather than recordings.
+         *
+         * The same `ORDER58_CASE_ORDER_PRIMARY` setting the listing itself reads, as a boolean rather
+         * than as the audio module's own `OrderListingMode` enum — `ModuleIsolationTest` forbids this
+         * module from naming that one at all, which is the same reason the grouping expression below
+         * is a copy rather than a call.
+         *
+         * It has to be here at all because this number is the card for the page: the card says how
+         * many rows the page has, so counting recordings beside a page that lists orders would put
+         * "4" on a card whose page lists 336. `StoreAudioOrderCountTest` asserts the two agree, and
+         * does it under both settings.
+         */
+        private bool $caseOrderPrimary = true,
+    ) {}
 
-    public function countsFor(array $sourceIds): array
+    public function countsFor(array $sourceIds, ?bool $caseOrderPrimary = null): array
     {
         if ($sourceIds === []) {
             return [];
@@ -109,6 +125,86 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
                 (int) $row['caller'],
                 (int) $row['callee'],
             );
+        }
+
+        return ($caseOrderPrimary ?? $this->caseOrderPrimary)
+            ? $this->byOrders($sourceIds, $counts)
+            : $counts;
+    }
+
+    /**
+     * The same cards, with the headline counting imported orders instead of recordings.
+     *
+     * Only the first two numbers change, and they become the same number. In this mode the page lists
+     * one row per imported order, so:
+     *
+     * - `orders` is how many orders were imported for the store — the page's row count.
+     * - `practisable` equals it, because every row the page lists *is* a mirrored order. The card only
+     *   names this number where it differs from the headline, so it correctly stops being mentioned.
+     * - the channel numbers are untouched. They describe the audio the store holds, which is a fact
+     *   about recordings and is true either way.
+     *
+     * A store with recordings and no imported orders is deliberately left at zero rather than removed:
+     * its page lists nothing in this mode, and a card saying so is the honest version of that.
+     *
+     * @param list<int>                      $sourceIds
+     * @param array<int, StoreAudioBreakdown> $audio
+     *
+     * @return array<int, StoreAudioBreakdown>
+     */
+    private function byOrders(array $sourceIds, array $audio): array
+    {
+        $orders = $this->orderCounts($sourceIds);
+
+        $counts = [];
+
+        foreach ($sourceIds as $sourceId) {
+            $rows = $orders[$sourceId] ?? 0;
+            $recordings = $audio[$sourceId] ?? StoreAudioBreakdown::none();
+
+            // Nothing to say about a store with neither. Absent means the card defaults to none(),
+            // which is what it already does for a store this method was never asked about.
+            if ($rows === 0 && $recordings->total === 0) {
+                continue;
+            }
+
+            $counts[$sourceId] = new StoreAudioBreakdown(
+                $rows,
+                $rows,
+                $recordings->total,
+                $recordings->mixed,
+                $recordings->caller,
+                $recordings->callee,
+            );
+        }
+
+        return $counts;
+    }
+
+    /**
+     * How many orders each store has imported.
+     *
+     * `COUNT(*)` of a table unique on `(account_id, source_order_id)`, so one order counts once
+     * however many times it was recorded — which is the property the card has to share with the page.
+     *
+     * @param list<int> $sourceIds
+     *
+     * @return array<int, int>
+     */
+    private function orderCounts(array $sourceIds): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = (new Query($this->connection))
+            ->select(['account_id', 'orders' => 'COUNT(*)'])
+            ->from('{{%order58_orders}}')
+            ->where(['account_id' => $sourceIds])
+            ->groupBy('account_id')
+            ->all();
+
+        $counts = [];
+
+        foreach ($rows as $row) {
+            $counts[(int) $row['account_id']] = (int) $row['orders'];
         }
 
         return $counts;

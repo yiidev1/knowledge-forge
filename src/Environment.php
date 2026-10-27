@@ -146,6 +146,20 @@ final class Environment
         // documents list. Set true to show them again without code changes.
         'ORDER58_SHOW_STORE_PROFILE_DOCUMENTS' => ['type' => 'bool', 'default' => false],
 
+        // WHICH ROWS THE STORE ORDER LISTINGS DRAW. Display only — see OrderListingMode.
+        //
+        // true  (default): one row per imported case order. A recording is shown where there is one,
+        //                  and a recording whose order is not in the mirror is not listed.
+        // false:           one row per recording group, which is what these pages listed before case
+        //                  orders existed. An order with no recording is not listed.
+        //
+        // It is NOT a feature switch. Case orders and recordings are imported and stored the same way
+        // either way; this decides what a listing is a list of. Flipping it changes a screen and loses
+        // nothing, which is why it is one boolean and not a migration.
+        //
+        // It does not reach the Agent practice surface, which requires an order AND its audio always.
+        'ORDER58_CASE_ORDER_PRIMARY' => ['type' => 'bool', 'default' => true],
+
         // Order58 fallback credential validation — a DIFFERENT host and API from the Integration API above,
         // reached only when that API explicitly rejects an agent's username/password. One URL and one static
         // Bearer token, declared once here, so changing the token is a single edit. Both default to empty:
@@ -200,40 +214,50 @@ final class Environment
         // 72h tolerates two missed daily agent syncs (scheduled 01:00 America/New_York).
         'ORDER58_VALIDATE_MAX_MIRROR_AGE_HOURS' => ['type' => 'int', 'default' => 72, 'min' => 1, 'max' => 720],
 
-        // Order58 ORIGINAL ORDER ITEMS. A fourth Order58 endpoint, with its OWN credential — this
-        // project already runs three distinct Order58 credential pairs, one per endpoint, so assuming
-        // the orders token carries here would assume the opposite of what the provider has shown.
+        // Order58 ORIGINAL ORDER ITEMS — what is left after Stage 7a.
         //
-        // SHIPS OFF. ORDER58_ITEM_SYNC_ENABLED=false means no request is ever made, so merging the
-        // feature sends no traffic and costs nothing until somebody decides otherwise.
-        'ORDER58_ITEM_API_URL' => ['type' => 'string', 'default' => ''],
-        'ORDER58_ITEM_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
-        // NOT confirmed. `Bearer` because the sibling endpoint uses it, not because anyone has said so.
-        // An empty value sends the token with no prefix, for a provider that expects it bare.
-        'ORDER58_ITEM_API_AUTH_SCHEME' => ['type' => 'string', 'default' => 'Bearer'],
-        'ORDER58_ITEM_API_CONNECT_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 30],
-        // One order's items is a small response; this bounds a manual click inside a web request.
-        'ORDER58_ITEM_API_TIMEOUT_SECONDS' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 40],
-        'ORDER58_ITEM_API_MAX_RESPONSE_MB' => ['type' => 'int', 'default' => 4, 'min' => 1, 'max' => 24],
-        // How long one claim holds an order. Comfortably longer than the request timeout, so a lease
-        // cannot expire while its own request is still in flight.
-        'ORDER58_ITEM_LEASE_SECONDS' => ['type' => 'int', 'default' => 120, 'min' => 30, 'max' => 900],
-        // Past this, an order needs an explicit click: a provider refusing us is not fixed by asking again.
+        // The per-order items ENDPOINT is gone: the Case Order response carries each order's lines
+        // inside the order, so there is nothing to fetch one order at a time and no credential,
+        // timeout, lease or kill switch to configure for it.
+        //
+        // This one survives because the ORDERS sync reads `items_attempts` when deciding whether an
+        // order is still due. Nothing writes that column any more, so it only ever sees values left
+        // behind by past runs.
         'ORDER58_ITEM_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 3, 'min' => 1, 'max' => 20],
-        'ORDER58_ITEM_SYNC_ENABLED' => ['type' => 'bool', 'default' => false],
 
-        // How item work rides along with the recording importer, instead of needing a worker of its
-        // own. See ImportRecordingsCommand::drainItems().
+        // Order58 CASE ORDER MIXED. The endpoint that replaces the orders + items pair: one request
+        // returns recent orders WITH their lines, so there is no per-order backlog to drain.
         //
-        // The per-run count is small because one order can cost a whole provider timeout, and the
-        // budget is a ceiling on what ONE run may spend on items after recordings have had their turn.
-        'ORDER58_ITEM_DRAIN_PER_RUN' => ['type' => 'int', 'default' => 5, 'min' => 0, 'max' => 50],
-        'ORDER58_ITEM_DRAIN_BUDGET_SECONDS' => ['type' => 'int', 'default' => 120, 'min' => 0, 'max' => 600],
-        // `TimeoutStartSec` of knowledge-forge-order58-import.service, as the application understands
-        // it. A process cannot read its own unit's timeout, so this must be changed WITH the unit.
-        'ORDER58_ITEM_RUN_CEILING_SECONDS' => ['type' => 'int', 'default' => 300, 'min' => 60, 'max' => 3600],
-        // How long before an operation with nothing settling is displayed as stalled. A display state,
-        // never a verdict — the usual cause is the importer unit not being installed.
+        // **The client permits ONE request a day.** That is rationed by a unique index on the business
+        // day, not by anything here — see order58_case_order_sync_runs.
+        'ORDER58_CASE_ORDER_API_URL' => ['type' => 'string', 'default' => ''],
+        'ORDER58_CASE_ORDER_API_TOKEN' => ['type' => 'string', 'default' => '', 'secret' => true],
+        // How the credential travels. `query` is the provider's own PHP example (?access-token=);
+        // `bearer` is an Authorization header, which a Postman capture also answered 200 to. Settable
+        // so a change of provider mind is configuration rather than an edit.
+        'ORDER58_CASE_ORDER_API_AUTH' => [
+            'type' => 'enum',
+            'default' => 'query',
+            'values' => ['query', 'bearer'],
+        ],
+        // The calendar the one-a-day allowance is counted against. The client's day is not UTC's, and
+        // a run at 23:30 local must not become eligible again forty minutes later.
+        'ORDER58_CASE_ORDER_TIMEZONE' => ['type' => 'string', 'default' => 'America/New_York'],
+
+        // Whether Load Calls may start a synchronisation. A manual press is unaffected.
+        'ORDER58_CASE_ORDER_AUTO_SYNC_ENABLED' => ['type' => 'bool', 'default' => true],
+        // Below this age a completed run is reused instead of starting another. Ours to waive.
+        'ORDER58_CASE_ORDER_MIN_REFRESH_SECONDS' => ['type' => 'int', 'default' => 600, 'min' => 0, 'max' => 86400],
+        // THE PROVIDER'S OWN FLOOR between requests, and a different question from the one above.
+        // Defaults to a day because that is the only limit the client has actually stated; widen it
+        // only once they confirm. A manual synchronisation does NOT bypass this.
+        // Automatic callers only; a manual synchronisation is never gated by it.
+        'ORDER58_CASE_ORDER_MIN_PROVIDER_GAP_SECONDS' => ['type' => 'int', 'default' => 86400, 'min' => 0, 'max' => 604800],
+        // How long a claim is believed before recovery may close it. Concurrency, not rationing.
+        'ORDER58_CASE_ORDER_LEASE_SECONDS' => ['type' => 'int', 'default' => 900, 'min' => 60, 'max' => 7200],
+
+        // How long before the Orders page shows a per-operation batch as stalled. A display state,
+        // never a verdict. Local only — nothing is fetched to decide it.
         'ORDER58_ITEM_BATCH_STALLED_SECONDS' => ['type' => 'int', 'default' => 180, 'min' => 30, 'max' => 3600],
 
         // Order Testing: where the Order58 listener drops demo/test order documents.

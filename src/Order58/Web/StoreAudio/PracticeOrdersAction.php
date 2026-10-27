@@ -34,6 +34,18 @@ final readonly class PracticeOrdersAction extends Action
         return true;
     }
 
+    /**
+     * This picker's cards follow `ORDER58_CASE_ORDER_PRIMARY`, like the page they link to.
+     *
+     * Stated here rather than inherited because this class extends the audio picker directly, not
+     * {@see OrderTestingAction} — so without it these cards would count recordings while the Practice
+     * Orders page they lead to listed imported orders.
+     */
+    protected function cardsCountImportedOrders(): ?bool
+    {
+        return null;
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/practice-orders';

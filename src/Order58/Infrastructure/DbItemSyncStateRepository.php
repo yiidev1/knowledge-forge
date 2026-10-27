@@ -90,33 +90,44 @@ final readonly class DbItemSyncStateRepository implements ItemSyncStateRepositor
     public function markSynced(
         int $accountId,
         int $sourceOrderId,
-        string $leaseOwner,
+        ?string $leaseOwner,
         int $itemCount,
         string $responseHash,
-        string $responseJson,
+        ?string $responseJson,
         DateTimeImmutable $now,
     ): void {
         $stamp = DbDateTime::format($now);
 
-        $this->connection->createCommand()->update(
-            self::ORDERS,
-            [
-                // EMPTY is a success with nothing in it, and is comparable. It is NOT a failure.
-                'items_status' => $itemCount === 0 ? 'EMPTY' : 'SYNCED',
-                'items_count' => $itemCount,
-                'items_response_hash' => $responseHash,
-                'items_response_json' => $responseJson,
-                'items_synced_at' => $stamp,
-                'items_attempts' => 0,
-                'items_error' => null,
-                'items_retry_after' => null,
-                'items_lease_owner' => null,
-                'items_leased_until' => null,
-                'updated_at' => $stamp,
-            ],
-            // Still ours, or this write belongs to a run that has already lost the row.
-            ['account_id' => $accountId, 'source_order_id' => $sourceOrderId, 'items_lease_owner' => $leaseOwner],
-        )->execute();
+        $values = [
+            // EMPTY is a success with nothing in it, and is comparable. It is NOT a failure.
+            'items_status' => $itemCount === 0 ? 'EMPTY' : 'SYNCED',
+            'items_count' => $itemCount,
+            'items_response_hash' => $responseHash,
+            'items_synced_at' => $stamp,
+            'items_attempts' => 0,
+            'items_error' => null,
+            'items_retry_after' => null,
+            'items_lease_owner' => null,
+            'items_leased_until' => null,
+            'updated_at' => $stamp,
+        ];
+
+        if ($responseJson !== null) {
+            // Omitted rather than nulled when the caller has none: the column is write-only, so
+            // blanking a previous snapshot's copy would destroy the only record of it and change
+            // nothing on any screen.
+            $values['items_response_json'] = $responseJson;
+        }
+
+        $where = ['account_id' => $accountId, 'source_order_id' => $sourceOrderId];
+
+        if ($leaseOwner !== null) {
+            // Still ours, or this write belongs to a run that has already lost the row. A null owner
+            // is a caller holding something stronger than a per-order lease — see the interface.
+            $where['items_lease_owner'] = $leaseOwner;
+        }
+
+        $this->connection->createCommand()->update(self::ORDERS, $values, $where)->execute();
     }
 
     public function markFailed(

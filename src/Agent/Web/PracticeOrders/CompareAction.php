@@ -41,11 +41,6 @@ final readonly class CompareAction extends OrderTestingCompareAction
         return $this->visibility->belongsToReader($demo);
     }
 
-    protected function canSyncItems(): bool
-    {
-        return false;
-    }
-
     protected function surfaceRoutes(): array
     {
         return [

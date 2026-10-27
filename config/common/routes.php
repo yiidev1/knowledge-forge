@@ -30,13 +30,14 @@ use App\OrderTesting\Web as OrderTestingModule;
 use App\Practice\Web as Practice;
 use App\Order58\Web\DataManagement as Order58Data;
 use App\Order58\Web\CallHistory as Order58CallHistory;
+use App\Order58\Web\CaseOrders as Order58CaseOrders;
+use App\Order58\Web\CaseOrdersAdmin as Order58CaseOrdersAdmin;
 use App\Order58\Web\CallRecordings as Order58CallRecordings;
 use App\Order58\Web\Calls as Order58Calls;
 use App\AudioToText\Web\AgentPracticeOrders as AgentPracticeOrdersSurface;
 use App\AudioToText\Web\PracticeOrders as PracticeOrdersSurface;
 use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
-use App\Order58\Web\OrderItems as Order58OrderItems;
 use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Receipt as Order58Receipt;
 use App\Order58\Web\Stores as Order58Stores;
@@ -325,24 +326,8 @@ return [
             Route::get('/admin/order58/orders')
                 ->action(Order58Orders\Action::class)
                 ->name('order58.orders'),
-            Route::post('/admin/order58/orders/sync')
-                ->action(Order58Orders\SyncAction::class)
-                ->name('order58.orders.sync'),
-            // One original order's items, fetched now. Posted to from BOTH the Orders listing and the
-            // original-vs-demo comparison page — the same operation, differing only in where the
-            // operator is sent afterwards, which travels as an allow-listed `return` field.
-            //
-            // It lives under /admin/order58 rather than under /order-testing because the work is
-            // Order58's: OrderTestingBoundariesTest forbids that module from naming App\Order58, so the
-            // comparison page reaches this by route NAME.
             // What one sync operation has got to. Read-only JSON, polled by the panel; it starts and
             // settles nothing.
-            Route::get('/admin/order58/orders/sync-status')
-                ->action(Order58Orders\SyncStatusAction::class)
-                ->name('order58.orders.sync-status'),
-            Route::post('/admin/order58/order-items/sync')
-                ->action(Order58OrderItems\SyncAction::class)
-                ->name('order58.order-items.sync'),
             Route::post('/admin/order58/calls/sync')
                 ->action(Order58Calls\SyncAction::class)
                 ->name('order58.calls.sync'),
@@ -371,6 +356,40 @@ return [
                 ->name('order58.call-recordings.status'),
             // What was downloaded and when. Only DOWNLOAD_ONLY activity — the calls page has its own
             // history for the imports that were asked to be transcribed.
+            /*
+             * Case orders: the replacement for the Orders + Order Items pair.
+             *
+             * POST does the work in the request — the operator gets real counts rather than a job id,
+             * the same arrangement the Orders sync above uses — and GET is what the panel polls while
+             * that request is still in flight. There is deliberately no worker: the provider allows
+             * one request a day, so a background retry could only either do nothing or breach that.
+             */
+            // Load Calls. A POST because it may START a global case order synchronisation, and a GET
+            // that starts work is one a refresh repeats. It redirects straight back to the readable
+            // address the listing has always had.
+            Route::post('/admin/order58/call-recordings/load')
+                ->action(Order58CallRecordings\LoadAction::class)
+                ->name('order58.call-recordings.load'),
+            Route::post('/admin/order58/case-orders/sync')
+                ->action(Order58CaseOrders\SyncAction::class)
+                ->name('order58.case-orders.sync'),
+            Route::get('/admin/order58/case-orders/status')
+                ->action(Order58CaseOrders\StatusAction::class)
+                ->name('order58.case-orders.status'),
+            /*
+             * Case Orders — admin only, by placement in this group.
+             *
+             * Reachable from the Call Recordings page and deliberately absent from every sidebar, so
+             * it never appears in the Agent or Operation navigation. Both are GETs that read: no
+             * parameter starts a synchronisation.
+             */
+            Route::get('/admin/order58/case-orders')
+                ->action(Order58CaseOrdersAdmin\Action::class)
+                ->name('order58.case-orders'),
+            // The pair is the identity: source_order_id is unique only within a store.
+            Route::get('/admin/order58/case-orders/{sourceId:\d+}/{sourceOrderId:\d+}')
+                ->action(Order58CaseOrdersAdmin\DetailAction::class)
+                ->name('order58.case-orders.detail'),
             Route::get('/admin/order58/call-recordings/history')
                 ->action(Order58CallRecordings\HistoryAction::class)
                 ->name('order58.call-recordings.history'),
