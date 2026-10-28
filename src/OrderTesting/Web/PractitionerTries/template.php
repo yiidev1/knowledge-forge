@@ -99,6 +99,7 @@ $pages = (int) ceil(max(1, $totalTries) / $perPage);
             </div>
         </div>
 
+        <div class="a2t-table-scroll">
         <table class="table pr-table pr-table--tries">
             <thead>
                 <tr>
@@ -139,6 +140,7 @@ $pages = (int) ceil(max(1, $totalTries) / $perPage);
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
 
         <?php if ($pages > 1): ?>
             <?php // Bounded here too: a practitioner with dozens of tries is paged, not poured out.?>

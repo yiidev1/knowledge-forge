@@ -426,7 +426,7 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    width: min(32rem, 100%);
+    width: min(38rem, 100%);
     max-height: 100%;
     background: var(--surface);
     border-left: 1px solid var(--border-strong);
@@ -509,6 +509,27 @@
 .pr-table--tries td {
     padding-left: 0;
     font-size: 0.82rem;
+}
+
+/*
+ * Sized by its content rather than split into five equal columns: a fifth of the panel is narrower
+ * than a timestamp, which then broke at its hyphens across three lines. Nothing in a try row needs
+ * to wrap, so none of it does; on a phone the table scrolls sideways in its own box instead.
+ */
+.table.pr-table--tries {
+    table-layout: auto;
+}
+
+.table.pr-table--tries th,
+.table.pr-table--tries td {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+    white-space: nowrap;
+}
+
+/* The hidden "Actions" label is absolutely positioned; anchored here, it cannot widen the panel. */
+.a2t-table-scroll:has(> .pr-table--tries) {
+    position: relative;
 }
 
 /*
