@@ -144,8 +144,14 @@ final class OrderTestingDemoOrdersCest
         $I->dontSee('16630681');
     }
 
-    /** Each demo order gets its own comparison; they are never merged into one. */
-    public function eachDemoOrderLinksToItsOwnComparison(WebTester $I): void
+    /**
+     * Every demo order keeps its own row, and a comparison is offered only for a 100% score.
+     *
+     * None of these scores 100%, so each row is listed with its score and date and no "View
+     * Comparison" link (owner's rule, 28 October 2026). The 100% boundary itself is pinned in
+     * `ComparisonScoreTest`.
+     */
+    public function aComparisonIsOfferedOnlyForAPerfectScore(WebTester $I): void
     {
         $this->signIn($I);
         $this->seedDemoOrder(16630651);
@@ -156,8 +162,11 @@ final class OrderTestingDemoOrdersCest
         $I->amOnPage($base . '/demo-orders');
 
         foreach ([16630651, 16630661, 16630671] as $demoId) {
-            $I->seeElement('a[href="' . $base . '/demo/' . $demoId . '"]');
+            $I->see('#' . $demoId);
+            $I->dontSeeElement('a[href="' . $base . '/demo/' . $demoId . '"]');
         }
+
+        $I->dontSee('View Comparison');
     }
 
     /**

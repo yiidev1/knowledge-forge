@@ -194,12 +194,14 @@ foreach ($tries as $try) {
                         // The existing comparison page, at this surface's own address, in a
                         // new tab — so a trainee comparing their work does not lose this list.
                         ?>
+                                <?php if ($try->score->isPerfect()): ?>
                                 <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
                                    href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
                                'sourceId' => $sourceId,
                                'sourceOrderId' => $sourceOrderId,
                                'demoOrderId' => $try->demo->demoOrderId,
                            ])) ?>">View Comparison</a>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

@@ -126,12 +126,14 @@ $pages = (int) ceil(max(1, $totalTries) / $perPage);
                             // The existing comparison page, in a new tab, so the drawer and the
                             // table behind it stay exactly as they were.
                     ?>
+                            <?php if ($try->score->isPerfect()): ?>
                             <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
                                href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
                            'sourceId' => $sourceId,
                            'sourceOrderId' => $sourceOrderId,
                            'demoOrderId' => $try->demo->demoOrderId,
                        ])) ?>">View Comparison</a>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

@@ -396,12 +396,15 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                             ? '<span class="util-muted">&mdash;</span>'
                             : Html::encode($demo->importedAt) ?></td>
                             <td data-ot-label="Actions" class="pr-actions">
+                                <?php // Offered only for a 100% score; the row itself always stays.?>
+                                <?php if ($unmatchedScore !== null && $unmatchedScore->isPerfect()): ?>
                                 <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
                                    href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
                                'sourceId' => $sourceId,
                                'sourceOrderId' => $sourceOrderId,
                                'demoOrderId' => $demo->demoOrderId,
                            ])) ?>">View Comparison</a>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
