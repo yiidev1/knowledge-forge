@@ -243,8 +243,7 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                     <col class="pr-col-num">
                     <col class="pr-col-scores">
                     <col class="pr-col-when">
-                    <col class="pr-col-compare">
-                    <col class="pr-col-action">
+                    <col class="pr-col-actions">
                 </colgroup>
                 <thead>
                     <tr>
@@ -252,8 +251,7 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                         <th class="pr-num">Tries</th>
                         <th>Try scores</th>
                         <th>Last practice</th>
-                        <th><span class="util-visually-hidden">Comparison</span></th>
-                        <th><span class="util-visually-hidden">Tries</span></th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -303,6 +301,7 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                                             $percent($try->score),
                                             $band($try->score),
                                             $try === $latestTry,
+                                            numbered: true,
                                         ) ?>
                                     <?php endforeach; ?>
                                 </div>
@@ -312,28 +311,26 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                                     ? '<span class="util-muted">&mdash;</span>'
                                     : Html::encode($appTimeZone->format($practitioner->lastPractisedAt, 'M j, Y')) ?>
                             </td>
-                            <td data-ot-label="Comparison" class="pr-actions">
+                            <td data-ot-label="Actions" class="pr-actions">
                                 <?php
-                                // Their latest try — the last score in the row. Unavailable only if
-                                // the row has no try left to compare, which says so rather than
-                                // linking to a comparison that does not exist.
+                                // Both actions in one cell, side by side. View Comparison opens their
+                                // latest try — the chip marked Latest — and is Unavailable only if the
+                                // row has no try left to compare, rather than linking to nothing.
+                                //
+                                // View Tries is a real link, and the drawer is an enhancement over it:
+                                // with no script it opens the same fragment as a page of its own.
                         ?>
-                                <?= $latestTry !== null
-                                    ? $compare->action(
-                                        $latestTry->demo->demoOrderId,
-                                        'View comparison for ' . $practitioner->displayName() . "'s latest try",
-                                    )
-                                    : '<span class="util-muted" title="No comparison is available for this practitioner.">Unavailable</span>' ?>
-                            </td>
-                            <td data-ot-label="Tries" class="pr-actions">
-                                <?php
-                                // A real link, and the drawer is an enhancement over it. With no
-                                // script it opens the same fragment as a page of its own, so the
-                                // history is reachable either way and nothing is script-only.
-                        ?>
-                                <a class="ot-rowaction" href="<?= Html::encode($triesUrl) ?>"
-                                   data-pr-tries="<?= Html::encode($triesUrl) ?>"
-                                   data-pr-agent="<?= Html::encode($practitioner->displayName()) ?>">View Tries</a>
+                                <div class="pr-actions__group">
+                                    <?= $latestTry !== null
+                                        ? $compare->action(
+                                            $latestTry->demo->demoOrderId,
+                                            'View comparison for ' . $practitioner->displayName() . "'s latest try",
+                                        )
+                                        : '<span class="util-muted" title="No comparison is available for this practitioner.">Unavailable</span>' ?>
+                                    <a class="ot-rowaction" href="<?= Html::encode($triesUrl) ?>"
+                                       data-pr-tries="<?= Html::encode($triesUrl) ?>"
+                                       data-pr-agent="<?= Html::encode($practitioner->displayName()) ?>">View Tries</a>
+                                </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>

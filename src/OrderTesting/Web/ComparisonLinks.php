@@ -64,24 +64,47 @@ final readonly class ComparisonLinks
      * One try's score, as a link to that try's comparison.
      *
      * The figure and its colour band are the page's own, passed in already worked out, so this prints
-     * exactly what the page would have printed. The try number goes into the tooltip and the
-     * accessible name, so "75%" is never the only thing telling a reader which try it opens.
+     * exactly what the page would have printed. The band colours the figure only — the try number and
+     * the Latest label stay neutral, and nothing but the figure can read as a score.
      *
-     * @param string $percent the figure as the page prints it, e.g. `75%` or `—`
-     * @param string $band    the page's colour band for it: excellent, good, fair, poor or none
-     * @param bool   $latest  marks the newest try, which the row's own View Comparison also opens
+     * Numbered (`1 · 47%`) where nothing beside it says which try it is, as in the practitioners
+     * table; plain in the drawer, whose Try column already does. Either way the try number and whether
+     * it is the latest are in the tooltip and the accessible name.
+     *
+     * @param string $percent  the figure as the page prints it, e.g. `75%` or `—`
+     * @param string $band     the page's colour band for it: excellent, good, fair, poor or none
+     * @param bool   $latest   marks the newest try, which the row's own View Comparison also opens
+     * @param bool   $numbered prints the try number, and a Latest label on the newest
      */
-    public function chip(int $demoOrderId, int $tryNumber, string $percent, string $band, bool $latest = false): string
-    {
-        $try = $tryNumber > 0 ? 'Try ' . $tryNumber : 'this try';
-        $name = 'View comparison for ' . $try . ($latest ? ' (latest)' : '') . ': ' . $percent;
+    public function chip(
+        int $demoOrderId,
+        int $tryNumber,
+        string $percent,
+        string $band,
+        bool $latest = false,
+        bool $numbered = false,
+    ): string {
+        $name = ($tryNumber > 0 ? 'Try ' . $tryNumber : 'Try') . ($latest ? ' — Latest' : '')
+            . ' — ' . $percent . ' — View Comparison';
 
-        return '<a class="pr-chip pr-score pr-score--' . Html::encode($band) . ($latest ? ' pr-chip--latest' : '') . '"'
+        $body = '<span class="pr-chip__score pr-score pr-score--' . Html::encode($band) . '">'
+            . Html::encode($percent) . '</span>';
+
+        if ($numbered && $tryNumber > 0) {
+            $body = '<span class="pr-chip__try">' . Html::encode((string) $tryNumber) . '</span>'
+                . '<span class="pr-chip__sep" aria-hidden="true">·</span>' . $body;
+        }
+
+        if ($numbered && $latest) {
+            $body .= '<span class="pr-chip__latest">Latest</span>';
+        }
+
+        return '<a class="pr-chip' . ($latest ? ' pr-chip--latest' : '') . '"'
             . ' target="_blank" rel="noopener noreferrer"'
             . ' href="' . Html::encode($this->url($demoOrderId)) . '"'
-            . ' title="' . Html::encode(($tryNumber > 0 ? 'Try ' . $tryNumber : 'Try') . ($latest ? ' · latest' : '') . ' — open its comparison') . '"'
+            . ' title="' . Html::encode($name) . '"'
             . ' aria-label="' . Html::encode($name) . '"'
             . ' data-pr-compare="' . Html::encode((string) $demoOrderId) . '">'
-            . Html::encode($percent) . '</a>';
+            . $body . '</a>';
     }
 }

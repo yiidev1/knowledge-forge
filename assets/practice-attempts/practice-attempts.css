@@ -314,30 +314,92 @@
 .pr-col-action { width: 18%; }
 
 /*
- * The practitioners table: Try scores takes the room Best and Latest had, and a second action column
- * sits beside View Tries. Scoped to that table, so the Unmatched table below keeps the widths above.
- * All percentages, summing to 100 — a fixed table that mixes units overflows by the difference.
+ * The practitioners table sizes to what it holds. Tries, Last practice and Actions take exactly their
+ * content — `width: 1%` with no wrapping is the shrink-to-fit idiom for an automatic table — and Try
+ * scores takes the rest. Split by fixed percentages it left wide gaps at 1920 and squeezed the
+ * actions at 1280. Scoped to this table, so Unmatched below keeps its own fixed widths.
  */
-.pr-table--practitioners .pr-col-agent { width: 19%; }
-.pr-table--practitioners .pr-col-num { width: 7%; }
-.pr-table--practitioners .pr-col-scores { width: 28%; }
-.pr-table--practitioners .pr-col-when { width: 15%; }
-.pr-table--practitioners .pr-col-compare { width: 17%; }
-.pr-table--practitioners .pr-col-action { width: 14%; }
+.table.pr-table--practitioners {
+    table-layout: auto;
+}
 
-/*
- * Headings, dates and actions each on one line: "View Comparison" broken in two reads as two controls,
- * and a heading over two lines makes every row below it look misaligned.
- */
+.pr-table--practitioners .pr-col-agent { width: 18%; }
+
+.pr-table--practitioners .pr-col-num,
+.pr-table--practitioners .pr-col-when,
+.pr-table--practitioners .pr-col-actions {
+    width: 1%;
+}
+
+/* Headings, counts, dates and actions each on one line; only the score chips wrap. */
 .pr-table--practitioners th,
+.pr-table--practitioners td[data-ot-label="Tries"],
 .pr-table--practitioners td[data-ot-label="Last practice"],
 .pr-table--practitioners td.pr-actions {
     white-space: nowrap;
 }
 
-.pr-table--practitioners td.pr-actions {
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
+/* Both actions in one cell, side by side and left-aligned under their heading. */
+.pr-table--practitioners .pr-actions {
+    text-align: left;
+}
+
+.pr-actions__group {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+/*
+ * Below a laptop width the two actions stack rather than push the table into a sideways scroll: at
+ * 1024 side by side they cost the score chips the room they need. Each stays on one line.
+ */
+@media (max-width: 73.75rem) {
+    /* Tighter cells too: five columns of full padding is most of a laptop-width table. */
+    .table.pr-table--practitioners th,
+    .table.pr-table--practitioners td {
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+    }
+
+    .pr-table--practitioners td.pr-actions {
+        white-space: normal;
+    }
+
+    .pr-actions__group {
+        flex-wrap: wrap;
+        gap: 0.4rem 0.6rem;
+    }
+}
+
+/*
+ * The two actions as small outlined buttons — the look `.ot-rowaction` has on the store pages, whose
+ * stylesheet this page does not load. Scoped to this table so no other table's links change.
+ */
+.pr-table--practitioners .ot-rowaction {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.4;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.pr-table--practitioners .ot-rowaction:hover {
+    border-color: var(--primary);
+    background: var(--surface-2);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.pr-table--practitioners .ot-rowaction:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
 }
 
 /* Figures line up digit under digit, which is the whole reason to right-align a number column. */
@@ -408,21 +470,24 @@
 }
 
 .pr-chip {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     min-width: 3.1rem;
-    padding: 0.15rem 0.5rem;
+    justify-content: center;
+    padding: 0.15rem 0.55rem;
     border: 1px solid var(--border);
     border-radius: 999px;
     background: var(--surface-2);
-    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
     line-height: 1.5;
-    text-align: center;
     text-decoration: none;
     white-space: nowrap;
 }
 
 .pr-chip:hover {
-    border-color: currentColor;
+    border-color: var(--text-muted);
     text-decoration: none;
 }
 
@@ -431,10 +496,36 @@
     outline-offset: 2px;
 }
 
-/* The newest try — the one the row's own View Comparison opens. Marked, not shouted. */
+/* The try number and its separator: neutral, so only the figure carries the score's colour. */
+.pr-chip__try {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.pr-chip__sep {
+    color: var(--text-faint);
+}
+
+/*
+ * The newest try — the one the row's own View Comparison opens. An accent border and a small label,
+ * so it is found at a glance even when every score is the same; the earlier chips stay neutral.
+ */
 .pr-chip--latest {
-    border-color: var(--border-strong);
-    box-shadow: inset 0 0 0 1px var(--border-strong);
+    border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+    background: color-mix(in srgb, var(--primary) 9%, var(--surface-2));
+}
+
+.pr-chip--latest:hover {
+    border-color: var(--primary);
+}
+
+.pr-chip__latest {
+    margin-left: 0.1rem;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--primary) 80%, var(--text));
 }
 
 /* The earlier tries a page could not afford to score: counted, and one click from the drawer. */

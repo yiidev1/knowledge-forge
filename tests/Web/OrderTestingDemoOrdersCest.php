@@ -195,9 +195,11 @@ final class OrderTestingDemoOrdersCest
         );
         $I->dontSeeElement('.pr-table--practitioners .pr-chip:not([target="_blank"])');
 
-        // Each names its try, so a figure is never the only thing saying which try it opens.
-        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630651"][aria-label^="View comparison for Try 1"]');
-        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630671"][aria-label^="View comparison for Try 3"]');
+        // Each shows and names its try, so identical scores are still told apart at a glance.
+        $I->see('1', '.pr-chip[href="' . $base . '/demo/16630651"] .pr-chip__try');
+        $I->see('3', '.pr-chip[href="' . $base . '/demo/16630671"] .pr-chip__try');
+        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630651"][aria-label^="Try 1 — "][aria-label*="View Comparison"]');
+        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630671"][aria-label^="Try 3 — Latest — "]');
 
         // Nothing is held back: three tries, three scores, and no "earlier" count.
         $I->dontSeeElement('.pr-table--practitioners .pr-chips__more');
@@ -217,12 +219,30 @@ final class OrderTestingDemoOrdersCest
         $I->amOnPage($base . '/demo-orders');
 
         $I->seeElement(
-            '.pr-table--practitioners td[data-ot-label="Comparison"] a[href="' . $base . '/demo/16630671"][target="_blank"]',
+            '.pr-table--practitioners td[data-ot-label="Actions"] a[data-pr-compare][href="' . $base . '/demo/16630671"][target="_blank"]',
         );
-        $I->seeElement('.pr-chip.pr-chip--latest[href="' . $base . '/demo/16630671"]');
-        // Exactly one latest, and View Tries is still there beside it.
+        // The latest chip is marked, and labelled Latest, exactly once.
+        $I->seeElement('.pr-chip.pr-chip--latest[href="' . $base . '/demo/16630671"] .pr-chip__latest');
         $I->seeNumberOfElements('.pr-chip--latest', 1);
-        $I->seeElement('.pr-table--practitioners [data-pr-tries]');
+        $I->seeNumberOfElements('.pr-table--practitioners .pr-chip__latest', 1);
+    }
+
+    /** Five columns, and both actions together in the one Actions cell. */
+    public function bothActionsShareOneActionsColumn(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedDemoOrder(16630651, self::SOURCE_ORDER, $this->seedAttempt());
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo-orders');
+
+        $I->seeNumberOfElements('.pr-table--practitioners thead th', 5);
+        $I->see('Actions', '.pr-table--practitioners thead');
+
+        $group = '.pr-table--practitioners td[data-ot-label="Actions"] .pr-actions__group';
+        $I->seeElement($group . ' a[data-pr-compare]');
+        $I->seeElement($group . ' a[data-pr-tries]');
+        // A single try is the latest one.
+        $I->seeElement('.pr-table--practitioners .pr-chip--latest .pr-chip__latest');
     }
 
     /** Two practitioners on one order: each row links only to its own results. */
@@ -252,8 +272,8 @@ final class OrderTestingDemoOrdersCest
             $I->grabMultiple($rows . ':nth-child(2) .pr-chip', 'href'),
         );
         // Their latest is their own, numbered from their own history.
-        $I->seeElement($rows . ':nth-child(2) td[data-ot-label="Comparison"] a[href="' . $base . '/demo/16630661"]');
-        $I->seeElement($rows . ':nth-child(2) .pr-chip[aria-label^="View comparison for Try 1"]');
+        $I->seeElement($rows . ':nth-child(2) td[data-ot-label="Actions"] a[data-pr-compare][href="' . $base . '/demo/16630661"]');
+        $I->seeElement($rows . ':nth-child(2) .pr-chip[aria-label^="Try 1 — Latest — "]');
     }
 
     /** The drawer offers every try's comparison, and its score links there too. */

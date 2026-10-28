@@ -188,11 +188,12 @@ async function run() {
         const row = document.querySelector('.pr-table:not(.pr-table--unmatched) tbody tr');
         const chips = row ? Array.from(row.querySelectorAll('.pr-chip')) : [];
         const more = row ? row.querySelector('.pr-chips__more') : null;
-        const action = row ? row.querySelector('td[data-ot-label="Comparison"] a') : null;
+        const action = row ? row.querySelector('td[data-ot-label="Actions"] a[data-pr-compare]') : null;
 
         return {
             chips: chips.length,
-            latest: chips.length > 0 ? chips[chips.length - 1].textContent.trim() : null,
+            latest: chips.length > 0 ? chips[chips.length - 1].querySelector('.pr-chip__score').textContent.trim() : null,
+            latestMarked: chips.length > 0 && chips[chips.length - 1].querySelector('.pr-chip__latest') !== null,
             latestHref: chips.length > 0 ? chips[chips.length - 1].getAttribute('href') : null,
             more: more ? more.textContent.trim() : null,
             moreOpensDrawer: more ? more.hasAttribute('data-pr-tries') : false,
@@ -219,6 +220,7 @@ async function run() {
      * nothing. What must never appear is a score for a comparison that could not be MADE — that
      * renders as a dash, and `PractitionerScorerTest` pins it where the condition can be created.
      */
+    check('and it is marked Latest', longHistory.latestMarked === true);
     check('Latest is reported even for a long history',
         longHistory.latest !== null && longHistory.latest !== '—',
         longHistory.latest);
