@@ -145,13 +145,12 @@ final class OrderTestingDemoOrdersCest
     }
 
     /**
-     * Every demo order keeps its own row, and a comparison is offered only for a 100% score.
+     * Each demo order gets its own comparison, whatever it scored; they are never merged into one.
      *
-     * None of these scores 100%, so each row is listed with its score and date and no "View
-     * Comparison" link (owner's rule, 28 October 2026). The 100% boundary itself is pinned in
-     * `ComparisonScoreTest`.
+     * None of these scores 100%, and every one is still offered — the 100%-only rule of 28 October
+     * was lifted the same day. In a new tab, so the results page stays where it was.
      */
-    public function aComparisonIsOfferedOnlyForAPerfectScore(WebTester $I): void
+    public function eachDemoOrderLinksToItsOwnComparison(WebTester $I): void
     {
         $this->signIn($I);
         $this->seedDemoOrder(16630651);
@@ -162,11 +161,125 @@ final class OrderTestingDemoOrdersCest
         $I->amOnPage($base . '/demo-orders');
 
         foreach ([16630651, 16630661, 16630671] as $demoId) {
-            $I->see('#' . $demoId);
-            $I->dontSeeElement('a[href="' . $base . '/demo/' . $demoId . '"]');
+            $I->seeElement('a[href="' . $base . '/demo/' . $demoId . '"][target="_blank"]');
+        }
+    }
+
+    // ------------------------------------------------------------------ try scores
+
+    /**
+     * The table lists every try's score instead of Best and Latest, oldest first, each linking to that
+     * try's own comparison in a new tab.
+     */
+    public function thePractitionerRowListsEveryTryScoreOldestFirst(WebTester $I): void
+    {
+        $this->signIn($I);
+        $attemptId = $this->seedAttempt();
+        $tries = [16630651, 16630661, 16630671];
+
+        foreach ($tries as $demoId) {
+            $this->seedDemoOrder($demoId, self::SOURCE_ORDER, $attemptId);
         }
 
-        $I->dontSee('View Comparison');
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER;
+        $I->amOnPage($base . '/demo-orders');
+
+        $I->see('Try scores', '.pr-table--practitioners thead');
+        $I->dontSee('Best', '.pr-table--practitioners thead');
+        $I->dontSee('Latest', '.pr-table--practitioners thead');
+
+        // One chip per try, in try order, each to its own demo order.
+        Assert::assertSame(
+            [$base . '/demo/16630651', $base . '/demo/16630661', $base . '/demo/16630671'],
+            $I->grabMultiple('.pr-table--practitioners .pr-chip', 'href'),
+        );
+        $I->dontSeeElement('.pr-table--practitioners .pr-chip:not([target="_blank"])');
+
+        // Each names its try, so a figure is never the only thing saying which try it opens.
+        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630651"][aria-label^="View comparison for Try 1"]');
+        $I->seeElement('.pr-chip[href="' . $base . '/demo/16630671"][aria-label^="View comparison for Try 3"]');
+
+        // Nothing is held back: three tries, three scores, and no "earlier" count.
+        $I->dontSeeElement('.pr-table--practitioners .pr-chips__more');
+    }
+
+    /** The row's own View Comparison opens the latest try — the last score in the row. */
+    public function theRowsViewComparisonOpensTheLatestTry(WebTester $I): void
+    {
+        $this->signIn($I);
+        $attemptId = $this->seedAttempt();
+
+        foreach ([16630651, 16630661, 16630671] as $demoId) {
+            $this->seedDemoOrder($demoId, self::SOURCE_ORDER, $attemptId);
+        }
+
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER;
+        $I->amOnPage($base . '/demo-orders');
+
+        $I->seeElement(
+            '.pr-table--practitioners td[data-ot-label="Comparison"] a[href="' . $base . '/demo/16630671"][target="_blank"]',
+        );
+        $I->seeElement('.pr-chip.pr-chip--latest[href="' . $base . '/demo/16630671"]');
+        // Exactly one latest, and View Tries is still there beside it.
+        $I->seeNumberOfElements('.pr-chip--latest', 1);
+        $I->seeElement('.pr-table--practitioners [data-pr-tries]');
+    }
+
+    /** Two practitioners on one order: each row links only to its own results. */
+    public function eachRowLinksOnlyToItsOwnPractitionersResults(WebTester $I): void
+    {
+        $this->signIn($I);
+        $mine = $this->seedAttempt();
+        $theirs = $this->seedAttempt('OPERATION', 424242);
+
+        $this->seedDemoOrder(16630651, self::SOURCE_ORDER, $mine);
+        $this->seedDemoOrder(16630661, self::SOURCE_ORDER, $theirs);
+        $this->seedDemoOrder(16630671, self::SOURCE_ORDER, $mine);
+
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER;
+        $I->amOnPage($base . '/demo-orders');
+
+        // Neither fixture result carries a creation time, so the default order falls to its tie-break —
+        // realm, then id — which puts the administrator first.
+        $rows = '.pr-table--practitioners tbody tr';
+
+        Assert::assertSame(
+            [$base . '/demo/16630651', $base . '/demo/16630671'],
+            $I->grabMultiple($rows . ':nth-child(1) .pr-chip', 'href'),
+        );
+        Assert::assertSame(
+            [$base . '/demo/16630661'],
+            $I->grabMultiple($rows . ':nth-child(2) .pr-chip', 'href'),
+        );
+        // Their latest is their own, numbered from their own history.
+        $I->seeElement($rows . ':nth-child(2) td[data-ot-label="Comparison"] a[href="' . $base . '/demo/16630661"]');
+        $I->seeElement($rows . ':nth-child(2) .pr-chip[aria-label^="View comparison for Try 1"]');
+    }
+
+    /** The drawer offers every try's comparison, and its score links there too. */
+    public function theDrawerOffersEveryTrysComparison(WebTester $I): void
+    {
+        $this->signIn($I);
+        $attemptId = $this->seedAttempt();
+
+        foreach ([16630651, 16630661] as $demoId) {
+            $this->seedDemoOrder($demoId, self::SOURCE_ORDER, $attemptId);
+        }
+
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER;
+        $I->amOnPage($base . '/demo-orders');
+        $I->amOnPage((string) $I->grabAttributeFrom('.pr-table--practitioners [data-pr-tries]', 'href'));
+
+        foreach ([16630651 => 'Try 1', 16630661 => 'Try 2'] as $demoId => $try) {
+            $I->seeElement(
+                '.pr-table--tries a.ot-rowaction[href="' . $base . '/demo/' . $demoId . '"][target="_blank"]'
+                . '[aria-label="View comparison for ' . $try . '"]',
+            );
+            $I->seeElement('.pr-table--tries a.pr-chip[href="' . $base . '/demo/' . $demoId . '"][target="_blank"]');
+        }
+
+        // The summary above the rows is unchanged.
+        $I->see('Completed tries');
     }
 
     /**
@@ -746,7 +859,8 @@ final class OrderTestingDemoOrdersCest
         ])->execute();
     }
 
-    private function seedAttempt(): int
+    /** An attempt by this suite's administrator, or by whoever is named. */
+    private function seedAttempt(string $realm = 'ADMIN', ?int $actorId = null): int
     {
         $now = gmdate('Y-m-d H:i:s');
 
@@ -754,8 +868,8 @@ final class OrderTestingDemoOrdersCest
             'public_id' => bin2hex(random_bytes(16)),
             'store_source_id' => self::STORE_ID,
             'source_order_id' => self::SOURCE_ORDER,
-            'initiated_by_type' => 'ADMIN',
-            'initiated_by_id' => $this->adminId(),
+            'initiated_by_type' => $realm,
+            'initiated_by_id' => $actorId ?? $this->adminId(),
             'status' => 'MATCHED',
             'started_at' => $now,
             'expires_at' => gmdate('Y-m-d H:i:s', time() + 3600),

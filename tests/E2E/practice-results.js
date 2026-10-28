@@ -186,17 +186,33 @@ async function run() {
 
     const longHistory = await page.evaluate(() => {
         const row = document.querySelector('.pr-table:not(.pr-table--unmatched) tbody tr');
+        const chips = row ? Array.from(row.querySelectorAll('.pr-chip')) : [];
+        const more = row ? row.querySelector('.pr-chips__more') : null;
+        const action = row ? row.querySelector('td[data-ot-label="Comparison"] a') : null;
 
         return {
-            best: row ? row.querySelectorAll('.pr-score')[0].textContent.trim() : null,
-            latest: row ? row.querySelectorAll('.pr-score')[1].textContent.trim() : null,
+            chips: chips.length,
+            latest: chips.length > 0 ? chips[chips.length - 1].textContent.trim() : null,
+            latestHref: chips.length > 0 ? chips[chips.length - 1].getAttribute('href') : null,
+            more: more ? more.textContent.trim() : null,
+            moreOpensDrawer: more ? more.hasAttribute('data-pr-tries') : false,
+            actionHref: action ? action.getAttribute('href') : null,
         };
     });
 
-    check('an unscoreable Best says so rather than guessing',
-        longHistory.best === 'Not available', longHistory.best);
     /*
-     * Latest is reported, whatever it is.
+     * Too long to score on one page: the latest try is shown, and the earlier ones are COUNTED and
+     * one click from the drawer — never silently left off, and never a partial list passing for all.
+     */
+    check('a long history shows its latest try', longHistory.chips === 1, longHistory.chips + ' chips');
+    check('and counts the earlier ones it did not score', /^\+\d+ earlier$/.test(longHistory.more || ''),
+        longHistory.more);
+    check('which open the drawer', longHistory.moreOpensDrawer === true);
+    check('the row\'s View Comparison opens that latest try',
+        longHistory.actionHref !== null && longHistory.actionHref === longHistory.latestHref,
+        longHistory.actionHref);
+    /*
+     * The latest score is reported, whatever it is.
      *
      * `0%` is a legitimate score here and not a bug: this fixture's source order totals 10.00 and
      * its demo orders 12.50, so every compared field differs and the comparison honestly scores
@@ -204,8 +220,7 @@ async function run() {
      * renders as a dash, and `PractitionerScorerTest` pins it where the condition can be created.
      */
     check('Latest is reported even for a long history',
-        longHistory.latest !== null && longHistory.latest !== '—'
-            && longHistory.latest !== 'Not available',
+        longHistory.latest !== null && longHistory.latest !== '—',
         longHistory.latest);
 
     const mine = cspHits.filter((h) => h.indexOf('/order-testing/') !== -1);

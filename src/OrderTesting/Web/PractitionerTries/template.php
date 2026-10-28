@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\OrderTesting\Application\Practice\PractitionerTry;
 use App\OrderTesting\Domain\InitiatorType;
+use App\OrderTesting\Web\ComparisonLinks;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -73,6 +74,9 @@ foreach ($tries as $try) {
 
 $latest = $tries[0] ?? null;
 $pages = (int) ceil(max(1, $totalTries) / $perPage);
+
+// The table's own comparison links, so a try opens the same comparison from here as from its row.
+$compare = new ComparisonLinks($urlGenerator, $routes['demoCompare'], $sourceId, $sourceOrderId);
 ?>
 <div data-pr-tries-content>
     <?php if ($tries === []): ?>
@@ -116,8 +120,13 @@ $pages = (int) ceil(max(1, $totalTries) / $perPage);
                         <td data-ot-label="Try">Try <?= Html::encode((string) $try->number) ?></td>
                         <td data-ot-label="Demo order">#<?= Html::encode((string) $try->demo->demoOrderId) ?></td>
                         <td data-ot-label="Score" class="pr-num">
-                            <span class="pr-score pr-score--<?= Html::encode($band($try->score)) ?>"><?=
-                                Html::encode($percent($try->score)) ?></span>
+                            <?= $compare->chip(
+                                $try->demo->demoOrderId,
+                                $try->number,
+                                $percent($try->score),
+                                $band($try->score),
+                                $try->number > 0 && $try->number === $totalTries,
+                            ) ?>
                         </td>
                         <td data-ot-label="Imported"><?= $try->demo->importedAt === null
                             ? '<span class="util-muted">&mdash;</span>'
@@ -127,14 +136,10 @@ $pages = (int) ceil(max(1, $totalTries) / $perPage);
                             // The existing comparison page, in a new tab, so the drawer and the
                             // table behind it stay exactly as they were.
                     ?>
-                            <?php if ($try->score->isPerfect()): ?>
-                            <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
-                               href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
-                           'sourceId' => $sourceId,
-                           'sourceOrderId' => $sourceOrderId,
-                           'demoOrderId' => $try->demo->demoOrderId,
-                       ])) ?>">View Comparison</a>
-                            <?php endif; ?>
+                            <?= $compare->action(
+                                $try->demo->demoOrderId,
+                                'View comparison for Try ' . $try->number,
+                            ) ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

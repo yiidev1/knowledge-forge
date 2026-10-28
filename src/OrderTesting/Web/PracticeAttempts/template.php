@@ -6,6 +6,7 @@ use App\OrderTesting\Application\Practice\PractitionerScores;
 use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\Practice\PracticeResultsQuery;
 use App\OrderTesting\Domain\Practice\PractitionerSummary;
+use App\OrderTesting\Web\ComparisonLinks;
 use App\OrderTesting\Web\PracticeAttemptsAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
@@ -20,9 +21,9 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * unusable at four hundred — a hundred practitioners with three tries each is a page nobody scrolls
  * to the bottom of, and every card on it costs a document parsed and a comparison scored.
  *
- * So each practitioner is one row: how many results they produced, their best, their latest, when
- * they last practised. Their individual tries are one click away, in a drawer, and are fetched only
- * for the practitioner somebody actually opened.
+ * So each practitioner is one row: how many results they produced, every try's score — each one a
+ * link to that try's comparison — and when they last practised. The full history, paged, is one click
+ * away in a drawer, fetched only for the practitioner somebody actually opened.
  *
  * ## The topic is context, not a control
  *
@@ -74,6 +75,9 @@ $allDemoUrl = $urlGenerator->generate(
     $routes['allDemoOrders'],
     ['sourceId' => $sourceId, 'sourceOrderId' => $sourceOrderId],
 );
+
+// Every comparison link on this page — scores, row actions and unmatched results — comes from here.
+$compare = new ComparisonLinks($urlGenerator, $routes['demoCompare'], $sourceId, $sourceOrderId);
 
 /**
  * A score as a percentage, or a dash where there is none.
@@ -233,23 +237,23 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
         </div>
     <?php else: ?>
         <div class="a2t-table-scroll">
-            <table class="table pr-table">
+            <table class="table pr-table pr-table--practitioners">
                 <colgroup>
                     <col class="pr-col-agent">
                     <col class="pr-col-num">
-                    <col class="pr-col-score">
-                    <col class="pr-col-score">
+                    <col class="pr-col-scores">
                     <col class="pr-col-when">
+                    <col class="pr-col-compare">
                     <col class="pr-col-action">
                 </colgroup>
                 <thead>
                     <tr>
                         <th>Practitioner</th>
                         <th class="pr-num">Tries</th>
-                        <th class="pr-num">Best</th>
-                        <th class="pr-num">Latest</th>
+                        <th>Try scores</th>
                         <th>Last practice</th>
-                        <th><span class="util-visually-hidden">Actions</span></th>
+                        <th><span class="util-visually-hidden">Comparison</span></th>
+                        <th><span class="util-visually-hidden">Tries</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -270,36 +274,58 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                             </td>
                             <td data-ot-label="Tries" class="pr-num"><?=
                                 Html::encode((string) $practitioner->completedTries) ?></td>
-                            <td data-ot-label="Best" class="pr-num">
-                                <?php if ($rowScores !== null && !$rowScores->bestIsExact): ?>
-                                    <?php
-                                    /*
-                                     * The page could not afford to score this practitioner's whole
-                                     * history, so it does not report a best at all.
-                                     *
-                                     * A number computed over part of somebody's results, labelled
-                                     * "Best", is the figure a reviewer compares two people with. An
-                                     * honest blank that points at the drawer — where the history is
-                                     * paged and scored a screenful at a time — is the better answer.
-                                     */
-                                    ?>
-                                    <span class="pr-score pr-score--unknown"
-                                          title="This practitioner has more results than one page can score. Open their tries to see each one.">Not available</span>
-                                <?php else: ?>
-                                    <span class="pr-score pr-score--<?= Html::encode($band($rowScores?->best)) ?>"><?=
-                                        Html::encode($percent($rowScores?->best)) ?></span>
-                                <?php endif; ?>
-                            </td>
-                            <td data-ot-label="Latest" class="pr-num">
-                                <span class="pr-score pr-score--<?= Html::encode($band($rowScores?->latest)) ?>"><?=
-                                    Html::encode($percent($rowScores?->latest)) ?></span>
+                            <td data-ot-label="Try scores">
+                                <?php
+                                /*
+                                 * Every try's score, oldest first, each opening that try's comparison.
+                                 *
+                                 * The same scores the row always computed, kept rather than reduced to
+                                 * one. When the page could not afford a practitioner's whole history,
+                                 * the earlier tries it did not score are counted and one click away in
+                                 * the drawer — never silently left off, so a short list cannot pass for
+                                 * the whole of somebody's record.
+                                 */
+                                $earlier = $rowScores === null ? 0 : $rowScores->earlierTriesNotListed($practitioner->completedTries);
+                        $latestTry = $rowScores?->latestTry();
+                        ?>
+                                <div class="pr-chips">
+                                    <?php if ($earlier > 0): ?>
+                                        <a class="pr-chips__more" href="<?= Html::encode($triesUrl) ?>"
+                                           data-pr-tries="<?= Html::encode($triesUrl) ?>"
+                                           data-pr-agent="<?= Html::encode($practitioner->displayName()) ?>"
+                                           title="Too many to score on this page. Open their tries to see each one.">+<?=
+                                    Html::encode((string) $earlier) ?> earlier</a>
+                                    <?php endif; ?>
+                                    <?php foreach ($rowScores?->tries ?? [] as $try): ?>
+                                        <?= $compare->chip(
+                                            $try->demo->demoOrderId,
+                                            $try->number,
+                                            $percent($try->score),
+                                            $band($try->score),
+                                            $try === $latestTry,
+                                        ) ?>
+                                    <?php endforeach; ?>
+                                </div>
                             </td>
                             <td data-ot-label="Last practice">
                                 <?= $practitioner->lastPractisedAt === null
                                     ? '<span class="util-muted">&mdash;</span>'
                                     : Html::encode($appTimeZone->format($practitioner->lastPractisedAt, 'M j, Y')) ?>
                             </td>
-                            <td data-ot-label="Actions" class="pr-actions">
+                            <td data-ot-label="Comparison" class="pr-actions">
+                                <?php
+                                // Their latest try — the last score in the row. Unavailable only if
+                                // the row has no try left to compare, which says so rather than
+                                // linking to a comparison that does not exist.
+                        ?>
+                                <?= $latestTry !== null
+                                    ? $compare->action(
+                                        $latestTry->demo->demoOrderId,
+                                        'View comparison for ' . $practitioner->displayName() . "'s latest try",
+                                    )
+                                    : '<span class="util-muted" title="No comparison is available for this practitioner.">Unavailable</span>' ?>
+                            </td>
+                            <td data-ot-label="Tries" class="pr-actions">
                                 <?php
                                 // A real link, and the drawer is an enhancement over it. With no
                                 // script it opens the same fragment as a page of its own, so the
@@ -396,15 +422,7 @@ $pageUrl = static function (array $extra) use ($urlGenerator, $routes, $sourceId
                             ? '<span class="util-muted">&mdash;</span>'
                             : Html::encode($demo->importedAt) ?></td>
                             <td data-ot-label="Actions" class="pr-actions">
-                                <?php // Offered only for a 100% score; the row itself always stays.?>
-                                <?php if ($unmatchedScore !== null && $unmatchedScore->isPerfect()): ?>
-                                <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
-                                   href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
-                               'sourceId' => $sourceId,
-                               'sourceOrderId' => $sourceOrderId,
-                               'demoOrderId' => $demo->demoOrderId,
-                           ])) ?>">View Comparison</a>
-                                <?php endif; ?>
+                                <?= $compare->action($demo->demoOrderId) ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

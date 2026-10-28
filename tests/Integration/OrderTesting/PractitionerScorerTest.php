@@ -9,6 +9,8 @@ use App\OrderTesting\Application\Comparison\DemoOrderNormalizer;
 use App\OrderTesting\Application\Comparison\OrderComparator;
 use App\OrderTesting\Application\Comparison\OrderNormalizer;
 use App\OrderTesting\Application\Practice\PractitionerScorer;
+use App\OrderTesting\Application\Practice\PractitionerTry;
+use App\OrderTesting\Domain\InitiatorType;
 use App\OrderTesting\Domain\Practice\PracticeResultsQuery;
 use App\OrderTesting\Infrastructure\DbOriginalItemsReader;
 use App\OrderTesting\Infrastructure\DbPracticeResultsReader;
@@ -18,6 +20,7 @@ use App\Tests\Support\IntegrationDb;
 use Codeception\Test\Unit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 
+use function array_map;
 use function gmdate;
 use function json_encode;
 use function str_pad;
@@ -155,6 +158,61 @@ final class PractitionerScorerTest extends Unit
         self::assertNull($row->best, 'an unavailable comparison must not become a best score');
     }
 
+    /**
+     * Every try is listed for the row, oldest first, numbered exactly as the drawer numbers them.
+     *
+     * Inserted out of order, so the list has to follow when each result was created rather than when
+     * it happened to be imported — which is what "Try 2" means everywhere else.
+     */
+    public function testEveryTryIsListedOldestFirstWithTheDrawersNumbers(): void
+    {
+        $attempt = $this->seedAttempt(7608);
+        $second = $this->seedDemo($attempt, 1_700_000_200);
+        $first = $this->seedDemo($attempt, 1_700_000_100);
+        $third = $this->seedDemo($attempt, 1_700_000_300);
+
+        $row = $this->scoreThePage()['AGENT:7608'];
+
+        self::assertSame([$first, $second, $third], array_map(
+            static fn(PractitionerTry $try): int => $try->demo->demoOrderId,
+            $row->tries,
+        ));
+        self::assertSame([1, 2, 3], array_map(static fn(PractitionerTry $try): int => $try->number, $row->tries));
+
+        // The drawer's own numbering, asked for directly.
+        $numbers = $this->reader->tryNumbersFor(self::STORE, self::ORDER, InitiatorType::Agent, 7608);
+        foreach ($row->tries as $try) {
+            self::assertSame($numbers[$try->demo->demoOrderId], $try->number);
+        }
+
+        // The latest is the last one listed, and it is the score the row has always called Latest.
+        self::assertSame($third, $row->latestTry()?->demo->demoOrderId);
+        self::assertSame($row->latest?->overall, $row->latestTry()?->score->overall);
+        self::assertSame(0, $row->earlierTriesNotListed(3));
+    }
+
+    /**
+     * Too long a history for one page: its latest try is listed, and the rest are counted — never a
+     * partial list passing for the whole of it.
+     */
+    public function testAHugeHistoryListsItsLatestTryAndCountsTheRest(): void
+    {
+        $attempt = $this->seedAttempt(7609);
+        $total = PractitionerScorer::PER_PRACTITIONER + 5;
+        $last = 0;
+
+        for ($i = 0; $i < $total; ++$i) {
+            $last = $this->seedDemo($attempt, 1_700_000_000 + $i);
+        }
+
+        $row = $this->scoreThePage()['AGENT:7609'];
+
+        self::assertCount(1, $row->tries);
+        self::assertSame($last, $row->latestTry()?->demo->demoOrderId);
+        self::assertSame($total, $row->latestTry()?->number, 'the latest is numbered over the whole history');
+        self::assertSame($total - 1, $row->earlierTriesNotListed($total));
+    }
+
     /** @return array<string, \App\OrderTesting\Application\Practice\PractitionerScores> */
     private function scoreThePage(): array
     {
@@ -189,7 +247,8 @@ final class PractitionerScorerTest extends Unit
         return (int) $this->connection->getLastInsertID();
     }
 
-    private function seedDemo(int $attemptId, int $createdAt): void
+    /** @return int the demo order id it wrote */
+    private function seedDemo(int $attemptId, int $createdAt): int
     {
         $now = gmdate('Y-m-d H:i:s');
         $demoOrderId = 16_900_000 + ++$this->seq;
@@ -215,6 +274,8 @@ final class PractitionerScorerTest extends Unit
             'created_at' => $now,
             'updated_at' => $now,
         ])->execute();
+
+        return $demoOrderId;
     }
 
     private function cleanup(): void

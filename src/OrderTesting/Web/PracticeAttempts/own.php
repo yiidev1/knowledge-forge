@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\OrderTesting\Application\Practice\PractitionerTry;
+use App\OrderTesting\Web\ComparisonLinks;
 use App\OrderTesting\Web\PracticeAttemptsAsset;
 use App\Shared\Application\Time\AppTimeZone;
 use Yiisoft\Html\Html;
@@ -53,6 +54,7 @@ $this->setParameter('breadcrumbs', [
 ]);
 
 $storeUrl = $urlGenerator->generate($routes['store'], ['sourceId' => $sourceId]);
+$compare = new ComparisonLinks($urlGenerator, $routes['demoCompare'], $sourceId, $sourceOrderId);
 
 /** A score, or a dash. Never 0% for a comparison that could not be made — see the table template. */
 $percent = static function (App\OrderTesting\Domain\Comparison\ComparisonScore $score): string {
@@ -194,14 +196,10 @@ foreach ($tries as $try) {
                         // The existing comparison page, at this surface's own address, in a
                         // new tab — so a trainee comparing their work does not lose this list.
                         ?>
-                                <?php if ($try->score->isPerfect()): ?>
-                                <a class="ot-rowaction" target="_blank" rel="noopener noreferrer"
-                                   href="<?= Html::encode($urlGenerator->generate($routes['demoCompare'], [
-                               'sourceId' => $sourceId,
-                               'sourceOrderId' => $sourceOrderId,
-                               'demoOrderId' => $try->demo->demoOrderId,
-                           ])) ?>">View Comparison</a>
-                                <?php endif; ?>
+                                <?= $compare->action(
+                                    $try->demo->demoOrderId,
+                                    'View comparison for Try ' . $try->number,
+                                ) ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

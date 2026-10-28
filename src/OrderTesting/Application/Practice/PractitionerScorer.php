@@ -12,11 +12,13 @@ use App\OrderTesting\Domain\Practice\PracticeResultsReaderInterface;
 use App\OrderTesting\Domain\Practice\PractitionerSummary;
 use App\OrderTesting\Domain\SourceOrderReaderInterface;
 
+use function array_reverse;
 use function count;
 use function min;
 
 /**
- * Best and latest score for the practitioners on one page of the table, under a fixed budget.
+ * Every try's score, plus best and latest, for the practitioners on one page of the table, under a
+ * fixed budget.
  *
  * ## Why this is the hard part
  *
@@ -48,6 +50,13 @@ use function min;
  * With ordinary data — practitioners with a handful of tries each — the budget is never approached
  * and every Best on the page is exact. It exists for the case the client asked about, not the
  * ordinary one.
+ *
+ * ## Every try's score comes from the same comparisons
+ *
+ * Scoring Best already scores each of a practitioner's results, so the row's list of try scores costs
+ * nothing extra: it is those same scores, kept and numbered. The numbers come from
+ * {@see PracticeResultsReaderInterface::tryNumbersFor()} — the drawer's own numbering — so Try 2 on the
+ * row and Try 2 in the drawer are always the same demo order.
  */
 final readonly class PractitionerScorer
 {
@@ -119,11 +128,23 @@ final readonly class PractitionerScorer
 
             $latest = null;
             $best = null;
+            $tries = [];
+            // Two integers a row over their whole history: what makes "Try 3" the same on every surface.
+            $numbers = $demos === []
+                ? []
+                : $this->results->tryNumbersFor(
+                    $storeSourceId,
+                    $sourceOrderId,
+                    $practitioner->realm,
+                    $practitioner->actorId,
+                );
 
             foreach ($demos as $i => $demo) {
                 $score = $this->scorer->score(
                     $this->comparator->compare($original, $this->normalizer->normalize($demo), $items),
                 );
+
+                $tries[] = new PractitionerTry($numbers[$demo->demoOrderId] ?? 0, $demo, $score);
 
                 // The reader returns newest first, so the first is the latest. Always exact.
                 if ($i === 0) {
@@ -156,6 +177,8 @@ final readonly class PractitionerScorer
                 // decision about a person with.
                 best: $exact ? $best : null,
                 bestIsExact: $exact,
+                // Newest first from the reader; oldest first on the row, so the last is the latest.
+                tries: array_reverse($tries),
             );
         }
 

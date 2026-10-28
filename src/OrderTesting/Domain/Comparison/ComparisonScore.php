@@ -40,17 +40,6 @@ final readonly class ComparisonScore
         return $this->overall !== null;
     }
 
-    /**
-     * Whether the demo order matched the original completely — the numeric score, not its printed form.
-     *
-     * The same boundary {@see SectionScore::display()} prints 100 at: anything short of 100.0, however
-     * close, is not a perfect score and does not display as one.
-     */
-    public function isPerfect(): bool
-    {
-        return $this->overall !== null && $this->overall >= 100.0;
-    }
-
     /** Rounded for display by the same rule the sections use — see {@see SectionScore::display()}. */
     public function displayPercent(): ?int
     {
