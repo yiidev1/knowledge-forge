@@ -9,6 +9,8 @@ use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
+use App\Order58\Web\CaseOrders\CaseOrderSyncControl;
+use App\Shared\Web\Actor\CurrentActor;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
 /**
@@ -47,6 +49,15 @@ final readonly class OrderTestingAction extends Action
         StoreTopicAssignmentCountsInterface $topicCounts,
         AudioProviderDefaultInterface $providerDefault,
         /**
+         * "Sync Order58 Case Orders" — the Call Recordings page's control, read the same way.
+         *
+         * Read-only, like the page: nothing here decides to synchronise. The press goes to the one
+         * case order endpoint, whichever page it came from.
+         */
+        private CaseOrderSyncControl $caseOrderSync,
+        /** Who is reading: the case order endpoint answers administrators only. */
+        private CurrentActor $actor,
+        /**
          * The configured landing data source, as written in `.env`.
          *
          * Injected as the raw string and interpreted in the domain, so this class carries
@@ -60,6 +71,25 @@ final readonly class OrderTestingAction extends Action
     protected function templatePath(): string
     {
         return __DIR__ . '/order-testing';
+    }
+
+    /**
+     * The case order synchronisation, for the readers its endpoint admits.
+     *
+     * `order58.case-orders.sync` sits in the administrators' route group, so an operation user — who
+     * reaches this page through its own group — is not offered a button that would be refused.
+     *
+     * @param array<array-key, mixed> $params
+     *
+     * @return array<string, mixed>
+     */
+    protected function surfaceParameters(array $params): array
+    {
+        if (!$this->actor->isAdmin()) {
+            return ['caseOrderSyncOffered' => false];
+        }
+
+        return ['caseOrderSyncOffered' => true] + $this->caseOrderSync->viewParameters($params);
     }
 
     /**

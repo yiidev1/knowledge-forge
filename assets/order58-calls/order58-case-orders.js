@@ -27,6 +27,15 @@
 
     var panel = document.querySelector('[data-o58-case-order-panel]');
 
+    /*
+     * Whether a run finished while this page watched it — so what the page behind shows may be stale.
+     *
+     * Read only where the dialog asks for it (`data-o58-case-order-refresh`): Manage Orders counts case
+     * orders on its store cards, so closing the dialog after a run reloads them. Call Recordings shows
+     * no such figures and does not ask.
+     */
+    var settled = false;
+
     bindDialog();
 
     if (!panel || !window.fetch) {
@@ -218,6 +227,7 @@
                 schedule(INTERVAL);
             } else {
                 panel.setAttribute('data-o58-case-order-active', '0');
+                settled = true;
             }
         } else {
             setText('[data-o58-case-order-state]', data.success === true ? 'Nothing to do' : 'Refused');
@@ -323,6 +333,7 @@
                  * would throw away the result the operator just asked for. They close it when ready.
                  */
                 panel.setAttribute('data-o58-case-order-active', '0');
+                settled = true;
 
                 if (start) {
                     start.disabled = false;
@@ -426,6 +437,12 @@
             if (timer !== null) {
                 window.clearTimeout(timer);
                 timer = null;
+            }
+
+            // To Close's own address rather than a reload, so a page opened with the confirmation
+            // flag in its URL does not open the dialog again.
+            if (settled && dialog.hasAttribute('data-o58-case-order-refresh')) {
+                window.location.assign((cancel && cancel.getAttribute('href')) || window.location.href);
             }
         });
     }

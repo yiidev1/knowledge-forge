@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\CallRecordings;
 
+use App\Order58\Web\CaseOrders\CaseOrderSyncAsset;
 use App\Web\Shared\Layout\Admin\AdminAsset;
 use Yiisoft\Assets\AssetBundle;
 
@@ -31,17 +32,18 @@ final class CallRecordingsAsset extends AssetBundle
     public ?string $baseUrl = '@assetsUrl/order58-calls';
     public ?string $sourcePath = '@assetsSource/order58-calls';
 
-    public array $depends = [AdminAsset::class];
+    /**
+     * The case order synchronisation's script comes from its own bundle, which Manage Orders registers
+     * too: it upgrades the confirmation link to a modal and watches the run while the POST is in
+     * flight. Declared once so no page can load it twice and bind the confirm button twice.
+     */
+    public array $depends = [AdminAsset::class, CaseOrderSyncAsset::class];
 
     /**
      * The shared select-all, and this page's own live progress.
      *
      * `order58-recordings.js` is not shared: the calls page has nothing to poll, and giving it a script
      * that looks for a status endpoint it does not render would be dead weight on every load.
-     *
-     * `order58-case-orders.js` is the same arrangement for the case order synchronisation: it upgrades
-     * the confirmation link to a modal and watches the run while the POST is in flight. It returns
-     * immediately on a page that renders neither, so it costs nothing where it is not wanted.
      */
-    public array $js = ['order58-calls.js', 'order58-recordings.js', 'order58-case-orders.js'];
+    public array $js = ['order58-calls.js', 'order58-recordings.js'];
 }

@@ -175,7 +175,7 @@ readonly class Action
                 'providerDefault' => $this->providerDefault->current(),
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
-            ]);
+            ] + $this->surfaceParameters($params));
     }
 
     /**
@@ -225,6 +225,21 @@ readonly class Action
     protected function showsPractisableCount(): bool
     {
         return false;
+    }
+
+    /**
+     * What a surface adds to the page beyond the picker itself. Nothing, here.
+     *
+     * Added to the template's variables, never in place of one: everything above is the picker and
+     * stays the same on every surface. Manage Orders uses it for its case order synchronisation.
+     *
+     * @param array<array-key, mixed> $params the query string
+     *
+     * @return array<string, mixed>
+     */
+    protected function surfaceParameters(array $params): array
+    {
+        return [];
     }
 
     protected function templatePath(): string

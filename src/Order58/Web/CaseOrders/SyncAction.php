@@ -19,6 +19,7 @@ use Throwable;
 use function is_array;
 use function is_string;
 use function json_encode;
+use function in_array;
 use function preg_match;
 use function str_contains;
 
@@ -72,6 +73,18 @@ use const JSON_THROW_ON_ERROR;
  */
 final readonly class SyncAction
 {
+    /**
+     * The pages a scriptless press may come back to, by route name — the pages that render the button.
+     *
+     * Call Recordings is the default, and what a form posting no `return` gets. Manage Orders carries
+     * the same button and names itself. A route name rather than a posted URL: a value that reached a
+     * `Location` header would be an open redirect, and a name cannot point off this site. Anything not
+     * listed is the default. The script's JSON path never redirects, so this is the no-script path only.
+     *
+     * Literals, not `OrderTestingRoute`: that constant lives in a module this one may not name.
+     */
+    private const RETURNS = ['order58.call-recordings', 'order-testing'];
+
     public function __construct(
         /** Decides and claims. It never executes, so the rules stay in one place. */
         private CaseOrderSyncCoordinator $coordinator,
@@ -87,6 +100,7 @@ final readonly class SyncAction
     {
         $body = $request->getParsedBody();
         $reimport = $this->runId(is_array($body) ? ($body['reimport'] ?? null) : null);
+        $back = $this->returnRoute(is_array($body) ? ($body['return'] ?? null) : null);
 
         if ($reimport !== null) {
             // A local re-import of a response already in hand. No provider request, so it runs here.
@@ -103,7 +117,7 @@ final readonly class SyncAction
             // Named for the same reason the sync is: the operator asked about this run, so the panel
             // they come back to describes it rather than whichever run happens to be newest.
             return $this->redirect->afterPost(
-                'order58.call-recordings',
+                $back,
                 ['sync-run' => (string) $reimport],
             );
         }
@@ -125,7 +139,7 @@ final readonly class SyncAction
 
             $this->flash->error($decision->message);
 
-            return $this->redirect->afterPost('order58.call-recordings');
+            return $this->redirect->afterPost($back);
         }
 
         /*
@@ -156,7 +170,7 @@ final readonly class SyncAction
              * inference, and it is this operator's own run by construction.
              */
             return $this->redirect->afterPost(
-                'order58.call-recordings',
+                $back,
                 ['sync-run' => (string) $decision->run->id],
             );
         }
@@ -172,10 +186,10 @@ final readonly class SyncAction
         // is named too. Fresh and rate-limited started nothing, so they name nothing.
         return $decision->isWatchable() && $decision->run !== null
             ? $this->redirect->afterPost(
-                'order58.call-recordings',
+                $back,
                 ['sync-run' => (string) $decision->run->id],
             )
-            : $this->redirect->afterPost('order58.call-recordings');
+            : $this->redirect->afterPost($back);
     }
 
     /**
@@ -263,6 +277,12 @@ final readonly class SyncAction
         $response->getBody()->write(json_encode($payload, JSON_THROW_ON_ERROR));
 
         return $response;
+    }
+
+    /** One of {@see RETURNS}, or the first of them. */
+    private function returnRoute(mixed $raw): string
+    {
+        return is_string($raw) && in_array($raw, self::RETURNS, true) ? $raw : self::RETURNS[0];
     }
 
     /** Digits only and bounded, or null; anything else is not cast into a different number. */

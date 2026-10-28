@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
+use App\Order58\Domain\CaseOrders\CaseOrderSyncRun;
 use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryResult;
 use App\Order58\Domain\StoreSourceStatusFilter;
+use App\Order58\Web\CaseOrders\CaseOrderSyncAsset;
+use App\Order58\Web\CaseOrders\CaseOrderSyncViews;
 use App\Shared\Web\Support\AlphabetIndex;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -13,6 +16,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
  * @var Yiisoft\View\WebView $this
+ * @var Yiisoft\Assets\AssetManager $assetManager
  * @var UrlGeneratorInterface $urlGenerator
  * @var Csrf $csrf
  * @var StoreDirectoryResult $result
@@ -32,6 +36,13 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $providerDefault storage value of the current default transcription provider
  * @var array<string, string> $providerChoices storage value => label, in offer order
  * @var bool $settingsOpen render the settings dialog already open (the no-JavaScript path)
+ * @var bool $caseOrderSyncOffered whether this reader gets "Sync Order58 Case Orders" — administrators only,
+ *      because that endpoint is theirs. The five below are present only when it is true.
+ * @var string $caseOrderSyncUrl
+ * @var string $caseOrderStatusUrl
+ * @var CaseOrderSyncRun|null $caseOrderRun
+ * @var string|null $caseOrderBlockedReason
+ * @var bool $caseOrderConfirmOpen
  */
 
 $this->setTitle('Manage Orders');
@@ -96,6 +107,12 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
 // looking at.
 $here = $dirUrl([]);
 $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
+// The case order confirmation, opened the same way and for the same reason.
+$caseOrderConfirmUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'confirm-case-orders=1';
+
+if ($caseOrderSyncOffered) {
+    $assetManager->register(CaseOrderSyncAsset::class);
+}
 ?>
 <div class="page-header">
     <div>
@@ -108,6 +125,16 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
     // beside the picker rather than on any one store's page.
 ?>
     <div class="page-header__actions">
+        <?php
+        // "Sync Order58 Case Orders": the Call Recordings page's own control — the same trigger file,
+        // the same dialog, the same endpoint and coordinator. Administrators only, because that
+        // endpoint is theirs. Secondary, like the rest of this header.
+?>
+        <?= $caseOrderSyncOffered ? $this->render(CaseOrderSyncViews::trigger(), [
+            'caseOrderBlockedReason' => $caseOrderBlockedReason,
+            'confirmUrl' => $caseOrderConfirmUrl,
+            'buttonClass' => 'btn btn--secondary',
+        ]) : '' ?>
         <?php
         // A real link, not a button: with JavaScript off it reloads this page with the dialog already
         // open, which is the only way the one global setting stays reachable. `admin.js` intercepts it
@@ -199,6 +226,24 @@ $settingsUrl = $here . (str_contains($here, '?') ? '&' : '?') . 'settings=1';
         </div>
     </form>
 </dialog>
+
+<?php
+// The case order confirmation: the shared dialog, posting back to this page when no script runs. The
+// store cards count case orders, so a run that finishes reloads them when the dialog closes.
+?>
+<?php if ($caseOrderSyncOffered): ?>
+    <?= $this->render(CaseOrderSyncViews::dialog(), [
+        'csrfField' => $csrfField,
+        'caseOrderSyncUrl' => $caseOrderSyncUrl,
+        'caseOrderStatusUrl' => $caseOrderStatusUrl,
+        'caseOrderRun' => $caseOrderRun,
+        'caseOrderBlockedReason' => $caseOrderBlockedReason,
+        'caseOrderConfirmOpen' => $caseOrderConfirmOpen,
+        'dismissUrl' => $here,
+        'returnRoute' => 'order-testing',
+        'refreshOnClose' => true,
+    ]) ?>
+<?php endif; ?>
 
 <?= $this->render(__DIR__ . '/_picker-body', [
     'urlGenerator' => $urlGenerator,

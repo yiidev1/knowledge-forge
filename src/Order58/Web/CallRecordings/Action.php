@@ -10,13 +10,11 @@ use App\Integration\Order58Recording\FixtureAvailability;
 use App\Integration\Order58Recording\FixtureCallSource;
 use App\Integration\Order58Recording\LatestCallsRequest;
 use App\Order58\Application\TodayCallFilter;
-use App\Order58\Application\CaseOrders\CaseOrderSyncCoordinator;
-use App\Order58\Client\CaseOrders\CaseOrderSettings;
-use App\Order58\Domain\CaseOrders\CaseOrderSyncRun;
 use App\Order58\Domain\CallImportRepositoryInterface;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreSourceStatusFilter;
+use App\Order58\Web\CaseOrders\CaseOrderSyncControl;
 use App\Shared\Domain\Clock\ClockInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -72,14 +70,12 @@ final readonly class Action
         private ClockInterface $clock,
         private UrlGeneratorInterface $urlGenerator,
         /**
-         * Today's case order run, and whether one could start.
+         * Today's case order run, and whether one could start — the same reading Manage Orders makes.
          *
          * Read on every render, and read-only: a GET must never decide to synchronise. One indexed
          * lookup, and never the staged payload — see the repository.
          */
-        private CaseOrderSyncCoordinator $caseOrders,
-        /** Why the button would be unavailable, in words. Checked before anything is claimed. */
-        private CaseOrderSettings $caseOrderSettings,
+        private CaseOrderSyncControl $caseOrderSync,
         private bool $importEnabled,
     ) {}
 
@@ -146,35 +142,7 @@ final readonly class Action
                  * the page renders an accurate account of today with no script at all — the panel's
                  * polling only saves a refresh.
                  */
-                'caseOrderSyncUrl' => $this->urlGenerator->generate('order58.case-orders.sync'),
-                'caseOrderStatusUrl' => $this->urlGenerator->generate('order58.case-orders.status'),
-                /*
-                 * The run the progress panel describes — **never simply the most recent one.**
-                 *
-                 * Rendering `latest()` here is what put a previous run's Completed badge, full bar
-                 * and its 200/723 counts inside the confirmation dialog before anything had been
-                 * confirmed. A finished run is history; it belongs to the Case Orders page's own
-                 * table, not to a panel whose whole job is to describe the operation in progress.
-                 *
-                 * So: the run actually running, or — after the synchronisation POST redirects back —
-                 * the one named by `sync-run`, which is that operator's own run and nobody else's.
-                 * With neither, the panel renders nothing and the dialog opens clean.
-                 */
-                'caseOrderRun' => $this->caseOrders->active() ?? $this->requestedRun($params),
-                /*
-                 * Whether the button may be pressed, asked of the coordinator rather than inferred.
-                 *
-                 * The panel below shows the most recent run whether or not another may start, so the
-                 * presence of a run says nothing about availability — deciding it from `caseOrderRun`
-                 * disabled the button permanently from the first run onwards. The coordinator owns
-                 * the rate and lease rules; this is the same answer the next press would get.
-                 */
-                'caseOrderBlockedReason' => $this->caseOrders->manualBlockedReason(),
-                'caseOrderProblems' => $this->caseOrderSettings->problems(),
-                // `?confirm-case-orders=1` renders the dialog already open, which is what makes the
-                // confirmation reachable with no script. The flag only ever opens a dialog, so an
-                // unexpected value is simply not it rather than an error.
-                'caseOrderConfirmOpen' => ($params['confirm-case-orders'] ?? null) === '1',
+                ...$this->caseOrderSync->viewParameters($params),
             ]);
     }
 
@@ -237,27 +205,6 @@ final readonly class Action
      * Anything else is today. A malformed value here is a typed URL, not a state worth an error
      * message, and the field shows which day was actually used.
      */
-    /**
-     * The run named by `?sync-run=`, when it exists.
-     *
-     * Written by the synchronisation POST's redirect, so an operator comes back to their own result
-     * rather than to whatever ran last. Any unreadable or unknown value resolves to null rather than
-     * to a different run: this decides which run is described, so a guessed id must show nothing
-     * instead of somebody else's counts.
-     *
-     * @param array<array-key, mixed> $params
-     */
-    private function requestedRun(array $params): ?CaseOrderSyncRun
-    {
-        $raw = $params['sync-run'] ?? null;
-
-        if (!is_string($raw) || preg_match('/^[1-9][0-9]{0,18}$/', $raw) !== 1) {
-            return null;
-        }
-
-        return $this->caseOrders->find((int) $raw);
-    }
-
     private function requestedDate(mixed $value, DateTimeImmutable $now): string
     {
         if (!is_string($value) || $value === '') {
