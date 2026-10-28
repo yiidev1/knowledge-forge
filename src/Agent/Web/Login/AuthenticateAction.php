@@ -22,10 +22,14 @@ use function trim;
  * Processes an agent login submission (POST /agent/login). Post/redirect/get throughout; the failure
  * message is generic (no account enumeration). The throttle key is namespaced so agent and admin login
  * attempts never share a bucket even for the same username and IP.
+ *
+ * Kept for a form that still posts here — a page cached before `/login` became the one sign-in form. That
+ * form signs agents and operation users in through the same service, under the same namespace.
  */
 final readonly class AuthenticateAction
 {
-    private const THROTTLE_NAMESPACE = 'order58-agent';
+    /** Shared with the one sign-in form, so a username's Order58 attempts count in one bucket. */
+    public const THROTTLE_NAMESPACE = 'order58-agent';
 
     public function __construct(
         private AgentLoginService $loginService,

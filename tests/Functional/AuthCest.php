@@ -56,6 +56,15 @@ final class AuthCest
         assertSame('/login', $response->getHeaderLine('Location'));
     }
 
+    /** The agent sign-in's old address is a redirect to the one form, never a second login page. */
+    public function theOldAgentLoginRedirectsToTheOneForm(FunctionalTester $tester): void
+    {
+        $response = $tester->sendRequest(new ServerRequest(uri: '/agent/login'));
+
+        assertSame(302, $response->getStatusCode());
+        assertSame('/login', $response->getHeaderLine('Location'));
+    }
+
     public function agentRuleChatRequiresAuthentication(FunctionalTester $tester): void
     {
         $response = $tester->sendRequest(new ServerRequest(uri: '/agent/rule-chat'));

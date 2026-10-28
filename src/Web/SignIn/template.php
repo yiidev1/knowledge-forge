@@ -7,18 +7,22 @@ use Yiisoft\Router\UrlGeneratorInterface;
 use Yiisoft\Yii\View\Renderer\Csrf;
 
 /**
+ * The one sign-in form, for administrators, agents and operation users alike. Nothing on it says which:
+ * the account the credentials verify against decides — see SignInService.
+ *
  * @var Yiisoft\View\WebView $this
  * @var UrlGeneratorInterface $urlGenerator
  * @var Csrf $csrf
- * @var string $username
+ * @var string $username Previously submitted username, redisplayed so a mistyped password does not
+ *                       force the whole form to be re-entered. Never the password.
  */
 
-$this->setTitle('Agent sign in');
+$this->setTitle('Sign in');
 ?>
-<h1 class="auth__title">Agent sign in</h1>
-<p class="auth__subtitle">Order58 agent access</p>
+<h1 class="auth__title">Sign in</h1>
+<p class="auth__subtitle">Access your account</p>
 
-<form method="post" action="<?= Html::encode($urlGenerator->generate('agent.login')) ?>" novalidate>
+<form method="post" action="<?= Html::encode($urlGenerator->generate('auth.login')) ?>" novalidate>
     <?= $csrf->hiddenInput() ?>
 
     <div class="field">

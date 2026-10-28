@@ -18,7 +18,6 @@ use App\AudioToText\Web as AudioToText;
 use App\AudioToText\Web\AudioToTextRoute;
 use App\AudioToText\Web\OrderTesting;
 use App\AudioToText\Web\OrderTesting\OrderTestingRoute;
-use App\Auth\Web\Login;
 use App\Auth\Web\Logout;
 use App\Auth\Web\Middleware\RequireAdminMiddleware;
 use App\Chat\Web as Chat;
@@ -55,6 +54,7 @@ use App\Rules\Web\Review as RulesReview;
 use App\Rules\Web\RulesList as RulesList;
 use App\Shared\Web\Middleware\DomainExceptionMiddleware;
 use App\Web\Dashboard;
+use App\Web\SignIn;
 use Yiisoft\Http\Method;
 use Yiisoft\Router\Group;
 use Yiisoft\Router\Route;
@@ -62,15 +62,19 @@ use Yiisoft\Router\Route;
 return [
     // Public authentication routes. No admin middleware here, or logging in would require being
     // logged in. CSRF still applies to the POST routes through the global middleware stack.
+    //
+    // ONE sign-in form for administrators, agents and operation users. Each is still verified by its own
+    // login against its own accounts and lands in its own area; see App\Web\SignIn\SignInService.
     Route::get('/login')
-        ->action(Login\ShowAction::class)
+        ->action(SignIn\ShowAction::class)
         ->name('auth.login.show'),
     Route::post('/login')
-        ->action(Login\AuthenticateAction::class)
+        ->action(SignIn\AuthenticateAction::class)
         ->name('auth.login'),
 
-    // Public Order58 agent authentication (a separate realm from the local admin login above). CSRF still
-    // applies to the POST through the global middleware stack.
+    // The Order58 sign-in's old address. GET redirects to /login, so bookmarks, the agent gates and the
+    // agent sign-out all still land on the one form; POST still signs an agent or operation user in, for a
+    // form cached before the move. CSRF applies to the POST through the global middleware stack.
     Route::get('/agent/login')
         ->action(AgentLogin\ShowAction::class)
         ->name('agent.login.show'),

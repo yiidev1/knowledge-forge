@@ -2,29 +2,34 @@
 
 declare(strict_types=1);
 
-namespace App\Auth\Web\Login;
+namespace App\Web\SignIn;
 
-use App\Auth\Application\LoginService;
-use App\Auth\Application\ThrottleKey;
 use App\Shared\Web\Flash\FlashMessages;
 use App\Shared\Web\Support\Redirect;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
+use function ceil;
 use function is_array;
 use function is_string;
+use function sprintf;
+use function trim;
 
 /**
- * Processes a login submission (POST /login).
+ * `POST /login` — signs in an administrator, an agent or an operation user from the one form.
  *
- * Post/redirect/get throughout: whatever the outcome, the response is a redirect carrying a flash
- * message, so a browser refresh never re-submits credentials. The failure message is deliberately
- * generic — it never says whether the username exists.
+ * The form carries no role, and nothing posted here could choose one: where a person lands is decided by
+ * which account their password verified against ({@see SignInService}). The messages are the ones both
+ * login pages already used, so an existing user reads nothing new. CSRF is checked by the global
+ * middleware before this runs.
+ *
+ * Every outcome redirects back to a fixed route name, never to anything taken from the request, so there is
+ * no return address to turn into an open redirect.
  */
 final readonly class AuthenticateAction
 {
     public function __construct(
-        private LoginService $loginService,
+        private SignInService $signIn,
         private Redirect $redirect,
         private FlashMessages $flash,
     ) {}
@@ -39,15 +44,14 @@ final readonly class AuthenticateAction
             return $this->redirect->afterPost('auth.login.show');
         }
 
-        $throttleKey = ThrottleKey::for($username, $this->clientIp($request));
-        $result = $this->loginService->login($username, $password, $throttleKey);
+        $result = $this->signIn->signIn($username, $password, $this->clientIp($request));
 
         if ($result->isSuccess()) {
-            return $this->redirect->afterPost('dashboard');
+            return $this->redirect->afterPost((string) $result->homeRoute);
         }
 
         if ($result->isLocked()) {
-            $minutes = (int) ceil(($result->retryAfterSeconds() ?? 0) / 60);
+            $minutes = (int) ceil(($result->retryAfterSeconds ?? 0) / 60);
             $this->flash->error(
                 sprintf('Too many failed attempts. Try again in %d minute%s.', $minutes, $minutes === 1 ? '' : 's'),
             );
@@ -55,6 +59,15 @@ final readonly class AuthenticateAction
             return $this->redirect->afterPost('auth.login.show');
         }
 
+        if ($result->unavailable) {
+            // Present only when an upstream service supplied a sentence worth showing; it arrives already
+            // sanitized and is escaped again by the flash partial.
+            $this->flash->error($result->message ?? 'Sign-in is temporarily unavailable. Please try again in a moment.');
+
+            return $this->redirect->afterPost('auth.login.show');
+        }
+
+        // One message whichever account was tried, so the page never says which usernames exist where.
         $this->flash->error('Invalid username or password.');
 
         return $this->redirect->afterPost('auth.login.show');
