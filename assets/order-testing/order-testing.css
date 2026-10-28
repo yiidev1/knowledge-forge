@@ -773,6 +773,23 @@
     gap: .3rem;
 }
 
+/* The length inside the Play button: fixed-width digits, so every row's button is the same width. */
+.ot-rec__duration {
+    min-width: 2.6em;
+    text-align: left;
+    white-space: nowrap;
+}
+
+/* Still being read: the placeholder stays quiet. */
+.ot-rec__duration:not([data-ot-duration-state]) {
+    color: var(--text-faint);
+}
+
+/* Could not be read: no placeholder left behind, just the Play icon. */
+.ot-rec__duration[data-ot-duration-state="unknown"] {
+    display: none;
+}
+
 .ot-rec__download {
     display: inline-flex;
     align-items: center;

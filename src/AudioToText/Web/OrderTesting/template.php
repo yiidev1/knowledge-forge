@@ -447,11 +447,16 @@ $caseRecordingControls = static function (string $orderId, CaseRecording $record
     $label = ' ' . $which . ' of order #' . $orderId;
 
     return '<span class="ot-rec__pair">'
-        . '<button class="a2t-play a2t-play--icon" type="button"'
+        . '<button class="a2t-play" type="button"'
         . ' data-a2t-play="' . Html::encode($caseRecordingUrl($orderId, $recording)) . '"'
         . ' title="' . Html::encode('Play' . $label) . '"'
         . ' aria-label="' . Html::encode('Play' . $label) . '">'
         . '<span class="a2t-play__icon" aria-hidden="true"></span>'
+        // The recording's length, inside the button like every other Play control on this page.
+        // Nothing stores it, so order-testing.js fills it in from the WAV header once the row is on
+        // screen; a placeholder holds the width until then, and it is hidden if it cannot be read.
+        . '<span class="a2t-play__time ot-rec__duration" aria-hidden="true"'
+        . ' data-ot-duration="' . Html::encode($caseRecordingUrl($orderId, $recording)) . '">--:--</span>'
         . '</button>'
         . '<a class="ot-rec__download" download'
         . ' href="' . Html::encode($caseRecordingUrl($orderId, $recording, true)) . '"'

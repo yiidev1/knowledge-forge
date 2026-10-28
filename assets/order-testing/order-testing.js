@@ -362,3 +362,207 @@
         });
     });
 }());
+
+/* ---- The length of each Case Order recording, inside its Play button ------------------------------
+
+   Nothing stores a Case Order recording's length: the audio is streamed from the provider on demand.
+   So it is read here from the WAV header — the first 4 KB, asked for with a Range request on the same
+   address Play uses — and computed as data bytes over the byte rate.
+
+   Deliberately frugal, because every read makes the server fetch that recording from the provider:
+   only rows that are on screen are asked about (a closed "N recordings" list waits until it is opened),
+   one at a time, each address once, and the answer is kept for the browser session. The players are not
+   touched — this uses fetch, never a media element — so Play, Pause and Download behave exactly as
+   before. A length that cannot be read is hidden, leaving the Play icon on its own. */
+
+(function () {
+    'use strict';
+
+    var labels = document.querySelectorAll('[data-ot-duration]');
+
+    if (labels.length === 0 || typeof window.fetch !== 'function') {
+        return;
+    }
+
+    var HEADER_BYTES = 4096;
+    var CACHE_PREFIX = 'ot-duration:';
+    var queue = [];
+    var asked = {};
+    var busy = false;
+
+    function two(n) {
+        return (n < 10 ? '0' : '') + n;
+    }
+
+    /** `02:35`, or `01:12:30` from an hour up. */
+    function clock(seconds) {
+        var whole = Math.round(seconds);
+        var hours = Math.floor(whole / 3600);
+        var rest = two(Math.floor((whole % 3600) / 60)) + ':' + two(whole % 60);
+
+        return hours > 0 ? two(hours) + ':' + rest : rest;
+    }
+
+    function remembered(url) {
+        try {
+            var value = window.sessionStorage.getItem(CACHE_PREFIX + url);
+
+            return value === null ? null : Number(value);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function remember(url, seconds) {
+        try {
+            window.sessionStorage.setItem(CACHE_PREFIX + url, String(seconds));
+        } catch (e) {
+            // Storage refused or full: the length is simply read again next time.
+        }
+    }
+
+    /** Every label for this address — the first recording is listed twice when an order has several. */
+    function show(url, seconds) {
+        Array.prototype.forEach.call(labels, function (label) {
+            if (label.getAttribute('data-ot-duration') !== url) {
+                return;
+            }
+
+            if (seconds === null) {
+                label.setAttribute('data-ot-duration-state', 'unknown');
+
+                return;
+            }
+
+            label.textContent = clock(seconds);
+            label.setAttribute('data-ot-duration-state', 'known');
+        });
+    }
+
+    function tag(view, offset) {
+        var text = '';
+
+        for (var i = 0; i < 4; i++) {
+            text += String.fromCharCode(view.getUint8(offset + i));
+        }
+
+        return text;
+    }
+
+    /**
+     * Seconds of audio, from a RIFF/WAVE header: the `data` chunk's size over the `fmt ` byte rate.
+     *
+     * A recorder that streamed the file may leave the data size at 0 or 0xFFFFFFFF; the file's total
+     * size from Content-Range is used instead then, which is what the size would have been.
+     */
+    function lengthOf(buffer, total) {
+        var view = new DataView(buffer);
+
+        if (view.byteLength < 12 || tag(view, 0) !== 'RIFF' || tag(view, 8) !== 'WAVE') {
+            return null;
+        }
+
+        var byteRate = 0;
+        var offset = 12;
+
+        while (offset + 8 <= view.byteLength) {
+            var id = tag(view, offset);
+            var size = view.getUint32(offset + 4, true);
+
+            if (id === 'fmt ' && offset + 20 <= view.byteLength) {
+                byteRate = view.getUint32(offset + 16, true);
+            }
+
+            if (id === 'data') {
+                var available = total > 0 ? total - (offset + 8) : 0;
+                var bytes = size > 0 && size !== 0xFFFFFFFF && (available === 0 || size <= available) ? size : available;
+
+                return byteRate > 0 && bytes > 0 ? bytes / byteRate : null;
+            }
+
+            offset += 8 + size + (size % 2);
+        }
+
+        return null;
+    }
+
+    function next() {
+        if (busy || queue.length === 0) {
+            return;
+        }
+
+        busy = true;
+        var url = queue.shift();
+
+        window.fetch(url, { headers: { Range: 'bytes=0-' + (HEADER_BYTES - 1) }, credentials: 'same-origin' })
+            .then(function (response) {
+                if (!response.ok) {
+                    // Read the short refusal to its end: an unread body keeps the request open, and
+                    // the page never settles.
+                    return response.text().then(function () {
+                        throw new Error('HTTP ' + response.status);
+                    });
+                }
+
+                var range = /\/(\d+)$/.exec(response.headers.get('Content-Range') || '');
+                var total = range ? Number(range[1]) : Number(response.headers.get('Content-Length') || 0);
+
+                return response.arrayBuffer().then(function (buffer) {
+                    return lengthOf(buffer, total);
+                });
+            })
+            .then(function (seconds) {
+                if (seconds !== null) {
+                    remember(url, seconds);
+                }
+
+                show(url, seconds);
+            })
+            .catch(function () {
+                show(url, null);
+            })
+            .then(function () {
+                busy = false;
+                next();
+            });
+    }
+
+    function want(url) {
+        if (!url || asked[url]) {
+            return;
+        }
+
+        asked[url] = true;
+        var cached = remembered(url);
+
+        if (cached !== null && isFinite(cached) && cached > 0) {
+            show(url, cached);
+
+            return;
+        }
+
+        queue.push(url);
+        next();
+    }
+
+    if (!('IntersectionObserver' in window)) {
+        Array.prototype.forEach.call(labels, function (label) {
+            want(label.getAttribute('data-ot-duration'));
+        });
+
+        return;
+    }
+
+    var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+                observer.unobserve(entry.target);
+                want(entry.target.getAttribute('data-ot-duration'));
+            }
+        });
+    }, { rootMargin: '200px 0px' });
+
+    Array.prototype.forEach.call(labels, function (label) {
+        observer.observe(label);
+    });
+}());

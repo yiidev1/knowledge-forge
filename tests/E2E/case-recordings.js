@@ -32,8 +32,15 @@ const recordingPath = (order, id) => '/order-testing/store/' + fx.store + '/orde
         }
     });
 
+    // Playback and downloads, kept apart from the 4 KB header reads the duration labels make.
+    const headerReads = [];
     page.on('request', (r) => {
-        if (r.url().includes('/recording/')) audioRequests.push(r.url());
+        if (!r.url().includes('/recording/')) return;
+        if ((r.headers().range || '') === 'bytes=0-4095' && r.resourceType() === 'fetch') {
+            headerReads.push(r.url());
+        } else {
+            audioRequests.push(r.url());
+        }
     });
 
     try {
@@ -44,7 +51,44 @@ const recordingPath = (order, id) => '/order-testing/store/' + fx.store + '/orde
         await page.evaluate(() => document.fonts.ready);
         await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
 
-        check('no recording is requested when the page opens', audioRequests.length === 0, audioRequests.join(', '));
+        check('no recording is played or downloaded when the page opens', audioRequests.length === 0, audioRequests.join(', '));
+
+        // ---------------------------------------------------------------- the length beside Play
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-ot-duration]')]
+            // A closed "N recordings" list is not on screen, however Chrome lays it out.
+            .filter((l) => l.closest('details:not([open])') === null)
+            .every((l) => l.hasAttribute('data-ot-duration-state')), { timeout: 15000 });
+        const lengths = await page.evaluate((one, three, gone) => {
+            const label = (id) => {
+                const tr = [...document.querySelectorAll('tr')].find((t) => t.textContent.includes('#' + id));
+                const l = tr && tr.querySelector('.ot-rec__pair .a2t-play .ot-rec__duration');
+                return l ? { text: l.textContent, state: l.getAttribute('data-ot-duration-state'),
+                    hidden: getComputedStyle(l).display === 'none' } : null;
+            };
+            const pair = document.querySelector('.ot-rec__pair');
+            const order = [...pair.children].map((c) => c.className.split(' ')[0])
+                .concat([...pair.querySelector('.a2t-play').children].map((c) => 'button>' + c.className.split(' ')[0]));
+            return { one: label(one), three: label(three), gone: label(gone), order };
+        }, fx.one, fx.three, fx.gone);
+        check('each recording shows its length beside Play', lengths.one && lengths.one.text === '00:06'
+            && lengths.three && lengths.three.text === '00:06', JSON.stringify(lengths));
+        check('inside the Play button, after the icon, with Download separate', JSON.stringify(lengths.order)
+            === JSON.stringify(['a2t-play', 'ot-rec__download', 'button>a2t-play__icon', 'button>a2t-play__time']),
+            JSON.stringify(lengths.order));
+        check('a length that cannot be read is hidden, not left as a placeholder',
+            lengths.gone && lengths.gone.state === 'unknown' && lengths.gone.hidden, JSON.stringify(lengths.gone));
+
+        // The whole button plays — pressing the length, not only the icon.
+        const durationOnly = '[data-a2t-play="' + recordingPath(fx.one, fx.recordings[fx.one][0]) + '"] .ot-rec__duration';
+        await page.click(durationOnly);
+        await sleep(1200);
+        const byLength = await page.$eval('[data-a2t-play="' + recordingPath(fx.one, fx.recordings[fx.one][0]) + '"]',
+            (b) => b.hasAttribute('data-playing'));
+        check('pressing the length plays the recording', byLength);
+        await page.click(durationOnly);
+        await sleep(300);
+        check('only the visible recordings were read, each once, as 4 KB header reads',
+            headerReads.length === 3 && new Set(headerReads).size === 3, headerReads.join(', '));
         check('no native audio players are rendered',
             await page.$$eval('audio', (a) => a.length) === 0);
 
@@ -68,7 +112,8 @@ const recordingPath = (order, id) => '/order-testing/store/' + fx.store + '/orde
             };
         }, fx.one, fx.none);
 
-        check('a recorded order has a Play icon', cell.play && cell.playText === '', JSON.stringify(cell));
+        check('a recorded order has a Play button carrying only its length as text',
+            cell.play && /^(--:--|\d{2}:\d{2})$/.test(cell.playText), JSON.stringify(cell));
         check('and a Download icon pointing at the download address',
             cell.download === recordingPath(fx.one, fx.recordings[fx.one][0]) + '?download=1', cell.download);
         check('icons only — no visible words', cell.downloadVisibleText === '', cell.downloadVisibleText);
@@ -95,6 +140,13 @@ const recordingPath = (order, id) => '/order-testing/store/' + fx.store + '/orde
         check('opened, it lists each recording with its own Play and Download',
             opened.items === 3 && opened.plays === 3 && opened.downloads === 3, JSON.stringify(opened));
 
+        await page.waitForFunction(() => [...document.querySelectorAll('.ot-rec__item .ot-rec__duration')]
+            .every((l) => l.getAttribute('data-ot-duration-state') === 'known'), { timeout: 15000 });
+        const listed = await page.$$eval('.ot-rec__item .ot-rec__duration', (ls) => ls.map((l) => l.textContent));
+        check('each listed recording shows its own length once the list is opened',
+            JSON.stringify(listed) === JSON.stringify(['00:06', '00:06', '00:06']), JSON.stringify(listed));
+        check('and only the two newly visible ones were read', headerReads.length === 5, headerReads.join(', '));
+
         // ---------------------------------------------------------------- playback
         const first = '[data-a2t-play="' + recordingPath(fx.one, fx.recordings[fx.one][0]) + '"]';
         await page.click(first);
@@ -108,7 +160,7 @@ const recordingPath = (order, id) => '/order-testing/store/' + fx.store + '/orde
         }));
         check('pressing Play plays it', playing.playing && !playing.broken && playing.pressed === 'true', JSON.stringify(playing));
         check('and the loading ring is gone once sound starts', !playing.loading, JSON.stringify(playing));
-        check('exactly that recording was requested, once',
+        check('only that recording was played, and the paused element resumed rather than refetched',
             audioRequests.length === 1 && audioRequests[0].endsWith(recordingPath(fx.one, fx.recordings[fx.one][0])),
             audioRequests.join(', '));
 
