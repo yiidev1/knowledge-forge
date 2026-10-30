@@ -564,9 +564,35 @@ final class OrderTestingItemComparisonCest
         $I->see('12.05000', '.ot-book--demo .ot-items');
         $I->see('Not scored', '.ot-book--demo .ot-items');
         $I->dontSee('Different', '.ot-book--demo .ot-items');
+        $I->dontSee('Match', '.ot-book--demo .ot-items .ot-mark');
         $I->dontSeeElement('.ot-book--demo .ot-items .ot-book__line--different');
         $I->see('100%', '.ot-book--demo .ot-sscore__value');
         $I->see('100%', '.ot-score__value');
+    }
+
+    /**
+     * The note is on every demo price, matching or not — never only where the prices differ — and a
+     * line the demo does not have prints a dash without one.
+     */
+    public function everyDemoUnitPriceSaysNotScored(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedItem(2, $this->soup(), 1);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $notes = [];
+
+        foreach ($I->grabMultiple('//section[contains(@class, "ot-book--demo")]//div[contains(@class, "ot-book__line")][dt[normalize-space(.) = "Unit price"]]') as $row) {
+            $notes[] = self::flatten($row);
+        }
+
+        // Wings: same price on both sides, still noted. Soup: not on the demo, a dash and nothing else.
+        // (The row's label, value and note are adjacent elements, so their text runs together.)
+        Assert::assertSame(['Unit price11.35000Not scored', 'Unit price—'], $notes);
     }
 
     /** Totals are for reference: no score badge, no verdicts and no tint, however the amounts differ. */

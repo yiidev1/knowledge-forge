@@ -177,7 +177,8 @@ final class ComparisonScoringTest extends TestCase
      * The reported pair, read exactly as the page reads it: both orders through the one normalizer, the
      * original's lines from their stored canonical form, and the demo's street from its own column.
      */
-    private function regression(): OrderComparison
+    /** @param (callable(array<array-key, mixed>): array<array-key, mixed>)|null $editDemo */
+    private function regression(?callable $editDemo = null): OrderComparison
     {
         $json = (string) file_get_contents(
             dirname(__DIR__, 2) . '/_data/order-testing/regression/15275271-16635331.json',
@@ -188,6 +189,10 @@ final class ComparisonScoringTest extends TestCase
         $demo = $fixture['demo'];
         self::assertIsArray($demo);
         $demo['data']['shipping']['street1'] = $fixture['demoStreet'];
+
+        if ($editDemo !== null) {
+            $demo = $editDemo($demo);
+        }
 
         $items = [];
 
@@ -461,6 +466,61 @@ final class ComparisonScoringTest extends TestCase
         self::assertSame(100, $this->section($score, 'Order items')->displayPercent());
         self::assertSame(2, $this->section($score, 'Order items')->matched);
         self::assertSame(0, $this->section($score, 'Order items')->different);
+    }
+
+    /**
+     * Changing only unit prices changes no score at all.
+     *
+     * The reported order, scored twice: once as it is (two lines priced differently from the original)
+     * and once with every demo price replaced — some now matching the original, the rest far off. Every
+     * section's percentage, matched, different, missing and scored counts, every line's verdict and the
+     * overall are identical. A price is neither a match nor a mismatch, and is in no denominator.
+     */
+    public function testChangingOnlyUnitPricesChangesNoScore(): void
+    {
+        $asStored = $this->regression();
+
+        $repriced = $this->regression(static function (array $demo): array {
+            foreach ($demo['items'] as $index => $item) {
+                // Even lines take the original's price, odd lines an absurd one.
+                $demo['items'][$index]['price'] = $index % 2 === 0 ? '11.55000' : '999.99000';
+            }
+
+            return $demo;
+        });
+
+        $before = (new ComparisonScorer())->score($asStored);
+        $after = (new ComparisonScorer())->score($repriced);
+
+        self::assertSame($before->overall, $after->overall);
+        self::assertSame($this->fingerprint($before), $this->fingerprint($after));
+        self::assertEquals($this->verdictsByName($asStored), $this->verdictsByName($repriced));
+
+        // And the prices really did change, so the test is not comparing a document with itself.
+        self::assertNotSame(
+            array_map(static fn(ItemComparison $i): ?string => $i->demo?->unitPrice, $asStored->items),
+            array_map(static fn(ItemComparison $i): ?string => $i->demo?->unitPrice, $repriced->items),
+        );
+    }
+
+    /** @return array<string, array<string, float|int|null>> */
+    private function fingerprint(ComparisonScore $score): array
+    {
+        $out = [];
+
+        foreach ($score->sections as $section) {
+            $out[$section->title] = [
+                'percent' => $section->percent,
+                'matched' => $section->matched,
+                'different' => $section->different,
+                'missing' => $section->missing,
+                'extra' => $section->extra,
+                'scored' => $section->scoredUnits,
+                'visible' => $section->visibleUnits,
+            ];
+        }
+
+        return $out;
     }
 
     /**

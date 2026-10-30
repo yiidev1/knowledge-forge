@@ -127,8 +127,8 @@ $verdict = static function (FieldComparison|ItemComparison $c) use ($statusWords
 /**
  * A row shown for reference and counted by nothing: said so, quietly, where a verdict would sit.
  *
- * Used where two values differ but the difference is not scored — a unit price — so a reader is not
- * left to take a neutral grey note for a mistake the score charged.
+ * Printed beside every demo unit price, whether or not it matches, so a reader is never left to take a
+ * price difference for a mistake the score charged.
  */
 $notScored = '<span class="ot-mark ot-mark--note">Not scored</span>';
 
@@ -502,13 +502,16 @@ $panel = static function (
                     ? ($mine === null ? $value(null) : $list($modifierLists[$field->label]($mine)))
                     : $value($pick($field));
 
-                // Shown, never scored: no verdict and no tint, and a difference is pointed out as one
-                // the score does not count rather than as a mistake.
+                // Shown, never scored: no verdict and no tint. Every demo price says so — matching or
+                // not — so the note reads as a property of the row rather than as a finding about it.
+                // A line the demo does not have prints a dash and no note.
                 if (in_array($field->label, $referenceItemFields, true)) {
+                    $shown = $pick($field);
+
                     $out .= $line(
                         $field->label,
                         $rendered,
-                        $isDemo && $field->status === ComparisonStatus::Different ? $notScored : '',
+                        $isDemo && $shown !== null && trim($shown) !== '' ? $notScored : '',
                     );
 
                     continue;
