@@ -17,6 +17,7 @@ use Throwable;
 
 use function fclose;
 use function file_get_contents;
+use function filesize;
 use function fopen;
 use function fwrite;
 use function is_file;
@@ -107,6 +108,109 @@ final readonly class RecordingStreamer
         } finally {
             $slot->release();
         }
+    }
+
+    /**
+     * How long a recording is, asked of the provider without fetching the audio.
+     *
+     * The page's duration labels were learned by requesting the first 4 KB of each recording. The
+     * provider does not honour `Range` — verified repeatedly against the live service — so every one
+     * of those requests was answered with the ENTIRE file. Store 1731's eight labels cost 37,369,952
+     * bytes on every uncached page load. A `HEAD` carries the same `Content-Length` having
+     * transferred ZERO bytes, and all eight were checked this way against the durations already on
+     * the page: every one matched to the second.
+     *
+     * It takes a gate slot like any fetch: a HEAD transfers nothing, but the provider still locates
+     * the recording — observed at 0.7 to 2.6 seconds — so it is a request this server makes of
+     * somebody else's service and queues with the rest.
+     *
+     * It never guesses. {@see RecordingMeasurement::fromBytes()} refuses a size that does not
+     * produce a plausible call length, and a provider answering without a `Content-Length` is a
+     * refusal too. Either way the caller is told nothing was learned and reads the real header
+     * instead — the path it took before this existed. This can be slow; it cannot be wrong.
+     */
+    public function measure(string $url): RecordingMeasurement
+    {
+        if (!RecordingUrlPolicy::accepts($url)) {
+            return RecordingMeasurement::failed(RecordingFetchFailure::Refused);
+        }
+
+        if ($this->settings->fixture) {
+            return $this->measureFixture($url);
+        }
+
+        $slot = $this->gate->acquire();
+
+        if ($slot === null) {
+            return RecordingMeasurement::failed(RecordingFetchFailure::Busy);
+        }
+
+        try {
+            $response = $this->client()->request('HEAD', $url, [
+                'headers' => ['Accept' => '*/*'],
+                'http_errors' => false,
+                // The same rule the download follows: an accepted address must not be able to lead
+                // somewhere unaccepted.
+                'allow_redirects' => false,
+                'connect_timeout' => self::CONNECT_TIMEOUT_SECONDS,
+                'timeout' => self::DEADLINE_SECONDS,
+            ]);
+        } catch (ConnectException) {
+            return RecordingMeasurement::failed(RecordingFetchFailure::Unreachable);
+        } catch (Throwable) {
+            // The message is deliberately not kept: a transport message quotes the full URI, which
+            // carries the customer's telephone number.
+            return RecordingMeasurement::failed(RecordingFetchFailure::Unreachable);
+        } finally {
+            $slot->release();
+        }
+
+        $status = $response->getStatusCode();
+
+        if ($status < 200 || $status >= 300) {
+            return RecordingMeasurement::failed(
+                $status === 404 ? RecordingFetchFailure::NotFound : RecordingFetchFailure::UpstreamError,
+            );
+        }
+
+        $declared = trim($response->getHeaderLine('Content-Length'));
+
+        if (preg_match('/\A\d{1,15}\z/', $declared) !== 1) {
+            // A HEAD without a length answers nothing. Not an error — simply no shortcut available.
+            return RecordingMeasurement::failed(RecordingFetchFailure::UpstreamError);
+        }
+
+        $bytes = (int) $declared;
+
+        return $bytes > self::MAX_BYTES
+            ? RecordingMeasurement::failed(RecordingFetchFailure::TooLarge)
+            : RecordingMeasurement::fromBytes($bytes);
+    }
+
+    /**
+     * The fixture's size on disk, so a test deployment answers this without a socket.
+     *
+     * Mirrors {@see fromFixture()}'s own search order, `default.wav` included, so the two cannot
+     * disagree about which file a session resolves to.
+     */
+    private function measureFixture(string $url): RecordingMeasurement
+    {
+        $session = (string) RecordingUrlPolicy::sessionIdOf($url);
+        $directory = $this->settings->fixtureDirectory;
+
+        foreach ([$directory . '/' . $session . '.wav', $directory . '/default.wav'] as $path) {
+            if (!is_file($path) || !is_readable($path)) {
+                continue;
+            }
+
+            $bytes = filesize($path);
+
+            if ($bytes !== false && $bytes > 0) {
+                return RecordingMeasurement::fromBytes($bytes);
+            }
+        }
+
+        return RecordingMeasurement::failed(RecordingFetchFailure::NotFound);
     }
 
     private function download(string $url): RecordingFetch

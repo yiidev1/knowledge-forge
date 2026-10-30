@@ -12,50 +12,50 @@
     'use strict';
 
     /* ---- Demo URL: record the attempt, then open Order58 in a new tab ----------------------------
-
+ 
        Why this exists at all, since a <form target="_blank"> already opens a new tab:
-
+ 
        `form-action 'self'` in the application's CSP is enforced ACROSS REDIRECTS by Chrome and
        Safari. The old cell posted here and received a 303 to `https://…order58.com/…`; the new tab
        opened and then sat on about:blank, because the redirect's destination is not in `form-action`.
        Ctrl-clicking looked like it worked only because a link navigation is not a form submission.
-
+ 
        A navigation this script performs is not a form submission either, and no directive in the
        policy restricts it. So: POST here for the attempt, read back the server-built URL, and point
        a tab at it.
-
+ 
        THE ORDER OF THE FIRST THREE STATEMENTS IS THE WHOLE TRICK, and it is not the obvious one.
-
+ 
        Both the player and the tab are opened SYNCHRONOUSLY, inside the click event, before any network
        call. A window opened later — in a promise callback, after an await — is no longer attributable
        to the user's gesture and every popup blocker refuses it.
-
+ 
        The player must come FIRST. `window.open()` consumes the transient activation, and
        `requestWindow()` then fails with `NotAllowedError: Document PiP requires user activation` —
        measured, not supposed. Requesting the player first and the tab second leaves both satisfied:
        the player opens and the tab is not blocked. Swapping these two lines back silently costs the
        player and nothing else, which is exactly the kind of regression nobody notices.
-
+ 
        The form stays a real form. With this script absent the POST still happens, the attempt is
        still recorded, and the server answers with a page carrying the link. */
 
     var ATTEMPT = '[data-ot-demo-url]';
 
     /* ---- the floating player ---------------------------------------------------------------------
-
+ 
        Pressing Demo URL opens the Order58 form in a second tab, and the trainee then works there. The
        recording they are transcribing lives in THIS tab, so once they switch, the audio is behind a tab
        they are no longer looking at — which is the whole difficulty this solves.
-
+ 
        Document Picture-in-Picture puts the player in a small always-on-top window owned by this
        document. It outlives a tab switch and keeps playing while the Order58 tab has focus. It does NOT
        outlive a navigation of THIS tab: the window belongs to this document and closes with it. That is
        measured behaviour, not a guess, and it is why the Order58 form opens in a second tab rather than
        in this one.
-
+ 
        The audio address is the one the row's own play button already uses — same route, same session,
        same authorization. Nothing new is exposed and no token is minted.
-
+ 
        `requestWindow()` needs transient user activation, so it is CALLED inside the click handler for
        the same reason `window.open` is. The window is furnished later, in the promise; only the call
        has to be attributable to the gesture. */
@@ -486,21 +486,24 @@
         return null;
     }
 
-    function next() {
-        if (busy || queue.length === 0) {
-            return;
-        }
-
-        busy = true;
-        var url = queue.shift();
-
-        window.fetch(url, { headers: { Range: 'bytes=0-' + (HEADER_BYTES - 1) }, credentials: 'same-origin' })
+    /**
+     * The length read out of the file's own RIFF header.
+     *
+     * Kept exactly as it was, and still the authority: the provider does not honour `Range`, so this
+     * costs a whole recording. It now runs only when the cheap question below cannot be answered —
+     * a format the size shortcut does not speak for — which is the case it was always right for.
+     */
+    function readHeader(url) {
+        return window.fetch(url, {
+            headers: { Range: 'bytes=0-' + (HEADER_BYTES - 1) },
+            credentials: 'same-origin'
+        })
             .then(function (response) {
                 if (!response.ok) {
                     // Read the short refusal to its end: an unread body keeps the request open, and
                     // the page never settles.
                     return response.text().then(function () {
-                        throw new Error('HTTP ' + response.status);
+                        return null;
                     });
                 }
 
@@ -511,7 +514,57 @@
                     return lengthOf(buffer, total);
                 });
             })
+            .catch(function () {
+                return null;
+            });
+    }
+
+    /**
+     * The length the server worked out from the recording's SIZE, without fetching the audio.
+     *
+     * Null means "could not tell" — a 409, or anything unexpected — and never "no recording". The
+     * caller falls back to the header read, so being unsure costs what this page cost before.
+     */
+    function askSize(url) {
+        return window.fetch(url + (url.indexOf('?') === -1 ? '?' : '&') + 'duration=1', {
+            credentials: 'same-origin'
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    // Drain the short refusal, or the request stays open.
+                    return response.text().then(function () {
+                        return null;
+                    });
+                }
+
+                return response.json().then(function (data) {
+                    var seconds = Number(data && data.seconds);
+
+                    return isFinite(seconds) && seconds > 0 ? seconds : null;
+                });
+            })
+            .catch(function () {
+                return null;
+            });
+    }
+
+    function next() {
+        if (busy || queue.length === 0) {
+            return;
+        }
+
+        busy = true;
+        var url = queue.shift();
+
+        // The cheap question first; the header read only when it cannot answer.
+        askSize(url)
             .then(function (seconds) {
+                return seconds !== null ? seconds : readHeader(url);
+            })
+            .then(function (seconds) {
+                // `url` here is always the ORIGINAL address — never the `?duration=1` form. Both the
+                // label lookup and the session cache are keyed on it, and a suffixed key would quietly
+                // match no label and poison the cache.
                 if (seconds !== null) {
                     remember(url, seconds);
                 }

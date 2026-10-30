@@ -60,6 +60,20 @@ final readonly class Action
             return $this->responder->problem(404, 'No such recording for this order.');
         }
 
+        // A duration probe: the page's "--:--" labels. Answered from the recording's SIZE, so the
+        // provider transfers nothing. Placed before the fetch below because it must never reach it —
+        // the whole point is not to download audio in order to print a number.
+        if (($request->getQueryParams()['duration'] ?? null) === '1') {
+            $measured = $this->streamer->measure($location->url);
+
+            // 409, not 404 or 500: the recording exists and this server is well — only the shortcut
+            // declined, and the page reads the real header instead, exactly as it did before. A
+            // distinct status keeps that apart from a genuine failure in the access log.
+            return $measured->isUsable()
+                ? $this->responder->duration((float) $measured->seconds)
+                : $this->responder->problem(409, 'Duration could not be determined from the recording size.');
+        }
+
         $fetch = $this->streamer->fetch($location->url);
 
         if (!$fetch->isOk()) {

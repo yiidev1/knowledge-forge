@@ -10,10 +10,12 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamInterface;
 
+use function json_encode;
 use function max;
 use function min;
 use function preg_match;
 use function preg_replace;
+use function round;
 use function sprintf;
 use function trim;
 
@@ -56,6 +58,25 @@ final readonly class RecordingResponder
             ->withHeader('Content-Range', sprintf('bytes %d-%d/%d', $start, $end, $size))
             ->withHeader('Content-Length', (string) $length)
             ->withBody(new LimitStream($body, $length, $start));
+    }
+
+    /**
+     * A duration, as JSON.
+     *
+     * Its own method rather than a raw response so the one place that writes `no-store` for a
+     * customer's call also writes it for a number derived from one.
+     */
+    public function duration(float $seconds): ResponseInterface
+    {
+        $response = $this->responseFactory
+            ->createResponse(200)
+            ->withHeader('Content-Type', 'application/json')
+            ->withHeader('X-Content-Type-Options', 'nosniff')
+            ->withHeader('Cache-Control', 'no-store, private');
+
+        $response->getBody()->write((string) json_encode(['seconds' => round($seconds, 2)]));
+
+        return $response;
     }
 
     /**
