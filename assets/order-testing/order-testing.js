@@ -93,6 +93,24 @@
     }
 
     /** The player's markup, built from the page's own classes so it wears the admin theme. */
+    /**
+     * The length this page already measured for that recording, or null.
+     *
+     * Written by the duration block at the foot of this file under the same key. Read here so the
+     * player can print a real length the moment it opens, instead of the "0:00 / 0:00" that made a
+     * recording still loading look like a broken one. Never a substitute for the element's own
+     * metadata — it is replaced by `loadedmetadata` as soon as that arrives.
+     */
+    function knownDuration(url) {
+        try {
+            var value = window.sessionStorage.getItem('ot-duration:' + url);
+
+            return value === null ? null : Number(value);
+        } catch (e) {
+            return null;
+        }
+    }
+
     function furnish(pip, url, label) {
         var doc = pip.document;
 
@@ -136,6 +154,36 @@
         time.className = 'ot-pip__time';
         time.textContent = '0:00 / 0:00';
 
+        // The buffered extent, drawn under the seek bar. Honest by construction: it is painted from
+        // `audio.buffered`, and when the browser reports no ranges it simply stays empty rather than
+        // inventing a percentage.
+        var buffered = doc.createElement('div');
+        buffered.className = 'ot-pip__buffered';
+        var bufferedFill = doc.createElement('div');
+        bufferedFill.className = 'ot-pip__buffered-fill';
+        buffered.appendChild(bufferedFill);
+
+        // One line that says what the player is doing. Hidden whenever the answer is "playing nicely",
+        // so normal playback gains no furniture.
+        var status = doc.createElement('div');
+        status.className = 'ot-pip__status';
+        // role="status" carries an implicit aria-live="polite", so a screen reader announces
+        // "Buffering audio..." without interrupting whatever it is already saying.
+        status.setAttribute('role', 'status');
+        status.hidden = true;
+        var spinner = doc.createElement('span');
+        spinner.className = 'ot-pip__spinner';
+        var statusText = doc.createElement('span');
+        statusText.className = 'ot-pip__status-text';
+        var retry = doc.createElement('button');
+        retry.type = 'button';
+        retry.className = 'ot-pip__btn ot-pip__retry';
+        retry.textContent = 'Retry';
+        retry.hidden = true;
+        status.appendChild(spinner);
+        status.appendChild(statusText);
+        status.appendChild(retry);
+
         var volume = doc.createElement('input');
         volume.type = 'range';
         volume.className = 'ot-pip__volume';
@@ -152,8 +200,9 @@
         row1.appendChild(time);
 
         var row2 = doc.createElement('div');
-        row2.className = 'ot-pip__row';
+        row2.className = 'ot-pip__row ot-pip__row--seek';
         row2.appendChild(seek);
+        row2.appendChild(buffered);
 
         var row3 = doc.createElement('div');
         row3.className = 'ot-pip__row';
@@ -166,37 +215,178 @@
         doc.body.appendChild(title);
         doc.body.appendChild(row1);
         doc.body.appendChild(row2);
+        doc.body.appendChild(status);
         doc.body.appendChild(row3);
         doc.body.appendChild(audio);
+
+        /*
+         * What the player is doing, in one variable.
+         *
+         * 'loading'   nothing is playable yet
+         * 'buffering' playable, but the next audio is not here
+         * 'error'     the request failed; Retry is offered
+         * ''          nothing to say — normal playback, or paused
+         *
+         * The browser resumes by itself once data arrives, so nothing below ever calls play() to
+         * recover from buffering: doing so fights the element and is how playback jumps about.
+         * `wanted` records the trainee's own intent, and is consulted only after a Retry.
+         */
+        var state = '';
+        var wanted = false;
+        var resumeAt = null;
+        var measured = knownDuration(url);
+
+        function say(next, text) {
+            state = next;
+            status.hidden = next === '';
+            spinner.hidden = next === 'error' || next === '';
+            retry.hidden = next !== 'error';
+            statusText.textContent = text || '';
+        }
+
+        /** The length to print: the element's own once it has one, else what the page measured. */
+        function total() {
+            if (isFinite(audio.duration) && audio.duration > 0) {
+                return audio.duration;
+            }
+
+            return measured !== null && isFinite(measured) && measured > 0 ? measured : 0;
+        }
+
+        function paintTime() {
+            time.textContent = clock(audio.currentTime) + ' / ' + clock(total());
+        }
+
+        function paintBuffered() {
+            var end = 0;
+            var whole = total();
+
+            // `buffered` can be empty, and can hold several ranges after seeking. The one that matters
+            // is whichever range the playhead is inside.
+            for (var i = 0; i < audio.buffered.length; i++) {
+                if (audio.buffered.start(i) <= audio.currentTime && audio.buffered.end(i) >= end) {
+                    end = audio.buffered.end(i);
+                }
+            }
+
+            bufferedFill.style.width = whole > 0 ? String(Math.min(100, (end / whole) * 100)) + '%' : '0%';
+        }
 
         // Deliberately NOT auto-played: the trainee is about to read an order form, and audio that
         // starts on its own is audio they have to find the controls for in a hurry.
         play.addEventListener('click', function () {
             if (audio.paused) {
-                audio.play();
+                wanted = true;
+                audio.play().catch(function () {
+                    // A play() the browser refuses is not a loading failure; the element's own `error`
+                    // event reports those. Nothing to say here.
+                });
             } else {
+                // An intentional pause. Nothing may start playback again on its own after this.
+                wanted = false;
                 audio.pause();
             }
         });
 
         replay.addEventListener('click', function () {
+            wanted = true;
             audio.currentTime = 0;
-            audio.play();
+            audio.play().catch(function () { });
+        });
+
+        /*
+         * Retry: ask for the same recording again, and come back to where the trainee was.
+         *
+         * User-driven only — nothing here retries by itself, so a provider that is down cannot be
+         * hammered by this page. `load()` re-requests the one URL; it does not open a second stream.
+         */
+        retry.addEventListener('click', function () {
+            resumeAt = audio.currentTime > 0 ? audio.currentTime : null;
+            say('loading', 'Loading audio...');
+            audio.load();
         });
 
         audio.addEventListener('play', function () { play.textContent = 'Pause'; });
         audio.addEventListener('pause', function () { play.textContent = 'Play'; });
+
+        audio.addEventListener('loadstart', function () {
+            say('loading', 'Loading audio...');
+            paintTime();
+        });
+
+        audio.addEventListener('loadedmetadata', function () {
+            // The element's own length supersedes the page's measurement.
+            measured = isFinite(audio.duration) && audio.duration > 0 ? audio.duration : measured;
+
+            // Return to the position a Retry interrupted, once there is something to seek within.
+            if (resumeAt !== null && isFinite(audio.duration) && audio.duration > resumeAt) {
+                audio.currentTime = resumeAt;
+            }
+
+            resumeAt = null;
+            paintTime();
+        });
+
+        // Playable. 'canplay' rather than 'canplaythrough': the latter waits for the whole file on
+        // some browsers, which would leave the spinner up long after the trainee could have pressed
+        // Play.
+        audio.addEventListener('canplay', function () {
+            if (state === 'loading' || state === 'buffering') {
+                say('', '');
+            }
+
+            paintTime();
+            paintBuffered();
+        });
+
+        // The element has run out of data — mid-play, or after a seek past what is buffered.
+        audio.addEventListener('waiting', function () {
+            say('buffering', 'Buffering audio...');
+        });
+
+        // Bytes are not arriving. The same message: from where the trainee sits it is the same
+        // situation, and a second vocabulary would only puzzle them.
+        audio.addEventListener('stalled', function () {
+            if (state !== 'error') {
+                say('buffering', 'Buffering audio...');
+            }
+        });
+
+        audio.addEventListener('playing', function () {
+            wanted = true;
+            say('', '');
+        });
+
+        audio.addEventListener('seeked', function () {
+            paintBuffered();
+            paintTime();
+        });
+
+        audio.addEventListener('progress', paintBuffered);
+
+        audio.addEventListener('ended', function () {
+            wanted = false;
+            say('', '');
+        });
+
+        /*
+         * The one state the player could previously never leave.
+         *
+         * Without this the element failed silently and the window sat at "0:00 / 0:00" for ever, with
+         * no way to tell a recording that was loading from one that never would. The endpoint answers
+         * a failure with a status code and a plain-text body, which an <audio> element cannot show, so
+         * the message says what the trainee can act on and Retry sits beside it.
+         */
+        audio.addEventListener('error', function () {
+            say('error', 'Unable to load audio. Please try again.');
+        });
 
         audio.addEventListener('timeupdate', function () {
             if (audio.duration > 0 && !seek.matches(':active')) {
                 seek.value = String((audio.currentTime / audio.duration) * 100);
             }
 
-            time.textContent = clock(audio.currentTime) + ' / ' + clock(audio.duration);
-        });
-
-        audio.addEventListener('loadedmetadata', function () {
-            time.textContent = clock(0) + ' / ' + clock(audio.duration);
+            paintTime();
         });
 
         seek.addEventListener('input', function () {
@@ -204,6 +394,11 @@
                 audio.currentTime = (Number(seek.value) / 100) * audio.duration;
             }
         });
+
+        // The window opens before the first byte arrives, so it says so immediately rather than
+        // showing a zero length it has not earned.
+        say('loading', 'Loading audio...');
+        paintTime();
 
         volume.addEventListener('input', function () {
             audio.volume = Number(volume.value);

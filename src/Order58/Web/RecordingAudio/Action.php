@@ -13,6 +13,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Log\LoggerInterface;
 use Yiisoft\Router\HydratorAttribute\RouteArgument;
+use Yiisoft\Session\SessionInterface;
 
 /**
  * Plays or downloads one Case Order call recording
@@ -43,6 +44,7 @@ final readonly class Action
         private RecordingStreamer $streamer,
         private RecordingResponder $responder,
         private LoggerInterface $logger,
+        private SessionInterface $session,
     ) {}
 
     public function __invoke(
@@ -59,6 +61,25 @@ final readonly class Action
         if ($location === null) {
             return $this->responder->problem(404, 'No such recording for this order.');
         }
+
+        /*
+         * The session lock is released here, before anything talks to the provider.
+         *
+         * PHP's `files` session handler holds an exclusive lock on the session file for the whole
+         * request, and `SessionMiddleware` only closes it after this action returns. Everything below
+         * is slow and needs no session: the gate waits up to 2 s for a slot, the provider takes
+         * 0.7–3 s to its first byte, and the whole WAV is spooled before a byte is sent. For that
+         * entire time every other request from the same signed-in person — a sidebar click, another
+         * recording — blocks in `session_start()`, because they share one session file.
+         *
+         * Authentication and the route group's access rules have already run by the time an action is
+         * reached, and the lookup above used the database, not the session. Nothing after this line
+         * reads or writes it: the failure path logs and returns a problem response, with no flash.
+         *
+         * The same release is already applied to every other slow action in this application — chat,
+         * rule chat, agent chat, AI usage sync — for exactly this reason.
+         */
+        $this->session->close();
 
         // A duration probe: the page's "--:--" labels. Answered from the recording's SIZE, so the
         // provider transfers nothing. Placed before the fetch below because it must never reach it —

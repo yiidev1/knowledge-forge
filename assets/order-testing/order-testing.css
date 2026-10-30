@@ -366,6 +366,74 @@
 
 /* The element is driven entirely by the controls above it; its native chrome would only be a second,
    differently-styled copy of them in a window this small. */
+/* ---- The player's own state: loading, buffering, or a failure it can be retried from ----------
+   The window clones this page's stylesheets, so these rules reach it with no inline CSS of their
+   own — `style-src 'self'` stays satisfied. */
+
+.ot-pip__row--seek {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+}
+
+/* The buffered extent, under the seek bar. Empty when the browser reports no ranges — it is never
+   filled in with a guess. */
+.ot-pip__buffered {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border, #2a2d34);
+    overflow: hidden;
+}
+
+.ot-pip__buffered-fill {
+    width: 0;
+    height: 100%;
+    background: var(--muted, #8a8f98);
+    transition: width 0.2s linear;
+}
+
+.ot-pip__status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.45rem;
+    font-size: 0.75rem;
+    color: var(--muted, #8a8f98);
+}
+
+.ot-pip__spinner {
+    flex: none;
+    width: 0.8rem;
+    height: 0.8rem;
+    border: 2px solid var(--border, #2a2d34);
+    border-top-color: var(--primary, #6b7cff);
+    border-radius: 50%;
+    animation: ot-pip-spin 0.7s linear infinite;
+}
+
+@keyframes ot-pip-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* A spinner that cannot spin still has to say something, so it keeps its shape and simply holds
+   still for anyone who has asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+    .ot-pip__spinner {
+        animation: none;
+        border-top-color: var(--muted, #8a8f98);
+    }
+
+    .ot-pip__buffered-fill {
+        transition: none;
+    }
+}
+
+.ot-pip__retry {
+    margin-left: auto;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+}
+
 .ot-pip audio {
     display: none;
 }
