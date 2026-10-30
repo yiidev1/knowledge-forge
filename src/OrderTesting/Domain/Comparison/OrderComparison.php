@@ -26,6 +26,7 @@ final readonly class OrderComparison
      * @param list<ComparisonSection> $sections
      * @param list<ItemComparison>    $items
      * @param list<NormalizedItem>    $removedItems lines the provider marked removed, never "missing"
+     * @param list<FieldComparison>   $payment      the card details, compared: card, expiry, billing ZIP
      */
     public function __construct(
         public ?NormalizedOrder $original,
@@ -36,6 +37,14 @@ final readonly class OrderComparison
         /** When the original items being shown were last successfully fetched. */
         public ?string $itemsSyncedAt = null,
         public array $removedItems = [],
+        /**
+         * The card details, compared — apart from `$sections` on purpose.
+         *
+         * The receipt page prints every field of every section, and it already prints the card from
+         * the orders themselves. Kept here instead, the comparison page can score them under Order
+         * details while the receipt reads exactly what it read before.
+         */
+        public array $payment = [],
     ) {}
 
     public function hasOriginal(): bool

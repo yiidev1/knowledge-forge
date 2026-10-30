@@ -52,7 +52,8 @@ final class ReceiptComparisonTest extends TestCase
         self::assertSame(1, $receipt->total());
     }
 
-    public function testAZeroIsAnAnswerAndIsCounted(): void
+    /** A zero is an answer and keeps its Summary row; the Summary carries no verdicts, so none is counted. */
+    public function testAZeroIsAnAnswerAndKeepsItsRowInTheUncountedSummary(): void
     {
         $receipt = ReceiptComparison::from($this->comparison([
             new ComparisonSection('Totals', [
@@ -62,8 +63,26 @@ final class ReceiptComparisonTest extends TestCase
         ]));
 
         self::assertCount(2, $receipt->sections[0]['fields']);
-        self::assertSame(1, $receipt->count(ComparisonStatus::Match));
-        self::assertSame(1, $receipt->count(ComparisonStatus::MissingInDemo));
+        self::assertSame(0, $receipt->total());
+    }
+
+    /** Customer count and Status are not drawn on the receipt, and so not counted. */
+    public function testTheCountAndTheStatusAreNotDrawn(): void
+    {
+        $receipt = ReceiptComparison::from($this->comparison([
+            new ComparisonSection('Customer', [
+                new FieldComparison('Phone', '1', '1', ComparisonStatus::Match),
+                new FieldComparison('Customer count', '1', '2', ComparisonStatus::Different),
+            ]),
+            new ComparisonSection('Order', [
+                new FieldComparison('Order type', 'delivery', 'delivery', ComparisonStatus::Match),
+                new FieldComparison('Status', 'completed', 'cancelled', ComparisonStatus::Different),
+            ]),
+        ]));
+
+        self::assertSame(['Phone'], array_map(static fn(FieldComparison $f): string => $f->label, $receipt->sections[0]['fields']));
+        self::assertSame(['Order type'], array_map(static fn(FieldComparison $f): string => $f->label, $receipt->sections[1]['fields']));
+        self::assertSame(0, $receipt->count(ComparisonStatus::Different));
     }
 
     public function testASectionLeftWithNothingIsDropped(): void
@@ -90,15 +109,21 @@ final class ReceiptComparisonTest extends TestCase
                 new ItemComparison($this->item('Wings'), $this->item('Wings'), ComparisonStatus::Match),
                 new ItemComparison($this->item('Soup'), null, ComparisonStatus::MissingInDemo),
                 new ItemComparison(null, $this->item('Rangoon'), ComparisonStatus::ExtraInDemo),
-                new ItemComparison($this->item('Rice'), $this->item('Rice'), ComparisonStatus::Different),
+                new ItemComparison($this->item('Rice'), $this->item('Rice'), ComparisonStatus::Different, [
+                    new FieldComparison('Quantity', '1', '2', ComparisonStatus::Different),
+                ]),
+                // Different only in its price, which is not judged: counted as the match it scored.
+                new ItemComparison($this->item('Tea'), $this->item('Tea'), ComparisonStatus::Different, [
+                    new FieldComparison('Unit price', '2.75', '3.00', ComparisonStatus::Different),
+                ]),
             ],
         ));
 
-        self::assertSame(1, $receipt->count(ComparisonStatus::Match));
+        self::assertSame(2, $receipt->count(ComparisonStatus::Match));
         self::assertSame(1, $receipt->count(ComparisonStatus::MissingInDemo));
         self::assertSame(1, $receipt->count(ComparisonStatus::ExtraInDemo));
         self::assertSame(1, $receipt->count(ComparisonStatus::Different));
-        self::assertSame(4, $receipt->total());
+        self::assertSame(5, $receipt->total());
     }
 
     /** "We cannot tell" is counted on its own, never folded into the matches. */
@@ -133,14 +158,17 @@ final class ReceiptComparisonTest extends TestCase
 
         $drawn = 0;
 
+        // Every row drawn with a verdict — the Summary is drawn without one.
         foreach ($receipt->sections as $section) {
-            $drawn += count($section['fields']);
+            if ($section['title'] !== 'Totals') {
+                $drawn += count($section['fields']);
+            }
         }
 
         $drawn += count($receipt->comparison->items);
 
         self::assertSame($drawn, $receipt->total());
-        self::assertSame(4, $drawn);
+        self::assertSame(3, $drawn);
     }
 
     /**

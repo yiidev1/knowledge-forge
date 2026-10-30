@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\OrderTesting\Domain\Comparison;
 
+use function str_contains;
+use function strtolower;
+
 /**
  * One Order58 order, read into the one shape both sides of the comparison use.
  *
@@ -25,6 +28,9 @@ namespace App\OrderTesting\Domain\Comparison;
  */
 final readonly class NormalizedOrder
 {
+    /** Printed for a card payment whose last four digits were not kept. */
+    public const CARD_NOT_RECORDED = 'Card not recorded';
+
     /** @param list<NormalizedItem> $items */
     public function __construct(
         /** The order's own id as the document states it. Shown, never used to pair anything. */
@@ -42,15 +48,16 @@ final readonly class NormalizedOrder
         /**
          * The card's last four digits, as kept when the order was stored — or null when none were.
          *
-         * Display only, and compared by nothing. Never the card number: nothing else about the card is
-         * stored. See `App\Shared\Order58\PaymentSecretRedactor::cardLastFour()`.
+         * Compared and scored only when both orders kept them. Never the card number: nothing else about
+         * the card number is stored. See `App\Shared\Order58\PaymentSecretRedactor::cardLastFour()`.
          */
         public ?string $cardLastFour = null,
         /**
          * The card's expiry as the stored order kept it, `MM/YYYY`, or null when none was.
          *
-         * Display only, and compared by nothing — like {@see $cardLastFour} beside it. Cardholder
-         * data, not authentication data: the verification code is never stored and has no field here.
+         * Compared and scored only when both orders kept one — like {@see $cardLastFour} beside it.
+         * Cardholder data, not authentication data: the verification code is never stored and has no
+         * field here.
          */
         public ?string $expiryDate = null,
         /**
@@ -62,4 +69,23 @@ final readonly class NormalizedOrder
         /** The store's time zone as the order states it, for printing the order's times. */
         public ?string $timezone = null,
     ) {}
+
+    /** Whether this order was paid by card, however the provider spelled the method. */
+    public function paidByCard(): bool
+    {
+        return $this->paymentMethod !== null && str_contains(strtolower($this->paymentMethod), 'card');
+    }
+
+    /**
+     * The card as it may be printed: `•••• 1234`, {@see CARD_NOT_RECORDED}, or null when the order was
+     * not paid by card. One answer for the comparison, the score and both pages.
+     */
+    public function cardLabel(): ?string
+    {
+        if ($this->cardLastFour !== null) {
+            return '•••• ' . $this->cardLastFour;
+        }
+
+        return $this->paidByCard() ? self::CARD_NOT_RECORDED : null;
+    }
 }

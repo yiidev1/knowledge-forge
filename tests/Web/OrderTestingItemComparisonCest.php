@@ -17,6 +17,8 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function array_map;
+use function array_replace;
 use function bin2hex;
 use function gmdate;
 use function hash;
@@ -445,15 +447,38 @@ final class OrderTestingItemComparisonCest
     /**
      * Zero is a stated number, not an absence, and keeps its row.
      *
-     * The fixture's demo order states no count at all, so this is also the one-sided case: the row
-     * survives on both panels and the demo side carries the verdict.
+     * The fixture's demo order states no tip at all, so this is also the one-sided case: the row
+     * survives on both panels.
      */
     public function aZeroIsAStatedNumberAndNotAnAbsence(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00', extra: ['tip' => '0.00000']);
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        foreach (['original', 'demo'] as $side) {
+            $rows = $this->panelRows($I->grabPageSource(), $side);
+            Assert::assertContains('line:Tip', $rows, $side . ' dropped a stated zero');
+        }
+
+        $I->see('0.00000', '.ot-book--original');
+    }
+
+    /**
+     * Customer count, order status and the product code are not shown, on either panel.
+     *
+     * All three are stated here, on both orders — so their absence is the page's decision, not an
+     * empty field. They are not scored either; the unit tests hold that.
+     */
+    public function theCountTheStatusAndTheProductCodeAreNotShown(WebTester $I): void
     {
         $this->seedOrder(
             'SYNCED',
             syncedAt: '2026-10-09 10:00:00',
-            reservation: ['phone' => self::PHONE, 'customer_count' => 0],
+            reservation: ['phone' => self::PHONE, 'customer_count' => 2],
         );
         $this->seedItem(1, $this->wings(), 0);
         $this->seedDemoOrder([$this->wings()]);
@@ -463,10 +488,191 @@ final class OrderTestingItemComparisonCest
 
         foreach (['original', 'demo'] as $side) {
             $rows = $this->panelRows($I->grabPageSource(), $side);
-            Assert::assertContains('line:Customer count', $rows, $side . ' dropped a stated zero');
+            Assert::assertNotContains('line:Customer count', $rows, $side);
+            Assert::assertNotContains('line:Status', $rows, $side);
+            Assert::assertNotContains('line:Product SN', $rows, $side);
+            Assert::assertContains('line:Order type', $rows, $side);
+            Assert::assertContains('line:Phone', $rows, $side);
         }
 
-        $I->see('0', '.ot-book--original');
+        // Nor in the line's heading, where the code used to follow the name. (This fixture's name keeps
+        // the provider's own `[F7]` prefix, which is the name as sent and stays.)
+        $I->dontSeeElement('.ot-book__item-name code');
+    }
+
+    /**
+     * Each option is a line of its own, exactly as the order named it.
+     *
+     * One addition carries a comma inside its own name. It must survive whole — the list is read from
+     * the line's own modifiers, never split out of a sentence.
+     */
+    public function modifiersAreListedOnePerLine(WebTester $I): void
+    {
+        $original = $this->wings();
+        $original['data']['additionals'] = [
+            ['additional_name' => 'No / Not / Exchange for items', 'option_name' => 'Not fried too hard'],
+            ['additional_name' => 'Sauce additional', 'option_name' => 'Garlic, extra hot'],
+        ];
+        $original['data']['combinations'] = [
+            'options' => [['attribute_name' => 'Combination With', 'option_name' => 'Shrimp FR']],
+        ];
+
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $original, 0);
+        $this->seedDemoOrder([$original]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $entries = $I->grabMultiple('.ot-book--original .ot-list__item');
+        Assert::assertSame(
+            [
+                // Options: every modifier.
+                'No / Not / Exchange for items: Not fried too hard',
+                'Sauce additional: Garlic, extra hot',
+                'Combination With: Shrimp FR',
+                // Additions.
+                'No / Not / Exchange for items: Not fried too hard',
+                'Sauce additional: Garlic, extra hot',
+                // Combinations.
+                'Combination With: Shrimp FR',
+            ],
+            array_map(static fn(string $text): string => self::flatten($text), $entries),
+        );
+        Assert::assertSame($entries, $I->grabMultiple('.ot-book--demo .ot-list__item'));
+    }
+
+    /**
+     * A different unit price is shown and pointed out, and costs nothing.
+     *
+     * Everything the score counts agreed, so the line, its section and the order all read 100% — and
+     * the price row says "Not scored", not "Different".
+     */
+    public function aDifferentUnitPriceIsPointedOutButNotScored(WebTester $I): void
+    {
+        $demo = $this->wings();
+        $demo['price'] = '12.05000';
+
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$demo]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('11.35000', '.ot-book--original .ot-items');
+        $I->see('12.05000', '.ot-book--demo .ot-items');
+        $I->see('Not scored', '.ot-book--demo .ot-items');
+        $I->dontSee('Different', '.ot-book--demo .ot-items');
+        $I->dontSeeElement('.ot-book--demo .ot-items .ot-book__line--different');
+        $I->see('100%', '.ot-book--demo .ot-sscore__value');
+        $I->see('100%', '.ot-score__value');
+    }
+
+    /** Totals are for reference: no score badge, no verdicts and no tint, however the amounts differ. */
+    public function theTotalsCarryNoScoreAndNoVerdicts(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00', extra: ['tax' => '1.00000']);
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()], extra: ['total_amount' => '99.00000']);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('99.00000', '.ot-book--demo .ot-book__section--totals');
+        $I->see('13.35000', '.ot-book--original .ot-book__section--totals');
+        $I->dontSeeElement('.ot-book__section--totals .ot-sscore');
+        $I->dontSeeElement('.ot-book__section--totals .ot-mark');
+        $I->dontSeeElement('.ot-book__section--totals [class*="ot-book__line--different"]');
+        $I->dontSeeElement('.ot-book__section--totals [class*="ot-book__line--missing"]');
+        // Neither difference moves the overall: everything scored agreed.
+        $I->see('100%', '.ot-score__value');
+    }
+
+    /**
+     * Order details and payment details share one score badge.
+     *
+     * Order type, payment method and card agree; the expiry does not: 3 of 4 — 75%, beside Order
+     * details, with no badge of its own under Payment details.
+     */
+    public function orderAndPaymentDetailsShareOneScore(WebTester $I): void
+    {
+        $card = ['payment_method' => 'credit card', 'card_last4' => '4242', 'card_expiry' => '12/2099'];
+
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00', extra: $card);
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()], extra: ['card_expiry' => '11/2099'] + $card);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('75%', '//section[contains(@class, "ot-book--demo")]//h3[contains(., "Order details")]');
+        $I->see('4 of 4 fields', '//section[contains(@class, "ot-book--demo")]//h3[contains(., "Order details")]');
+        $I->dontSeeElement('.ot-book__subhead .ot-sscore');
+        $I->see('•••• 4242', '.ot-book--demo');
+        $I->see('Different', '.ot-book--demo .ot-book__line--different');
+        $I->see('11/2099', '.ot-book--demo .ot-book__line--different');
+    }
+
+    /**
+     * The delivery address has its own score now.
+     *
+     * The original states a city and a postcode; the demo states the same city and no postcode. City
+     * agrees, the postcode is missing — 1 of 2, 50%. The street line cannot be compared and is shown,
+     * not counted.
+     */
+    public function theDeliveryAddressIsScored(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            shipping: ['city' => 'Freeport', 'zipcode' => '11520'],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $heading = '//section[contains(@class, "ot-book--demo")]//h3[contains(., "Delivery address")]';
+        $I->see('50%', $heading);
+        $I->see('2 of 3 fields', $heading);
+        $I->see('Missing in demo', '.ot-book--demo');
+        $I->see('Not available', '.ot-book--demo');
+    }
+
+    /**
+     * The receipt follows the same rules: no Customer count or Status row, a Summary with no verdicts,
+     * and a line that differs only in its unit price is not called different.
+     */
+    public function theReceiptHidesTheCountAndStatusAndJudgesNeitherPriceNorSummary(WebTester $I): void
+    {
+        $demo = $this->wings();
+        $demo['price'] = '12.05000';
+
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            reservation: ['phone' => self::PHONE, 'customer_count' => 2],
+            extra: ['tax' => '1.00000'],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$demo], extra: ['total_amount' => '99.00000']);
+
+        $this->signIn($I);
+        $I->amOnPage($this->receiptUrl());
+
+        $I->dontSee('Customer count', '.rc-pair');
+        $I->dontSee('Status', '.rc-pair');
+        $I->see('Order type', '.rc--demo');
+        // Both prices still printed; the line is not called different for them.
+        $I->see('11.35', '.rc--original');
+        $I->see('12.05', '.rc--demo');
+        $I->dontSee('Different', '.rc--demo .rc__line--item');
+        // The Summary prints its amounts and nothing else.
+        $I->see('99.00', '.rc--demo');
+        $I->dontSeeElement('.rc__sum .rc-mark');
+        $I->dontSeeElement('.rc__sum[data-rc-status]');
     }
 
     /** Whatever is hidden is hidden from both panels, which is what keeps the two in step. */
@@ -842,15 +1048,18 @@ final class OrderTestingItemComparisonCest
 
         // Every rule that moves the figure, in the page's own words.
         $I->see('silence is not agreement');
-        $I->see('quantity and unit price count double');
-        $I->see('the grand total counts triple');
+        $I->see('the quantity counts double');
+        $I->see('The unit price is shown');
+        $I->see('Totals are shown for reference and are not scored');
+        $I->see('the payment details together, as one score');
 
         // The weighting, printed from the same table the arithmetic used — and as shares of a
         // hundred, which is what the sum divides by when every section applies.
-        $I->see('Customer 22.22%');
-        $I->see('Order 22.22%');
+        $I->see('Customer details 22.22%');
+        $I->see('Order details 22.22%');
+        $I->see('Delivery address 5.56%');
         $I->see('Order items 50.00%');
-        $I->see('Totals 5.56%');
+        $I->dontSee('Totals 5.56%');
         $I->see('100.00% in all');
 
         // Its scope, so a figure about two documents is not read as a figure about a person.
@@ -890,9 +1099,10 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         // This line has no modifiers and no instructions on either side, so its weighted units are
-        // Product 1, Quantity 2, Unit price 2 and Product SN 1 — six, of which the wrong quantity costs
-        // two: 4/6, i.e. 67%. The unit tests hold the arithmetic; this holds that the page shows it.
-        $I->see('67%', '.ot-book--demo .ot-sscore__value');
+        // Product 1 and Quantity 2 — the unit price and product code are not scored — and the wrong
+        // quantity costs two of the three: 33%. The unit tests hold the arithmetic; this holds that the
+        // page shows it.
+        $I->see('33%', '.ot-book--demo .ot-sscore__value');
         $I->dontSee('100%', '.ot-score__value');
     }
 
@@ -938,8 +1148,13 @@ final class OrderTestingItemComparisonCest
         $I->dontSeeElement('.ot-book--original .ot-sscore');
     }
 
-    /** Delivery address is shown and never scored, because its street is redacted on both sides. */
-    public function theDeliveryAddressSectionSaysItIsNotScored(WebTester $I): void
+    /**
+     * An address only the demo states has nothing to be scored against.
+     *
+     * The original here holds no shipping block — a take-out shape — so the demo's street and city are
+     * shown, nothing is charged, and the section says N/A rather than a percentage nobody measured.
+     */
+    public function anAddressOnlyTheDemoStatesIsNotScored(WebTester $I): void
     {
         $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
         $this->seedItem(1, $this->wings(), 0);
@@ -948,7 +1163,8 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Not scored', '.ot-book--demo .ot-sscore--none');
+        $I->see('N/A', '.ot-book--demo .ot-sscore--none');
+        $I->see('Missing in original', '.ot-book--demo');
     }
 
     public function aGuestSeesNoneOfIt(WebTester $I): void
@@ -1571,18 +1787,29 @@ final class OrderTestingItemComparisonCest
      *                                               to the real shape: a phone and no name at all,
      *                                               which is what 390 of 396 mirrored orders carry.
      */
-    private function seedOrder(string $itemsStatus, ?string $syncedAt = null, ?array $reservation = null): void
-    {
+    private function seedOrder(
+        string $itemsStatus,
+        ?string $syncedAt = null,
+        ?array $reservation = null,
+        ?array $shipping = null,
+        array $extra = [],
+    ): void {
         $now = gmdate('Y-m-d H:i:s');
+        $data = ['reservation' => $reservation ?? ['phone' => self::PHONE]];
+
+        if ($shipping !== null) {
+            $data['shipping'] = $shipping;
+        }
+
         // Deliberately WITHOUT an `items` key: this is what the orders mirror actually holds, and the
         // reason the items come from their own table.
-        $payload = (string) json_encode([
+        $payload = (string) json_encode(array_replace([
             'id' => (string) self::ORDER,
             'status' => 'completed',
             'type' => 'delivery',
             'total_amount' => '13.35000',
-            'data' => (string) json_encode(['reservation' => $reservation ?? ['phone' => self::PHONE]]),
-        ]);
+            'data' => (string) json_encode($data),
+        ], $extra));
 
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
@@ -1625,21 +1852,26 @@ final class OrderTestingItemComparisonCest
         ])->execute();
     }
 
-    /** @param list<array<string, mixed>> $items */
+    /**
+     * @param list<array<string, mixed>> $items
+     * @param array<string, mixed>       $extra top-level payload keys to add or replace
+     */
     private function seedDemoOrder(
         array $items,
         ?string $address = '162 N Main St',
         ?string $city = 'Freeport',
+        array $extra = [],
+        ?string $postalCode = null,
     ): void {
         $now = gmdate('Y-m-d H:i:s');
-        $payload = (string) json_encode([
+        $payload = (string) json_encode(array_replace([
             'id' => self::DEMO_ORDER,
             'status' => 'completed',
             'type' => 'delivery',
             'total_amount' => '13.35000',
             'items' => $items,
             'data' => ['reservation' => ['phone' => self::PHONE, 'first_name' => 'testa']],
-        ]);
+        ], $extra));
 
         $this->connection->createCommand()->insert('{{%order_testing_demo_orders}}', [
             'public_id' => bin2hex(random_bytes(16)),
@@ -1654,6 +1886,7 @@ final class OrderTestingItemComparisonCest
             'total_amount' => '13.35000',
             'address' => $address,
             'city' => $city,
+            'postal_code' => $postalCode,
             'source_filename' => self::ORDER . '-' . self::DEMO_ORDER . '.json',
             'content_hash' => hash('sha256', $payload),
             'raw_payload' => $payload,

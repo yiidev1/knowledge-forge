@@ -15,6 +15,7 @@ use App\OrderTesting\Domain\Comparison\SectionScore;
 
 use function array_sum;
 use function count;
+use function in_array;
 use function trim;
 
 /**
@@ -43,6 +44,22 @@ use function trim;
  * comparable the provider has stated its lines and their modifiers, so an extra line — or an extra
  * addition on a matched line — is a real discrepancy.
  *
+ * ## What the comparison page scores, section by section
+ *
+ *  - **Customer details** — the customer fields shown. `Customer count` is not shown and not scored.
+ *  - **Order details** — Order type and Payment method, and the card details under them (card, expiry,
+ *    billing ZIP), as **one** score. `Status` is not shown and not scored. A card detail counts only
+ *    when both orders kept it; see `OrderComparator::payment()`.
+ *  - **Delivery address** — the address fields shown; see {@see addressFields()} for Street and
+ *    Destination.
+ *  - **Order items** — per line: Product, Quantity (double), Additions, Combinations and instructions.
+ *    Unit price is shown and never scored; Product SN is not shown and not scored.
+ *  - **Totals** — shown for reference, never scored.
+ *
+ * The rows the page leaves out are named once, in {@see HIDDEN_FIELDS} and {@see HIDDEN_ITEM_FIELDS},
+ * and the template reads them from here — so a field cannot be hidden from the reader and still move
+ * the number, or the other way round.
+ *
  * ## Nothing here is persisted
  *
  * A score is derived from two documents that can both change. Storing one would mean storing something
@@ -58,27 +75,36 @@ final readonly class ComparisonScorer
     public const TOTALS = 'Totals';
 
     /**
+     * Section fields the comparison page does not show, and therefore never scores.
+     *
+     * Still compared, and still printed on the receipt page, which reads the comparison directly.
+     */
+    public const HIDDEN_FIELDS = [
+        self::CUSTOMER => ['Customer count'],
+        self::ORDER => ['Status'],
+    ];
+
+    /** Line-item fields the comparison page does not show, and therefore never scores. */
+    public const HIDDEN_ITEM_FIELDS = ['Product SN'];
+
+    /**
      * How much each section matters relative to the others. Not percentages, and never shown.
      *
      * Order items carry 90 of the 180, so an order whose every line is wrong cannot exceed 50% however
      * perfect its header is — half the measurement is what was actually ordered. That ceiling is the
      * stated intent of this weighting rather than a side effect of it, and a test holds it.
      *
-     * `Delivery address` is absent: it is shown and never scored, because its street line is redacted
-     * out of BOTH documents by the payment-secret policy and the rest of it is empty on a take-out
-     * order. A section that is usually either blank or missing from the mirror would move a score
-     * without saying anything about the demo.
+     * `Delivery address` took the 10 that `Totals` carried when Totals stopped being scored, so every
+     * other section's share — and the 50% ceiling above — is exactly what it was. A take-out order has
+     * no address to score; its section then leaves the denominator rather than scoring zero.
+     *
+     * `Totals` is absent: it is shown for reference and never scored.
      */
     private const RELATIVE_SECTION_WEIGHTS = [
         self::CUSTOMER => 40,
         self::ORDER => 40,
+        self::ADDRESS => 10,
         self::ITEMS => 90,
-        self::TOTALS => 10,
-    ];
-
-    /** Fields that weigh more than one within their section. Everything else is one. */
-    private const FIELD_WEIGHTS = [
-        self::TOTALS => ['Total' => 3],
     ];
 
     /**
@@ -87,15 +113,17 @@ final readonly class ComparisonScorer
      * `Options` is deliberately absent: it is the union of Additions and Combinations, so scoring all
      * three charged one wrong modifier three times — measured on a live pair, a single modifier
      * mistake produced Options different, Additions missing and Combinations different.
+     *
+     * `Unit price` is absent too: it is shown, and a different price is pointed out, but the price is
+     * the menu's and not something the trainee chose — so it neither earns nor costs anything.
+     * `Product SN` is not shown at all ({@see HIDDEN_ITEM_FIELDS}).
      */
     private const FACET_WEIGHTS = [
         'Product' => 1,
         'Quantity' => 2,
-        'Unit price' => 2,
         'Additions' => 1,
         'Combinations' => 1,
         'Item instructions' => 1,
-        'Product SN' => 1,
     ];
 
     /**
@@ -128,7 +156,19 @@ final readonly class ComparisonScorer
         $sections = [];
 
         foreach ($comparison->sections as $section) {
-            $sections[] = $this->fieldSection($section);
+            $fields = self::shownFields($section);
+
+            // Order details and the payment details printed under them are one score: one badge, one
+            // denominator, nothing counted twice.
+            if ($section->title === self::ORDER) {
+                $fields = [...$fields, ...$comparison->payment];
+            }
+
+            if ($section->title === self::ADDRESS) {
+                $fields = self::addressFields($fields);
+            }
+
+            $sections[] = $this->fieldSection($section->title, $fields);
         }
 
         $sections[] = $this->itemSection($comparison);
@@ -142,49 +182,146 @@ final readonly class ComparisonScorer
     }
 
     /**
-     * One of the header sections: customer, order, delivery address, totals.
+     * The fields of a section the comparison page shows, before blank rows are dropped.
+     *
+     * The template asks the same question of the same constant, so the page and the score agree about
+     * which rows exist.
+     *
+     * @return list<FieldComparison>
+     */
+    public static function shownFields(ComparisonSection $section): array
+    {
+        $hidden = self::HIDDEN_FIELDS[$section->title] ?? [];
+        $shown = [];
+
+        foreach ($section->fields as $field) {
+            if (!in_array($field->label, $hidden, true)) {
+                $shown[] = $field;
+            }
+        }
+
+        return $shown;
+    }
+
+    /**
+     * What a line item's verdict is, counting only what is scored.
+     *
+     * The comparator calls a pair `Different` when any field differs — a price, a product code. The
+     * page heads each line with this instead, so a line that differs only in what is not scored reads
+     * as the match it scored, and a "Different" heading always means the score was charged for it.
+     * A line on one side only keeps the comparator's verdict.
+     */
+    public static function itemVerdict(ItemComparison $item): ComparisonStatus
+    {
+        if ($item->status !== ComparisonStatus::Match && $item->status !== ComparisonStatus::Different) {
+            return $item->status;
+        }
+
+        foreach ($item->fields as $field) {
+            if (
+                !isset(self::FACET_WEIGHTS[$field->label])
+                || $field->status === ComparisonStatus::Uncomparable
+                || self::bothBlank($field)
+            ) {
+                continue;
+            }
+
+            if ($field->status !== ComparisonStatus::Match) {
+                return ComparisonStatus::Different;
+            }
+        }
+
+        return ComparisonStatus::Match;
+    }
+
+    /**
+     * The delivery address's scorable rows.
+     *
+     * **Street** is scored when it can be compared. Today it cannot: `street1` is on the payment-secret
+     * list, so the original order's street line is redacted, and the comparator reports the row as not
+     * comparable — shown, never charged.
+     *
+     * **Destination** is the whole address as Order58 formats it — street, city, state and postcode on
+     * one line. It is scored only while Street cannot be compared, because it is then the one place the
+     * street line can be checked at all. If Street ever becomes comparable, Destination only repeats
+     * the rows above it and is shown without being scored, so an address mistake is not charged twice.
+     *
+     * The other rows follow the header rule: a value both sides hold is compared, a value the demo
+     * missed is charged, and a value only the demo holds is shown but not charged — which is also why a
+     * take-out original, holding no address, scores nothing here and leaves the overall untouched.
+     *
+     * @param list<FieldComparison> $fields
+     *
+     * @return list<FieldComparison>
+     */
+    private static function addressFields(array $fields): array
+    {
+        $streetIsScored = false;
+
+        foreach ($fields as $field) {
+            if (
+                $field->label === 'Street'
+                && $field->status !== ComparisonStatus::Uncomparable
+                && !self::bothBlank($field)
+            ) {
+                $streetIsScored = true;
+            }
+        }
+
+        if (!$streetIsScored) {
+            return $fields;
+        }
+
+        $kept = [];
+
+        foreach ($fields as $field) {
+            // Shown, and counted as shown, but not as a scored unit: see above.
+            $kept[] = $field->label === 'Destination'
+                ? new FieldComparison($field->label, $field->original, $field->demo, ComparisonStatus::Uncomparable)
+                : $field;
+        }
+
+        return $kept;
+    }
+
+    /**
+     * One of the header sections: customer, order and payment, delivery address, totals.
      *
      * Visibility first, status second. A row the page does not draw is not a unit, whatever status the
      * comparator gave it — that is what keeps the arithmetic addable from the screen.
+     *
+     * @param list<FieldComparison> $fields the rows the page shows for this section
      */
-    private function fieldSection(ComparisonSection $section): SectionScore
+    private function fieldSection(string $title, array $fields): SectionScore
     {
-        $weights = self::FIELD_WEIGHTS[$section->title] ?? [];
-        $informational = $section->title === self::ADDRESS;
+        $informational = $title === self::TOTALS;
 
         $matched = $different = $missing = $extra = $notApplicable = 0;
         $hidden = $visible = $scored = 0;
-        $earned = 0.0;
-        $weight = 0.0;
 
-        foreach ($section->fields as $field) {
-            if ($this->bothBlank($field)) {
+        foreach ($fields as $field) {
+            if (self::bothBlank($field)) {
                 $hidden++;
 
                 continue;
             }
 
             $visible++;
-            $fieldWeight = (float) ($weights[$field->label] ?? 1);
 
             switch ($field->status) {
                 case ComparisonStatus::Match:
                     $matched++;
                     $scored++;
-                    $weight += $fieldWeight;
-                    $earned += $fieldWeight;
 
                     break;
                 case ComparisonStatus::Different:
                     $different++;
                     $scored++;
-                    $weight += $fieldWeight;
 
                     break;
                 case ComparisonStatus::MissingInDemo:
                     $missing++;
                     $scored++;
-                    $weight += $fieldWeight;
 
                     break;
                 case ComparisonStatus::ExtraInDemo:
@@ -200,22 +337,22 @@ final readonly class ComparisonScorer
         }
 
         return new SectionScore(
-            title: $section->title,
-            percent: $informational || $weight === 0.0 ? null : $earned / $weight * 100,
+            title: $title,
+            percent: $informational || $scored === 0 ? null : $matched / $scored * 100,
             matched: $matched,
             different: $different,
             missing: $missing,
             extra: $extra,
             notApplicable: $notApplicable,
-            // An informational section reports no coverage either: "4 of 6 fields" beside "Not scored"
-            // would be describing a measurement nobody took.
+            // An informational section reports no coverage either: "4 of 6 fields" beside nothing
+            // scored would be describing a measurement nobody took.
             scoredUnits: $informational ? 0 : $scored,
             visibleUnits: $visible,
             hiddenAbsences: $hidden,
             extraIsScored: false,
             unit: 'field',
             informationalOnly: $informational,
-            weight: self::weighting()[$section->title] ?? 0.0,
+            weight: self::weighting()[$title] ?? 0.0,
         );
     }
 
@@ -233,7 +370,8 @@ final readonly class ComparisonScorer
         $units = [];
 
         foreach ($comparison->items as $item) {
-            switch ($item->status) {
+            // The scored verdict, so the counts agree with the headings the page draws.
+            switch (self::itemVerdict($item)) {
                 case ComparisonStatus::Match:
                     $matched++;
                     $units[] = $this->facetScore($item);
@@ -302,7 +440,7 @@ final readonly class ComparisonScorer
                 continue;
             }
 
-            if ($this->bothBlank($field)) {
+            if (self::bothBlank($field)) {
                 continue;
             }
 
@@ -369,7 +507,7 @@ final readonly class ComparisonScorer
     }
 
     /** The template's own rule for whether a row is drawn at all. */
-    private function bothBlank(FieldComparison $field): bool
+    private static function bothBlank(FieldComparison $field): bool
     {
         return ($field->original === null || trim($field->original) === '')
             && ($field->demo === null || trim($field->demo) === '');

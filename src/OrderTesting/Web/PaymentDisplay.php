@@ -31,13 +31,14 @@ use function trim;
  * here, once, and each side then prints its own value or a dash. A row decided per side would slide one
  * document out of step with the other.
  *
- * Nothing here is scored. The payment method row keeps the verdict the comparison gave it; the card and
- * the processing fee are shown for reference only.
+ * Nothing here scores anything. The comparison page compares and scores the card details through
+ * `OrderComparison::$payment` and only borrows {@see showsFee()} from here; the receipt page prints the
+ * card rows from here, for reference.
  */
 final class PaymentDisplay
 {
     /** Printed for a card payment whose last four digits were not kept. */
-    public const NOT_RECORDED = 'Card not recorded';
+    public const NOT_RECORDED = NormalizedOrder::CARD_NOT_RECORDED;
 
     /** Whether a payment method is a card payment, however the provider spelled it. */
     public static function isCard(?string $method): bool
@@ -51,15 +52,9 @@ final class PaymentDisplay
      */
     public static function card(?NormalizedOrder $order): ?string
     {
-        if ($order === null) {
-            return null;
-        }
-
-        if ($order->cardLastFour !== null) {
-            return '•••• ' . $order->cardLastFour;
-        }
-
-        return self::isCard($order->paymentMethod) ? self::NOT_RECORDED : null;
+        // The order's own answer, so the comparison page — which scores this row — and the receipt
+        // print the same words for the same card.
+        return $order?->cardLabel();
     }
 
     /** Whether either order has a card to describe. */

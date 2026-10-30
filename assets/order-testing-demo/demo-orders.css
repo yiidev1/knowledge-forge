@@ -85,6 +85,17 @@
     align-items: start;
 }
 
+/*
+ * Two invoices want the screen, not the 1240px reading column.
+ *
+ * The same marker-and-`:has()` pattern as the Order58 call tables (`.o58-wide` in admin.css), because the
+ * layout's own `wideContent` flag sets a class a later `.content` rule overrides. Only a page holding the
+ * two invoices is widened; the breadcrumb bar is widened with it so the header stays over the page. A
+ * browser without `:has()` keeps the reading column, which is how this page looked before.
+ */
+.content:has(.ot-books) { max-width: 1680px; }
+.main:has(.ot-books) .topbar__inner { max-width: 1680px; }
+
 /* How the score is calculated: there for whoever wants it, closed until asked for. */
 .ot-books__note {
     margin-top: 1rem;
@@ -218,15 +229,16 @@
  * One line of the invoice: label left, value right, verdict hard against the right edge.
  *
  * `minmax(0, 1fr)` rather than `1fr`, so a long option list wraps inside the panel instead of widening
- * the grid track and pushing the verdict off the card.
+ * the grid track and pushing the verdict off the card. The label column is a share of the line between
+ * two bounds, so a wide panel gives labels room to breathe and a narrow one gives the room to values.
  */
 .ot-book__line {
     position: relative;
     display: grid;
-    grid-template-columns: 9.5rem minmax(0, 1fr);
-    gap: 0.25rem 0.75rem;
+    grid-template-columns: clamp(7.5rem, 24%, 10.5rem) minmax(0, 1fr);
+    gap: 0.25rem 1rem;
     align-items: baseline;
-    padding: 0.22rem 1.25rem;
+    padding: 0.24rem 1.25rem;
 }
 
 /*
@@ -261,6 +273,40 @@
 
 .ot-book__mark {
     flex: none;
+}
+
+/*
+ * Options, Additions and Combinations: one modifier per line.
+ *
+ * Each entry is one modifier exactly as the order named it, so a long one wraps inside its own line and
+ * never runs into the next. A small dot and a hanging indent keep a wrapped entry visibly one entry.
+ */
+.ot-list {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.2rem;
+    line-height: 1.4;
+}
+
+.ot-list__item {
+    position: relative;
+    padding-left: 0.9rem;
+}
+
+.ot-list__item::before {
+    content: '';
+    position: absolute;
+    left: 0.15rem;
+    top: 0.6em;
+    width: 0.3rem;
+    height: 0.3rem;
+    border-radius: 50%;
+    background: var(--text-muted, #8a8f98);
+    opacity: 0.7;
 }
 
 /*

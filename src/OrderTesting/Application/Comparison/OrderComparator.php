@@ -85,7 +85,86 @@ final readonly class OrderComparator
             $items->availability,
             $items->syncedAt,
             $items->removed(),
+            $this->payment($original, $demo),
         );
+    }
+
+    /**
+     * The card details: the card's last four digits, its expiry and its billing postcode.
+     *
+     * ## Compared only when both orders kept the detail
+     *
+     * When one order has a detail and the other does not, there are two possible reasons, and neither
+     * is a mistake to charge here:
+     *
+     *  - the other order was not paid by card — and `Payment method` already compares that, so charging
+     *    the card as well would count one mistake twice;
+     *  - it was paid by card, but the detail was not kept when the order was stored (orders stored
+     *    before the last four digits were kept show "Card not recorded").
+     *
+     * So a detail only one side holds is `Uncomparable` — shown as "Not available", never as missing.
+     * Two kept values are compared exactly; the card is compared on its four digits, not its label.
+     *
+     * Only what is safe to print exists here at all: the card number and the verification code are
+     * removed before an order is stored. See `App\Shared\Order58\PaymentSecretRedactor`.
+     *
+     * @return list<FieldComparison>
+     */
+    private function payment(?NormalizedOrder $original, NormalizedOrder $demo): array
+    {
+        return [
+            $this->cardDetail(
+                'Card',
+                $original?->cardLabel(),
+                $demo->cardLabel(),
+                $original?->cardLastFour,
+                $demo->cardLastFour,
+                $original,
+            ),
+            $this->cardDetail(
+                'Expiration date',
+                $original?->expiryDate,
+                $demo->expiryDate,
+                $original?->expiryDate,
+                $demo->expiryDate,
+                $original,
+            ),
+            $this->cardDetail(
+                'Billing ZIP',
+                $original?->billingZip,
+                $demo->billingZip,
+                $original?->billingZip,
+                $demo->billingZip,
+                $original,
+            ),
+        ];
+    }
+
+    /**
+     * One card detail: shown as printed, judged on the kept value.
+     *
+     * The two differ for the card alone — `•••• 1234` or "Card not recorded" is shown, the four digits
+     * are compared.
+     */
+    private function cardDetail(
+        string $label,
+        ?string $shownOriginal,
+        ?string $shownDemo,
+        ?string $keptOriginal,
+        ?string $keptDemo,
+        ?NormalizedOrder $sourceOrder,
+    ): FieldComparison {
+        $status = match (true) {
+            $sourceOrder === null => ComparisonStatus::Uncomparable,
+            // Nothing on either side, and nothing printed either: no row at all.
+            $shownOriginal === null && $shownDemo === null => ComparisonStatus::Match,
+            $keptOriginal === null || $keptDemo === null => ComparisonStatus::Uncomparable,
+            default => ComparisonRules::textEquals($keptOriginal, $keptDemo)
+                ? ComparisonStatus::Match
+                : ComparisonStatus::Different,
+        };
+
+        return new FieldComparison($label, $shownOriginal, $shownDemo, $status);
     }
 
     /** @return list<ComparisonSection> */

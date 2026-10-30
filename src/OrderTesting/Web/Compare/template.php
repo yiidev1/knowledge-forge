@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Domain\Comparison\ComparisonScore;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
 use App\OrderTesting\Domain\Comparison\ComparisonStatus;
@@ -107,20 +108,61 @@ $statusWords = static fn(ComparisonStatus $status): string => match ($status) {
  * otherwise, so the few rows that differ are the ones that stand out. A screen reader still hears
  * "Match". Everything else is a short label, because "missing" and "different" are not the same thing
  * and a symbol could not say which.
+ *
+ * A line item is headed by the verdict the score gave it, not the comparator's: a line whose only
+ * difference is its unit price scored as a match, and reads as one. See `ComparisonScorer::itemVerdict()`.
  */
 $verdict = static function (FieldComparison|ItemComparison $c) use ($statusWords): string {
-    $words = $statusWords($c->status);
+    $status = $c instanceof ItemComparison ? ComparisonScorer::itemVerdict($c) : $c->status;
+    $words = $statusWords($status);
 
-    if ($c->status === ComparisonStatus::Match) {
+    if ($status === ComparisonStatus::Match) {
         return '<span class="util-visually-hidden">' . Html::encode($words) . '</span>';
     }
 
-    return '<span class="ot-mark ot-mark--' . Html::encode($c->status->modifier()) . '">'
+    return '<span class="ot-mark ot-mark--' . Html::encode($status->modifier()) . '">'
         . Html::encode($words) . '</span>';
 };
 
-/** A row shown for reference and counted by nothing: said so, quietly, where a verdict would sit. */
+/**
+ * A row shown for reference and counted by nothing: said so, quietly, where a verdict would sit.
+ *
+ * Used where two values differ but the difference is not scored — a unit price — so a reader is not
+ * left to take a neutral grey note for a mistake the score charged.
+ */
 $notScored = '<span class="ot-mark ot-mark--note">Not scored</span>';
+
+/** Line-item rows the score never reads, shown for reference only. */
+$referenceItemFields = ['Unit price'];
+
+/**
+ * The modifier rows, printed as the list they are rather than one comma-joined sentence.
+ *
+ * Read from the line's own lists — each entry is one modifier exactly as the document named it — so
+ * nothing is split on a comma that might belong inside a name.
+ *
+ * @var array<string, Closure(NormalizedItem): list<string>> $modifierLists
+ */
+$modifierLists = [
+    'Options' => static fn(NormalizedItem $i): array => $i->options,
+    'Additions' => static fn(NormalizedItem $i): array => $i->additions,
+    'Combinations' => static fn(NormalizedItem $i): array => $i->combinations,
+];
+
+/** @param list<string> $entries */
+$list = static function (array $entries): string {
+    if ($entries === []) {
+        return '<span class="util-muted">&mdash;</span>';
+    }
+
+    $out = '<ul class="ot-list">';
+
+    foreach ($entries as $entry) {
+        $out .= '<li class="ot-list__item">' . Html::encode($entry) . '</li>';
+    }
+
+    return $out . '</ul>';
+};
 
 /** The section headings as a reader expects them. The comparison's own titles stay its own. */
 $sectionHeading = static fn(string $title): string => match ($title) {
@@ -148,10 +190,10 @@ $sectionScore = static function (?SectionScore $section): string {
     }
 
     if (!$section->isScored()) {
-        // Shown, never scored, and the reason differs: Delivery address is redacted out of both
-        // documents by policy, everything else here simply had nothing comparable in it.
+        // Shown, never scored, and the reason differs: an informational section is never scored by
+        // design, everything else here simply had nothing comparable in it.
         $why = $section->informationalOnly
-            ? 'Shown for reference. Not scored: the street line is redacted from both documents.'
+            ? 'Shown for reference and not scored.'
             : 'Nothing in this section could be compared, so it is left out of the overall score.';
 
         return '<span class="ot-sscore ot-sscore--none" title="' . Html::encode($why) . '">'
@@ -187,7 +229,7 @@ foreach ($score->sections as $scored) {
     $scoredPercent = $scored->displayPercent();
 
     if ($scored->weight > 0 && $scoredPercent !== null) {
-        $overallParts[] = $scored->title . ' ' . $scoredPercent . '% at '
+        $overallParts[] = $sectionHeading($scored->title) . ' ' . $scoredPercent . '% at '
             . number_format($scored->weight, 2) . '%';
     }
 }
@@ -208,7 +250,7 @@ $overallTitle = $score->isAvailable()
 $weightNote = [];
 
 foreach ($score->weighting as $weighted => $share) {
-    $weightNote[] = $weighted . ' ' . number_format($share, 2) . '%';
+    $weightNote[] = $sectionHeading($weighted) . ' ' . number_format($share, 2) . '%';
 }
 
 $weightTotal = number_format(array_sum($score->weighting), 2);
@@ -218,19 +260,18 @@ $overallTone = $overallPercent === null
     ? 'unknown'
     : ($overallPercent >= 90 ? 'good' : ($overallPercent >= 70 ? 'fair' : 'poor'));
 
-/** The line's own heading inside an invoice: what was ordered, and its catalogue code. */
+/**
+ * The line's own heading inside an invoice: what was ordered.
+ *
+ * The product code is not printed — here or as a row: it is the kitchen's routing code, not something
+ * the trainee is checked on. It is still in the stored order, and lines are never paired on it.
+ */
 $itemTitle = static function (?NormalizedItem $item): string {
     if ($item === null) {
         return '<span class="util-muted">Not on this order</span>';
     }
 
-    $out = Html::encode($item->name ?? 'Unnamed item');
-
-    if ($item->sn !== null) {
-        $out .= ' <code>' . Html::encode($item->sn) . '</code>';
-    }
-
-    return $out;
+    return Html::encode($item->name ?? 'Unnamed item');
 };
 
 /**
@@ -276,7 +317,8 @@ $totalsSections = [];
 
 foreach ($comparison->sections as $section) {
     /** @var ComparisonSection $section */
-    $fields = $keepFilled($section->fields);
+    // Customer count and Status are not shown — and, read from the same list, not scored.
+    $fields = $keepFilled(ComparisonScorer::shownFields($section));
 
     if ($fields === []) {
         continue;
@@ -294,21 +336,19 @@ foreach ($comparison->sections as $section) {
 /*
  * Payment details, decided once from BOTH orders and handed to both panels.
  *
- * Shown for reference and never scored: the comparison's sections and weights are untouched, and the
- * payment method row keeps the verdict it always had. Both panels print the same rows — a row one side
- * would skip still prints on that side with a dash — so the two invoices stay level row for row.
+ * The card, its expiry and its billing ZIP, compared — and scored with Order details, under whose
+ * heading they print. A row exists when either order has something to print in it, so both invoices
+ * put out the same rows and stay level; the side without a value prints a dash.
  *
- * The card row exists when either order was paid by card or kept a card's last four digits. The
- * processing fee goes in Totals, where it is part of the total it explains; it appears when either
+ * The processing fee goes in Totals, where it is part of the total it explains; it appears when either
  * order was paid by card or was charged one.
  */
-$showCardRow = PaymentDisplay::showsCard($comparison->original, $comparison->demo);
-$showExpiryRow = PaymentDisplay::showsExpiry($comparison->original, $comparison->demo);
-$showZipRow = PaymentDisplay::showsBillingZip($comparison->original, $comparison->demo);
+$paymentFields = $keepFilled($comparison->payment);
 $showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
 
 /**
- * The same rule inside each line item, so an empty Options or Instructions row goes as well.
+ * The same rule inside each line item, so an empty Options or Instructions row goes as well — and the
+ * product code, which this page does not show, goes with them.
  *
  * @var array<int, list<FieldComparison>> $itemFields
  */
@@ -316,7 +356,15 @@ $itemFields = [];
 
 foreach ($comparison->items as $index => $item) {
     /** @var ItemComparison $item */
-    $itemFields[$index] = $keepFilled($item->fields);
+    $shownItemFields = [];
+
+    foreach ($item->fields as $field) {
+        if (!in_array($field->label, ComparisonScorer::HIDDEN_ITEM_FIELDS, true)) {
+            $shownItemFields[] = $field;
+        }
+    }
+
+    $itemFields[$index] = $keepFilled($shownItemFields);
 }
 
 /**
@@ -342,20 +390,23 @@ $panel = static function (
     $sectionScore,
     $sectionHeading,
     $notScored,
-    $showCardRow,
-    $showExpiryRow,
-    $showZipRow,
+    $referenceItemFields,
+    $modifierLists,
+    $list,
+    $paymentFields,
     $showFeeRow,
 ): string {
     $isDemo = $side === 'demo';
     $pick = static fn(FieldComparison $f): ?string => $isDemo ? $f->demo : $f->original;
     $mark = static fn(FieldComparison|ItemComparison $c): string => $isDemo ? $verdict($c) : '';
 
+    // A row with nothing to say beside its value prints no verdict slot, so its value sits where the
+    // same value sits on the original panel — the totals in particular end flush with each other.
     $line = static function (string $label, string $rendered, string $markup, string $extra = '') use ($isDemo): string {
         return '<div class="ot-book__line' . $extra . '">'
             . '<dt class="ot-book__term">' . Html::encode($label) . '</dt>'
             . '<dd class="ot-book__desc">' . $rendered
-            . ($isDemo ? '<span class="ot-book__mark">' . $markup . '</span>' : '')
+            . ($isDemo && $markup !== '' ? '<span class="ot-book__mark">' . $markup . '</span>' : '')
             . '</dd></div>';
     };
 
@@ -383,8 +434,8 @@ $panel = static function (
             . ($isDemo ? $sectionScore($score->section($section['title'])) : '')
             . '</h3><dl class="ot-book__lines">';
 
-        // The payment method is one of the Order section's scored fields and stays one — its verdict and
-        // the section's score are unchanged. It is printed under its own heading with the card, below.
+        // The payment method is one of the Order section's scored fields. It is printed under its own
+        // heading with the card details below, and all of them share the one Order details score.
         $payment = null;
 
         foreach ($section['fields'] as $field) {
@@ -397,35 +448,25 @@ $panel = static function (
             $out .= $line($field->label, $value($pick($field)), $mark($field), $tint($field));
         }
 
-        if (
-            $section['title'] === 'Order'
-            && ($payment !== null || $showCardRow || $showExpiryRow || $showZipRow)
-        ) {
+        if ($section['title'] === 'Order' && ($payment !== null || $paymentFields !== [])) {
             $out .= '</dl><h4 class="ot-book__subhead">Payment details</h4><dl class="ot-book__lines">';
 
             if ($payment !== null) {
                 $out .= $line($payment->label, $value($pick($payment)), $mark($payment), $tint($payment));
             }
 
-            if ($showCardRow) {
-                $card = PaymentDisplay::card($order);
+            // Card, expiry, billing ZIP — each with its verdict. A detail only one order kept reads
+            // "Not available" and is not counted; see `OrderComparator::payment()`.
+            foreach ($paymentFields as $field) {
+                $shown = $pick($field);
                 $out .= $line(
-                    'Card',
-                    $card === PaymentDisplay::NOT_RECORDED
-                        ? '<span class="util-muted">' . Html::encode($card) . '</span>'
-                        : $value($card),
-                    $notScored,
+                    $field->label,
+                    $shown === NormalizedOrder::CARD_NOT_RECORDED
+                        ? '<span class="util-muted">' . Html::encode($shown) . '</span>'
+                        : $value($shown),
+                    $mark($field),
+                    $tint($field),
                 );
-            }
-
-            // Both are stated as stored and scored by nothing, like the card above them. An order that
-            // kept neither prints no row, because the flags were decided from both sides at the top.
-            if ($showExpiryRow) {
-                $out .= $line('Expiration date', $value(PaymentDisplay::expiry($order)), $notScored);
-            }
-
-            if ($showZipRow) {
-                $out .= $line('Billing ZIP', $value(PaymentDisplay::billingZip($order)), $notScored);
             }
         }
 
@@ -457,7 +498,23 @@ $panel = static function (
 
             foreach ($itemFields[$index] ?? [] as $field) {
                 /** @var FieldComparison $field */
-                $out .= $line($field->label, $value($pick($field)), $mark($field), $tint($field));
+                $rendered = isset($modifierLists[$field->label])
+                    ? ($mine === null ? $value(null) : $list($modifierLists[$field->label]($mine)))
+                    : $value($pick($field));
+
+                // Shown, never scored: no verdict and no tint, and a difference is pointed out as one
+                // the score does not count rather than as a mistake.
+                if (in_array($field->label, $referenceItemFields, true)) {
+                    $out .= $line(
+                        $field->label,
+                        $rendered,
+                        $isDemo && $field->status === ComparisonStatus::Different ? $notScored : '',
+                    );
+
+                    continue;
+                }
+
+                $out .= $line($field->label, $rendered, $mark($field), $tint($field));
             }
 
             $out .= '</dl></article>';
@@ -496,19 +553,21 @@ $panel = static function (
     $out .= '</div>';
 
     // ---- totals close the invoice ----------------------------------------------------------------
+    //
+    // For reference only: no score, no verdicts, no tint. Each side prints its own amounts as stored,
+    // and nothing about them counts towards the overall.
     foreach ($totalsSections as $section) {
         $out .= '<div class="ot-book__section ot-book__section--totals">'
-            . '<h3 class="ot-book__section-title">' . Html::encode($section['title'])
-            . ($isDemo ? $sectionScore($score->section($section['title'])) : '')
-            . '</h3><dl class="ot-book__lines">';
+            . '<h3 class="ot-book__section-title">' . Html::encode($section['title']) . '</h3>'
+            . '<dl class="ot-book__lines">';
 
         $last = array_key_last($section['fields']);
 
         foreach ($section['fields'] as $key => $field) {
             // The card processing fee is already inside the total, so it is printed just above it —
-            // then the lines above the total add up to it. Stated as stored; counted by nothing.
+            // then the lines above the total add up to it.
             if ($key === $last && $showFeeRow) {
-                $out .= $line('Card processing fee', $value($order?->totals->processingFee), $notScored);
+                $out .= $line('Card processing fee', $value($order?->totals->processingFee), '');
             }
 
             // The grand total is the figure anybody actually looks for, so it is set apart rather than
@@ -516,8 +575,8 @@ $panel = static function (
             $out .= $line(
                 $field->label,
                 $value($pick($field)),
-                $mark($field),
-                ($key === $last ? ' ot-book__line--grand' : '') . $tint($field),
+                '',
+                $key === $last ? ' ot-book__line--grand' : '',
             );
         }
 
@@ -681,21 +740,37 @@ $panel = static function (
 <details class="ot-books__note">
     <summary>How this score is calculated</summary>
     <p class="util-muted">
-        Each section counts the rows shown above it: a row that agrees counts in full, one that differs or
-        is missing counts as nothing. A field both orders left empty is not shown and not counted &mdash;
-        silence is not agreement. A value only the demo order has is shown but is not counted against it
-        here, because the mirror frequently holds no name or email to compare; on the line items it <em>is</em>
-        counted, because the provider states which lines the order had. A line the demo missed, or one it
-        added, counts once and for nothing &mdash; once, not once per field, so a single mistake is charged
-        a single time. Within a matched line, quantity and unit price count double, and the Options row is
-        not counted on its own because it repeats Additions and Combinations. Within Totals, the grand
-        total counts triple. Delivery address is shown and never scored: its street line is redacted from
-        both documents. Figures are rounded to whole percentages, except that a section short of complete
-        never prints 100 and one short of nothing never prints 0.
-        Weighting &mdash; <?= Html::encode(implode(', ', $weightNote)) ?>,
-        <?= Html::encode($weightTotal) ?>% in all.
-        The figure is this demo order measured against this original, and nothing wider: not the trainee,
-        not the call, not the store. Payment details and the card processing fee are shown for reference
-        and are not scored.
+        Each scored section counts the rows shown in it: a row that agrees counts in full, one that differs
+        or is missing from the demo counts as nothing. A field both orders left empty is not shown and not
+        counted &mdash; silence is not agreement. A value only the demo order has is shown as
+        &ldquo;Missing in original&rdquo; but is not counted against it, because the original frequently
+        holds no name, state or email to compare. A row marked &ldquo;Not available&rdquo; could not be
+        compared and is not counted either.
+    </p>
+    <p class="util-muted">
+        <strong>Customer details</strong> score the customer fields shown; the customer count is not shown
+        or scored. <strong>Order details</strong> score the order type and the payment details together, as
+        one score: payment method, card (last four digits), expiration date and billing ZIP. A card detail
+        counts only when both orders recorded it &mdash; when only one did, the other was either not paid
+        by card, which the payment method already counts, or its card details were not kept. The order
+        status is not shown or scored. <strong>Delivery address</strong> scores city, state, postal code and
+        street 2; the original order&rsquo;s street line is never stored, so the street is compared through
+        Destination, the full address line, which counts once. A take-out order has no address to score,
+        and the section then leaves the overall rather than counting as zero.
+    </p>
+    <p class="util-muted">
+        <strong>Order items</strong> count one unit per line. A line the demo missed, or one it added,
+        counts once and for nothing &mdash; once, not once per field, so a single mistake is charged a
+        single time. Within a matched line, the product, additions, combinations and instructions count
+        once each and the quantity counts double; Options is not counted on its own because it repeats
+        Additions and Combinations. The unit price is shown, and a different price is pointed out, but it
+        is not scored. <strong>Totals</strong> are shown for reference and are not scored.
+    </p>
+    <p class="util-muted">
+        The overall is the weighted average of the sections that could be scored &mdash;
+        <?= Html::encode(implode(', ', $weightNote)) ?>, <?= Html::encode($weightTotal) ?>% in all.
+        Figures are rounded to whole percentages, except that a section short of complete never prints
+        100 and one short of nothing never prints 0. The figure is this demo order measured against this
+        original, and nothing wider: not the trainee, not the call, not the store.
     </p>
 </details>

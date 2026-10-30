@@ -29,10 +29,15 @@ use function trim;
  *
  * ## What is counted
  *
- * Every field row the page draws, and every line item. A field both documents left empty is neither
- * drawn nor counted: two orders that both say nothing have not agreed about anything, and counting
- * that as a match would inflate the score with silence. `Uncomparable` is counted on its own, because
- * "we cannot tell" is not "the same".
+ * Every field row the page draws with a verdict, and every line item. A field both documents left empty
+ * is neither drawn nor counted: two orders that both say nothing have not agreed about anything, and
+ * counting that as a match would inflate the score with silence. `Uncomparable` is counted on its own,
+ * because "we cannot tell" is not "the same".
+ *
+ * The receipt follows the comparison page's rules: Customer count and Status are not drawn
+ * (`ComparisonScorer::HIDDEN_FIELDS`); the Summary is drawn without verdicts, so its rows are not
+ * counted; and a line item is counted under the verdict the score gave it, so a line that differs only
+ * in its unit price counts as matched.
  */
 final readonly class ReceiptComparison
 {
@@ -64,14 +69,17 @@ final readonly class ReceiptComparison
             /** @var ComparisonSection $section */
             $fields = [];
 
-            foreach ($section->fields as $field) {
-                /** @var FieldComparison $field */
+            foreach (ComparisonScorer::shownFields($section) as $field) {
                 if (self::isBlank($field->original) && self::isBlank($field->demo)) {
                     continue;
                 }
 
                 $fields[] = $field;
-                ++$tally[$field->status->value];
+
+                // The Summary is for reference: drawn without a verdict, so not counted as one.
+                if ($section->title !== ComparisonScorer::TOTALS) {
+                    ++$tally[$field->status->value];
+                }
             }
 
             if ($fields === []) {
@@ -83,7 +91,7 @@ final readonly class ReceiptComparison
 
         foreach ($comparison->items as $item) {
             /** @var ItemComparison $item */
-            ++$tally[$item->status->value];
+            ++$tally[ComparisonScorer::itemVerdict($item)->value];
         }
 
         return new self($comparison, $sections, $tally);

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\OrderTesting\Application\Comparison\ComparisonScorer;
 use App\OrderTesting\Application\Comparison\ReceiptComparison;
 use App\OrderTesting\Domain\Comparison\ComparisonStatus;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
@@ -361,7 +362,10 @@ $card = static function (
             /** @var ItemComparison $item */
             $mine = $isDemo ? $item->demo : $item->original;
             $modifiers = $modifiersOf($mine);
-            $status = Html::encode($item->status->value);
+            // The verdict the score gave the line, so a price-only difference reads as the match it
+            // scored — the unit price is shown and never judged.
+            $verdict = ComparisonScorer::itemVerdict($item);
+            $status = Html::encode($verdict->value);
 
             $out .= '<div class="rc__line rc__line--item' . ($mine === null ? ' rc__line--absent' : '')
                 . '" data-rc-status="' . $status . '">'
@@ -370,7 +374,7 @@ $card = static function (
                     ? '<span class="rc-muted">Not on this order</span>'
                     : '<span class="rc__item-name">' . Html::encode($mine->name ?? 'Unnamed item') . '</span>'
                     . ($mine->sn === null ? '' : ' <span class="rc__sn">' . Html::encode($mine->sn) . '</span>'))
-                . '<span class="rc__mark">' . $mark($item) . '</span>'
+                . '<span class="rc__mark">' . ($isDemo ? $badge($verdict) : '') . '</span>'
                 . '</span>'
                 . '<span class="rc__qty">' . $text($mine?->quantityLabel()) . '</span>'
                 . '<span class="rc__price">' . $money($mine?->unitPrice) . '</span>'
@@ -457,11 +461,12 @@ $card = static function (
                     . '<span class="rc__mark"></span></div>';
             }
 
-            $out .= '<div class="rc__sum' . $grand . '" data-rc-status="'
-                . Html::encode($field->status->value) . '">'
+            // The Summary is for reference: amounts as stored, no verdict, no status for the filter
+            // chips to highlight.
+            $out .= '<div class="rc__sum' . $grand . '">'
                 . '<span class="rc__label">' . Html::encode($field->label) . '</span>'
                 . '<span class="rc__amount">' . $money($pick($field)) . '</span>'
-                . '<span class="rc__mark">' . $mark($field) . '</span></div>';
+                . '<span class="rc__mark"></span></div>';
         }
     }
 
