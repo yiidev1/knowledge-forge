@@ -49,6 +49,10 @@ return [
     // Nothing in this project runs it on a timer, and this command exists for server-side and
     // debugging use rather than as something for a scheduler to call.
     'kf:order-testing:import-demo-orders' => App\OrderTesting\Console\ImportDemoOrdersCommand::class,
+    // One-off. The three payment-detail fields are held out of the content hash on purpose, so a
+    // re-sync reads an existing order as unchanged and skips it — correctly, and for ever. This is
+    // the only thing that fills them in on rows stored before they were kept. Dry run unless --write.
+    'kf:order-testing:payment-details:backfill' => App\OrderTesting\Console\BackfillPaymentDetailsCommand::class,
 
     // ONE order's original line items, from a shell. The same service both manual buttons call; two
     // required arguments and no "all" mode, so it cannot turn into a backfill.

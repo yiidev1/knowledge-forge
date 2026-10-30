@@ -32,8 +32,17 @@ final class OrderMapper
 {
     /** Money columns, each read as a string and kept as one. */
     private const MONEY = [
-        'seawolf_subtotal', 'seawolf_cost', 'total_cost', 'discount', 'total_amount',
-        'shipping_fee', 'tax', 'tax_rate', 'service_fee', 'surcharge', 'tip',
+        'seawolf_subtotal',
+        'seawolf_cost',
+        'total_cost',
+        'discount',
+        'total_amount',
+        'shipping_fee',
+        'tax',
+        'tax_rate',
+        'service_fee',
+        'surcharge',
+        'tip',
     ];
 
     /** Provider Unix timestamps, column name => source key. */
@@ -80,21 +89,35 @@ final class OrderMapper
         }
 
         /*
-         * The card's last four digits are stored with the payload but kept OUT of the fingerprint.
+         * The card's last four digits, its expiry and its billing postcode are stored with the payload
+         * but kept OUT of the fingerprint.
          *
          * Read from the record before its secrets go — or, for a Case Order, carried by the client that
-         * already redacted it. Hashing the payload without them leaves every stored order's hash exactly
-         * what it was, so an unchanged order is still skipped: an order already in the table is not
-         * rewritten just because this field now exists. New and genuinely changed orders carry it.
+         * already redacted it, which is why the permissive reader is the right one here: this method is
+         * given raw records by `OrderSyncService` and redacted ones by `CaseOrderParser`, and only the
+         * reader that accepts both keeps Case Orders working. The strict
+         * {@see PaymentSecretRedactor::provenPaymentKeys()} is applied at the client boundary instead,
+         * where the record really is the provider's own.
+         *
+         * Hashing the payload without the three leaves every stored order's hash exactly what it was,
+         * so an unchanged order is still skipped: a row already in the table is not rewritten just
+         * because these fields now exist. New and genuinely changed orders carry them.
+         *
+         * The exclusion list comes from the redactor, so a key added there is held out here too rather
+         * than quietly joining the fingerprint and rewriting every row.
          */
-        $cardLastFour = PaymentSecretRedactor::cardLastFour($raw);
         $clean = self::withoutPaymentSecrets($raw);
-        unset($clean[PaymentSecretRedactor::CARD_LAST_FOUR]);
+
+        foreach (PaymentSecretRedactor::keptPaymentKeys() as $keptKey) {
+            unset($clean[$keptKey]);
+        }
 
         $hashedPayload = json_encode($clean, JSON_THROW_ON_ERROR);
-        $payloadJson = $cardLastFour === null
+        $kept = PaymentSecretRedactor::readPaymentKeys($raw);
+
+        $payloadJson = $kept === []
             ? $hashedPayload
-            : json_encode($clean + [PaymentSecretRedactor::CARD_LAST_FOUR => $cardLastFour], JSON_THROW_ON_ERROR);
+            : json_encode($clean + $kept, JSON_THROW_ON_ERROR);
 
         $order = [
             'accountId' => $accountId,

@@ -12,6 +12,7 @@ use function is_string;
 use function json_decode;
 use function json_encode;
 use function preg_match;
+use function trim;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -81,6 +82,23 @@ final readonly class PaymentSecretRedactor
     public const CARD_LAST_FOUR = 'card_last4';
 
     /**
+     * The card's expiry, kept beside {@see CARD_LAST_FOUR} and under the same rules.
+     *
+     * Cardholder data rather than authentication data: PCI DSS permits retaining it, unlike the CVV
+     * beside it in the provider's record, which is stripped and never kept.
+     */
+    public const CARD_EXPIRY = 'card_expiry';
+
+    /** The billing postcode. Present on a minority of records; absent is the normal case. */
+    public const BILLING_ZIP = 'billing_zip_kept';
+
+    /** `MM/YYYY`, the only shape the provider sends — measured across every card order. */
+    private const EXPIRY_FORMAT = '/^(0[1-9]|1[0-2])\/(20\d{2})$/';
+
+    /** Five digits, or five plus four. Anything else is not a postcode and is refused. */
+    private const ZIP_FORMAT = '/^\d{5}(-\d{4})?$/';
+
+    /**
      * `<token>|<four digits>`. The token must be more than a few characters, must not contain the
      * separator or whitespace, and must not be all digits — a run of digits there could be a card
      * number written in clear, which is a different document from the one this rule was measured on.
@@ -133,16 +151,13 @@ final readonly class PaymentSecretRedactor
     public static function redactKeepingCardLastFour(array $raw): array
     {
         $clean = self::redact($raw);
-        $lastFour = self::cardLastFour($raw);
 
-        // Whatever arrived under this name is replaced by what was proved here, or removed.
-        unset($clean[self::CARD_LAST_FOUR]);
+        // Whatever arrived under these names is dropped and replaced by what can be proved — see
+        // provenPaymentKeys(), which is also what the mapper and the demo document use, so all three
+        // callers keep exactly the same fields under exactly the same rules.
+        unset($clean[self::CARD_LAST_FOUR], $clean[self::CARD_EXPIRY], $clean[self::BILLING_ZIP]);
 
-        if ($lastFour !== null) {
-            $clean[self::CARD_LAST_FOUR] = $lastFour;
-        }
-
-        return $clean;
+        return $clean + self::provenPaymentKeys($raw);
     }
 
     /**
@@ -201,6 +216,155 @@ final readonly class PaymentSecretRedactor
         }
 
         return $lastFour;
+    }
+
+    /**
+     * The card's expiry date, or null when it cannot be proved.
+     *
+     * Read from `data.cc.exp_date`, exactly as {@see cardLastFour()} reads the reference beside it. A
+     * record already redacted is asked for the value a previous call kept, and that is accepted only
+     * in the one shape the provider uses — so a malformed or hand-edited row yields nothing rather
+     * than a date the page would print as fact.
+     *
+     * Measured 2026-10-30 on every card order of the live response: 30 of 30 are `MM/YYYY`.
+     *
+     * @param array<array-key, mixed> $raw an order, before or after redaction
+     */
+    public static function cardExpiry(array $raw): ?string
+    {
+        $value = self::fromCc($raw, 'exp_date');
+
+        if ($value === null) {
+            $kept = $raw[self::CARD_EXPIRY] ?? null;
+
+            return is_string($kept) && preg_match(self::EXPIRY_FORMAT, $kept) === 1 ? $kept : null;
+        }
+
+        return preg_match(self::EXPIRY_FORMAT, $value) === 1 ? $value : null;
+    }
+
+    /**
+     * The billing postcode, or null.
+     *
+     * Empty far more often than not — 24 of 30 card orders carry an empty string — so null is the
+     * ordinary answer here, and the pages are built to omit the row rather than print a blank one.
+     *
+     * @param array<array-key, mixed> $raw
+     */
+    public static function billingZip(array $raw): ?string
+    {
+        $value = self::fromCc($raw, 'billing_zip');
+
+        if ($value === null) {
+            $kept = $raw[self::BILLING_ZIP] ?? null;
+
+            return is_string($kept) && preg_match(self::ZIP_FORMAT, $kept) === 1 ? $kept : null;
+        }
+
+        return preg_match(self::ZIP_FORMAT, $value) === 1 ? $value : null;
+    }
+
+    /**
+     * The keys this class may re-attach after redaction.
+     *
+     * Exists so the mapper and the demo document can hold these out of their fingerprints without
+     * listing them again — a second list would be the thing that drifted.
+     *
+     * @return list<string>
+     */
+    public static function keptPaymentKeys(): array
+    {
+        return [self::CARD_LAST_FOUR, self::CARD_EXPIRY, self::BILLING_ZIP];
+    }
+
+    /**
+     * What may be kept about the card on a record **the provider sent**, ready to merge into a payload.
+     *
+     * ## Why the kept keys are stripped from the input first
+     *
+     * All three are this class's own output — the provider sends `cc.card_num`, `cc.exp_date` and
+     * `cc.billing_zip`, never `card_last4`, `card_expiry` or `billing_zip_kept`. So a provider record
+     * that arrives carrying one is carrying something another hand put there, and the readers below
+     * would accept it through the fallback they keep for already-redacted records. The keys would then
+     * be self-asserting: set `card_expiry` on an incoming document and it would be stored as fact.
+     *
+     * They are therefore removed before anything is read, which leaves `data.cc` as the only source.
+     *
+     * Use this for a document from the provider or from a demo file. For a record this application has
+     * already stored and redacted, where the kept keys ARE the only remaining source, use
+     * {@see readPaymentKeys()} instead.
+     *
+     * @param array<array-key, mixed> $raw a record as the provider sent it
+     *
+     * @return array<string, string> only the keys that could be proved; empty for a cash order
+     */
+    public static function provenPaymentKeys(array $raw): array
+    {
+        unset($raw[self::CARD_LAST_FOUR], $raw[self::CARD_EXPIRY], $raw[self::BILLING_ZIP]);
+
+        return self::readPaymentKeys($raw);
+    }
+
+    /**
+     * The same three fields, read from wherever the record states them.
+     *
+     * For a record this application stored: its secrets are long gone, so the kept keys are the only
+     * source left and each reader falls back to them — still format-checked, so a hand-edited row
+     * yields nothing rather than text the pages would print as fact.
+     *
+     * Trusts the kept keys by design. Do not use it on anything the provider just sent;
+     * {@see provenPaymentKeys()} is the one for that.
+     *
+     * @param array<array-key, mixed> $raw
+     *
+     * @return array<string, string>
+     */
+    public static function readPaymentKeys(array $raw): array
+    {
+        $kept = [];
+
+        foreach (
+            [
+                self::CARD_LAST_FOUR => self::cardLastFour($raw),
+                self::CARD_EXPIRY => self::cardExpiry($raw),
+                self::BILLING_ZIP => self::billingZip($raw),
+            ] as $key => $value
+        ) {
+            if ($value !== null) {
+                $kept[$key] = $value;
+            }
+        }
+
+        return $kept;
+    }
+
+    /**
+     * One non-empty string from `data.cc`, with `data` decoded if it arrived as JSON.
+     *
+     * Extracted so the two readers above cannot drift from each other, and so the `data`-as-string
+     * case is handled once. Deliberately does NOT look at top-level siblings the way
+     * {@see cardLastFour()} does for `card_num`: expiry and postcode appear only inside `cc`, and
+     * widening the search would be inventing a source.
+     *
+     * @param array<array-key, mixed> $raw
+     */
+    private static function fromCc(array $raw, string $key): ?string
+    {
+        $data = $raw['data'] ?? null;
+
+        if (is_string($data) && $data !== '') {
+            try {
+                $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            } catch (JsonException) {
+                $data = null;
+            }
+        }
+
+        $data = is_array($data) ? $data : [];
+        $cc = isset($data['cc']) && is_array($data['cc']) ? $data['cc'] : [];
+        $value = $cc[$key] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
     /**

@@ -194,7 +194,7 @@ foreach ($score->sections as $scored) {
 
 $overallTitle = $score->isAvailable()
     ? 'Weighted across the sections that could be scored: ' . implode(', ', $overallParts)
-        . '. This demo order against its original — not an average over the call.'
+    . '. This demo order against its original — not an average over the call.'
     : ($score->unavailableReason ?? 'Nothing in this comparison could be scored.');
 
 /*
@@ -303,6 +303,8 @@ foreach ($comparison->sections as $section) {
  * order was paid by card or was charged one.
  */
 $showCardRow = PaymentDisplay::showsCard($comparison->original, $comparison->demo);
+$showExpiryRow = PaymentDisplay::showsExpiry($comparison->original, $comparison->demo);
+$showZipRow = PaymentDisplay::showsBillingZip($comparison->original, $comparison->demo);
 $showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
 
 /**
@@ -341,6 +343,8 @@ $panel = static function (
     $sectionHeading,
     $notScored,
     $showCardRow,
+    $showExpiryRow,
+    $showZipRow,
     $showFeeRow,
 ): string {
     $isDemo = $side === 'demo';
@@ -393,7 +397,10 @@ $panel = static function (
             $out .= $line($field->label, $value($pick($field)), $mark($field), $tint($field));
         }
 
-        if ($section['title'] === 'Order' && ($payment !== null || $showCardRow)) {
+        if (
+            $section['title'] === 'Order'
+            && ($payment !== null || $showCardRow || $showExpiryRow || $showZipRow)
+        ) {
             $out .= '</dl><h4 class="ot-book__subhead">Payment details</h4><dl class="ot-book__lines">';
 
             if ($payment !== null) {
@@ -409,6 +416,16 @@ $panel = static function (
                         : $value($card),
                     $notScored,
                 );
+            }
+
+            // Both are stated as stored and scored by nothing, like the card above them. An order that
+            // kept neither prints no row, because the flags were decided from both sides at the top.
+            if ($showExpiryRow) {
+                $out .= $line('Expiration date', $value(PaymentDisplay::expiry($order)), $notScored);
+            }
+
+            if ($showZipRow) {
+                $out .= $line('Billing ZIP', $value(PaymentDisplay::billingZip($order)), $notScored);
             }
         }
 
@@ -544,17 +561,17 @@ $panel = static function (
          * items — see `ItemAvailability` — and the remedy is a Case Order synchronisation, which
          * covers every order the provider returns in one request.
          */
-?>
+        ?>
         <?php
-// `btn` alone draws no box — the base class is layout and typography, and a variant supplies
-// the surface. Without one this sat in a row of buttons as bare link text. `btn--secondary` is
-// the same variant View Receipt uses, so the three controls now read as one set.
-//
-// The visible label is shortened and the accessible name keeps the whole sentence, which still
-// contains it — a screen reader is told which call, and the toolbar does not grow to say so.
-?>
+        // `btn` alone draws no box — the base class is layout and typography, and a variant supplies
+        // the surface. Without one this sat in a row of buttons as bare link text. `btn--secondary` is
+        // the same variant View Receipt uses, so the three controls now read as one set.
+        //
+        // The visible label is shortened and the accessible name keeps the whole sentence, which still
+        // contains it — a screen reader is told which call, and the toolbar does not grow to say so.
+        ?>
         <a class="btn btn--secondary" href="<?= Html::encode($listUrl) ?>"
-           aria-label="All demo orders for this call">
+            aria-label="All demo orders for this call">
             <span aria-hidden="true">📋</span> All Demo Orders
         </a>
         <a class="btn btn--secondary" href="<?= Html::encode($receiptUrl) ?>">
@@ -570,15 +587,16 @@ $panel = static function (
     //
     // Unavailable prints as unavailable rather than as 0%. The reason is already on this page — the
     // mirror notice above, or the item-synchronisation alert below — so it is not repeated here.
-?>
+    ?>
     <div class="ot-score ot-score--<?= Html::encode($overallTone) ?>"
-         title="<?= Html::encode($overallTitle) ?>">
+        title="<?= Html::encode($overallTitle) ?>">
         <span class="ot-score__label">Overall match score</span>
-        <?php // `!== null` rather than `isAvailable()`: the same question, but it narrows the type.?>
+        <?php // `!== null` rather than `isAvailable()`: the same question, but it narrows the type.
+        ?>
         <span class="ot-score__value<?= $overallPercent === null ? ' ot-score__value--unavailable' : '' ?>">
             <?= $overallPercent === null
-            ? 'Not scored'
-            : Html::encode($overallPercent . '%') ?>
+                ? 'Not scored'
+                : Html::encode($overallPercent . '%') ?>
         </span>
         <span class="ot-score__scope">
             <?= $score->isAvailable() ? 'this demo order' : 'see the note below' ?>
@@ -588,15 +606,26 @@ $panel = static function (
 
 <div class="card">
     <dl class="ot-summary">
-        <div><dt>Store</dt><dd><?= Html::encode($storeName) ?> &middot; Store #<?= Html::encode((string) $sourceId) ?></dd></div>
-        <div><dt>Source order</dt><dd>#<?= Html::encode((string) $demo->sourceOrderId) ?></dd></div>
-        <div><dt>Demo order</dt><dd>#<?= Html::encode((string) $demo->demoOrderId) ?></dd></div>
+        <div>
+            <dt>Store</dt>
+            <dd><?= Html::encode($storeName) ?> &middot; Store #<?= Html::encode((string) $sourceId) ?></dd>
+        </div>
+        <div>
+            <dt>Source order</dt>
+            <dd>#<?= Html::encode((string) $demo->sourceOrderId) ?></dd>
+        </div>
+        <div>
+            <dt>Demo order</dt>
+            <dd>#<?= Html::encode((string) $demo->demoOrderId) ?></dd>
+        </div>
         <div>
             <dt>Tested by</dt>
             <dd>
                 <?php if ($attempt === null): ?>
-                    <?php // Never invented. See the import rules: attribution is written once, when a?>
-                    <?php // demo order first arrives, and only if an attempt was open for it.?>
+                    <?php // Never invented. See the import rules: attribution is written once, when a
+                    ?>
+                    <?php // demo order first arrives, and only if an attempt was open for it.
+                    ?>
                     <span class="util-muted">Unknown &mdash; no matched attempt</span>
                 <?php else: ?>
                     <?php
@@ -623,10 +652,10 @@ $panel = static function (
 
 <?php if ($comparison->itemNote() !== ''): ?>
     <?php
-// Why the line items below read as they do. Two different kinds of message share this one place:
-// "these cannot be compared" and "these are from an earlier fetch". Both are statements about the
-// synchronisation, and neither is a statement about the trainee — which is exactly what the old
-// behaviour got wrong when it reported every demo line as invented.
+    // Why the line items below read as they do. Two different kinds of message share this one place:
+    // "these cannot be compared" and "these are from an earlier fetch". Both are statements about the
+    // synchronisation, and neither is a statement about the trainee — which is exactly what the old
+    // behaviour got wrong when it reported every demo line as invented.
     ?>
     <div class="alert alert--<?= Html::encode($comparison->itemAvailability->modifier()) ?>" role="status">
         <?= Html::encode($comparison->itemNote()) ?>
@@ -652,21 +681,21 @@ $panel = static function (
 <details class="ot-books__note">
     <summary>How this score is calculated</summary>
     <p class="util-muted">
-    Each section counts the rows shown above it: a row that agrees counts in full, one that differs or
-    is missing counts as nothing. A field both orders left empty is not shown and not counted &mdash;
-    silence is not agreement. A value only the demo order has is shown but is not counted against it
-    here, because the mirror frequently holds no name or email to compare; on the line items it <em>is</em>
-    counted, because the provider states which lines the order had. A line the demo missed, or one it
-    added, counts once and for nothing &mdash; once, not once per field, so a single mistake is charged
-    a single time. Within a matched line, quantity and unit price count double, and the Options row is
-    not counted on its own because it repeats Additions and Combinations. Within Totals, the grand
-    total counts triple. Delivery address is shown and never scored: its street line is redacted from
-    both documents. Figures are rounded to whole percentages, except that a section short of complete
-    never prints 100 and one short of nothing never prints 0.
-    Weighting &mdash; <?= Html::encode(implode(', ', $weightNote)) ?>,
-    <?= Html::encode($weightTotal) ?>% in all.
-    The figure is this demo order measured against this original, and nothing wider: not the trainee,
-    not the call, not the store. Payment details and the card processing fee are shown for reference
-    and are not scored.
+        Each section counts the rows shown above it: a row that agrees counts in full, one that differs or
+        is missing counts as nothing. A field both orders left empty is not shown and not counted &mdash;
+        silence is not agreement. A value only the demo order has is shown but is not counted against it
+        here, because the mirror frequently holds no name or email to compare; on the line items it <em>is</em>
+        counted, because the provider states which lines the order had. A line the demo missed, or one it
+        added, counts once and for nothing &mdash; once, not once per field, so a single mistake is charged
+        a single time. Within a matched line, quantity and unit price count double, and the Options row is
+        not counted on its own because it repeats Additions and Combinations. Within Totals, the grand
+        total counts triple. Delivery address is shown and never scored: its street line is redacted from
+        both documents. Figures are rounded to whole percentages, except that a section short of complete
+        never prints 100 and one short of nothing never prints 0.
+        Weighting &mdash; <?= Html::encode(implode(', ', $weightNote)) ?>,
+        <?= Html::encode($weightTotal) ?>% in all.
+        The figure is this demo order measured against this original, and nothing wider: not the trainee,
+        not the call, not the store. Payment details and the card processing fee are shown for reference
+        and are not scored.
     </p>
 </details>

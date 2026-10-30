@@ -46,6 +46,19 @@ final readonly class NormalizedOrder
          * stored. See `App\Shared\Order58\PaymentSecretRedactor::cardLastFour()`.
          */
         public ?string $cardLastFour = null,
+        /**
+         * The card's expiry as the stored order kept it, `MM/YYYY`, or null when none was.
+         *
+         * Display only, and compared by nothing — like {@see $cardLastFour} beside it. Cardholder
+         * data, not authentication data: the verification code is never stored and has no field here.
+         */
+        public ?string $expiryDate = null,
+        /**
+         * The billing postcode the stored order kept, or null.
+         *
+         * Null is the ordinary case: the provider leaves it empty on most card orders.
+         */
+        public ?string $billingZip = null,
         /** The store's time zone as the order states it, for printing the order's times. */
         public ?string $timezone = null,
     ) {}

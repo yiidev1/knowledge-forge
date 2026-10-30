@@ -130,8 +130,24 @@ final readonly class OrderNormalizer
             // Only the digits a stored order kept, and only when they are exactly four. The card
             // reference itself never reaches this class: it is removed before anything is stored.
             cardLastFour: self::cardLastFour($raw[PaymentSecretRedactor::CARD_LAST_FOUR] ?? null),
+            // Both are read straight off the stored record and checked again here, so a row edited by
+            // hand cannot put arbitrary text on the page. Neither is scored.
+            expiryDate: self::expiryDate($raw[PaymentSecretRedactor::CARD_EXPIRY] ?? null),
+            billingZip: self::billingZip($raw[PaymentSecretRedactor::BILLING_ZIP] ?? null),
             timezone: self::timezone($raw['timezone'] ?? null),
         );
+    }
+
+    /** `MM/YYYY`, or nothing. */
+    private static function expiryDate(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^(0[1-9]|1[0-2])\/(20\d{2})$/', $value) === 1 ? $value : null;
+    }
+
+    /** Five digits, or five plus four, or nothing. */
+    private static function billingZip(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^\d{5}(-\d{4})?$/', $value) === 1 ? $value : null;
     }
 
     /** Four digits, or nothing. */

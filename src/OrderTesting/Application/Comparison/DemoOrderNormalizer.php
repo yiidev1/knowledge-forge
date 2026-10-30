@@ -83,6 +83,11 @@ final readonly class DemoOrderNormalizer
             createdAt: $fromPayload->createdAt,
             updatedAt: $fromPayload->updatedAt,
             cardLastFour: $fromPayload->cardLastFour,
+            // Beside the last four digits and under the same rule: read from the payload the same
+            // normalizer wrote, never from a column. Omitting either here is how the demo side of a
+            // comparison silently loses a field the original side shows.
+            expiryDate: $fromPayload->expiryDate,
+            billingZip: $fromPayload->billingZip,
             timezone: $fromPayload->timezone,
         );
     }

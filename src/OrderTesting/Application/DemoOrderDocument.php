@@ -109,16 +109,25 @@ final readonly class DemoOrderDocument
         // storage. The two steps are in this order on purpose and the order is the whole trick.
         $normalized = $normalizer->normalize($raw);
         $redacted = PaymentSecretRedactor::redact($raw);
-        unset($redacted[PaymentSecretRedactor::CARD_LAST_FOUR]);
+
+        foreach (PaymentSecretRedactor::keptPaymentKeys() as $keptKey) {
+            unset($redacted[$keptKey]);
+        }
+
         $hashed = json_encode($redacted, JSON_THROW_ON_ERROR);
 
-        // The card's last four digits, proved from the reference before it is redacted, are stored with
-        // the payload but kept out of the hash — so a file already imported still reads as unchanged and
-        // its row is not rewritten for this field alone. See PaymentSecretRedactor::cardLastFour().
-        $cardLastFour = PaymentSecretRedactor::cardLastFour($raw);
-        $payload = $cardLastFour === null
+        /*
+         * The card's last four digits, its expiry and its billing postcode — proved from `data.cc`
+         * before it is redacted — are stored with the payload but kept out of the hash, so a file
+         * already imported still reads as unchanged and its row is not rewritten for these alone.
+         *
+         * A demo file is the provider's own document, so the strict reader applies: only `data.cc` may
+         * state these, never a key sitting at the top of the file. See provenPaymentKeys().
+         */
+        $kept = PaymentSecretRedactor::provenPaymentKeys($raw);
+        $payload = $kept === []
             ? $hashed
-            : json_encode($redacted + [PaymentSecretRedactor::CARD_LAST_FOUR => $cardLastFour], JSON_THROW_ON_ERROR);
+            : json_encode($redacted + $kept, JSON_THROW_ON_ERROR);
 
         return new self(new DemoOrder(
             storeSourceId: $accountId,

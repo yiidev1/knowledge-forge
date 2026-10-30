@@ -17,9 +17,13 @@ use function trim;
  *
  * ## Only what is safe to print exists to print
  *
- * The card is its last four digits, kept when the order was stored, and nothing else: the card number,
- * its expiry, the verification code and the billing address are removed before an order is saved and
- * never reach these pages. See `App\Shared\Order58\PaymentSecretRedactor`.
+ * The card is its last four digits, its expiry and its billing postcode — the three facts kept when the
+ * order was stored, and nothing else. **The card number and the verification code are removed before an
+ * order is saved and can never reach these pages**, and the billing street is removed with them. See
+ * `App\Shared\Order58\PaymentSecretRedactor`.
+ *
+ * The expiry is cardholder data, which PCI DSS permits retaining. The verification code is authentication
+ * data, which it does not — so there is no field, no getter and no row for it anywhere below.
  *
  * ## Both pages show the same rows on both sides
  *
@@ -62,6 +66,41 @@ final class PaymentDisplay
     public static function showsCard(?NormalizedOrder $original, ?NormalizedOrder $demo): bool
     {
         return self::card($original) !== null || self::card($demo) !== null;
+    }
+
+    /**
+     * The card's expiry on one order as it may be printed, or null.
+     *
+     * Unlike {@see card()} there is no "not recorded" stand-in: a card order whose expiry was not kept
+     * prints a dash like any other absent value, because an expiry is not the thing an operator is
+     * checking the receipt for and a label claiming it is missing would be noise.
+     */
+    public static function expiry(?NormalizedOrder $order): ?string
+    {
+        return $order?->expiryDate;
+    }
+
+    /** Whether either order kept an expiry to show. */
+    public static function showsExpiry(?NormalizedOrder $original, ?NormalizedOrder $demo): bool
+    {
+        return self::expiry($original) !== null || self::expiry($demo) !== null;
+    }
+
+    /**
+     * The billing postcode on one order, or null.
+     *
+     * The **billing** postcode that travels with the card, not the delivery address — that has its own
+     * section and is compared there. This is shown for reference and scored by nothing.
+     */
+    public static function billingZip(?NormalizedOrder $order): ?string
+    {
+        return $order?->billingZip;
+    }
+
+    /** Whether either order kept a billing postcode. Usually neither did. */
+    public static function showsBillingZip(?NormalizedOrder $original, ?NormalizedOrder $demo): bool
+    {
+        return self::billingZip($original) !== null || self::billingZip($demo) !== null;
     }
 
     /**

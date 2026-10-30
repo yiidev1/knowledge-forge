@@ -108,7 +108,8 @@ $lineTotal = static function (?NormalizedItem $item): ?string {
 
     $qty = $item->quantityLabel();
 
-    if ($qty === null || $item->unitPrice === null
+    if (
+        $qty === null || $item->unitPrice === null
         || !is_numeric(trim($qty)) || !is_numeric(trim($item->unitPrice))
     ) {
         return null;
@@ -167,6 +168,8 @@ $placedAt = static function (?NormalizedOrder $order): ?string {
 
 // Payment rows, decided from BOTH orders so the two receipts stay row for row. See PaymentDisplay.
 $showCardRow = PaymentDisplay::showsCard($comparison->original, $comparison->demo);
+$showExpiryRow = PaymentDisplay::showsExpiry($comparison->original, $comparison->demo);
+$showZipRow = PaymentDisplay::showsBillingZip($comparison->original, $comparison->demo);
 $showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
 
 $statuses = [
@@ -241,6 +244,8 @@ $card = static function (
     $sectionTitle,
     $placedAt,
     $showCardRow,
+    $showExpiryRow,
+    $showZipRow,
     $showFeeRow,
 ): string {
     $isDemo = $side === 'demo';
@@ -269,7 +274,7 @@ $card = static function (
         $out .= '<div class="rc__absent">'
             . ($isDemo
                 ? 'The original is not in the local mirror, so there is nothing to compare against. '
-                    . 'Everything the trainee entered is shown here in full.'
+                . 'Everything the trainee entered is shown here in full.'
                 : 'This order is not held in the local mirror, so there is nothing to print here.')
             . '</div>';
     }
@@ -298,7 +303,10 @@ $card = static function (
                 . '<span class="rc__mark">' . $mark($field) . '</span></span></div>';
         }
 
-        if ($section['title'] === 'Order' && ($payment !== null || $showCardRow)) {
+        if (
+            $section['title'] === 'Order'
+            && ($payment !== null || $showCardRow || $showExpiryRow || $showZipRow)
+        ) {
             $out .= '<div class="rc__caption">Payment Details</div>';
 
             if ($payment !== null) {
@@ -309,7 +317,8 @@ $card = static function (
             }
 
             if ($showCardRow) {
-                // The last four digits and nothing else — no card number, expiry or code is ever kept.
+                // The last four digits only — the card number itself is never kept, and neither is the
+                // verification code, which has no field anywhere in this application.
                 $card = PaymentDisplay::card($order);
                 $out .= '<div class="rc__row">'
                     . '<span class="rc__label">Card</span>'
@@ -318,6 +327,18 @@ $card = static function (
                         ? '<span class="rc-muted">' . Html::encode($card) . '</span>'
                         : $text($card))
                     . '</span></div>';
+            }
+
+            if ($showExpiryRow) {
+                $out .= '<div class="rc__row">'
+                    . '<span class="rc__label">Expiration date</span>'
+                    . '<span class="rc__value">' . $text(PaymentDisplay::expiry($order)) . '</span></div>';
+            }
+
+            if ($showZipRow) {
+                $out .= '<div class="rc__row">'
+                    . '<span class="rc__label">Billing ZIP</span>'
+                    . '<span class="rc__value">' . $text(PaymentDisplay::billingZip($order)) . '</span></div>';
             }
         }
     }
@@ -348,7 +369,7 @@ $card = static function (
                 . ($mine === null
                     ? '<span class="rc-muted">Not on this order</span>'
                     : '<span class="rc__item-name">' . Html::encode($mine->name ?? 'Unnamed item') . '</span>'
-                        . ($mine->sn === null ? '' : ' <span class="rc__sn">' . Html::encode($mine->sn) . '</span>'))
+                    . ($mine->sn === null ? '' : ' <span class="rc__sn">' . Html::encode($mine->sn) . '</span>'))
                 . '<span class="rc__mark">' . $mark($item) . '</span>'
                 . '</span>'
                 . '<span class="rc__qty">' . $text($mine?->quantityLabel()) . '</span>'
@@ -476,9 +497,9 @@ $card = static function (
     <?php foreach ($statuses as $status): ?>
         <?php if ($receipt->count($status) > 0): ?>
             <button class="btn rc-chip rc-chip--<?= Html::encode($status->modifier()) ?>"
-                    type="button"
-                    aria-pressed="false"
-                    data-rc-filter="<?= Html::encode($status->value) ?>">
+                type="button"
+                aria-pressed="false"
+                data-rc-filter="<?= Html::encode($status->value) ?>">
                 <span class="rc-chip__count"><?= Html::encode((string) $receipt->count($status)) ?></span>
                 <?= Html::encode($summaryWords[$status->value]) ?>
             </button>
