@@ -13,6 +13,7 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function array_replace;
 use function bin2hex;
 use function gmdate;
 use function hash;
@@ -442,7 +443,7 @@ final class OrderTestingDemoOrdersCest
         // item-synchronisation alert further down, rather than a second copy of it up here.
         $I->see('see the note below', '.ot-score__scope');
         // And the rules, so a reader can check whatever figure does appear.
-        $I->see('How this is scored');
+        $I->see('How this score is calculated');
 
         // A measurement, not a verdict. These words would make it one.
         $I->dontSee('Pass');
@@ -467,7 +468,80 @@ final class OrderTestingDemoOrdersCest
         $I->see('Source order unavailable in the local mirror');
         // The trainee's work is still all there.
         $I->see('Wonton Soup');
-        $I->see('Not comparable');
+        $I->see('Not available');
+    }
+
+    // ------------------------------------------------------------------ payment details
+
+    /**
+     * Both pages show how each order was paid: the method, the card's last four digits and the
+     * processing fee — and nothing else about the card. Synthetic values throughout.
+     */
+    public function bothPagesShowPaymentDetailsAndNoCardSecrets(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->payByCard(self::SOURCE_ORDER, '4242', '0.85110', 'America/New_York');
+        $this->seedDemoOrder(16630651);
+        $this->payDemoByCard(16630651, null, '0.07468', 'America/Chicago');
+
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo/16630651';
+
+        foreach ([$base, $base . '/receipt'] as $page) {
+            $I->amOnPage($page);
+
+            $I->see('Payment', $page === $base ? '.ot-book__subhead' : '.rc__caption');
+            $I->see('credit card');
+            // The original kept its digits; the demo was paid by card but kept none.
+            $I->see('•••• 4242');
+            $I->see('Card not recorded');
+            $I->see('rocessing fee');
+
+            // Never a secret, never a symbol for a verdict.
+            foreach (['card_num', 'cvv', 'exp_date', 'billing_zip', 'U1lOVEhF', '✓', '✕', '≠'] as $absent) {
+                $I->dontSeeInSource($absent);
+            }
+        }
+
+        // The receipt prints each order on its own store clock.
+        $I->see('EDT', '.rc--original .rc__date');
+        $I->see('CDT', '.rc--demo .rc__date');
+    }
+
+    /** A cash order on both sides has no card row and no fee row. */
+    public function aCashOrderShowsItsMethodWithoutCardFields(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedDemoOrder(16630651);
+
+        $base = '/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo/16630651';
+
+        foreach ([$base => '.ot-books', $base . '/receipt' => '.rc-pair'] as $page => $documents) {
+            $I->amOnPage($page);
+            $I->see('cash', $documents);
+            $I->dontSee('Card not recorded', $documents);
+            $I->dontSee('••••', $documents);
+            // On the documents themselves: the scoring note below them mentions the fee in prose.
+            $I->dontSee('rocessing fee', $documents);
+        }
+    }
+
+    /** The summary card names the comparison, not the plumbing; the verdicts are words, not symbols. */
+    public function theComparisonCarriesNoTechnicalDetail(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->seedDemoOrder(16630651, self::SOURCE_ORDER, $this->seedAttempt());
+
+        $I->amOnPage('/order-testing/store/' . self::STORE_ID . '/order/' . self::SOURCE_ORDER . '/demo/16630651');
+
+        $I->dontSee('Imported from');
+        $I->dontSee('.json');
+        $I->dontSee('Original items', '.ot-summary');
+        $I->dontSee('(Matched)', '.ot-summary');
+        $I->dontSee('(Expired)', '.ot-summary');
+        $I->see(self::ADMIN, '.ot-summary');
+        $I->dontSeeElement('.ot-book__phone');
+        $I->dontSeeElement('.ot-mark__glyph');
+        $I->seeElement('details.ot-books__note');
     }
 
     // ------------------------------------------------------------------ the boundary
@@ -898,6 +972,39 @@ final class OrderTestingDemoOrdersCest
         ])->execute();
 
         return (int) $this->connection->getLastInsertId();
+    }
+
+    /** The mirrored source order, paid by card: synthetic last four digits, fee and store time zone. */
+    private function payByCard(int $orderId, ?string $lastFour, string $fee, string $timezone): void
+    {
+        $payload = array_replace($this->orderDocument($orderId, '4.28000'), [
+            'payment_method' => 'credit card',
+            'cc_processing_fee' => $fee,
+            'timezone' => $timezone,
+            'created_at' => 1783379248,
+        ], $lastFour === null ? [] : ['card_last4' => $lastFour]);
+
+        $this->connection->createCommand()->update(
+            '{{%order58_orders}}',
+            ['payment_method' => 'credit card', 'payload_json' => (string) json_encode($payload)],
+            ['account_id' => self::STORE_ID, 'source_order_id' => $orderId],
+        )->execute();
+    }
+
+    private function payDemoByCard(int $demoOrderId, ?string $lastFour, string $fee, string $timezone): void
+    {
+        $payload = array_replace($this->orderDocument($demoOrderId, '4.28000'), [
+            'payment_method' => 'credit card',
+            'cc_processing_fee' => $fee,
+            'timezone' => $timezone,
+            'created_at' => 1783379248,
+        ], $lastFour === null ? [] : ['card_last4' => $lastFour]);
+
+        $this->connection->createCommand()->update(
+            '{{%order_testing_demo_orders}}',
+            ['payment_method' => 'credit card', 'raw_payload' => (string) json_encode($payload)],
+            ['store_source_id' => self::STORE_ID, 'demo_order_id' => $demoOrderId],
+        )->execute();
     }
 
     /** A conversation with an order number, so the store page renders a row for it. */

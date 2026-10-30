@@ -82,6 +82,8 @@ final readonly class DemoOrderNormalizer
             items: $fromPayload->items,
             createdAt: $fromPayload->createdAt,
             updatedAt: $fromPayload->updatedAt,
+            cardLastFour: $fromPayload->cardLastFour,
+            timezone: $fromPayload->timezone,
         );
     }
 }

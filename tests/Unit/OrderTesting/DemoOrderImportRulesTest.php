@@ -14,7 +14,11 @@ use PHPUnit\Framework\TestCase;
 use function dirname;
 use function file_get_contents;
 use function hash;
+use function json_decode;
+use function json_encode;
 use function str_contains;
+
+use const JSON_THROW_ON_ERROR;
 
 /**
  * What the importer will and will not accept.
@@ -255,6 +259,68 @@ final class DemoOrderImportRulesTest extends TestCase
         self::assertNotNull($first);
         self::assertNotNull($second);
         self::assertSame($first->contentHash, $second->contentHash);
+    }
+
+    // ------------------------------------------------------------------ the card's last four digits
+
+    /**
+     * A card demo keeps its last four digits and nothing else of the card.
+     *
+     * The fixture is synthetic, in the provider's measured shape: `<token>|<four digits>` in both copies.
+     */
+    public function testACardDemoKeepsOnlyItsLastFourDigits(): void
+    {
+        $order = $this->parse($this->fixtures('demo_card_orders'), '16758551-16630691.json')->order;
+
+        self::assertNotNull($order);
+
+        $stored = json_decode($order->rawPayload, true);
+        self::assertIsArray($stored);
+        self::assertSame('4242', $stored[PaymentSecretRedactor::CARD_LAST_FOUR] ?? null);
+
+        foreach (PaymentSecretRedactor::PAYMENT_SECRETS as $secret) {
+            self::assertStringNotContainsString('"' . $secret . '"', $order->rawPayload, $secret . ' must never be stored');
+        }
+
+        foreach (['U1lOVEhFVElDLVRFU1QtQ0FSRC1UT0tFTg', '12/2099', 'Synthetic Billing'] as $value) {
+            self::assertStringNotContainsString($value, $order->rawPayload);
+        }
+    }
+
+    /**
+     * The digits are kept OUT of the hash, so a file imported before they existed still reads as
+     * unchanged and its row is not rewritten for this field alone.
+     */
+    public function testTheLastFourDigitsAreNotPartOfTheContentHash(): void
+    {
+        $order = $this->parse($this->fixtures('demo_card_orders'), '16758551-16630691.json')->order;
+
+        self::assertNotNull($order);
+
+        $stored = json_decode($order->rawPayload, true);
+        self::assertIsArray($stored);
+        unset($stored[PaymentSecretRedactor::CARD_LAST_FOUR]);
+
+        $raw = json_decode((string) file_get_contents(
+            $this->fixtures('demo_card_orders') . '/16758551-16630691.json',
+        ), true);
+        self::assertIsArray($raw);
+
+        // Exactly the hash the importer computed before the digits were kept: over the redacted document.
+        self::assertSame(
+            hash('sha256', (string) json_encode(PaymentSecretRedactor::redact($raw), JSON_THROW_ON_ERROR)),
+            $order->contentHash,
+        );
+        self::assertSame(hash('sha256', (string) json_encode($stored, JSON_THROW_ON_ERROR)), $order->contentHash);
+    }
+
+    /** A card number in clear is not the measured shape, so nothing is kept — and nothing is guessed. */
+    public function testADemoWithACardNumberInClearKeepsNoDigits(): void
+    {
+        $order = $this->parse($this->fixtures('demo_mix_orders'), '16758551-16630651.json')->order;
+
+        self::assertNotNull($order);
+        self::assertStringNotContainsString(PaymentSecretRedactor::CARD_LAST_FOUR, $order->rawPayload);
     }
 
     /** Three demo orders, one source order: the shape production already proved. */

@@ -11,6 +11,7 @@ use function is_array;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function preg_match;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -39,6 +40,18 @@ use const JSON_THROW_ON_ERROR;
  * reflection, so a key added to one and not the other fails the build rather than quietly leaking from
  * whichever copy was forgotten.
  *
+ * ## The last four digits are the one thing kept, and only when they can be proved
+ *
+ * The provider writes the card reference as `<encrypted token>|<last four digits>`, in `data.card_num` and
+ * again in `data.cc.card_num`. Measured 2026-10-30 on 29 credit-card orders of a real Case Order response:
+ * every one had that shape, both copies were identical, and on the three that could be checked the four
+ * digits were the last four printed on Order58's own receipt for that order.
+ *
+ * {@see cardLastFour()} reads those four digits and nothing else — the token is never decoded, never
+ * stored and never examined beyond its shape. A reference in any other shape, or two copies that
+ * disagree, yields nothing rather than a guess. The digits are kept under {@see CARD_LAST_FOUR} by the
+ * callers that store an order; every secret is still removed exactly as before.
+ *
  * ## `street1` is in the list, and the delivery address is still shown
  *
  * `street1` is the **billing** street that travels with the card. It is stripped from the stored blob at
@@ -58,6 +71,21 @@ final readonly class PaymentSecretRedactor
 
     /** Record fields that are themselves JSON-encoded strings, so the secrets sit one level down. */
     public const NESTED_JSON = ['data', 'commit_data'];
+
+    /**
+     * Where a stored order keeps its card's last four digits — derived here, never sent by the provider.
+     *
+     * Top level of the record rather than inside `data`, because `data` is the provider's own structure
+     * and this is not something the provider wrote there.
+     */
+    public const CARD_LAST_FOUR = 'card_last4';
+
+    /**
+     * `<token>|<four digits>`. The token must be more than a few characters, must not contain the
+     * separator or whitespace, and must not be all digits — a run of digits there could be a card
+     * number written in clear, which is a different document from the one this rule was measured on.
+     */
+    private const CARD_REFERENCE = '/^(?!\d+\|)[^|\s]{8,}\|(\d{4})$/';
 
     /**
      * @param array<array-key, mixed> $raw
@@ -90,6 +118,89 @@ final readonly class PaymentSecretRedactor
         }
 
         return self::strip($raw);
+    }
+
+    /**
+     * {@see redact()}, plus the card's last four digits when {@see cardLastFour()} can prove them.
+     *
+     * For an ORDER document about to be stored. Line items and envelopes use {@see redact()} alone: they
+     * carry no card reference, and a key appearing on them would be one more place a card is described.
+     *
+     * @param array<array-key, mixed> $raw the provider's order, before redaction
+     *
+     * @return array<array-key, mixed>
+     */
+    public static function redactKeepingCardLastFour(array $raw): array
+    {
+        $clean = self::redact($raw);
+        $lastFour = self::cardLastFour($raw);
+
+        // Whatever arrived under this name is replaced by what was proved here, or removed.
+        unset($clean[self::CARD_LAST_FOUR]);
+
+        if ($lastFour !== null) {
+            $clean[self::CARD_LAST_FOUR] = $lastFour;
+        }
+
+        return $clean;
+    }
+
+    /**
+     * The last four digits of the card on an order, or null when they cannot be proved.
+     *
+     * Read from `data.card_num` and `data.cc.card_num`, whichever are present. Every copy present must
+     * have the measured shape and all must agree; one malformed or disagreeing copy and the answer is
+     * null. A record whose reference was already redacted is asked for the digits a previous call kept,
+     * and those are accepted only as exactly four digits.
+     *
+     * Nothing is decrypted and nothing is inferred: no reference, no digits.
+     *
+     * @param array<array-key, mixed> $raw an order, before or after {@see redactKeepingCardLastFour()}
+     */
+    public static function cardLastFour(array $raw): ?string
+    {
+        $data = $raw['data'] ?? null;
+
+        if (is_string($data) && $data !== '') {
+            try {
+                $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
+            } catch (JsonException) {
+                $data = null;
+            }
+        }
+
+        $data = is_array($data) ? $data : [];
+        $cc = isset($data['cc']) && is_array($data['cc']) ? $data['cc'] : [];
+
+        $references = [];
+
+        foreach ([$data['card_num'] ?? null, $cc['card_num'] ?? null] as $reference) {
+            if (is_string($reference) && $reference !== '') {
+                $references[] = $reference;
+            }
+        }
+
+        if ($references === []) {
+            $kept = $raw[self::CARD_LAST_FOUR] ?? null;
+
+            return is_string($kept) && preg_match('/^\d{4}$/', $kept) === 1 ? $kept : null;
+        }
+
+        $lastFour = null;
+
+        foreach ($references as $reference) {
+            if (preg_match(self::CARD_REFERENCE, $reference, $match) !== 1) {
+                return null;
+            }
+
+            if ($lastFour !== null && $lastFour !== $match[1]) {
+                return null;
+            }
+
+            $lastFour = $match[1];
+        }
+
+        return $lastFour;
     }
 
     /**

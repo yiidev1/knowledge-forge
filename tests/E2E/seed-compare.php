@@ -154,10 +154,18 @@ $demoLines = [
 //   shipping_fee        0.00 vs 2.50      -> shown; a zero is an answer, not a missing value
 //   tip                 0.00 on both      -> suppressed, symmetrically, as an agreed-zero charge
 //   surcharge/discount  absent on both    -> removed entirely
+// Paid by card on both sides, so the payment rows and the processing fee are in the geometry too. The
+// original kept its last four digits; the demo did not. Synthetic values, in the stored shape only — no
+// card reference, expiry or code is ever stored, so none appears here.
 $payload = (string) json_encode([
     'id' => (string) ORDER,
     'status' => 'completed',
     'type' => 'delivery',
+    'payment_method' => 'credit card',
+    'cc_processing_fee' => '0.85110',
+    'card_last4' => '4242',
+    'timezone' => 'America/New_York',
+    'created_at' => 1783379248,
     'subtotal' => '29.55000',
     'tax' => '1.95000',
     'shipping_fee' => '0.00000',
@@ -179,7 +187,7 @@ $c->createCommand()->insert('{{%order58_orders}}', [
     'source_order_id' => ORDER,
     'reservation_phone' => PHONE,
     'type' => 'delivery',
-    'payment_method' => 'cash',
+    'payment_method' => 'credit card',
     'status' => 'completed',
     'total_amount' => '31.50000',
     'payload_json' => $payload,
@@ -217,6 +225,10 @@ $demoPayload = (string) json_encode([
     'id' => DEMO_ORDER,
     'status' => 'completed',
     'type' => 'delivery',
+    'payment_method' => 'credit card',
+    'cc_processing_fee' => '0.79000',
+    'timezone' => 'America/Chicago',
+    'created_at' => 1783382848,
     'subtotal' => '26.10000',
     'tax' => '1.72000',
     'shipping_fee' => '2.50000',
@@ -234,7 +246,7 @@ $c->createCommand()->insert('{{%order_testing_demo_orders}}', [
     'customer_phone' => PHONE,
     'customer_first_name' => 'Marta',
     'order_type' => 'delivery',
-    'payment_method' => 'cash',
+    'payment_method' => 'credit card',
     'status' => 'completed',
     'subtotal' => '26.10000',
     'tax' => '1.72000',

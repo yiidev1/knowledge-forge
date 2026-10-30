@@ -108,7 +108,17 @@ final readonly class DemoOrderDocument
         // Normalised from the ORIGINAL document, so the address survives; redacted afterwards for
         // storage. The two steps are in this order on purpose and the order is the whole trick.
         $normalized = $normalizer->normalize($raw);
-        $payload = json_encode(PaymentSecretRedactor::redact($raw), JSON_THROW_ON_ERROR);
+        $redacted = PaymentSecretRedactor::redact($raw);
+        unset($redacted[PaymentSecretRedactor::CARD_LAST_FOUR]);
+        $hashed = json_encode($redacted, JSON_THROW_ON_ERROR);
+
+        // The card's last four digits, proved from the reference before it is redacted, are stored with
+        // the payload but kept out of the hash — so a file already imported still reads as unchanged and
+        // its row is not rewritten for this field alone. See PaymentSecretRedactor::cardLastFour().
+        $cardLastFour = PaymentSecretRedactor::cardLastFour($raw);
+        $payload = $cardLastFour === null
+            ? $hashed
+            : json_encode($redacted + [PaymentSecretRedactor::CARD_LAST_FOUR => $cardLastFour], JSON_THROW_ON_ERROR);
 
         return new self(new DemoOrder(
             storeSourceId: $accountId,
@@ -137,7 +147,7 @@ final readonly class DemoOrderDocument
             // Over the REDACTED payload, so a row written before the redactor existed reports itself
             // changed on the next scan and is rewritten clean. Hashing the raw file would freeze the
             // secrets in place behind an "unchanged" verdict.
-            contentHash: hash('sha256', $payload),
+            contentHash: hash('sha256', $hashed),
             rawPayload: $payload,
         ));
     }

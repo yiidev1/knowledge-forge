@@ -39,5 +39,14 @@ final readonly class NormalizedOrder
         /** The provider's clock, Unix seconds. */
         public ?int $createdAt = null,
         public ?int $updatedAt = null,
+        /**
+         * The card's last four digits, as kept when the order was stored — or null when none were.
+         *
+         * Display only, and compared by nothing. Never the card number: nothing else about the card is
+         * stored. See `App\Shared\Order58\PaymentSecretRedactor::cardLastFour()`.
+         */
+        public ?string $cardLastFour = null,
+        /** The store's time zone as the order states it, for printing the order's times. */
+        public ?string $timezone = null,
     ) {}
 }

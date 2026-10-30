@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Order58;
 
 use App\Order58\Client\CaseOrders\CaseOrderAuth;
+use App\Shared\Order58\PaymentSecretRedactor;
 use App\Order58\Client\CaseOrders\CaseOrderFetchFailed;
 use App\Order58\Client\CaseOrders\CaseOrderSettings;
 use App\Order58\Client\CaseOrders\HttpCaseOrderClient;
@@ -164,6 +165,40 @@ final class CaseOrderClientTest extends Unit
         ]], JSON_THROW_ON_ERROR)));
 
         $this->assertStringNotContainsString('999', $this->client($http)->fetch()->sanitizedBody);
+    }
+
+    /**
+     * The card's last four digits survive redaction, and nothing else about the card does.
+     *
+     * Synthetic values in the provider's measured shape — `<token>|<four digits>` in both copies.
+     */
+    public function testTheCardsLastFourDigitsAreKeptAndNothingElse(): void
+    {
+        $token = 'U1lOVEhFVElDLVRFU1QtQ0FSRC1UT0tFTg==';
+        $http = $this->http(new Response(200, [], json_encode([[
+            'id' => 17066031,
+            'account_id' => 1121,
+            'payment_method' => 'credit card',
+            'data' => [
+                'card_num' => $token . '|4242',
+                'exp_date' => '12/2099',
+                'cvv' => '000',
+                'cc' => ['card_num' => $token . '|4242', 'cvv' => '000', 'exp_date' => '12/2099'],
+                'reservation' => ['phone' => '15550000000'],
+            ],
+            'items' => [['id' => 1, 'order_id' => 17066031, 'name' => 'Wings', 'qty' => 1]],
+        ]], JSON_THROW_ON_ERROR)));
+
+        $response = $this->client($http)->fetch();
+
+        $this->assertSame('4242', $response->orders[0][PaymentSecretRedactor::CARD_LAST_FOUR] ?? null);
+
+        foreach ([$token, '12/2099', '"cvv"', '"card_num"', '"exp_date"'] as $secret) {
+            $this->assertStringNotContainsString($secret, $response->sanitizedBody);
+        }
+
+        // Only the order carries the digits, never a line.
+        $this->assertArrayNotHasKey(PaymentSecretRedactor::CARD_LAST_FOUR, $response->orders[0]['items'][0]);
     }
 
     /** An envelope is tolerated, because `{"data": […]}` is how an API usually grows one. */

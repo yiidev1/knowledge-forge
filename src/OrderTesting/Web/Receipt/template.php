@@ -9,6 +9,7 @@ use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\DemoOrder;
+use App\OrderTesting\Web\PaymentDisplay;
 use App\OrderTesting\Web\ReceiptAsset;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
@@ -122,31 +123,51 @@ $text = static fn(?string $v): string => $v === null || trim($v) === ''
     : Html::encode(trim($v));
 
 /**
- * The verdict, as a mark a reader can read.
+ * The verdict, in words and never a symbol.
  *
- * Icon and words together, always: a glyph alone cannot distinguish "missing" from "extra", and colour
- * alone is not available to every reader. "Extra in demo" is written as "Missing in original", which is
- * the same fact said from the original's side — the side this page reads from.
+ * A match prints nothing a sighted reader sees: the receipt reads as agreement unless a row says
+ * otherwise, so the rows that differ are the ones that stand out. A screen reader still hears "Match".
+ * "Extra in demo" is written as "Missing in original", which is the same fact said from the original's
+ * side — the side this page reads from.
  */
 $badge = static function (ComparisonStatus $status): string {
-    $glyph = match ($status) {
-        ComparisonStatus::Match => '✓',
-        ComparisonStatus::Different => '≠',
-        ComparisonStatus::MissingInDemo => '!',
-        ComparisonStatus::ExtraInDemo => '!',
-        ComparisonStatus::Uncomparable => '·',
-    };
-
     $words = match ($status) {
         ComparisonStatus::ExtraInDemo => 'Missing in original',
         ComparisonStatus::Uncomparable => 'Not available',
         default => $status->label(),
     };
 
+    if ($status === ComparisonStatus::Match) {
+        return '<span class="util-visually-hidden">' . Html::encode($words) . '</span>';
+    }
+
     return '<span class="rc-mark rc-mark--' . Html::encode($status->modifier()) . '">'
-        . '<span class="rc-mark__glyph" aria-hidden="true">' . $glyph . '</span>'
         . Html::encode($words) . '</span>';
 };
+
+/**
+ * When an order was placed, on the store's own clock — the order states its time zone, as Order58's
+ * printed receipt does. An order that names none, or a zone this server does not know, is printed in
+ * UTC and says so rather than being placed in a zone it never claimed.
+ */
+$placedAt = static function (?NormalizedOrder $order): ?string {
+    $placed = $order?->createdAt;
+
+    if ($order === null || $placed === null) {
+        return null;
+    }
+
+    $at = new DateTimeImmutable('@' . $placed);
+    $zone = $order->timezone;
+
+    return $zone === null || $zone === ''
+        ? $at->format('M j, Y g:i A') . ' UTC'
+        : $at->setTimezone(new DateTimeZone($zone))->format('M j, Y g:i A T');
+};
+
+// Payment rows, decided from BOTH orders so the two receipts stay row for row. See PaymentDisplay.
+$showCardRow = PaymentDisplay::showsCard($comparison->original, $comparison->demo);
+$showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
 
 $statuses = [
     ComparisonStatus::Match,
@@ -218,12 +239,15 @@ $card = static function (
     $modifiersOf,
     $lineTotal,
     $sectionTitle,
+    $placedAt,
+    $showCardRow,
+    $showFeeRow,
 ): string {
     $isDemo = $side === 'demo';
     $pick = static fn(FieldComparison $f): ?string => $isDemo ? $f->demo : $f->original;
     $mark = static fn(FieldComparison|ItemComparison $c): string => $isDemo ? $badge($c->status) : '';
 
-    $placed = $order?->createdAt;
+    $placed = $placedAt($order);
 
     $out = '<section class="rc rc--' . Html::encode($side) . '" aria-label="' . Html::encode($kind) . '">';
 
@@ -235,7 +259,7 @@ $card = static function (
         . '<div class="rc__date">'
         . ($placed === null
             ? '<span class="rc-muted">No date recorded</span>'
-            : Html::encode(gmdate('M j, Y g:i A', $placed) . ' UTC'))
+            : Html::encode($placed))
         . '</div></header>';
 
     // ---- the order's own facts, and the customer's --------------------------------------------------
@@ -257,11 +281,44 @@ $card = static function (
 
         $out .= '<div class="rc__caption">' . Html::encode($sectionTitle($section['title'])) . '</div>';
 
+        // The payment method is printed under Payment Details with the card, below. It is the same
+        // compared field with the same verdict; only where it is printed changes.
+        $payment = null;
+
         foreach ($section['fields'] as $field) {
+            if ($section['title'] === 'Order' && $field->label === 'Payment method') {
+                $payment = $field;
+
+                continue;
+            }
+
             $out .= '<div class="rc__row" data-rc-status="' . Html::encode($field->status->value) . '">'
                 . '<span class="rc__label">' . Html::encode($field->label) . '</span>'
                 . '<span class="rc__value">' . $text($pick($field))
                 . '<span class="rc__mark">' . $mark($field) . '</span></span></div>';
+        }
+
+        if ($section['title'] === 'Order' && ($payment !== null || $showCardRow)) {
+            $out .= '<div class="rc__caption">Payment Details</div>';
+
+            if ($payment !== null) {
+                $out .= '<div class="rc__row" data-rc-status="' . Html::encode($payment->status->value) . '">'
+                    . '<span class="rc__label">' . Html::encode($payment->label) . '</span>'
+                    . '<span class="rc__value">' . $text($pick($payment))
+                    . '<span class="rc__mark">' . $mark($payment) . '</span></span></div>';
+            }
+
+            if ($showCardRow) {
+                // The last four digits and nothing else — no card number, expiry or code is ever kept.
+                $card = PaymentDisplay::card($order);
+                $out .= '<div class="rc__row">'
+                    . '<span class="rc__label">Card</span>'
+                    . '<span class="rc__value">'
+                    . ($card === PaymentDisplay::NOT_RECORDED
+                        ? '<span class="rc-muted">' . Html::encode($card) . '</span>'
+                        : $text($card))
+                    . '</span></div>';
+            }
         }
     }
 
@@ -369,6 +426,15 @@ $card = static function (
 
         foreach ($section['fields'] as $key => $field) {
             $grand = $key === $last ? ' rc__sum--grand' : '';
+
+            // Already inside the total, so printed just above it, where Order58's own receipt prints
+            // it — the lines above the total then add up to it. Shown as stored, compared by nothing.
+            if ($key === $last && $showFeeRow) {
+                $out .= '<div class="rc__sum">'
+                    . '<span class="rc__label">Processing fee</span>'
+                    . '<span class="rc__amount">' . $money($order?->totals->processingFee) . '</span>'
+                    . '<span class="rc__mark"></span></div>';
+            }
 
             $out .= '<div class="rc__sum' . $grand . '" data-rc-status="'
                 . Html::encode($field->status->value) . '">'

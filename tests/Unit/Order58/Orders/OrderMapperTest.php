@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Order58\Orders;
 
 use App\Order58\Application\Orders\OrderMapper;
+use App\Shared\Order58\PaymentSecretRedactor;
 use App\Order58\Application\Orders\OrderNotMappable;
 use Codeception\Test\Unit;
 
+use function json_decode;
 use function json_encode;
 
 /**
@@ -168,6 +170,54 @@ final class OrderMapperTest extends Unit
             $mapper->toOrder(self::ACCOUNT, $this->record([]))->contentHash,
             $mapper->toOrder(self::ACCOUNT, $this->record([]))->contentHash,
         );
+    }
+
+    /**
+     * The card's last four digits are stored with the payload and kept out of the hash.
+     *
+     * So an order already in the table hashes exactly as it did before the digits were kept, and the
+     * next sync leaves it alone rather than rewriting it for this field. Synthetic values throughout.
+     */
+    public function testTheCardsLastFourAreStoredButNotHashed(): void
+    {
+        $mapper = new OrderMapper();
+        $token = 'U1lOVEhFVElDLVRFU1QtQ0FSRC1UT0tFTg==';
+
+        $withCard = $this->record(['data' => (string) json_encode([
+            'card_num' => $token . '|4242',
+            'cvv' => '000',
+            'cc' => ['card_num' => $token . '|4242', 'cvv' => '000'],
+            'reservation' => ['phone' => '13474472616'],
+        ])]);
+        $redactedAlready = $this->record(['data' => (string) json_encode([
+            'cc' => [],
+            'reservation' => ['phone' => '13474472616'],
+        ])]);
+
+        $order = $mapper->toOrder(self::ACCOUNT, $withCard);
+        $payload = json_decode($order->payloadJson, true);
+
+        $this->assertIsArray($payload);
+        $this->assertSame('4242', $payload[PaymentSecretRedactor::CARD_LAST_FOUR] ?? null);
+        $this->assertStringNotContainsString($token, $order->payloadJson);
+        $this->assertStringNotContainsString('"cvv"', $order->payloadJson);
+
+        // Same document without the card: same fingerprint, so nothing reads as changed.
+        $this->assertSame($mapper->toOrder(self::ACCOUNT, $redactedAlready)->contentHash, $order->contentHash);
+    }
+
+    /** A Case Order arrives already redacted, carrying the digits its client proved; they are kept. */
+    public function testDigitsCarriedByAnEarlierRedactionAreKept(): void
+    {
+        $order = (new OrderMapper())->toOrder(
+            self::ACCOUNT,
+            $this->record([PaymentSecretRedactor::CARD_LAST_FOUR => '0007']),
+        );
+
+        $payload = json_decode($order->payloadJson, true);
+        $this->assertIsArray($payload);
+        $this->assertSame('0007', $payload[PaymentSecretRedactor::CARD_LAST_FOUR] ?? null);
+        $this->assertSame((new OrderMapper())->toOrder(self::ACCOUNT, $this->record([]))->contentHash, $order->contentHash);
     }
 
     /**

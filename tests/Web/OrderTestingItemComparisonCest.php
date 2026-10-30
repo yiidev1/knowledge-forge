@@ -91,8 +91,8 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('have not been synchronized yet');
-        $I->see('Not comparable', '.ot-items');
-        $I->dontSee('Extra in demo', '.ot-items');
+        $I->see('Not available', '.ot-items');
+        $I->dontSee('Missing in original', '.ot-items');
         // The trainee's work is still fully on the page.
         $I->see(self::WINGS);
         $I->see('Wonton Soup');
@@ -108,7 +108,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('queued for synchronization');
-        $I->dontSee('Extra in demo', '.ot-items');
+        $I->dontSee('Missing in original', '.ot-items');
     }
 
     /** A failure with nothing ever stored says so, and says it is not the demo's fault. */
@@ -121,7 +121,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('not a difference in the demo order');
-        $I->dontSee('Extra in demo', '.ot-items');
+        $I->dontSee('Missing in original', '.ot-items');
     }
 
     // ------------------------------------------------------------------ a real comparison
@@ -136,7 +136,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('Match', '.ot-items');
-        $I->dontSee('Not comparable', '.ot-items');
+        $I->dontSee('Not available', '.ot-items');
         $I->dontSee('have not been synchronized');
     }
 
@@ -168,7 +168,7 @@ final class OrderTestingItemComparisonCest
 
         $I->see('Different', '.ot-items');
         $I->dontSee('Missing in demo', '.ot-items');
-        $I->dontSee('Extra in demo', '.ot-items');
+        $I->dontSee('Missing in original', '.ot-items');
     }
 
     public function anOmittedLineIsMissingAndAnAddedLineIsExtra(WebTester $I): void
@@ -181,7 +181,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('Missing in demo', '.ot-items');
-        $I->see('Extra in demo', '.ot-items');
+        $I->see('Missing in original', '.ot-items');
     }
 
     /** A verified empty original really does make a demo line extra. */
@@ -193,12 +193,18 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Extra in demo', '.ot-items');
+        $I->see('Missing in original', '.ot-items');
         $I->dontSee('have not been synchronized');
     }
 
-    /** The summary card names the state, so it is known before the table is read. */
-    public function theSummaryCardNamesTheItemSyncState(WebTester $I): void
+    /**
+     * The summary card is about the comparison, not the plumbing behind it.
+     *
+     * The import file name and the item-synchronisation timestamp were technical detail the client
+     * asked to remove (2026-10-30). When the original's items are NOT usable the page still says so,
+     * in the alert above the invoices — see the two tests below.
+     */
+    public function theSummaryCardLeavesOutSyncDetails(WebTester $I): void
     {
         $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
         $this->seedItem(1, $this->wings(), 0);
@@ -207,13 +213,15 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Original items', '.ot-summary');
-        $I->see('Synced', '.ot-summary');
-        $I->see('2026-10-09 10:00:00', '.ot-summary');
+        $I->see('Source order', '.ot-summary');
+        $I->dontSee('Original items', '.ot-summary');
+        $I->dontSee('2026-10-09 10:00:00', '.ot-summary');
+        $I->dontSee('Imported from', '.ot-summary');
+        $I->dontSee('.json');
     }
 
-    /** And it says "No items" rather than "0 items", which would read as a quiet failure. */
-    public function anEmptyOriginalIsNamedAsSuchInTheSummary(WebTester $I): void
+    /** An empty original says so where its items would be. */
+    public function anEmptyOriginalIsNamedAsSuchOnTheInvoice(WebTester $I): void
     {
         $this->seedOrder('EMPTY', syncedAt: '2026-10-09 10:00:00');
         $this->seedDemoOrder([]);
@@ -221,11 +229,10 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('No items', '.ot-summary');
-        $I->dontSee('0 items', '.ot-summary');
+        $I->see('No line items', '.ot-book--original');
     }
 
-    public function anUnsynchronizedOriginalIsNamedInTheSummaryToo(WebTester $I): void
+    public function anUnsynchronizedOriginalIsStillAnnouncedAboveTheInvoices(WebTester $I): void
     {
         $this->seedOrder('PENDING');
         $this->seedDemoOrder([$this->wings()]);
@@ -233,7 +240,7 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Not synced', '.ot-summary');
+        $I->see('have not been synchronized yet', '.alert');
     }
 
     // ------------------------------------------------------------------ modifiers, by kind
@@ -831,7 +838,7 @@ final class OrderTestingItemComparisonCest
         $I->see('Overall match score');
         // The scope, beside the figure: two documents, not a person and not a period.
         $I->see('this demo order', '.ot-score__scope');
-        $I->see('How this is scored');
+        $I->see('How this score is calculated');
 
         // Every rule that moves the figure, in the page's own words.
         $I->see('silence is not agreement');
@@ -1005,12 +1012,12 @@ final class OrderTestingItemComparisonCest
     }
 
     /**
-     * An order naming nobody says so, and says it the same way everywhere.
+     * An order naming nobody prints no name line rather than a placeholder.
      *
      * This is the common case: the default fixture reservation holds a phone and no name, exactly as
      * the mirror does for all but six of its orders.
      */
-    public function anOrderWithoutANameShowsADashRatherThanABlank(WebTester $I): void
+    public function anOrderWithoutANameShowsNoPlaceholder(WebTester $I): void
     {
         $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
         $this->seedItem(1, $this->wings(), 0);
@@ -1019,7 +1026,10 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('-', '.ot-book--original .ot-book__who');
+        // No name, so no name line — a lone dash under the heading said nothing (2026-10-30). And the
+        // phone is not repeated in the heading: it is the first row under Customer details.
+        $I->dontSeeElement('.ot-book--original .ot-book__who');
+        $I->dontSeeElement('.ot-book__phone');
     }
 
     /** The shipping block answers when the reservation names nobody — the one real fallback in use. */
@@ -1212,10 +1222,10 @@ final class OrderTestingItemComparisonCest
         $I->see('Not on this order', '.ot-book--demo');
 
         $I->see('Missing in demo', '.ot-book--demo');
-        $I->see('Extra in demo', '.ot-book--demo');
+        $I->see('Missing in original', '.ot-book--demo');
         // Verdicts stay on the side that is being judged, however many items there are.
         $I->dontSee('Missing in demo', '.ot-book--original');
-        $I->dontSee('Extra in demo', '.ot-book--original');
+        $I->dontSee('Missing in original', '.ot-book--original');
     }
 
     /**

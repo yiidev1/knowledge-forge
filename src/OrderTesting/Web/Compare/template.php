@@ -6,7 +6,6 @@ use App\OrderTesting\Domain\Comparison\ComparisonScore;
 use App\OrderTesting\Domain\Comparison\ComparisonSection;
 use App\OrderTesting\Domain\Comparison\ComparisonStatus;
 use App\OrderTesting\Domain\Comparison\FieldComparison;
-use App\OrderTesting\Domain\Comparison\ItemAvailability;
 use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
@@ -15,6 +14,7 @@ use App\OrderTesting\Domain\Comparison\SectionScore;
 use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\TestAttempt;
 use App\OrderTesting\Web\DemoOrdersAsset;
+use App\OrderTesting\Web\PaymentDisplay;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
@@ -88,34 +88,46 @@ $value = static fn(?string $v): string => $v === null || $v === ''
     : Html::encode($v);
 
 /**
- * The verdict beside a demo value.
- *
- * A match is a tick and nothing else — twenty-seven of them spelled out would bury the three that
- * matter. Everything else keeps its words, because "missing" and "extra" are not opposites of "match"
- * and a bare mark could not tell them apart. The `title` carries the full wording for the tick, and
- * `util-visually-hidden` repeats it for a screen reader, so the compact form is never the only copy.
+ * What a status is called on this page — the same words the receipt comparison uses, so the two pages
+ * describe one comparison in one vocabulary. "Extra in demo" is said from the original's side, as
+ * "Missing in original", exactly as the receipt says it.
  */
-$verdict = static function (FieldComparison|ItemComparison $c): string {
-    $label = $c->status->label();
-    $modifier = $c->status->modifier();
+$statusWords = static fn(ComparisonStatus $status): string => match ($status) {
+    ComparisonStatus::Match => 'Match',
+    ComparisonStatus::Different => 'Different',
+    ComparisonStatus::MissingInDemo => 'Missing in demo',
+    ComparisonStatus::ExtraInDemo => 'Missing in original',
+    ComparisonStatus::Uncomparable => 'Not available',
+};
+
+/**
+ * The verdict beside a demo value: words, never a symbol.
+ *
+ * A match prints nothing a sighted reader sees — the page reads as agreement unless something says
+ * otherwise, so the few rows that differ are the ones that stand out. A screen reader still hears
+ * "Match". Everything else is a short label, because "missing" and "different" are not the same thing
+ * and a symbol could not say which.
+ */
+$verdict = static function (FieldComparison|ItemComparison $c) use ($statusWords): string {
+    $words = $statusWords($c->status);
 
     if ($c->status === ComparisonStatus::Match) {
-        return '<span class="ot-mark ot-mark--match" title="' . Html::encode($label) . '">'
-            . '<span aria-hidden="true">✓</span>'
-            . '<span class="util-visually-hidden">' . Html::encode($label) . '</span></span>';
+        return '<span class="util-visually-hidden">' . Html::encode($words) . '</span>';
     }
 
-    $glyph = match ($c->status) {
-        ComparisonStatus::Different => '✕',
-        ComparisonStatus::MissingInDemo => '−',
-        ComparisonStatus::ExtraInDemo => '+',
-        ComparisonStatus::Uncomparable => '·',
-        ComparisonStatus::Match => '✓',
-    };
+    return '<span class="ot-mark ot-mark--' . Html::encode($c->status->modifier()) . '">'
+        . Html::encode($words) . '</span>';
+};
 
-    return '<span class="ot-mark ot-mark--' . Html::encode($modifier) . '">'
-        . '<span class="ot-mark__glyph" aria-hidden="true">' . $glyph . '</span>'
-        . Html::encode($label) . '</span>';
+/** A row shown for reference and counted by nothing: said so, quietly, where a verdict would sit. */
+$notScored = '<span class="ot-mark ot-mark--note">Not scored</span>';
+
+/** The section headings as a reader expects them. The comparison's own titles stay its own. */
+$sectionHeading = static fn(string $title): string => match ($title) {
+    'Customer' => 'Customer details',
+    'Order' => 'Order details',
+    'Delivery address' => 'Delivery address',
+    default => $title,
 };
 
 /**
@@ -206,30 +218,6 @@ $overallTone = $overallPercent === null
     ? 'unknown'
     : ($overallPercent >= 90 ? 'good' : ($overallPercent >= 70 ? 'fair' : 'poor'));
 
-/**
- * The item-synchronisation state, in words an administrator can act on.
- *
- * `EMPTY` deliberately reads as "No items" rather than "Synced, 0 items": the provider confirmed the
- * order has no lines, which is a comparable fact, and "0 items" reads as a sync that quietly failed.
- */
-$itemStateLabel = match ($comparison->itemAvailability) {
-    ItemAvailability::Synced => 'Synced',
-    ItemAvailability::AuthoritativeEmpty => 'No items',
-    ItemAvailability::Queued => 'Queued',
-    ItemAvailability::Fetching => 'Synchronizing',
-    ItemAvailability::Unavailable => 'Failed',
-    ItemAvailability::StaleAfterFailure => 'Stale — last refresh failed',
-    ItemAvailability::StaleWhileFetching => 'Stale — refreshing',
-    ItemAvailability::NeverRequested => 'Not synced',
-};
-
-$itemStateModifier = match ($comparison->itemAvailability) {
-    ItemAvailability::Synced, ItemAvailability::AuthoritativeEmpty => 'match',
-    ItemAvailability::Unavailable => 'different',
-    ItemAvailability::StaleAfterFailure, ItemAvailability::StaleWhileFetching => 'extra',
-    default => 'unknown',
-};
-
 /** The line's own heading inside an invoice: what was ordered, and its catalogue code. */
 $itemTitle = static function (?NormalizedItem $item): string {
     if ($item === null) {
@@ -303,6 +291,20 @@ foreach ($comparison->sections as $section) {
     $leadingSections[] = ['title' => $section->title, 'fields' => $fields];
 }
 
+/*
+ * Payment details, decided once from BOTH orders and handed to both panels.
+ *
+ * Shown for reference and never scored: the comparison's sections and weights are untouched, and the
+ * payment method row keeps the verdict it always had. Both panels print the same rows — a row one side
+ * would skip still prints on that side with a dash — so the two invoices stay level row for row.
+ *
+ * The card row exists when either order was paid by card or kept a card's last four digits. The
+ * processing fee goes in Totals, where it is part of the total it explains; it appears when either
+ * order was paid by card or was charged one.
+ */
+$showCardRow = PaymentDisplay::showsCard($comparison->original, $comparison->demo);
+$showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
+
 /**
  * The same rule inside each line item, so an empty Options or Instructions row goes as well.
  *
@@ -336,6 +338,10 @@ $panel = static function (
     $itemTitle,
     $score,
     $sectionScore,
+    $sectionHeading,
+    $notScored,
+    $showCardRow,
+    $showFeeRow,
 ): string {
     $isDemo = $side === 'demo';
     $pick = static fn(FieldComparison $f): ?string => $isDemo ? $f->demo : $f->original;
@@ -349,29 +355,61 @@ $panel = static function (
             . '</dd></div>';
     };
 
+    // A demo row that disagrees is tinted as well as labelled, so a reader scanning the column finds the
+    // few rows that matter without reading every value.
+    $tint = static fn(FieldComparison $f): string => $isDemo && $f->status !== ComparisonStatus::Match
+        ? ' ot-book__line--' . $f->status->modifier()
+        : '';
+
     $out = '<section class="ot-book ot-book--' . Html::encode($side) . '" aria-label="' . Html::encode($kind) . '">';
 
-    // Read once, so an unreadable order prints the same placeholder in both slots rather than half a
-    // header. `$customer` is non-null whenever `$order` is; the nullsafe chain is about the order.
-    $customer = $order?->customer;
-    $phone = $customer?->phone;
+    // The name only when the document has one: a placeholder dash under the heading told the reader
+    // nothing. The phone is not repeated here — it is the first row under Customer details.
+    $name = $order?->customer->displayName();
 
     $out .= '<header class="ot-book__head">'
         . '<span class="ot-book__kind">' . Html::encode($kind) . '</span>'
         . '<span class="ot-book__number">#' . Html::encode((string) $orderId) . '</span>'
-        . '<span class="ot-book__who">' . Html::encode($customer?->displayName() ?? '-') . '</span>'
-        . '<span class="ot-book__phone">'
-        . ($phone === null ? '<span class="util-muted">-</span>' : Html::encode($phone))
-        . '</span></header>';
+        . ($name === null || trim($name) === '' ? '' : '<span class="ot-book__who">' . Html::encode($name) . '</span>')
+        . '</header>';
 
     foreach ($leadingSections as $section) {
         $out .= '<div class="ot-book__section"><h3 class="ot-book__section-title">'
-            . Html::encode($section['title'])
+            . Html::encode($sectionHeading($section['title']))
             . ($isDemo ? $sectionScore($score->section($section['title'])) : '')
             . '</h3><dl class="ot-book__lines">';
 
+        // The payment method is one of the Order section's scored fields and stays one — its verdict and
+        // the section's score are unchanged. It is printed under its own heading with the card, below.
+        $payment = null;
+
         foreach ($section['fields'] as $field) {
-            $out .= $line($field->label, $value($pick($field)), $mark($field));
+            if ($section['title'] === 'Order' && $field->label === 'Payment method') {
+                $payment = $field;
+
+                continue;
+            }
+
+            $out .= $line($field->label, $value($pick($field)), $mark($field), $tint($field));
+        }
+
+        if ($section['title'] === 'Order' && ($payment !== null || $showCardRow)) {
+            $out .= '</dl><h4 class="ot-book__subhead">Payment details</h4><dl class="ot-book__lines">';
+
+            if ($payment !== null) {
+                $out .= $line($payment->label, $value($pick($payment)), $mark($payment), $tint($payment));
+            }
+
+            if ($showCardRow) {
+                $card = PaymentDisplay::card($order);
+                $out .= $line(
+                    'Card',
+                    $card === PaymentDisplay::NOT_RECORDED
+                        ? '<span class="util-muted">' . Html::encode($card) . '</span>'
+                        : $value($card),
+                    $notScored,
+                );
+            }
         }
 
         $out .= '</dl></div>';
@@ -402,7 +440,7 @@ $panel = static function (
 
             foreach ($itemFields[$index] ?? [] as $field) {
                 /** @var FieldComparison $field */
-                $out .= $line($field->label, $value($pick($field)), $mark($field));
+                $out .= $line($field->label, $value($pick($field)), $mark($field), $tint($field));
             }
 
             $out .= '</dl></article>';
@@ -450,13 +488,19 @@ $panel = static function (
         $last = array_key_last($section['fields']);
 
         foreach ($section['fields'] as $key => $field) {
+            // The card processing fee is already inside the total, so it is printed just above it —
+            // then the lines above the total add up to it. Stated as stored; counted by nothing.
+            if ($key === $last && $showFeeRow) {
+                $out .= $line('Card processing fee', $value($order?->totals->processingFee), $notScored);
+            }
+
             // The grand total is the figure anybody actually looks for, so it is set apart rather than
             // left as the last of seven identical rows.
             $out .= $line(
                 $field->label,
                 $value($pick($field)),
                 $mark($field),
-                $key === $last ? ' ot-book__line--grand' : '',
+                ($key === $last ? ' ot-book__line--grand' : '') . $tint($field),
             );
         }
 
@@ -555,24 +599,12 @@ $panel = static function (
                     <?php // demo order first arrives, and only if an attempt was open for it.?>
                     <span class="util-muted">Unknown &mdash; no matched attempt</span>
                 <?php else: ?>
+                    <?php
+                    // Who practised, not the state of their attempt: whether it later expired is
+                    // bookkeeping about the attempt, not a fact about this comparison.
+                    ?>
                     <?= Html::encode($attempt->initiatedByType->label()) ?>
                     <?= Html::encode($attempt->initiatedByName ?? ('#' . $attempt->initiatedById)) ?>
-                    <span class="util-muted">(<?= Html::encode($attempt->status->label()) ?>)</span>
-                <?php endif; ?>
-            </dd>
-        </div>
-        <div><dt>Imported from</dt><dd><code><?= Html::encode($demo->sourceFilename) ?></code></dd></div>
-        <div>
-            <dt>Original items</dt>
-            <dd>
-                <span class="ot-verdict ot-verdict--<?= Html::encode($itemStateModifier) ?>">
-                    <?= Html::encode($itemStateLabel) ?>
-                </span>
-                <?php if ($comparison->itemsSyncedAt !== null): ?>
-                    <span class="util-muted">
-                        <?= $comparison->itemAvailability->isStale() ? 'from' : 'synced' ?>
-                        <?= Html::encode($comparison->itemsSyncedAt) ?> UTC
-                    </span>
                 <?php endif; ?>
             </dd>
         </div>
@@ -617,8 +649,9 @@ $panel = static function (
 // nothing and the one that makes a row count for nothing at all — and the weights are printed from the
 // same table the arithmetic used rather than retyped here.
 ?>
-<p class="util-muted ot-books__note">
-    <strong>How this is scored.</strong>
+<details class="ot-books__note">
+    <summary>How this score is calculated</summary>
+    <p class="util-muted">
     Each section counts the rows shown above it: a row that agrees counts in full, one that differs or
     is missing counts as nothing. A field both orders left empty is not shown and not counted &mdash;
     silence is not agreement. A value only the demo order has is shown but is not counted against it
@@ -633,5 +666,7 @@ $panel = static function (
     Weighting &mdash; <?= Html::encode(implode(', ', $weightNote)) ?>,
     <?= Html::encode($weightTotal) ?>% in all.
     The figure is this demo order measured against this original, and nothing wider: not the trainee,
-    not the call, not the store.
-</p>
+    not the call, not the store. Payment details and the card processing fee are shown for reference
+    and are not scored.
+    </p>
+</details>

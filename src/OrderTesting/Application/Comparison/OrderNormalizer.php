@@ -10,9 +10,12 @@ use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\Comparison\NormalizedTotals;
 use App\Shared\Order58\Items\ItemCanonicalizer;
+use App\Shared\Order58\PaymentSecretRedactor;
+use DateTimeZone;
 use JsonException;
 
 use function array_slice;
+use function in_array;
 use function is_array;
 use function is_int;
 use function is_scalar;
@@ -119,11 +122,32 @@ final readonly class OrderNormalizer
                 tip: self::money($raw['tip'] ?? null),
                 discount: self::money($raw['discount'] ?? null),
                 total: self::money($raw['total_amount'] ?? $raw['total_cost'] ?? null),
+                processingFee: self::money($raw['cc_processing_fee'] ?? null),
             ),
             items: $this->items($raw, $data),
             createdAt: self::timestamp($raw['created_at'] ?? null),
             updatedAt: self::timestamp($raw['updated_at'] ?? null),
+            // Only the digits a stored order kept, and only when they are exactly four. The card
+            // reference itself never reaches this class: it is removed before anything is stored.
+            cardLastFour: self::cardLastFour($raw[PaymentSecretRedactor::CARD_LAST_FOUR] ?? null),
+            timezone: self::timezone($raw['timezone'] ?? null),
         );
+    }
+
+    /** Four digits, or nothing. */
+    private static function cardLastFour(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^\d{4}$/', $value) === 1 ? $value : null;
+    }
+
+    /** A time zone this server knows by that exact name, or nothing — never a guess at one. */
+    private static function timezone(mixed $value): ?string
+    {
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        return in_array($value, DateTimeZone::listIdentifiers(), true) ? $value : null;
     }
 
     /** Decode a stored payload and normalize it. Null when it is not a usable document. */

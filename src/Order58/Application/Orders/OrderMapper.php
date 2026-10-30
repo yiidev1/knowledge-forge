@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Application\Orders;
 
 use App\Order58\Domain\Orders\Order58Order;
+use App\Shared\Order58\PaymentSecretRedactor;
 use JsonException;
 
 use function hash;
@@ -78,7 +79,22 @@ final class OrderMapper
             $times[$column] = $this->timestamp($raw[$key] ?? null);
         }
 
-        $payloadJson = json_encode(self::withoutPaymentSecrets($raw), JSON_THROW_ON_ERROR);
+        /*
+         * The card's last four digits are stored with the payload but kept OUT of the fingerprint.
+         *
+         * Read from the record before its secrets go — or, for a Case Order, carried by the client that
+         * already redacted it. Hashing the payload without them leaves every stored order's hash exactly
+         * what it was, so an unchanged order is still skipped: an order already in the table is not
+         * rewritten just because this field now exists. New and genuinely changed orders carry it.
+         */
+        $cardLastFour = PaymentSecretRedactor::cardLastFour($raw);
+        $clean = self::withoutPaymentSecrets($raw);
+        unset($clean[PaymentSecretRedactor::CARD_LAST_FOUR]);
+
+        $hashedPayload = json_encode($clean, JSON_THROW_ON_ERROR);
+        $payloadJson = $cardLastFour === null
+            ? $hashedPayload
+            : json_encode($clean + [PaymentSecretRedactor::CARD_LAST_FOUR => $cardLastFour], JSON_THROW_ON_ERROR);
 
         $order = [
             'accountId' => $accountId,
@@ -131,7 +147,7 @@ final class OrderMapper
             timezone: $order['timezone'],
             sourceTimes: $times,
             payloadJson: $payloadJson,
-            contentHash: self::hashOf($order, $payloadJson),
+            contentHash: self::hashOf($order, $hashedPayload),
         );
     }
 

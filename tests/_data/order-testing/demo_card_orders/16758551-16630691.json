@@ -1,0 +1,60 @@
+{
+    "id": 16630691,
+    "seq": null,
+    "type": "take-out",
+    "payment_method": "credit card",
+    "account_id": 987655910,
+    "status": "completed",
+    "subtotal": "2.75000",
+    "tax": "0.23733",
+    "shipping_fee": "0.00000",
+    "tip": "0.00000",
+    "cc_processing_fee": "0.07468",
+    "total_amount": "3.06201",
+    "uid": "16758551-19178532637-1793341936",
+    "created_at": 1793341936,
+    "updated_at": 1793341936,
+    "timezone": "America/New_York",
+    "is_test": "1",
+    "data": {
+        "card_num": "U1lOVEhFVElDLVRFU1QtQ0FSRC1UT0tFTg==|4242",
+        "exp_date": "12/2099",
+        "cvv": "000",
+        "street1": "1 Synthetic Billing Way",
+        "billing_zip": "00000",
+        "cc": {
+            "card_num": "U1lOVEhFVElDLVRFU1QtQ0FSRC1UT0tFTg==|4242",
+            "exp_date": "12/2099",
+            "cvv": "000",
+            "street1": "1 Synthetic Billing Way",
+            "billing_zip": "00000"
+        },
+        "reservation": {
+            "first_name": "test",
+            "phone": "19178532637",
+            "customer_count": "1"
+        },
+        "shipping": null,
+        "payment_method": "credit card",
+        "type": "take-out"
+    },
+    "items": [
+        {
+            "id": 44915891,
+            "name": "Homemade Ice Tea",
+            "qty": 1,
+            "price": "2.75000",
+            "order_id": 16630691,
+            "product_id": 510391,
+            "deleted": "0",
+            "data": {
+                "product": {
+                    "id": 510391,
+                    "name": "Homemade Ice Tea",
+                    "sn": "",
+                    "price": "2.75"
+                }
+            }
+        }
+    ]
+}

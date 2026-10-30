@@ -85,8 +85,25 @@
     align-items: start;
 }
 
+/* How the score is calculated: there for whoever wants it, closed until asked for. */
 .ot-books__note {
     margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border, #2a2d34);
+    border-radius: 0.6rem;
+    background: var(--surface, #16181d);
+}
+
+.ot-books__note > summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.ot-books__note > p {
+    margin: 0.6rem 0 0;
+    font-size: 0.84rem;
+    line-height: 1.55;
 }
 
 .ot-book {
@@ -157,13 +174,35 @@
  */
 .ot-book__section-title {
     margin: 0;
-    padding: 0.9rem 1.25rem 0.45rem;
+    padding: 1rem 1.25rem 0.5rem;
     border-top: 1px solid var(--border, #2a2d34);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: var(--muted, #8a8f98);
+    color: var(--text, #e6e8ee);
+}
+
+/*
+ * A heading inside a section — Payment details under Order details. Quieter than a section title and
+ * set off by a hairline inset to the invoice's padding, like the rule between two line items.
+ */
+.ot-book__subhead {
+    position: relative;
+    margin: 0.35rem 0 0;
+    padding: 0.7rem 1.25rem 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted, #8a8f98);
+}
+
+.ot-book__subhead::before {
+    content: '';
+    position: absolute;
+    inset: 0 1.25rem auto;
+    border-top: 1px dashed var(--border, #2a2d34);
 }
 
 /* The head already closes itself with a border, so the first section must not draw a second line. */
@@ -187,8 +226,16 @@
     grid-template-columns: 9.5rem minmax(0, 1fr);
     gap: 0.25rem 0.75rem;
     align-items: baseline;
-    padding: 0.15rem 1.25rem;
+    padding: 0.22rem 1.25rem;
 }
+
+/*
+ * A demo row that disagrees with the original: a faint wash in the verdict's own colour, and the label
+ * beside the value says which verdict. Matching rows stay plain, so the eye goes to the ones that are not.
+ */
+.ot-book--demo .ot-book__line--different { background: rgba(214, 69, 69, 0.07); }
+.ot-book--demo .ot-book__line--missing { background: rgba(214, 140, 40, 0.07); }
+.ot-book--demo .ot-book__line--extra { background: rgba(90, 120, 220, 0.07); }
 
 /* The last line of a section closes it. Inside the items, only the last item's last line does, because
    between two items the next item's heading already provides the space. */
@@ -199,7 +246,7 @@
 
 .ot-book__term {
     font-size: 0.82rem;
-    color: var(--muted, #8a8f98);
+    color: var(--text-muted, #8a8f98);
 }
 
 .ot-book__desc {
@@ -331,15 +378,6 @@
     white-space: nowrap;
 }
 
-/* A match is the quiet case: a tick, no word, no pill. Twenty-seven labels saying "Match" would bury
-   the three that do not. The full wording stays in `title` and in visually-hidden text. */
-.ot-mark--match {
-    padding: 0;
-    background: none;
-    color: #2ea36a;
-    font-size: 0.85rem;
-}
-
 .ot-mark--different {
     background: rgba(214, 69, 69, 0.16);
     color: #e06a6a;
@@ -357,11 +395,15 @@
 
 .ot-mark--unknown {
     background: rgba(130, 130, 140, 0.16);
-    color: var(--muted, #8a8f98);
+    color: var(--text-muted, #8a8f98);
 }
 
-.ot-mark__glyph {
-    font-weight: 700;
+/* Shown for reference only — the payment rows the score does not count. A note, not a verdict. */
+.ot-mark--note {
+    padding: 0;
+    background: none;
+    font-weight: 500;
+    color: var(--text-muted, #8a8f98);
 }
 
 /*

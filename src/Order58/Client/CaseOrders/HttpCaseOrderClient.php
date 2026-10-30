@@ -241,7 +241,9 @@ final readonly class HttpCaseOrderClient implements CaseOrderClientInterface
 
         foreach ($envelope as $order) {
             if (is_array($order)) {
-                $orders[] = PaymentSecretRedactor::redact($order);
+                // The one fact about the card that survives: its last four digits, proved from the
+                // reference before the reference is removed. See PaymentSecretRedactor::cardLastFour().
+                $orders[] = PaymentSecretRedactor::redactKeepingCardLastFour($order);
             }
         }
 

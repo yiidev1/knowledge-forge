@@ -21,5 +21,12 @@ final readonly class NormalizedTotals
         public ?string $tip = null,
         public ?string $discount = null,
         public ?string $total = null,
+        /**
+         * The card processing fee the provider charged, already inside `total`.
+         *
+         * Shown so the figures add up on the page, and compared by nothing: it is not one of the
+         * fields the comparison scores.
+         */
+        public ?string $processingFee = null,
     ) {}
 }

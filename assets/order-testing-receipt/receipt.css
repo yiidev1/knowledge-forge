@@ -295,9 +295,9 @@
     color: #4a4f58;
 }
 
-.rc__mods li::before {
-    content: '+ ';
-    color: #767b85;
+/* An indent says "belongs to the line above" without a symbol that could be read as a verdict. */
+.rc__mods li {
+    padding-left: 0.9rem;
 }
 
 .rc__removed {
@@ -392,12 +392,7 @@
     white-space: nowrap;
 }
 
-.rc-mark__glyph {
-    font-weight: 700;
-}
-
 /* Soft fills: enough to find a row at a glance, not enough to shout over the receipt. */
-.rc-mark--match { background: #e6f4ec; color: #2d7a52; }
 .rc-mark--different { background: #fdf0df; color: #9a5f17; }
 .rc-mark--missing { background: #fdeaea; color: #a53b3a; }
 .rc-mark--extra { background: #eeecfa; color: #5b51a8; }
