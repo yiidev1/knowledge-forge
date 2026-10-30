@@ -94,7 +94,7 @@ final class OrderTestingItemComparisonCest
 
         $I->see('have not been synchronized yet');
         $I->see('Not available', '.ot-items');
-        $I->dontSee('Missing in original', '.ot-items');
+        $I->dontSee('Extra product in demo', '.ot-items');
         // The trainee's work is still fully on the page.
         $I->see(self::WINGS);
         $I->see('Wonton Soup');
@@ -110,7 +110,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('queued for synchronization');
-        $I->dontSee('Missing in original', '.ot-items');
+        $I->dontSee('Extra product in demo', '.ot-items');
     }
 
     /** A failure with nothing ever stored says so, and says it is not the demo's fault. */
@@ -123,7 +123,7 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('not a difference in the demo order');
-        $I->dontSee('Missing in original', '.ot-items');
+        $I->dontSee('Extra product in demo', '.ot-items');
     }
 
     // ------------------------------------------------------------------ a real comparison
@@ -169,8 +169,8 @@ final class OrderTestingItemComparisonCest
         $I->amOnPage($this->url());
 
         $I->see('Different', '.ot-items');
-        $I->dontSee('Missing in demo', '.ot-items');
-        $I->dontSee('Missing in original', '.ot-items');
+        $I->dontSee('Missing from demo', '.ot-items');
+        $I->dontSee('Extra product in demo', '.ot-items');
     }
 
     public function anOmittedLineIsMissingAndAnAddedLineIsExtra(WebTester $I): void
@@ -182,8 +182,8 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Missing in demo', '.ot-items');
-        $I->see('Missing in original', '.ot-items');
+        $I->see('Missing from demo', '.ot-items');
+        $I->see('Extra product in demo', '.ot-items');
     }
 
     /** A verified empty original really does make a demo line extra. */
@@ -195,7 +195,7 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('Missing in original', '.ot-items');
+        $I->see('Extra product in demo', '.ot-items');
         $I->dontSee('have not been synchronized');
     }
 
@@ -314,7 +314,8 @@ final class OrderTestingItemComparisonCest
         $I->see('Product', '.ot-items');
         $I->see('Quantity', '.ot-items');
         $I->see('Unit price', '.ot-items');
-        $I->see('11.35000', '.ot-items');
+        $I->see('11.35', '.ot-items');
+        $I->dontSee('11.35000', '.ot-items');
         // The un-prefixed name is what the Product row compares, so both forms appear on the page.
         $I->see('Fried Chicken Wings (4)', '.ot-items');
     }
@@ -365,7 +366,7 @@ final class OrderTestingItemComparisonCest
 
         $I->see('Removed from the original order');
         $I->seeElement('.ot-removed-items');
-        $I->dontSee('Missing in demo', '.ot-items');
+        $I->dontSee('Missing from demo', '.ot-items');
     }
 
     // ------------------------------------------------------------------ the two changes
@@ -407,7 +408,7 @@ final class OrderTestingItemComparisonCest
         }
 
         $I->see('marta@example.test', '.ot-book--original');
-        $I->see('Missing in demo', '.ot-book--demo');
+        $I->see('Missing from demo', '.ot-book--demo');
     }
 
     /** An address neither order has takes its whole section with it, heading included. */
@@ -464,16 +465,17 @@ final class OrderTestingItemComparisonCest
             Assert::assertContains('line:Tip', $rows, $side . ' dropped a stated zero');
         }
 
-        $I->see('0.00000', '.ot-book--original');
+        $I->see('0.00', '.ot-book--original');
+        $I->dontSee('0.00000', '.ot-book--original');
     }
 
     /**
-     * Customer count, order status and the product code are not shown, on either panel.
+     * Phone, customer count, order status and the product code are not shown, on either panel.
      *
-     * All three are stated here, on both orders — so their absence is the page's decision, not an
+     * All four are stated here, on both orders — so their absence is the page's decision, not an
      * empty field. They are not scored either; the unit tests hold that.
      */
-    public function theCountTheStatusAndTheProductCodeAreNotShown(WebTester $I): void
+    public function thePhoneTheCountTheStatusAndTheProductCodeAreNotShown(WebTester $I): void
     {
         $this->seedOrder(
             'SYNCED',
@@ -492,8 +494,10 @@ final class OrderTestingItemComparisonCest
             Assert::assertNotContains('line:Status', $rows, $side);
             Assert::assertNotContains('line:Product SN', $rows, $side);
             Assert::assertContains('line:Order type', $rows, $side);
-            Assert::assertContains('line:Phone', $rows, $side);
+            Assert::assertNotContains('line:Phone', $rows, $side);
         }
+
+        $I->dontSee(self::PHONE, '.ot-books');
 
         // Nor in the line's heading, where the code used to follow the name. (This fixture's name keeps
         // the provider's own `[F7]` prefix, which is the name as sent and stays.)
@@ -560,8 +564,8 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('11.35000', '.ot-book--original .ot-items');
-        $I->see('12.05000', '.ot-book--demo .ot-items');
+        $I->see('11.35', '.ot-book--original .ot-items');
+        $I->see('12.05', '.ot-book--demo .ot-items');
         $I->see('Not scored', '.ot-book--demo .ot-items');
         $I->dontSee('Different', '.ot-book--demo .ot-items');
         $I->dontSee('Match', '.ot-book--demo .ot-items .ot-mark');
@@ -592,7 +596,7 @@ final class OrderTestingItemComparisonCest
 
         // Wings: same price on both sides, still noted. Soup: not on the demo, a dash and nothing else.
         // (The row's label, value and note are adjacent elements, so their text runs together.)
-        Assert::assertSame(['Unit price11.35000Not scored', 'Unit price—'], $notes);
+        Assert::assertSame(['Unit price11.35Not scored', 'Unit price—'], $notes);
     }
 
     /** Totals are for reference: no score badge, no verdicts and no tint, however the amounts differ. */
@@ -605,14 +609,141 @@ final class OrderTestingItemComparisonCest
         $this->signIn($I);
         $I->amOnPage($this->url());
 
-        $I->see('99.00000', '.ot-book--demo .ot-book__section--totals');
-        $I->see('13.35000', '.ot-book--original .ot-book__section--totals');
+        $I->see('99.00', '.ot-book--demo .ot-book__section--totals');
+        $I->see('13.35', '.ot-book--original .ot-book__section--totals');
         $I->dontSeeElement('.ot-book__section--totals .ot-sscore');
         $I->dontSeeElement('.ot-book__section--totals .ot-mark');
         $I->dontSeeElement('.ot-book__section--totals [class*="ot-book__line--different"]');
         $I->dontSeeElement('.ot-book__section--totals [class*="ot-book__line--missing"]');
         // Neither difference moves the overall: everything scored agreed.
         $I->see('100%', '.ot-score__value');
+    }
+
+    /**
+     * The phone is printed on neither page, and a Customer details section left with nothing to show
+     * is not drawn at all — no empty heading and no badge.
+     *
+     * Both orders here hold a phone and nothing else about the customer, which is the common real shape.
+     */
+    public function thePhoneIsOnNeitherPageAndAnEmptyCustomerSectionIsNotDrawn(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()], extra: ['data' => ['reservation' => ['phone' => self::PHONE]]]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->dontSee(self::PHONE, '.ot-books');
+        $I->dontSee('Customer details', '.ot-books');
+        $I->see('Order details', '.ot-book--demo');
+        // The overall is still a score, made of the sections that remain.
+        $I->see('100%', '.ot-score__value');
+
+        $I->amOnPage($this->receiptUrl());
+
+        $I->dontSee(self::PHONE, '.rc-pair');
+        $I->dontSee('Customer Details', '.rc-pair');
+        $I->see('Order Details', '.rc--demo');
+    }
+
+    /**
+     * Every amount on both pages is printed to two decimals, rounded half up; the stored five decimals
+     * are what was compared, so a tax that differs only past the cent still reads as it was stored.
+     */
+    public function everyAmountIsPrintedToTwoDecimalsOnBothPages(WebTester $I): void
+    {
+        $this->seedOrder(
+            'SYNCED',
+            syncedAt: '2026-10-09 10:00:00',
+            extra: ['subtotal' => '11.35000', 'tax' => '2.38620', 'total_amount' => '34.88710'],
+        );
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings()], extra: ['tax' => '2.49839', 'total_amount' => '35.31000']);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $I->see('2.39', '.ot-book--original .ot-book__section--totals');
+        $I->see('34.89', '.ot-book--original .ot-book__line--grand');
+        $I->see('2.50', '.ot-book--demo .ot-book__section--totals');
+        $I->see('35.31', '.ot-book--demo .ot-book__line--grand');
+        $I->see('11.35', '.ot-book--original .ot-items');
+
+        foreach (['2.38620', '34.88710', '2.49839', '35.31000', '11.35000'] as $stored) {
+            $I->dontSee($stored, '.ot-books');
+        }
+
+        $I->amOnPage($this->receiptUrl());
+
+        $I->see('2.39', '.rc--original');
+        $I->see('34.89', '.rc--original');
+        $I->see('2.50', '.rc--demo');
+        $I->see('35.31', '.rc--demo');
+
+        foreach (['2.38620', '34.88710', '2.49839', '35.31000', '11.35000'] as $stored) {
+            $I->dontSee($stored, '.rc-pair');
+        }
+    }
+
+    /**
+     * An extra product is labelled "Extra product in demo", once, and costs a unit: one matched line and
+     * one extra is 1 of 2 — 50%, never 100%. The receipt counts it under a chip of its own.
+     */
+    public function anExtraProductIsLabelledOnceAndLowersTheItemScore(WebTester $I): void
+    {
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $this->wings(), 0);
+        $this->seedDemoOrder([$this->wings(), $this->soup()]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $heading = '//section[contains(@class, "ot-book--demo")]//h3[contains(., "Order items")]';
+        $I->see('50%', $heading);
+        $I->see('2 of 2 items', $heading);
+        $I->seeNumberOfElements('.ot-book--demo .ot-items .ot-mark--extra', 1);
+        $I->see('Extra product in demo', '.ot-book--demo .ot-book__item-head');
+        $I->dontSee('100%', '.ot-score__value');
+
+        $I->amOnPage($this->receiptUrl());
+
+        $I->seeElement('[data-rc-filter="EXTRA_PRODUCT"]');
+        $I->see('Extra product in demo', '[data-rc-filter="EXTRA_PRODUCT"]');
+        $I->see('Extra product in demo', '.rc--demo');
+        Assert::assertSame(1, $this->chipCounts($I->grabPageSource())['EXTRA_PRODUCT'] ?? 0);
+        Assert::assertSame(1, $this->rowsWithStatus($I->grabPageSource(), 'EXTRA_PRODUCT'));
+    }
+
+    /**
+     * Options repeats Additions and Combinations, so it is shown as "Not scored" and never as a second
+     * "Different" for the same modifier. The Additions row carries the one verdict.
+     */
+    public function optionsIsShownButNotJudgedASecondTime(WebTester $I): void
+    {
+        $original = $this->wings();
+        $original['data']['additionals'] = [
+            ['additional_name' => 'Sauce additional', 'option_name' => 'Chicken Wings CUT'],
+        ];
+        $demo = $this->wings();
+        $demo['data']['additionals'] = [
+            ['additional_name' => 'Sauce additional', 'option_name' => 'SOFT Wings'],
+        ];
+
+        $this->seedOrder('SYNCED', syncedAt: '2026-10-09 10:00:00');
+        $this->seedItem(1, $original, 0);
+        $this->seedDemoOrder([$demo]);
+
+        $this->signIn($I);
+        $I->amOnPage($this->url());
+
+        $row = static fn(string $label): string => '//section[contains(@class, "ot-book--demo")]'
+            . '//div[contains(@class, "ot-book__line")][dt[normalize-space(.) = "' . $label . '"]]';
+
+        $I->see('Not scored', $row('Options'));
+        $I->dontSee('Different', $row('Options'));
+        $I->see('Different', $row('Additions'));
+        $I->seeNumberOfElements('.ot-book--demo .ot-items .ot-book__line .ot-mark--different', 1);
     }
 
     /**
@@ -663,7 +794,7 @@ final class OrderTestingItemComparisonCest
         $heading = '//section[contains(@class, "ot-book--demo")]//h3[contains(., "Delivery address")]';
         $I->see('50%', $heading);
         $I->see('2 of 3 fields', $heading);
-        $I->see('Missing in demo', '.ot-book--demo');
+        $I->see('Missing from demo', '.ot-book--demo');
         $I->see('Not available', '.ot-book--demo');
     }
 
@@ -827,7 +958,7 @@ final class OrderTestingItemComparisonCest
 
         $I->seeElement('.rc--demo .rc-mark');
         $I->dontSeeElement('.rc--original .rc-mark');
-        $I->see('Missing in demo', '.rc--demo');
+        $I->see('Missing from demo', '.rc--demo');
     }
 
     /** The summary strip counts the very rows the receipts draw. */
@@ -1075,7 +1206,10 @@ final class OrderTestingItemComparisonCest
         // Every rule that moves the figure, in the page's own words.
         $I->see('silence is not agreement');
         $I->see('the quantity counts double');
-        $I->see('The unit price is shown');
+        $I->see('which follows the menu');
+        $I->see('the phone number and the customer');
+        $I->see('A wrong product entered in place of an ordered one is both');
+        $I->see('Amounts are printed to two decimal places');
         $I->see('Totals are shown for reference and are not scored');
         $I->see('the payment details together, as one score');
 
@@ -1463,11 +1597,17 @@ final class OrderTestingItemComparisonCest
         $I->see('Not on this order', '.ot-book--original');
         $I->see('Not on this order', '.ot-book--demo');
 
-        $I->see('Missing in demo', '.ot-book--demo');
-        $I->see('Missing in original', '.ot-book--demo');
+        $I->see('Missing from demo', '.ot-book--demo');
+        $I->see('Extra product in demo', '.ot-book--demo');
         // Verdicts stay on the side that is being judged, however many items there are.
-        $I->dontSee('Missing in demo', '.ot-book--original');
-        $I->dontSee('Missing in original', '.ot-book--original');
+        $I->dontSee('Missing from demo', '.ot-book--original');
+        $I->dontSee('Extra product in demo', '.ot-book--original');
+
+        // A line on one side only is labelled once, on its heading — not again on every row under it,
+        // which read as one charge per row when the score charges the line once.
+        $I->seeNumberOfElements('.ot-book--demo .ot-book__item--absent .ot-mark', 1);
+        $I->seeNumberOfElements('.ot-book--demo .ot-items .ot-mark--extra', 1);
+        $I->dontSee('Missing in original', '.ot-book--demo .ot-items');
     }
 
     /**

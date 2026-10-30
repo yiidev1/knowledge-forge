@@ -221,6 +221,46 @@ final class ComparisonScoringTest extends TestCase
         return $verdicts;
     }
 
+    /**
+     * The source order and a demo of it that differ only in their lines.
+     *
+     * @param list<array<string, mixed>> $originalLines
+     * @param list<array<string, mixed>> $demoLines
+     */
+    private function lines(array $originalLines, array $demoLines): OrderComparison
+    {
+        $original = $this->sourceDocument();
+        $original['items'] = $originalLines;
+        $demo = $this->sourceDocument();
+        $demo['id'] = 16630999;
+        $demo['items'] = $demoLines;
+
+        return $this->compareDocument((new OrderNormalizer())->normalize($original), $demo);
+    }
+
+    /**
+     * One synthetic line, in the document shape both orders use.
+     *
+     * @param list<string> $options
+     *
+     * @return array<string, mixed>
+     */
+    private static function line(
+        string $name,
+        int $quantity = 1,
+        string $price = '2.00000',
+        array $options = [],
+    ): array {
+        return [
+            'name' => $name,
+            'quantity' => $quantity,
+            'price' => $price,
+            'total' => $price,
+            'sn' => null,
+            'options' => array_map(static fn(string $option): array => ['name' => $option], $options),
+        ];
+    }
+
     private function section(ComparisonScore $score, string $title): SectionScore
     {
         $section = $score->section($title);
@@ -237,7 +277,7 @@ final class ComparisonScoringTest extends TestCase
     /**
      * One wrong quantity on one of two lines.
      *
-     * Customer 5/5 (the customer count is not shown, so not counted), Order 2/2 (order type and payment
+     * Customer 4/4 (the phone and the customer count are not shown, so not counted), Order 2/2 (order type and payment
      * method; the status is not counted, and a cash order has no card details), Delivery address 4/4
      * (Street 2, City, State, Postal code — the street line cannot be compared and Destination is only
      * on the demo, so neither is charged) — each 100%.
@@ -255,7 +295,7 @@ final class ComparisonScoringTest extends TestCase
         self::assertSame(100, $this->section($score, 'Delivery address')->displayPercent());
         self::assertSame(75, $this->section($score, 'Order items')->displayPercent());
 
-        self::assertSame(5, $this->section($score, 'Customer')->scoredUnits);
+        self::assertSame(4, $this->section($score, 'Customer')->scoredUnits);
         self::assertSame(2, $this->section($score, 'Order')->scoredUnits);
         self::assertSame(4, $this->section($score, 'Delivery address')->scoredUnits);
 
@@ -417,8 +457,8 @@ final class ComparisonScoringTest extends TestCase
     // ------------------------------------------------------------ hidden, informational and combined rows
 
     /**
-     * What the page does not show is not scored: a different customer count, order status or product
-     * code moves nothing.
+     * What the page does not show is not scored: a different phone number, customer count, order status
+     * or product code moves nothing.
      */
     public function testHiddenFieldsAreNotScored(): void
     {
@@ -429,6 +469,7 @@ final class ComparisonScoringTest extends TestCase
         $data = json_decode((string) $raw['data'], true);
         self::assertIsArray($data);
         $data['reservation']['customer_count'] = 7;
+        $data['reservation']['phone'] = '15550000000';
         $raw['data'] = (string) json_encode($data);
 
         $score = $this->scoreDocument($this->source(), $raw);
@@ -438,7 +479,7 @@ final class ComparisonScoringTest extends TestCase
         self::assertSame(100, $this->section($score, 'Order items')->displayPercent());
         self::assertSame(100, $score->displayPercent());
 
-        self::assertSame(['Customer count'], ComparisonScorer::HIDDEN_FIELDS['Customer']);
+        self::assertSame(['Phone', 'Customer count'], ComparisonScorer::HIDDEN_FIELDS['Customer']);
         self::assertSame(['Status'], ComparisonScorer::HIDDEN_FIELDS['Order']);
         self::assertSame(['Product SN'], ComparisonScorer::HIDDEN_ITEM_FIELDS);
     }
@@ -650,10 +691,12 @@ final class ComparisonScoringTest extends TestCase
     /**
      * Order #15275271 against demo #16635331 — the order on the reported page.
      *
-     * Before this scoring: Customer 2/2, Order 3/3, Totals 33%, Items 58%, overall 75%.
+     * First scoring: Customer 2/2, Order 3/3, Totals 33%, Items 58%, overall 75%. Then, with the phone
+     * still scored: Customer 1/1, overall 84.29%.
      *
      * Now:
-     *  - Customer 1/1 (phone; the customer count is not scored) — 100%.
+     *  - Customer: nothing shown — the phone and the customer count are not scored and the original
+     *    holds no name, email or note — so the section leaves the overall.
      *  - Order 4/4 (order type, payment method, card, expiration date; no billing ZIP on either) — 100%.
      *  - Delivery address 3/3 (City, Postal code, Destination agree; State is only on the demo and the
      *    street line is not comparable) — 100%.
@@ -663,15 +706,15 @@ final class ComparisonScoringTest extends TestCase
      *    = 0; Clear Soup added = 0. Mean 4.8 / 7 = 68.571…%.
      *  - Totals differ (subtotal, shipping, tax, total) and are not scored.
      *
-     * Overall = (100·40 + 100·40 + 100·10 + 68.571…·90) / 180 = 84.285…%.
+     * Overall = (100·40 + 100·10 + 68.571…·90) / 140 = 79.795…%.
      */
     public function testTheReportedOrderScoresAsSpecified(): void
     {
         $fixture = $this->regression();
         $score = (new ComparisonScorer())->score($fixture);
 
-        self::assertSame(100, $this->section($score, 'Customer')->displayPercent());
-        self::assertSame(1, $this->section($score, 'Customer')->scoredUnits);
+        self::assertNull($this->section($score, 'Customer')->percent);
+        self::assertSame(0, $this->section($score, 'Customer')->visibleUnits, 'nothing left to show');
         self::assertSame(100, $this->section($score, 'Order')->displayPercent());
         self::assertSame(4, $this->section($score, 'Order')->scoredUnits);
         self::assertSame(100, $this->section($score, 'Delivery address')->displayPercent());
@@ -683,8 +726,12 @@ final class ComparisonScoringTest extends TestCase
         self::assertSame(69, $this->section($score, 'Order items')->displayPercent());
         self::assertSame(7, $this->section($score, 'Order items')->scoredUnits);
 
-        self::assertEqualsWithDelta(84.285714, $score->overall ?? 0.0, 0.0001);
-        self::assertSame(84, $score->displayPercent());
+        self::assertSame(5, $this->section($score, 'Order items')->matched + $this->section($score, 'Order items')->different);
+        self::assertSame(1, $this->section($score, 'Order items')->missing);
+        self::assertSame(1, $this->section($score, 'Order items')->extra);
+
+        self::assertEqualsWithDelta(79.795918, $score->overall ?? 0.0, 0.0001);
+        self::assertSame(80, $score->displayPercent());
 
         // Each line headed by what it scored: a price-only difference is a match.
         self::assertSame(
@@ -724,6 +771,180 @@ final class ComparisonScoringTest extends TestCase
         self::assertSame(1, $items->extra);
         self::assertTrue($items->extraIsScored);
         self::assertSame(3, $items->scoredUnits);
+    }
+
+    // ------------------------------------------------------- products: matched, missing, extra, wrong
+
+    /** Scenario A: the same products on both orders. Every line matched, the section full. */
+    public function testTheSameProductsScoreInFull(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup'), self::line('Spring Roll')],
+            [self::line('Wonton Soup'), self::line('Spring Roll')],
+        );
+        $items = $this->section((new ComparisonScorer())->score($comparison), 'Order items');
+
+        self::assertSame(100, $items->displayPercent());
+        self::assertSame(2, $items->matched);
+        self::assertSame(2, $items->scoredUnits);
+        self::assertSame(
+            ['Wonton Soup' => ComparisonStatus::Match, 'Spring Roll' => ComparisonStatus::Match],
+            $this->verdictsByName($comparison),
+        );
+    }
+
+    /**
+     * Scenario B: an extra product. Two matched lines and one the original does not have — three units,
+     * two earned: 66.7%. An extra product is in the denominator, so the section cannot reach 100%.
+     */
+    public function testAnExtraProductIsChargedOnce(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup'), self::line('Spring Roll')],
+            [self::line('Wonton Soup'), self::line('Spring Roll'), self::line('Egg Roll')],
+        );
+        $score = (new ComparisonScorer())->score($comparison);
+        $items = $this->section($score, 'Order items');
+
+        self::assertEqualsWithDelta(200 / 3, $items->percent ?? 0.0, 0.000001);
+        self::assertSame(67, $items->displayPercent());
+        self::assertSame(1, $items->extra);
+        self::assertSame(3, $items->scoredUnits);
+        self::assertSame(ComparisonStatus::ExtraInDemo, $this->verdictsByName($comparison)['Egg Roll']);
+        self::assertLessThan(100.0, $score->overall ?? 100.0);
+    }
+
+    /** Scenario C: a missing product. Three units, two earned: 66.7%. */
+    public function testAMissingProductIsChargedOnce(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup'), self::line('Spring Roll'), self::line('Egg Roll')],
+            [self::line('Wonton Soup'), self::line('Spring Roll')],
+        );
+        $items = $this->section((new ComparisonScorer())->score($comparison), 'Order items');
+
+        self::assertSame(67, $items->displayPercent());
+        self::assertSame(1, $items->missing);
+        self::assertSame(3, $items->scoredUnits);
+        self::assertSame(ComparisonStatus::MissingInDemo, $this->verdictsByName($comparison)['Egg Roll']);
+    }
+
+    /**
+     * Scenario D: a wrong product in place of an ordered one.
+     *
+     * Lines pair only with the same product, so Egg Roll is never matched to the Spring Roll it replaced
+     * and nothing of it is judged against Spring Roll's quantity or modifiers. The ordered product is
+     * missing and the wrong one is extra — three units, each line charged once, one earned: 33.3%. No
+     * line is charged twice and no placeholder row earns anything back.
+     */
+    public function testAWrongProductIsNeverPairedWithTheOneItReplaced(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup'), self::line('Spring Roll')],
+            [self::line('Wonton Soup'), self::line('Egg Roll')],
+        );
+        $items = $this->section((new ComparisonScorer())->score($comparison), 'Order items');
+
+        foreach ($comparison->items as $item) {
+            /** @var ItemComparison $item */
+            if ($item->original !== null && $item->demo !== null) {
+                self::assertSame($item->original->name, $item->demo->name, 'only a product is paired with itself');
+            }
+        }
+
+        self::assertSame(
+            [
+                'Wonton Soup' => ComparisonStatus::Match,
+                'Spring Roll' => ComparisonStatus::MissingInDemo,
+                'Egg Roll' => ComparisonStatus::ExtraInDemo,
+            ],
+            $this->verdictsByName($comparison),
+        );
+        self::assertSame(1, $items->matched);
+        self::assertSame(1, $items->missing);
+        self::assertSame(1, $items->extra);
+        self::assertSame(3, $items->scoredUnits);
+        self::assertEqualsWithDelta(100 / 3, $items->percent ?? 0.0, 0.000001);
+    }
+
+    /** Scenario E: the same product at $11.00 and at $15.00. The price is the menu's; nothing moves. */
+    public function testAPriceChangeAloneChangesNoScore(): void
+    {
+        $scorer = new ComparisonScorer();
+        $samePrice = $this->lines(
+            [self::line('Wonton Soup', price: '11.00000')],
+            [self::line('Wonton Soup', price: '11.00000')],
+        );
+        $newPrice = $this->lines(
+            [self::line('Wonton Soup', price: '11.00000')],
+            [self::line('Wonton Soup', price: '15.00000')],
+        );
+
+        self::assertSame($scorer->score($samePrice)->overall, $scorer->score($newPrice)->overall);
+        self::assertSame(100, $this->section($scorer->score($newPrice), 'Order items')->displayPercent());
+        self::assertSame(ComparisonStatus::Match, $this->verdictsByName($newPrice)['Wonton Soup']);
+    }
+
+    /**
+     * Scenario F: two ordered, one entered. Product earned (1) of Product 1 + Quantity 2 — the line has
+     * no modifiers or note to weigh — so 1/3, and the line is Different.
+     */
+    public function testAWrongQuantityIsCharged(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup', quantity: 2)],
+            [self::line('Wonton Soup', quantity: 1)],
+        );
+        $items = $this->section((new ComparisonScorer())->score($comparison), 'Order items');
+
+        self::assertEqualsWithDelta(100 / 3, $items->percent ?? 0.0, 0.000001);
+        self::assertSame(1, $items->different);
+        self::assertSame(ComparisonStatus::Different, $this->verdictsByName($comparison)['Wonton Soup']);
+    }
+
+    /**
+     * The same product twice: paired by what each line carries, not by position, and a second line the
+     * demo left out is one missing unit.
+     */
+    public function testTheSameProductTwiceIsPairedByItsDetails(): void
+    {
+        $scorer = new ComparisonScorer();
+        $swapped = $this->lines(
+            [self::line('Wonton Soup', options: ['Extra noodles']), self::line('Wonton Soup')],
+            [self::line('Wonton Soup'), self::line('Wonton Soup', options: ['Extra noodles'])],
+        );
+        $swappedItems = $this->section($scorer->score($swapped), 'Order items');
+
+        self::assertSame(2, $swappedItems->matched);
+        self::assertSame(100, $swappedItems->displayPercent());
+
+        $oneShort = $this->section(
+            $scorer->score($this->lines(
+                [self::line('Wonton Soup'), self::line('Wonton Soup')],
+                [self::line('Wonton Soup')],
+            )),
+            'Order items',
+        );
+
+        self::assertSame(1, $oneShort->matched);
+        self::assertSame(1, $oneShort->missing);
+        self::assertSame(50, $oneShort->displayPercent());
+    }
+
+    /**
+     * A customisation left off: Product 1 + Quantity 2 earned of 4 (Additions missed) — 75%, the line
+     * Different. Charged once: Options repeats the same modifier and is not weighed.
+     */
+    public function testAMissingCustomisationIsChargedOnTheLine(): void
+    {
+        $comparison = $this->lines(
+            [self::line('Wonton Soup', options: ['Extra noodles'])],
+            [self::line('Wonton Soup')],
+        );
+        $items = $this->section((new ComparisonScorer())->score($comparison), 'Order items');
+
+        self::assertSame(75, $items->displayPercent());
+        self::assertSame(ComparisonStatus::Different, $this->verdictsByName($comparison)['Wonton Soup']);
     }
 
     // ------------------------------------------------------------------------- when there is no score

@@ -417,6 +417,7 @@
 [data-rc-filter-active='DIFFERENT'] [data-rc-status='DIFFERENT'],
 [data-rc-filter-active='MISSING_IN_DEMO'] [data-rc-status='MISSING_IN_DEMO'],
 [data-rc-filter-active='EXTRA_IN_DEMO'] [data-rc-status='EXTRA_IN_DEMO'],
+[data-rc-filter-active='EXTRA_PRODUCT'] [data-rc-status='EXTRA_PRODUCT'],
 [data-rc-filter-active='UNCOMPARABLE'] [data-rc-status='UNCOMPARABLE'] {
     opacity: 1;
 }

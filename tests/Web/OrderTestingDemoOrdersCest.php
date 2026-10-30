@@ -413,8 +413,10 @@ final class OrderTestingDemoOrdersCest
         );
 
         $I->see('Different');
-        $I->see('9.99000');
-        $I->see('4.28000');
+        // Both totals, as a person reads money: two decimals. Compared on the stored strings.
+        $I->see('9.99');
+        $I->see('4.28');
+        $I->dontSee('9.99000');
     }
 
     /**

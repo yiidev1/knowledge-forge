@@ -10,8 +10,10 @@ use App\OrderTesting\Domain\Comparison\ItemComparison;
 use App\OrderTesting\Domain\Comparison\NormalizedItem;
 use App\OrderTesting\Domain\Comparison\NormalizedOrder;
 use App\OrderTesting\Domain\DemoOrder;
+use App\OrderTesting\Web\MoneyDisplay;
 use App\OrderTesting\Web\PaymentDisplay;
 use App\OrderTesting\Web\ReceiptAsset;
+use App\OrderTesting\Web\VerdictWords;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
@@ -35,7 +37,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  *
  * ## Money
  *
- * Written to two decimals, because a receipt is read by a person. The verdict beside it was decided by
+ * Written to two decimals by {@see MoneyDisplay}, the one formatter both comparison pages use, because a
+ * receipt is read by a person. The verdict beside it was decided by
  * {@see \App\OrderTesting\Application\Comparison\ComparisonRules::moneyEquals()} on the stored strings,
  * so rounding here can never hide a difference or invent one. Nothing is recalculated: a total is the
  * total the document stored, not the lines added up.
@@ -81,14 +84,10 @@ $comparison = $receipt->comparison;
 $blank = static fn(?string $v): bool => $v === null || trim($v) === '';
 
 /** An amount as a person reads it. The comparison was made on the stored string, not on this. */
-$money = static function (?string $v) use ($blank): string {
-    if ($blank($v)) {
-        return '<span class="rc-muted">-</span>';
-    }
+$money = static function (?string $v): string {
+    $shown = MoneyDisplay::amount($v);
 
-    $t = trim((string) $v);
-
-    return is_numeric($t) ? Html::encode(number_format((float) $t, 2, '.', ',')) : Html::encode($t);
+    return $shown === null ? '<span class="rc-muted">-</span>' : Html::encode($shown);
 };
 
 /**
@@ -96,7 +95,8 @@ $money = static function (?string $v) use ($blank): string {
  *
  * Neither provider stores one. Both operands are printed in the columns to its left, so the figure can
  * be checked by eye — it is arithmetic on two shown numbers, not a value conjured from nowhere. A line
- * missing either operand prints a dash rather than a guess.
+ * missing either operand prints a dash rather than a guess. Multiplied on the decimal digits, not as
+ * floats, so the cents printed are the cents the two figures make.
  */
 $lineTotal = static function (?NormalizedItem $item): ?string {
     if ($item === null) {
@@ -107,16 +107,7 @@ $lineTotal = static function (?NormalizedItem $item): ?string {
         return $item->total;
     }
 
-    $qty = $item->quantityLabel();
-
-    if (
-        $qty === null || $item->unitPrice === null
-        || !is_numeric(trim($qty)) || !is_numeric(trim($item->unitPrice))
-    ) {
-        return null;
-    }
-
-    return (string) ((float) trim($qty) * (float) trim($item->unitPrice));
+    return MoneyDisplay::times($item->quantityLabel(), $item->unitPrice);
 };
 
 /** Any other value, or a dash. Never the opposite document's. */
@@ -129,15 +120,11 @@ $text = static fn(?string $v): string => $v === null || trim($v) === ''
  *
  * A match prints nothing a sighted reader sees: the receipt reads as agreement unless a row says
  * otherwise, so the rows that differ are the ones that stand out. A screen reader still hears "Match".
- * "Extra in demo" is written as "Missing in original", which is the same fact said from the original's
- * side — the side this page reads from.
+ * The words are the comparison page's ({@see VerdictWords}): a product only the demo has is an "Extra
+ * product in demo", a field value only the demo has is "Missing in original".
  */
-$badge = static function (ComparisonStatus $status): string {
-    $words = match ($status) {
-        ComparisonStatus::ExtraInDemo => 'Missing in original',
-        ComparisonStatus::Uncomparable => 'Not available',
-        default => $status->label(),
-    };
+$badge = static function (ComparisonStatus $status, bool $isItem = false): string {
+    $words = $isItem ? VerdictWords::item($status) : VerdictWords::field($status);
 
     if ($status === ComparisonStatus::Match) {
         return '<span class="util-visually-hidden">' . Html::encode($words) . '</span>';
@@ -173,20 +160,46 @@ $showExpiryRow = PaymentDisplay::showsExpiry($comparison->original, $comparison-
 $showZipRow = PaymentDisplay::showsBillingZip($comparison->original, $comparison->demo);
 $showFeeRow = PaymentDisplay::showsFee($comparison->original, $comparison->demo);
 
-$statuses = [
-    ComparisonStatus::Match,
-    ComparisonStatus::Different,
-    ComparisonStatus::MissingInDemo,
-    ComparisonStatus::ExtraInDemo,
-    ComparisonStatus::Uncomparable,
-];
-
-$summaryWords = [
-    ComparisonStatus::Match->value => 'Matched',
-    ComparisonStatus::Different->value => 'Different',
-    ComparisonStatus::MissingInDemo->value => 'Missing in demo',
-    ComparisonStatus::ExtraInDemo->value => 'Missing in original',
-    ComparisonStatus::Uncomparable->value => 'Not available',
+/**
+ * The counts above the receipts: filter key, how many, the words, the colour.
+ *
+ * An extra product has a chip of its own, apart from a field value only the demo has — the first is
+ * charged and the second is not. See `ReceiptComparison::EXTRA_PRODUCT`.
+ *
+ * @var list<array{string, int, string, string}> $chips
+ */
+$chips = [
+    [ComparisonStatus::Match->value, $receipt->count(ComparisonStatus::Match), 'Matched', 'match'],
+    [
+        ComparisonStatus::Different->value,
+        $receipt->count(ComparisonStatus::Different),
+        VerdictWords::field(ComparisonStatus::Different),
+        'different',
+    ],
+    [
+        ComparisonStatus::MissingInDemo->value,
+        $receipt->count(ComparisonStatus::MissingInDemo),
+        VerdictWords::field(ComparisonStatus::MissingInDemo),
+        'missing',
+    ],
+    [
+        ReceiptComparison::EXTRA_PRODUCT,
+        $receipt->extraProducts(),
+        VerdictWords::item(ComparisonStatus::ExtraInDemo),
+        'extra',
+    ],
+    [
+        ComparisonStatus::ExtraInDemo->value,
+        $receipt->count(ComparisonStatus::ExtraInDemo),
+        VerdictWords::field(ComparisonStatus::ExtraInDemo),
+        'extra',
+    ],
+    [
+        ComparisonStatus::Uncomparable->value,
+        $receipt->count(ComparisonStatus::Uncomparable),
+        VerdictWords::field(ComparisonStatus::Uncomparable),
+        'unknown',
+    ],
 ];
 
 /**
@@ -363,9 +376,10 @@ $card = static function (
             $mine = $isDemo ? $item->demo : $item->original;
             $modifiers = $modifiersOf($mine);
             // The verdict the score gave the line, so a price-only difference reads as the match it
-            // scored — the unit price is shown and never judged.
+            // scored — the unit price is shown and never judged. An extra product is keyed apart from
+            // an extra field value, so its chip highlights the product lines and nothing else.
             $verdict = ComparisonScorer::itemVerdict($item);
-            $status = Html::encode($verdict->value);
+            $status = Html::encode(ReceiptComparison::itemKey($item));
 
             $out .= '<div class="rc__line rc__line--item' . ($mine === null ? ' rc__line--absent' : '')
                 . '" data-rc-status="' . $status . '">'
@@ -374,7 +388,7 @@ $card = static function (
                     ? '<span class="rc-muted">Not on this order</span>'
                     : '<span class="rc__item-name">' . Html::encode($mine->name ?? 'Unnamed item') . '</span>'
                     . ($mine->sn === null ? '' : ' <span class="rc__sn">' . Html::encode($mine->sn) . '</span>'))
-                . '<span class="rc__mark">' . ($isDemo ? $badge($verdict) : '') . '</span>'
+                . '<span class="rc__mark">' . ($isDemo ? $badge($verdict, true) : '') . '</span>'
                 . '</span>'
                 . '<span class="rc__qty">' . $text($mine?->quantityLabel()) . '</span>'
                 . '<span class="rc__price">' . $money($mine?->unitPrice) . '</span>'
@@ -499,14 +513,14 @@ $card = static function (
 // nothing about the orders themselves.
 ?>
 <div class="rc-summary" data-rc-summary>
-    <?php foreach ($statuses as $status): ?>
-        <?php if ($receipt->count($status) > 0): ?>
-            <button class="btn rc-chip rc-chip--<?= Html::encode($status->modifier()) ?>"
+    <?php foreach ($chips as [$key, $count, $words, $tone]): ?>
+        <?php if ($count > 0): ?>
+            <button class="btn rc-chip rc-chip--<?= Html::encode($tone) ?>"
                 type="button"
                 aria-pressed="false"
-                data-rc-filter="<?= Html::encode($status->value) ?>">
-                <span class="rc-chip__count"><?= Html::encode((string) $receipt->count($status)) ?></span>
-                <?= Html::encode($summaryWords[$status->value]) ?>
+                data-rc-filter="<?= Html::encode($key) ?>">
+                <span class="rc-chip__count"><?= Html::encode((string) $count) ?></span>
+                <?= Html::encode($words) ?>
             </button>
         <?php endif; ?>
     <?php endforeach; ?>

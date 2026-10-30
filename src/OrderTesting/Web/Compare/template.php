@@ -15,7 +15,9 @@ use App\OrderTesting\Domain\Comparison\SectionScore;
 use App\OrderTesting\Domain\DemoOrder;
 use App\OrderTesting\Domain\TestAttempt;
 use App\OrderTesting\Web\DemoOrdersAsset;
+use App\OrderTesting\Web\MoneyDisplay;
 use App\OrderTesting\Web\PaymentDisplay;
+use App\OrderTesting\Web\VerdictWords;
 use Yiisoft\Html\Html;
 use Yiisoft\Router\UrlGeneratorInterface;
 
@@ -89,17 +91,10 @@ $value = static fn(?string $v): string => $v === null || $v === ''
     : Html::encode($v);
 
 /**
- * What a status is called on this page — the same words the receipt comparison uses, so the two pages
- * describe one comparison in one vocabulary. "Extra in demo" is said from the original's side, as
- * "Missing in original", exactly as the receipt says it.
+ * An amount as a person reads it: two decimals, from the formatter the receipt uses too. Display only —
+ * every verdict and score on this page was decided on the amount as stored.
  */
-$statusWords = static fn(ComparisonStatus $status): string => match ($status) {
-    ComparisonStatus::Match => 'Match',
-    ComparisonStatus::Different => 'Different',
-    ComparisonStatus::MissingInDemo => 'Missing in demo',
-    ComparisonStatus::ExtraInDemo => 'Missing in original',
-    ComparisonStatus::Uncomparable => 'Not available',
-};
+$amount = static fn(?string $v): string => $value(MoneyDisplay::amount($v));
 
 /**
  * The verdict beside a demo value: words, never a symbol.
@@ -111,10 +106,12 @@ $statusWords = static fn(ComparisonStatus $status): string => match ($status) {
  *
  * A line item is headed by the verdict the score gave it, not the comparator's: a line whose only
  * difference is its unit price scored as a match, and reads as one. See `ComparisonScorer::itemVerdict()`.
+ * The words are shared with the receipt page — see {@see VerdictWords} for why a product and a field
+ * only the demo has are worded differently.
  */
-$verdict = static function (FieldComparison|ItemComparison $c) use ($statusWords): string {
+$verdict = static function (FieldComparison|ItemComparison $c): string {
     $status = $c instanceof ItemComparison ? ComparisonScorer::itemVerdict($c) : $c->status;
-    $words = $statusWords($status);
+    $words = $c instanceof ItemComparison ? VerdictWords::item($status) : VerdictWords::field($status);
 
     if ($status === ComparisonStatus::Match) {
         return '<span class="util-visually-hidden">' . Html::encode($words) . '</span>';
@@ -127,13 +124,22 @@ $verdict = static function (FieldComparison|ItemComparison $c) use ($statusWords
 /**
  * A row shown for reference and counted by nothing: said so, quietly, where a verdict would sit.
  *
- * Printed beside every demo unit price, whether or not it matches, so a reader is never left to take a
- * price difference for a mistake the score charged.
+ * Printed beside every demo unit price and every demo Options list, whether or not it matches, so a
+ * reader is never left to take a difference there for a mistake the score charged.
  */
 $notScored = '<span class="ot-mark ot-mark--note">Not scored</span>';
 
-/** Line-item rows the score never reads, shown for reference only. */
-$referenceItemFields = ['Unit price'];
+/**
+ * Line-item rows the score never reads, shown for reference only.
+ *
+ * The unit price is the menu's, not the trainee's. Options is every addition and combination of the
+ * line in one list, so it repeats the two rows below it; judging it as well would print one modifier
+ * mistake as two findings.
+ */
+$referenceItemFields = ['Unit price', 'Options'];
+
+/** Line-item rows that are amounts of money. */
+$itemAmounts = ['Unit price'];
 
 /**
  * The modifier rows, printed as the list they are rather than one comma-joined sentence.
@@ -225,14 +231,34 @@ $sectionScore = static function (?SectionScore $section): string {
  */
 $overallParts = [];
 
+/*
+ * A section that could not be scored leaves the denominator, so the ones that could share the whole in
+ * their policy proportions. Those shares are what this order's figure was made of, and what the tooltip
+ * and the explanation print — so the figures a reader multiplies out add up to the overall.
+ */
+$appliedWeight = 0.0;
+
+foreach ($score->sections as $scored) {
+    if ($scored->weight > 0 && $scored->percent !== null) {
+        $appliedWeight += $scored->weight;
+    }
+}
+
+/** @var list<string> $appliedNote this order's sections and their share of its overall */
+$appliedNote = [];
+
 foreach ($score->sections as $scored) {
     $scoredPercent = $scored->displayPercent();
 
-    if ($scored->weight > 0 && $scoredPercent !== null) {
-        $overallParts[] = $sectionHeading($scored->title) . ' ' . $scoredPercent . '% at '
-            . number_format($scored->weight, 2) . '%';
+    if ($scored->weight > 0 && $scoredPercent !== null && $appliedWeight > 0) {
+        $share = number_format($scored->weight / $appliedWeight * 100, 2) . '%';
+        $overallParts[] = $sectionHeading($scored->title) . ' ' . $scoredPercent . '% at ' . $share;
+        $appliedNote[] = $sectionHeading($scored->title) . ' ' . $share;
     }
 }
+
+// Said only when it differs from the policy: when every section was scored, the shares are the policy.
+$appliedDiffers = $score->isAvailable() && count($appliedNote) < count($score->weighting);
 
 $overallTitle = $score->isAvailable()
     ? 'Weighted across the sections that could be scored: ' . implode(', ', $overallParts)
@@ -391,6 +417,8 @@ $panel = static function (
     $sectionHeading,
     $notScored,
     $referenceItemFields,
+    $itemAmounts,
+    $amount,
     $modifierLists,
     $list,
     $paymentFields,
@@ -419,7 +447,7 @@ $panel = static function (
     $out = '<section class="ot-book ot-book--' . Html::encode($side) . '" aria-label="' . Html::encode($kind) . '">';
 
     // The name only when the document has one: a placeholder dash under the heading told the reader
-    // nothing. The phone is not repeated here — it is the first row under Customer details.
+    // nothing. The phone is not shown on this page, here or as a row.
     $name = $order?->customer->displayName();
 
     $out .= '<header class="ot-book__head">'
@@ -490,6 +518,15 @@ $panel = static function (
             /** @var ItemComparison $item */
             $mine = $isDemo ? $item->demo : $item->original;
 
+            // A product on one side only is one finding, and its heading says so once: "Missing from
+            // demo" or "Extra product in demo". Its rows carry the line's tint and no label of their
+            // own — repeating the verdict on each of them read as one charge per row, and the score
+            // charges the line exactly once.
+            $lineVerdict = ComparisonScorer::itemVerdict($item);
+            $oneSided = $lineVerdict === ComparisonStatus::MissingInDemo
+                || $lineVerdict === ComparisonStatus::ExtraInDemo;
+            $lineTint = $isDemo && $oneSided ? ' ot-book__line--' . $lineVerdict->modifier() : '';
+
             $out .= '<article class="ot-book__item' . ($mine === null ? ' ot-book__item--absent' : '') . '">'
                 . '<header class="ot-book__item-head">'
                 . '<h4 class="ot-book__item-name">' . $itemTitle($mine) . '</h4>'
@@ -498,12 +535,16 @@ $panel = static function (
 
             foreach ($itemFields[$index] ?? [] as $field) {
                 /** @var FieldComparison $field */
-                $rendered = isset($modifierLists[$field->label])
-                    ? ($mine === null ? $value(null) : $list($modifierLists[$field->label]($mine)))
-                    : $value($pick($field));
+                $rendered = match (true) {
+                    isset($modifierLists[$field->label]) => $mine === null
+                        ? $value(null)
+                        : $list($modifierLists[$field->label]($mine)),
+                    in_array($field->label, $itemAmounts, true) => $amount($pick($field)),
+                    default => $value($pick($field)),
+                };
 
-                // Shown, never scored: no verdict and no tint. Every demo price says so — matching or
-                // not — so the note reads as a property of the row rather than as a finding about it.
+                // Shown, never scored: no verdict. Every demo price and options list says so — matching
+                // or not — so the note reads as a property of the row rather than as a finding about it.
                 // A line the demo does not have prints a dash and no note.
                 if (in_array($field->label, $referenceItemFields, true)) {
                     $shown = $pick($field);
@@ -512,12 +553,15 @@ $panel = static function (
                         $field->label,
                         $rendered,
                         $isDemo && $shown !== null && trim($shown) !== '' ? $notScored : '',
+                        $lineTint,
                     );
 
                     continue;
                 }
 
-                $out .= $line($field->label, $rendered, $mark($field), $tint($field));
+                $out .= $oneSided
+                    ? $line($field->label, $rendered, '', $lineTint)
+                    : $line($field->label, $rendered, $mark($field), $tint($field));
             }
 
             $out .= '</dl></article>';
@@ -570,14 +614,14 @@ $panel = static function (
             // The card processing fee is already inside the total, so it is printed just above it —
             // then the lines above the total add up to it.
             if ($key === $last && $showFeeRow) {
-                $out .= $line('Card processing fee', $value($order?->totals->processingFee), '');
+                $out .= $line('Card processing fee', $amount($order?->totals->processingFee), '');
             }
 
             // The grand total is the figure anybody actually looks for, so it is set apart rather than
             // left as the last of seven identical rows.
             $out .= $line(
                 $field->label,
-                $value($pick($field)),
+                $amount($pick($field)),
                 '',
                 $key === $last ? ' ot-book__line--grand' : '',
             );
@@ -751,8 +795,9 @@ $panel = static function (
         compared and is not counted either.
     </p>
     <p class="util-muted">
-        <strong>Customer details</strong> score the customer fields shown; the customer count is not shown
-        or scored. <strong>Order details</strong> score the order type and the payment details together, as
+        <strong>Customer details</strong> score the customer fields shown; the phone number and the customer
+        count are not shown or scored, and when nothing else is recorded the section is not shown and
+        leaves the overall. <strong>Order details</strong> score the order type and the payment details together, as
         one score: payment method, card (last four digits), expiration date and billing ZIP. A card detail
         counts only when both orders recorded it &mdash; when only one did, the other was either not paid
         by card, which the payment method already counts, or its card details were not kept. The order
@@ -762,18 +807,27 @@ $panel = static function (
         and the section then leaves the overall rather than counting as zero.
     </p>
     <p class="util-muted">
-        <strong>Order items</strong> count one unit per line. A line the demo missed, or one it added,
-        counts once and for nothing &mdash; once, not once per field, so a single mistake is charged a
-        single time. Within a matched line, the product, additions, combinations and instructions count
-        once each and the quantity counts double; Options is not counted on its own because it repeats
-        Additions and Combinations. The unit price is shown, and a different price is pointed out, but it
-        is not scored. <strong>Totals</strong> are shown for reference and are not scored.
+        <strong>Order items</strong> count one unit for every product line on either order. A product is
+        only ever paired with the same product. A product &ldquo;Missing from demo&rdquo;, or an
+        &ldquo;Extra product in demo&rdquo;, counts as one unit worth nothing &mdash; once, not once per
+        row, so a single line is charged a single time &mdash; and an extra product means the section
+        cannot reach 100%. A wrong product entered in place of an ordered one is both: the ordered product
+        is missing and the wrong one is extra. Within a matched product, the product, additions,
+        combinations and instructions count once each and the quantity counts double, and a difference
+        in any of them marks the product &ldquo;Different&rdquo;. Options, which repeats Additions and
+        Combinations, and the unit price, which follows the menu, are shown marked &ldquo;Not
+        scored&rdquo;. <strong>Totals</strong> are shown for reference and are not scored.
     </p>
     <p class="util-muted">
         The overall is the weighted average of the sections that could be scored &mdash;
         <?= Html::encode(implode(', ', $weightNote)) ?>, <?= Html::encode($weightTotal) ?>% in all.
+        <?php if ($appliedDiffers): ?>
+            A section that could not be scored leaves the average, so on this order the others share the
+            whole in the same proportions: <?= Html::encode(implode(', ', $appliedNote)) ?>.
+        <?php endif; ?>
         Figures are rounded to whole percentages, except that a section short of complete never prints
-        100 and one short of nothing never prints 0. The figure is this demo order measured against this
+        100 and one short of nothing never prints 0. Amounts are printed to two decimal places; every
+        comparison is made on the amounts as recorded. The figure is this demo order measured against this
         original, and nothing wider: not the trainee, not the call, not the store.
     </p>
 </details>

@@ -66,12 +66,13 @@ final class ReceiptComparisonTest extends TestCase
         self::assertSame(0, $receipt->total());
     }
 
-    /** Customer count and Status are not drawn on the receipt, and so not counted. */
-    public function testTheCountAndTheStatusAreNotDrawn(): void
+    /** Phone, Customer count and Status are not drawn on the receipt, and so not counted. */
+    public function testThePhoneTheCountAndTheStatusAreNotDrawn(): void
     {
         $receipt = ReceiptComparison::from($this->comparison([
             new ComparisonSection('Customer', [
-                new FieldComparison('Phone', '1', '1', ComparisonStatus::Match),
+                new FieldComparison('First name', 'Marta', 'Marta', ComparisonStatus::Match),
+                new FieldComparison('Phone', '1', '2', ComparisonStatus::Different),
                 new FieldComparison('Customer count', '1', '2', ComparisonStatus::Different),
             ]),
             new ComparisonSection('Order', [
@@ -80,9 +81,26 @@ final class ReceiptComparisonTest extends TestCase
             ]),
         ]));
 
-        self::assertSame(['Phone'], array_map(static fn(FieldComparison $f): string => $f->label, $receipt->sections[0]['fields']));
+        self::assertSame(['First name'], array_map(static fn(FieldComparison $f): string => $f->label, $receipt->sections[0]['fields']));
         self::assertSame(['Order type'], array_map(static fn(FieldComparison $f): string => $f->label, $receipt->sections[1]['fields']));
         self::assertSame(0, $receipt->count(ComparisonStatus::Different));
+    }
+
+    /** A customer section holding only the phone is not drawn at all — no empty heading. */
+    public function testACustomerSectionWithOnlyThePhoneIsDropped(): void
+    {
+        $receipt = ReceiptComparison::from($this->comparison([
+            new ComparisonSection('Customer', [
+                new FieldComparison('Phone', '15164623815', '15164623815', ComparisonStatus::Match),
+                new FieldComparison('Customer count', '1', '1', ComparisonStatus::Match),
+            ]),
+            new ComparisonSection('Order', [
+                new FieldComparison('Order type', 'delivery', 'delivery', ComparisonStatus::Match),
+            ]),
+        ]));
+
+        self::assertSame(['Order'], array_column($receipt->sections, 'title'));
+        self::assertSame(1, $receipt->total());
     }
 
     public function testASectionLeftWithNothingIsDropped(): void
@@ -121,9 +139,33 @@ final class ReceiptComparisonTest extends TestCase
 
         self::assertSame(2, $receipt->count(ComparisonStatus::Match));
         self::assertSame(1, $receipt->count(ComparisonStatus::MissingInDemo));
-        self::assertSame(1, $receipt->count(ComparisonStatus::ExtraInDemo));
+        self::assertSame(1, $receipt->extraProducts());
+        self::assertSame(0, $receipt->count(ComparisonStatus::ExtraInDemo), 'an extra product is not an extra field');
         self::assertSame(1, $receipt->count(ComparisonStatus::Different));
         self::assertSame(5, $receipt->total());
+    }
+
+    /**
+     * A product only the demo has is counted apart from a field value only the demo has: the first is
+     * charged by the score and the second is not, so one count for both would add up two different
+     * things.
+     */
+    public function testAnExtraProductIsCountedApartFromAnExtraFieldValue(): void
+    {
+        $extraLine = new ItemComparison(null, $this->item('Clear Soup'), ComparisonStatus::ExtraInDemo);
+        $receipt = ReceiptComparison::from($this->comparison(
+            [
+                new ComparisonSection('Delivery address', [
+                    new FieldComparison('State', null, 'NY', ComparisonStatus::ExtraInDemo),
+                ]),
+            ],
+            [$extraLine],
+        ));
+
+        self::assertSame(1, $receipt->extraProducts());
+        self::assertSame(1, $receipt->count(ComparisonStatus::ExtraInDemo));
+        self::assertSame(ReceiptComparison::EXTRA_PRODUCT, ReceiptComparison::itemKey($extraLine));
+        self::assertSame(2, $receipt->total());
     }
 
     /** "We cannot tell" is counted on its own, never folded into the matches. */
@@ -147,7 +189,7 @@ final class ReceiptComparisonTest extends TestCase
                 new ComparisonSection('Customer', [
                     new FieldComparison('First name', 'Marta', 'Marta', ComparisonStatus::Match),
                     new FieldComparison('Email', null, null, ComparisonStatus::Match),
-                    new FieldComparison('Phone', '1', '2', ComparisonStatus::Different),
+                    new FieldComparison('Last name', 'Nowak', 'Novak', ComparisonStatus::Different),
                 ]),
                 new ComparisonSection('Totals', [
                     new FieldComparison('Total', '10.00', '9.00', ComparisonStatus::Different),

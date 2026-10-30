@@ -46,14 +46,17 @@ use function trim;
  *
  * ## What the comparison page scores, section by section
  *
- *  - **Customer details** — the customer fields shown. `Customer count` is not shown and not scored.
+ *  - **Customer details** — the customer fields shown. `Phone` and `Customer count` are not shown and
+ *    not scored; on most orders nothing else is held, so the section is not drawn and leaves the
+ *    overall rather than scoring zero.
  *  - **Order details** — Order type and Payment method, and the card details under them (card, expiry,
  *    billing ZIP), as **one** score. `Status` is not shown and not scored. A card detail counts only
  *    when both orders kept it; see `OrderComparator::payment()`.
  *  - **Delivery address** — the address fields shown; see {@see addressFields()} for Street and
  *    Destination.
- *  - **Order items** — per line: Product, Quantity (double), Additions, Combinations and instructions.
- *    Unit price is shown and never scored; Product SN is not shown and not scored.
+ *  - **Order items** — one unit per product line on either order; see {@see itemSection()}. Within a
+ *    matched line: Product, Quantity (double), Additions, Combinations and instructions. Unit price and
+ *    Options are shown and never scored; Product SN is not shown and not scored.
  *  - **Totals** — shown for reference, never scored.
  *
  * The rows the page leaves out are named once, in {@see HIDDEN_FIELDS} and {@see HIDDEN_ITEM_FIELDS},
@@ -80,7 +83,7 @@ final readonly class ComparisonScorer
      * Still compared, and still printed on the receipt page, which reads the comparison directly.
      */
     public const HIDDEN_FIELDS = [
-        self::CUSTOMER => ['Customer count'],
+        self::CUSTOMER => ['Phone', 'Customer count'],
         self::ORDER => ['Status'],
     ];
 
@@ -359,10 +362,25 @@ final readonly class ComparisonScorer
     /**
      * The item list, scored one unit per line rather than one per field.
      *
-     * A missing line already carries seven child fields of its own, one of which can be a match
-     * because neither side filled it in. Counting those would charge one mistake seven times and hand
-     * back credit for the silence, so a missing or extra line is exactly one unit, worth nothing, and
-     * the facets only decide how much of a *matched* line was reproduced.
+     * Every product line on **either** order is one unit, and the score is the credit earned over the
+     * units:
+     *
+     *  - a **matched** line (same product, paired by `ItemMatcher`) earns its facet share, 0..1;
+     *  - a line **missing from the demo** earns nothing;
+     *  - an **extra product in the demo** earns nothing — and is in the denominator, so an order with an
+     *    extra product can never score 100%.
+     *
+     * Each line is charged at most once. A missing line already carries seven child fields of its own,
+     * one of which can be a match because neither side filled it in. Counting those would charge one
+     * mistake seven times and hand back credit for the silence, so a one-sided line is exactly one unit,
+     * worth nothing, and the facets only decide how much of a *matched* line was reproduced.
+     *
+     * Lines are only ever paired with the same product (catalogue id, then name), so a wrong product is
+     * never matched to the product it replaced: it reads as the ordered product missing from the demo
+     * and the wrong one extra in it — two lines, each charged once. That is deliberate. Counting the
+     * pair as one unit would make an extra product cost nothing whenever another line was missing, so a
+     * guess would always be free; this way every extra product and every missing product costs the
+     * same one unit, whatever else is on the order.
      */
     private function itemSection(OrderComparison $comparison): SectionScore
     {
