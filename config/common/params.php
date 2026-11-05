@@ -248,6 +248,12 @@ return [
         'attemptTtlMinutes' => Environment::int('ORDER_TESTING_ATTEMPT_TTL_MINUTES'),
     ],
 
+    // Topic Management: stores a topic may not be newly saved against. Transport only — parsed in
+    // App\Practice\Domain\ExcludedStoreIds, wired in config/common/di/practice.php.
+    'app/practice' => [
+        'topicExcludedStoreIds' => Environment::string('PRACTICE_TOPIC_EXCLUDED_STORE_IDS'),
+    ],
+
     'app/order58' => [
         'baseUrl' => Environment::string('ORDER58_API_BASE_URL'),
         'token' => Environment::string('ORDER58_API_TOKEN'),

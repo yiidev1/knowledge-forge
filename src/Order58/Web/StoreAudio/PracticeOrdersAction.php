@@ -54,6 +54,12 @@ final readonly class PracticeOrdersAction extends Action
         return false;
     }
 
+    /** Practice is on orders being taken now: only stores with a recent Case Order. */
+    protected function listsOnlyRecentCaseOrderStores(): bool
+    {
+        return true;
+    }
+
     protected function templatePath(): string
     {
         return __DIR__ . '/practice-orders';

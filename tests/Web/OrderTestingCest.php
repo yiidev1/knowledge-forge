@@ -24,6 +24,7 @@ use function json_encode;
 use function str_pad;
 use function str_repeat;
 use function substr_count;
+use function time;
 
 use const LOCK_EX;
 use const LOCK_NB;
@@ -263,6 +264,9 @@ final class OrderTestingCest
         // Narrowed to the fixture by name throughout, so what is being tested is the audio filter and
         // not where this store happens to sort among the directory's several hundred.
         $search = '&q=' . urlencode(self::STORE_NAME);
+        // Manage Orders lists only stores with a Case Order from the last 30 days, so the store has one;
+        // what is being tested here is the audio filter on top of that.
+        $this->mirrorOrder(self::ORDER_ID);
 
         // Nothing uploaded yet, so this store is not one with audio.
         $I->amOnPage('/order-testing?audio=with' . $search);
@@ -731,7 +735,8 @@ final class OrderTestingCest
             'Practice Order',
             'Demo Orders',
             'Set Topic',
-            'Verification',
+            // Verification is temporarily hidden (5 November 2026); `OrderTestingVerificationCest`
+            // asserts that, and that the endpoint behind it still works.
             // A column of its own again. The menu put it one click further away and bought a
             // column's width the table did not need; the widths are content-aware now.
             'View Receipt',
@@ -943,6 +948,8 @@ final class OrderTestingCest
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
             'source_order_id' => $sourceOrderId,
+            // Placed now: the picker lists only stores with a Case Order from the last 30 days.
+            'source_created_at' => time(),
             'payload_json' => '{}',
             'content_hash' => str_pad((string) $sourceOrderId, 64, '0', STR_PAD_LEFT),
             'synced_at' => $now,

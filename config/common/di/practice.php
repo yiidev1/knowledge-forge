@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Practice\Application\AssignTopicService;
 use App\Practice\Application\TopicInputValidator;
 use App\Practice\Application\TopicService;
+use App\Practice\Domain\ExcludedStoreIds;
 use App\Practice\Domain\SourceOrderExistenceInterface;
 use App\Practice\Domain\TopicAssignmentRepositoryInterface;
 use App\Practice\Domain\StoreOptionsInterface;
@@ -15,6 +16,8 @@ use App\Practice\Infrastructure\DbStoreOptions;
 use App\Practice\Infrastructure\DbTopicRepository;
 
 /**
+ * @var array $params
+ *
  * Practice Orders: training topics and the orders they are assigned to.
  *
  * Nothing here is shared with Order Testing on purpose — this module owns the topic tables and reads
@@ -25,8 +28,16 @@ return [
     TopicRepositoryInterface::class => DbTopicRepository::class,
 
     // The stores a topic may be restricted to — the same mirror the Order Testing picker
-    // lists, keyed by the same `source_id`.
-    StoreOptionsInterface::class => DbStoreOptions::class,
+    // lists, keyed by the same `source_id` — less the test and demo accounts named in
+    // PRACTICE_TOPIC_EXCLUDED_STORE_IDS. See ExcludedStoreIds.
+    StoreOptionsInterface::class => [
+        'class' => DbStoreOptions::class,
+        '__construct()' => [
+            'excluded' => ExcludedStoreIds::fromSetting(
+                (string) $params['app/practice']['topicExcludedStoreIds'],
+            ),
+        ],
+    ],
     TopicAssignmentRepositoryInterface::class => DbTopicAssignmentRepository::class,
 
     // Reads `order58_orders` by table name; see the class docblock for why it is not a call into the

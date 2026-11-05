@@ -46,6 +46,9 @@ final readonly class StoreAction
                 $name,
                 $description,
                 $active,
+                // An administrator's own id. An operation user has none — they are an Order58 user, and
+                // `created_by_admin_id` holds `admin_users` ids — so their topics record no creator
+                // rather than an id from the other realm.
                 $this->currentAdmin->getOrNull()?->id(),
                 $storeSourceId,
             );

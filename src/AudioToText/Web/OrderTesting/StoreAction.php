@@ -207,9 +207,11 @@ readonly class StoreAction extends AudioStoreAction
             'assignableTopics' => $this->topics->assignableTopics($sourceId),
             // One query for the whole page, and only on the surface that renders the column: an order
             // with no row is unverified, which the template already knows how to say.
-            'orderVerifications' => $this->capabilities()->canVerifyOrders
+            'orderVerifications' => $this->capabilities()->canVerifyOrders && $this->showsVerificationColumn()
                 ? $this->verifications->forOrders($sourceId, $orderIds)
                 : [],
+            // Whether the column is drawn at all; see showsVerificationColumn().
+            'verificationColumnShown' => $this->showsVerificationColumn(),
             // The template renders the topic column when this is true; whether that column can be
             // *used* is a separate question, answered by the capabilities.
             'practiceMode' => true,
@@ -295,6 +297,20 @@ readonly class StoreAction extends AudioStoreAction
     protected function afterUpload(string $conversationId, int $sourceId): ResponseInterface
     {
         return $this->redirect->afterPost(OrderTestingRoute::STORE, ['sourceId' => $sourceId]);
+    }
+
+    /**
+     * Whether the store table draws its Verification column.
+     *
+     * **Temporarily hidden** (requested 5 November 2026). This decides what the table shows and nothing
+     * else: the column's header, its cells and its confirmation dialog go, exactly as on the practice
+     * surfaces, and the query that only fed them is skipped. The verification endpoint, its stored
+     * decisions and the `canVerifyOrders` capability are untouched, so returning true here restores the
+     * column with every order's verification as it was.
+     */
+    protected function showsVerificationColumn(): bool
+    {
+        return false;
     }
 
     /**

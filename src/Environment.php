@@ -300,6 +300,17 @@ final class Environment
         // operator who clicked and walked away would hold that order shut for everyone, permanently.
         'ORDER_TESTING_ATTEMPT_TTL_MINUTES' => ['type' => 'int', 'default' => 60, 'min' => 5, 'max' => 1440],
 
+        /*
+         * Topic Management: the Order58 stores a topic may not be newly saved against — the test and
+         * demo accounts — as a comma-separated list of store ids.
+         *
+         * A list rather than a rule because nothing in Order58's data marks a store as a test or demo
+         * account, and a name match would one day hide a real store. Empty excludes nothing. Read as
+         * a string and parsed leniently in {@see \App\Practice\Domain\ExcludedStoreIds}, so a typo
+         * drops one id rather than stopping the application.
+         */
+        'PRACTICE_TOPIC_EXCLUDED_STORE_IDS' => ['type' => 'string', 'default' => ''],
+
         // Storage and upload limits.
         'KNOWLEDGE_STORAGE_PATH' => ['type' => 'string', 'default' => '@runtime/storage'],
         'MAX_UPLOAD_SIZE_MB' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 512],

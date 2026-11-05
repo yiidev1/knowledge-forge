@@ -59,6 +59,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var string $combinedLimitLabel
  * @var bool $canUpload
  * @var ConversationCapabilities|null $capabilities what the reader may change; absent means everything
+ * @var bool|null $verificationColumnShown false while the Verification column is hidden; absent means shown
  * @var AppTimeZone $appTimeZone
  * @var TranscriptionProvider $provider currently selected, and what all recording cards preselect
  * @var list<TranscriptionProvider> $providerChoices every provider, usable or not
@@ -135,8 +136,10 @@ $canAssignTopics = $practiceMode && $capabilities->canAssignTopics;
 
 // Verification is Order Testing's own. `$practiceMode` is true on the read-only practice surfaces as
 // well, and `$capabilities` is permissive on the Audio-to-Text store page, so neither answers this on
-// its own: the column exists only where both are true, which is this one page.
-$canVerifyOrders = $practiceMode && $capabilities->canVerifyOrders;
+// its own: the column exists only where both are true, which is this one page — and only while that
+// page draws it. `StoreAction::showsVerificationColumn()` is temporarily false, which removes the
+// column, its cells and its dialog together and leaves verification itself untouched.
+$canVerifyOrders = $practiceMode && $capabilities->canVerifyOrders && ($verificationColumnShown ?? true);
 
 // What agents listened to. The same two conditions as Verification and for the same reason — it is a
 // statement about an order, and it belongs on the page where orders are managed — but a different
@@ -2905,11 +2908,12 @@ $last = min($page * $perPage, $total);
         </div>
     </dialog>
 
+    <?php if ($canVerifyOrders): ?>
     <?php
     // One dialog for both directions. Verify and Unverify ask different questions and carry different
     // weight, but they are the same decision about the same order, and two dialogs would be two places
     // to keep the order number, the wording and the button labels in step. The script fills all three.
-    ?>
+        ?>
     <dialog class="source-modal practice-dialog" id="ot-verify-dialog" data-practice-dialog
         aria-labelledby="ot-verify-title">
         <div class="source-modal__head">
@@ -2930,6 +2934,7 @@ $last = min($page * $perPage, $total);
                 data-ot-verify-confirm>Confirm Verification</button>
         </div>
     </dialog>
+    <?php endif; ?>
 
     <dialog class="source-modal practice-dialog" id="practice-bulk-confirm-dialog" data-practice-dialog
         aria-labelledby="practice-bulk-confirm-title">

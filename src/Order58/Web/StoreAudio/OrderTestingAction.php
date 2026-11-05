@@ -10,6 +10,7 @@ use App\Order58\Domain\StoreAudioFilter;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
 use App\Order58\Web\CaseOrders\CaseOrderSyncControl;
+use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Web\Actor\CurrentActor;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
@@ -39,7 +40,7 @@ final readonly class OrderTestingAction extends Action
      * Everything the picker needs, plus the one setting this surface adds.
      *
      * Spelled out rather than inherited because a subclass that adds a dependency has to: the parent
-     * promotes its five, and PHP gives a child no way to append to that list. They are passed
+     * promotes its six, and PHP gives a child no way to append to that list. They are passed
      * straight through, so the two cannot diverge on anything but the new value.
      */
     public function __construct(
@@ -48,6 +49,7 @@ final readonly class OrderTestingAction extends Action
         StoreAudioCountsInterface $audioCounts,
         StoreTopicAssignmentCountsInterface $topicCounts,
         AudioProviderDefaultInterface $providerDefault,
+        ClockInterface $clock,
         /**
          * "Sync Order58 Case Orders" — the Call Recordings page's control, read the same way.
          *
@@ -65,7 +67,13 @@ final readonly class OrderTestingAction extends Action
          */
         private string $defaultSource = 'case_orders',
     ) {
-        parent::__construct($viewRenderer, $reader, $audioCounts, $topicCounts, $providerDefault);
+        parent::__construct($viewRenderer, $reader, $audioCounts, $topicCounts, $providerDefault, $clock);
+    }
+
+    /** Manage Orders is about orders being worked on now: only stores with a recent Case Order. */
+    protected function listsOnlyRecentCaseOrderStores(): bool
+    {
+        return true;
     }
 
     protected function templatePath(): string

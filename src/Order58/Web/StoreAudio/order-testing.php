@@ -43,6 +43,7 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var CaseOrderSyncRun|null $caseOrderRun
  * @var string|null $caseOrderBlockedReason
  * @var bool $caseOrderConfirmOpen
+ * @var int|null $recentCaseOrderDays only stores with a Case Order this recent are listed
  */
 
 $this->setTitle('Manage Orders');
@@ -263,6 +264,8 @@ if ($caseOrderSyncOffered) {
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'order-testing.store',
+    // Only stores with a recent Case Order are listed here; the body says so. See RecentCaseOrderWindow.
+    'recentCaseOrderDays' => $recentCaseOrderDays,
     /*
      * The action names what the card is about, which is now two things.
      *

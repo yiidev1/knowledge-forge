@@ -13,6 +13,8 @@ use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
+use function count;
+
 use function gmdate;
 use function str_repeat;
 
@@ -68,70 +70,63 @@ final class OrderTestingVerificationCest
 
     // ---------------------------------------------------------------- what the page offers
 
-    public function theTableCarriesAVerificationColumn(WebTester $I): void
+    /**
+     * The Verification column is temporarily hidden (5 November 2026) — header, cells, the conversation
+     * dialog's copy of the control and the confirmation dialog alike — while every other column stays,
+     * one `<col>` per header so the table does not drift. See StoreAction::showsVerificationColumn().
+     */
+    public function theVerificationColumnIsTemporarilyHidden(WebTester $I): void
     {
         $I->amOnPage(self::STORE_URL);
         $I->seeResponseCodeIs(200);
 
-        $I->see('Verification', 'thead');
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER . '"]');
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER . '"] [data-ot-verify-button]');
+        $I->dontSee('Verification', 'thead');
+        $I->dontSeeElement('[data-ot-verify]');
+        $I->dontSeeElement('[data-ot-verify-dialog]');
+        $I->dontSeeElement('#ot-verify-dialog');
+        $I->dontSeeElement('col.ot-col-verification');
+
+        foreach (['Order No#', 'Recording', 'Practice Order', 'Demo Orders', 'Set Topic'] as $header) {
+            $I->see($header, '.ot-orders thead th');
+        }
+
+        // Still one column per header: a `<colgroup>` one short shifts every width a place left.
+        Assert::assertCount(
+            count($I->grabMultiple('.ot-orders > thead > tr > th')),
+            $I->grabMultiple('.ot-orders > colgroup > col', 'class'),
+        );
+        Assert::assertSame(0, $this->stateRows(), 'rendering the page must not write anything');
     }
 
-    public function everyOrderStartsUnverified(WebTester $I): void
+    // ---------------------------------------------------------------- the endpoint, unchanged
+
+    public function verifyingAnOrderThroughTheEndpointStillSavesIt(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
+        $this->decide($I, self::ORDER, 'verified', '0');
 
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER . '"][data-ot-verified="0"]');
-        Assert::assertSame(0, $this->stateRows(), 'rendering the column must not write anything');
-    }
-
-    public function aRowWithNoSourceOrderOffersNothingToVerify(WebTester $I): void
-    {
-        $I->amOnPage(self::STORE_URL);
-
-        // The recording is listed — it is still a recording — but it carries no control, exactly as
-        // the Set Topic column already behaves for the same rows.
-        $I->see((string) self::ORPHAN_ORDER);
-        $I->dontSeeElement('[data-ot-verify][data-ot-order="' . self::ORPHAN_ORDER . '"]');
-    }
-
-    // ---------------------------------------------------------------- the round trip
-
-    public function verifyingAnOrderSavesItAndShowsTheBadge(WebTester $I): void
-    {
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', []);
-
-        $I->see('Order verified successfully.', '.alert');
+        $I->seeResponseCodeIs(200);
         Assert::assertTrue($this->isVerified(self::ORDER));
 
-        // And the page now renders the other state.
+        // The decision is kept; the page simply does not draw it while the column is hidden.
         $I->amOnPage(self::STORE_URL);
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER . '"][data-ot-verified="1"]');
-        $I->see('Verified', '.ot-verify__badge');
+        $I->dontSeeElement('.ot-verify__badge');
+        Assert::assertTrue($this->isVerified(self::ORDER), 'rendering must not touch a kept decision');
     }
 
-    public function verificationSurvivesAReloadAndLeavesEveryOtherOrderAlone(WebTester $I): void
+    public function verificationLeavesEveryOtherOrderAlone(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', []);
+        $this->decide($I, self::ORDER, 'verified', '0');
 
-        $I->amOnPage(self::STORE_URL);
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER . '"][data-ot-verified="1"]');
-        $I->seeElement('[data-ot-verify][data-ot-order="' . self::ORDER_B . '"][data-ot-verified="0"]');
+        Assert::assertTrue($this->isVerified(self::ORDER));
+        Assert::assertFalse($this->isVerified(self::ORDER_B));
     }
 
     public function unverifyingPutsTheOrderBack(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', []);
+        $this->decide($I, self::ORDER, 'verified', '0');
+        $this->decide($I, self::ORDER, 'unverified', (string) $this->versionOf(self::ORDER));
 
-        // The control now posts the other direction, and the page is what decides which.
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', []);
-
-        $I->see('Order verification removed successfully.', '.alert');
+        $I->seeResponseCodeIs(200);
         Assert::assertFalse($this->isVerified(self::ORDER));
         Assert::assertSame(2, $this->eventRows(), 'both decisions are kept');
     }
@@ -140,16 +135,7 @@ final class OrderTestingVerificationCest
 
     public function anOrderFromAnotherStoreIsRefused(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
-
-        // A store this administrator may reach, and an order number that is not one of its orders.
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', [], null);
-        $I->amOnPage(self::STORE_URL);
-
-        $I->sendAjaxPostRequest(
-            self::STORE_URL . '/order/19999999/verification',
-            ['decision' => 'verified', 'version' => '0'],
-        );
+        $this->decide($I, 19999999, 'verified', '0');
 
         $I->seeResponseCodeIs(422);
         Assert::assertFalse($this->isVerified(19999999));
@@ -169,44 +155,52 @@ final class OrderTestingVerificationCest
 
     public function anUnknownActionChangesNothing(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', ['decision' => 'destroy']);
+        $this->decide($I, self::ORDER, 'destroy', '0');
 
+        $I->seeResponseCodeIs(422);
         Assert::assertFalse($this->isVerified(self::ORDER));
         Assert::assertSame(0, $this->eventRows());
     }
 
     public function aStaleVersionIsRefusedRatherThanAppliedOverTheNewerChange(WebTester $I): void
     {
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm('[data-ot-verify][data-ot-order="' . self::ORDER . '"]', []);
+        $this->decide($I, self::ORDER, 'verified', '0');
         Assert::assertTrue($this->isVerified(self::ORDER));
 
         // A screen that still believes the order has never been touched tries to act on it.
-        $I->amOnPage(self::STORE_URL);
-        $I->submitForm(
-            '[data-ot-verify][data-ot-order="' . self::ORDER . '"]',
-            ['version' => '0', 'decision' => 'unverified'],
-        );
+        $this->decide($I, self::ORDER, 'unverified', '0');
 
-        $I->see('changed by somebody else', '.alert');
+        $I->seeResponseCodeIs(409);
         Assert::assertTrue($this->isVerified(self::ORDER), 'the newer decision must survive');
     }
 
-    // ---------------------------------------------------------------- the conversation dialog
+    // ---------------------------------------------------------------- helpers
 
-    public function theDialogCarriesItsOwnVerificationControl(WebTester $I): void
+    /**
+     * Posts one decision straight to the endpoint, as the table's form did, with a real CSRF token taken
+     * from the store page. Asked for JSON, so the response code says what happened.
+     */
+    private function decide(WebTester $I, int $orderId, string $decision, string $version): void
     {
         $I->amOnPage(self::STORE_URL);
+        $token = (string) $I->grabValueFrom('input[name="_csrf"]');
 
-        // Present in the markup and hidden, so it cannot be seen before the script decides which order
-        // the dialog is about. The script fills its label; the server renders no state into it, which
-        // is what keeps the table the only place verification is recorded.
-        $I->seeElement('[data-ot-verify-dialog]');
-        $I->seeElement('#ot-verify-dialog [data-ot-verify-confirm]');
+        $I->sendAjaxPostRequest(
+            self::STORE_URL . '/order/' . $orderId . '/verification',
+            ['_csrf' => $token, 'decision' => $decision, 'version' => $version],
+        );
     }
 
-    // ---------------------------------------------------------------- helpers
+    private function versionOf(int $orderId): int
+    {
+        $value = (new Query($this->connection))
+            ->select('version')
+            ->from('{{%order_testing_order_verifications}}')
+            ->where(['store_source_id' => self::STORE_ID, 'source_order_id' => $orderId])
+            ->scalar();
+
+        return (int) $value;
+    }
 
     private function isVerified(int $orderId): bool
     {

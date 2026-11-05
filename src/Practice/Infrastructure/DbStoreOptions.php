@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Practice\Infrastructure;
 
+use App\Practice\Domain\ExcludedStoreIds;
 use App\Practice\Domain\StoreOption;
 use App\Practice\Domain\StoreOptionsInterface;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -29,22 +30,39 @@ use function is_array;
  * inactive or has no audio yet is still a store somebody may be preparing training for. Narrowing
  * here would mean a topic could not be created until a recording happened to arrive.
  *
- * The id is still validated — {@see exists()} — so a topic can only name a store that is really in
+ * The id is still validated — {@see isOffered()} — so a topic can only name a store that is really in
  * the mirror.
+ *
+ * ## The one exclusion: test and demo accounts
+ *
+ * Those are not "stores somebody may be preparing training for", and Order58 does not mark them, so they
+ * are named in configuration ({@see ExcludedStoreIds}) and left out here, in the query, for the dropdown,
+ * its search and the server-side check alike. {@see namesFor()} is deliberately not narrowed: a topic
+ * saved against one of them before the exclusion keeps its store, and the listing still names it.
  */
 final readonly class DbStoreOptions implements StoreOptionsInterface
 {
     private const TABLE = '{{%order58_stores}}';
 
-    public function __construct(private ConnectionInterface $connection) {}
+    public function __construct(
+        private ConnectionInterface $connection,
+        private ExcludedStoreIds $excluded = new ExcludedStoreIds(),
+    ) {}
 
-    public function all(): array
+    public function all(?int $keep = null): array
     {
-        $rows = (new Query($this->connection))
+        $query = (new Query($this->connection))
             ->select(['source_id', 'name', 'company'])
             ->from(self::TABLE)
-            ->orderBy(['name' => SORT_ASC, 'source_id' => SORT_ASC])
-            ->all();
+            ->orderBy(['name' => SORT_ASC, 'source_id' => SORT_ASC]);
+
+        if (!$this->excluded->isEmpty()) {
+            $offered = ['not in', 'source_id', $this->excluded->ids];
+            // The edited topic's own store stays in the list, so the select can show what it is.
+            $query->where($keep !== null && $keep > 0 ? ['or', $offered, ['source_id' => $keep]] : $offered);
+        }
+
+        $rows = $query->all();
 
         $out = [];
 
@@ -73,6 +91,11 @@ final readonly class DbStoreOptions implements StoreOptionsInterface
             ->from(self::TABLE)
             ->where(['source_id' => $storeSourceId])
             ->exists();
+    }
+
+    public function isOffered(int $storeSourceId): bool
+    {
+        return !$this->excluded->contains($storeSourceId) && $this->exists($storeSourceId);
     }
 
     public function namesFor(array $storeSourceIds): array

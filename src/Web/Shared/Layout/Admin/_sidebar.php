@@ -134,11 +134,11 @@ foreach ($items as $item) {
 // not they are linked. Hiding a link has never been a permission; it is here so the page is honest
 // about what is reachable.
 //
-// An allow-list rather than a single label, because that is now two entries: Order Testing and
-// Practice Orders both sit behind the gate this realm passes. Topic Management deliberately does not —
-// it is in the administrators' group, so linking it here would offer a door that answers with a
-// redirect to a login form they cannot use.
-$operatorMenu = ['Manage Orders', 'Practice Orders'];
+// An allow-list rather than a single label: Order Testing, Practice Orders and Topic Management all
+// sit behind the gate this realm passes (RequireOrderTestingAccessMiddleware). Anything not listed
+// here is in the administrators' group, so linking it would offer a door that answers with a redirect
+// to a login form they cannot use.
+$operatorMenu = ['Manage Orders', 'Practice Orders', 'Topic Management'];
 
 if ($operator !== null) {
     $navItems = array_values(array_filter(

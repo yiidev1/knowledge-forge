@@ -14,8 +14,9 @@ use App\Shared\Domain\Exception\ValidationException;
 /**
  * Creating, renaming and retiring topics.
  *
- * Administrators only — enforced by the route group the actions sit in, which is what "admin-only"
- * means everywhere in this application.
+ * Administrators and operation users — enforced by the route group the actions sit in
+ * (`RequireOrderTestingAccessMiddleware`), which is what a role restriction means everywhere in this
+ * application.
  */
 final readonly class TopicService
 {
@@ -51,19 +52,31 @@ final readonly class TopicService
      * Checked against the live directory on every write. A form only ever offers stores that are
      * there, but a request is not a form: without this, a hand-made POST could file a topic under a
      * store id that resolves to nothing, and the listing would then show a number nobody can place.
+     *
+     * The same check refuses the configured test and demo accounts, so the server agrees with the
+     * dropdown. One exception, and only for an edit: the store the topic **already** belongs to is
+     * accepted unchanged, so a topic saved against such an account before it was excluded can still be
+     * renamed or have its description changed without being moved anywhere.
      */
-    private function resolveStore(?int $storeSourceId): ?int
+    private function resolveStore(?int $storeSourceId, ?int $current = null): ?int
     {
         // 0 and negatives are what an empty select posts, and they mean global rather than "store 0".
         if ($storeSourceId === null || $storeSourceId <= 0) {
             return null;
         }
 
-        if (!$this->stores->exists($storeSourceId)) {
+        if ($current !== null && $storeSourceId === $current) {
+            return $storeSourceId;
+        }
+
+        if (!$this->stores->isOffered($storeSourceId)) {
             throw ValidationException::forField(
                 'store_source_id',
-                'That store is not one this application knows about. Choose one from the list, or '
-                . 'leave it on Global.',
+                $this->stores->exists($storeSourceId)
+                    ? 'That store is a test or demo account and cannot be chosen for a topic. Choose one '
+                    . 'from the list, or leave it on Global.'
+                    : 'That store is not one this application knows about. Choose one from the list, or '
+                    . 'leave it on Global.',
             );
         }
 
@@ -134,7 +147,7 @@ final readonly class TopicService
         // `$changeStore` separates "the form said global" from "the form said nothing about the
         // store", exactly as `$active` separates a status from a silence. Without it an endpoint
         // that does not send the field would quietly make every topic it touched global.
-        $scope = $changeStore ? $this->resolveStore($storeSourceId) : $topic->storeSourceId;
+        $scope = $changeStore ? $this->resolveStore($storeSourceId, $topic->storeSourceId) : $topic->storeSourceId;
 
         if ($scope !== $topic->storeSourceId) {
             $this->refuseUnsafeScopeChange($topic, $scope);

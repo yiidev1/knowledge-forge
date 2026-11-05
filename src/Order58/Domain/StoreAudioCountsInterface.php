@@ -82,6 +82,19 @@ interface StoreAudioCountsInterface
     public function storesWithCaseOrders(): array;
 
     /**
+     * Every store with at least one imported Case Order **created** at or after this instant.
+     *
+     * "Created" is Order58's own clock, `order58_orders.source_created_at` — when the customer placed
+     * the order — never when this application synchronised it. A sync imports old orders too, so a
+     * store whose only order is from last year must not qualify because the order arrived today.
+     *
+     * @param int $sinceUnix the earliest qualifying creation time, Unix seconds (UTC)
+     *
+     * @return list<int>
+     */
+    public function storesWithCaseOrdersCreatedSince(int $sinceUnix): array;
+
+    /**
      * Case Order call recording counts for the stores on one page, keyed by store source id.
      *
      * One grouped query for the page, from the recording metadata alone — `audio_conversations` is not

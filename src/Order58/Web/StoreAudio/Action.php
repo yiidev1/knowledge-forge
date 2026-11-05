@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Order58\Web\StoreAudio;
 
 use App\Order58\Domain\AudioProviderDefaultInterface;
+use App\Order58\Domain\RecentCaseOrderWindow;
 use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreCaseRecordingCounts;
@@ -15,12 +16,15 @@ use App\Order58\Domain\StoreDirectoryItem;
 use App\Order58\Domain\StoreDirectoryQuery;
 use App\Order58\Domain\StoreDirectoryReaderInterface;
 use App\Order58\Domain\StoreSourceStatusFilter;
+use App\Shared\Domain\Clock\ClockInterface;
 use App\Shared\Web\Support\AlphabetIndex;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Yiisoft\Yii\View\Renderer\WebViewRenderer;
 
+use function array_intersect;
 use function array_map;
+use function array_values;
 use function is_string;
 use function max;
 use function min;
@@ -67,6 +71,8 @@ readonly class Action
          */
         private StoreTopicAssignmentCountsInterface $topicCounts,
         private AudioProviderDefaultInterface $providerDefault,
+        /** For {@see listsOnlyRecentCaseOrderStores()}: "the last 30 days" is measured from this. */
+        private ClockInterface $clock,
     ) {}
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
@@ -102,6 +108,16 @@ readonly class Action
             StoreAudioFilter::CaseRecordings => $this->audioCounts->storesWithCaseRecordings(),
             StoreAudioFilter::All => null,
         };
+
+        // The surfaces that list only stores with a recent Case Order narrow the same id list, so the
+        // window composes with every chip, the search, the letter and the pager rather than being one
+        // more filter applied after them. See RecentCaseOrderWindow.
+        if ($this->listsOnlyRecentCaseOrderStores()) {
+            $recent = $this->audioCounts->storesWithCaseOrdersCreatedSince(
+                RecentCaseOrderWindow::since($this->clock->now()),
+            );
+            $restrictTo = $restrictTo === null ? $recent : array_values(array_intersect($restrictTo, $recent));
+        }
 
         $build = static fn(int $p): StoreDirectoryQuery => new StoreDirectoryQuery(
             $search,
@@ -175,6 +191,9 @@ readonly class Action
                 'providerDefault' => $this->providerDefault->current(),
                 'providerChoices' => $this->providerDefault->choices(),
                 'settingsOpen' => $settingsOpen,
+                // Said on the page, and in its empty state, so a store missing from the cards is
+                // explained rather than mysterious. Null where the picker lists every store.
+                'recentCaseOrderDays' => $this->listsOnlyRecentCaseOrderStores() ? RecentCaseOrderWindow::DAYS : null,
             ] + $this->surfaceParameters($params));
     }
 
@@ -223,6 +242,17 @@ readonly class Action
      * on the card and 3 on the page with nothing explaining the gap.
      */
     protected function showsPractisableCount(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Whether this picker lists only stores with a Case Order placed in the last 30 days.
+     *
+     * False here, so the Audio-to-Text store picker still lists every store. Manage Orders and Practice
+     * Orders answer true: they are about orders being worked on now. See RecentCaseOrderWindow.
+     */
+    protected function listsOnlyRecentCaseOrderStores(): bool
     {
         return false;
     }

@@ -18,6 +18,7 @@ use function substr_count;
 use function gmdate;
 use function str_pad;
 use function str_repeat;
+use function time;
 
 use const STR_PAD_LEFT;
 
@@ -254,10 +255,12 @@ final class PracticeOrdersCest
         $I->seeElement('[data-practice-select-all]');
         $I->seeElement('#practice-bulk-form');
         $I->seeElement('#practice-confirm-dialog');
-        $I->seeElement('[data-ot-verify]');
-        $I->seeElement('#ot-verify-dialog');
+        // Verification is temporarily hidden on Order Testing too (5 November 2026); see
+        // OrderTestingVerificationCest, which also holds that the endpoint still works.
+        $I->dontSeeElement('[data-ot-verify]');
+        $I->dontSeeElement('#ot-verify-dialog');
         $I->see('Set Topic', 'thead');
-        $I->see('Verification', 'thead');
+        $I->dontSee('Verification', 'thead');
         $I->see('Sync demo orders');
         $I->see('Add Audio');
     }
@@ -990,6 +993,8 @@ final class PracticeOrdersCest
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
             'source_order_id' => $orderId,
+            // Placed now: the picker lists only stores with a Case Order from the last 30 days.
+            'source_created_at' => time(),
             'payload_json' => '{}',
             'content_hash' => str_repeat('0', 64),
             'synced_at' => $now,

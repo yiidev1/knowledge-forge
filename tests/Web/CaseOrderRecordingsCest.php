@@ -23,6 +23,7 @@ use function strlen;
 use function substr;
 use function substr_count;
 use function urlencode;
+use function time;
 
 use const STR_PAD_LEFT;
 
@@ -410,7 +411,8 @@ final class CaseOrderRecordingsCest
             'source_order_id' => $order,
             'payload_json' => '{}',
             'content_hash' => str_pad((string) $order, 64, '0', STR_PAD_LEFT),
-            'source_created_at' => 1_790_000_000 - $age * 60,
+            // Relative to now: the picker lists only stores with a Case Order from the last 30 days.
+            'source_created_at' => time() - $age * 60,
             'synced_at' => $now,
             'created_at' => $now,
             'updated_at' => $now,

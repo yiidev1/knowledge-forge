@@ -97,8 +97,10 @@ final readonly class TopicsPage
                 'editing' => $editing,
                 'values' => $values,
                 'errors' => $errors,
-                // Every selectable store, once per render, for the one dropdown both dialogs use.
-                'storeOptions' => $this->stores->all(),
+                // Every selectable store, once per render, for the one dropdown both dialogs use. The
+                // test and demo accounts are left out; a topic being edited keeps its own store in the
+                // list even if it is one of them, so saving cannot silently move it to Global.
+                'storeOptions' => $this->stores->all($editing?->storeSourceId),
             ]);
     }
 }

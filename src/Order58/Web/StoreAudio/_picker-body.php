@@ -44,6 +44,8 @@ use Yiisoft\Router\UrlGeneratorInterface;
  * @var callable(array): string $dirUrl builds a URL carrying the current filters
  * @var string $storeRoute route NAME a card links to; a name is not a namespace, so isolation holds
  * @var string $cta the card button's words
+ * @var int|null $recentCaseOrderDays set where only stores with a Case Order placed in the last N days
+ *      are listed (Manage Orders, Practice Orders); absent or null where every store is
  */
 ?>
 <div class="dir-toolbar">
@@ -102,11 +104,26 @@ use Yiisoft\Router\UrlGeneratorInterface;
     <?php endforeach; ?>
 </nav>
 
+<?php
+// Absent on the Audio-to-Text picker, which lists every store.
+$recentCaseOrderDays ??= null;
+?>
+<?php if ($recentCaseOrderDays !== null): ?>
+    <p class="util-muted" data-recent-case-order-note>
+        Showing stores with at least one Case Order placed in the last <?= Html::encode((string) $recentCaseOrderDays) ?>
+        days. A store with only older orders keeps all of them and can still be opened from its own page.
+    </p>
+<?php endif; ?>
+
 <?php if ($result->items === []): ?>
     <div class="empty" style="padding: 2rem;">
         <div class="empty__icon" aria-hidden="true">🎙️</div>
         <div class="empty__title">No stores match</div>
-        <?php if ($audio === StoreAudioFilter::WithAudio): ?>
+        <?php if ($recentCaseOrderDays !== null): ?>
+            <p>No store has a Case Order placed in the last <?= Html::encode((string) $recentCaseOrderDays) ?>
+                days under these filters. Synchronise Case Orders to bring in newer ones, or try a different
+                letter, search term or data source above.</p>
+        <?php elseif ($audio === StoreAudioFilter::WithAudio): ?>
             <p>No store has any conversions yet under these filters.</p>
         <?php elseif ($audio === StoreAudioFilter::CaseOrders): ?>
             <p>No store has any imported Case Orders under these filters. Synchronise case orders

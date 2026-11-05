@@ -505,31 +505,6 @@ return [
                 ->action(AudioToText\Action::class)
                 ->name(AudioToTextRoute::PAGE),
 
-            // ---------------------------------------------------------------------------------------
-            // Topic Management: the training topics a practice order can be assigned to.
-            //
-            // Administrators only, and here is the whole of that rule — it is declared inside this
-            // group, exactly as the global transcription setting below is. Operation users run the
-            // Practice Orders workflow and assign topics; curating the list itself is not theirs,
-            // for the same reason the transcription default is not.
-            // ---------------------------------------------------------------------------------------
-            Route::get('/admin/topics')
-                ->action(Practice\Topics\Action::class)
-                ->name('practice.topics'),
-            Route::post('/admin/topics')
-                ->action(Practice\Topics\StoreAction::class)
-                ->name('practice.topics.store'),
-            Route::post('/admin/topics/{id:\d+}')
-                ->action(Practice\Topics\UpdateAction::class)
-                ->name('practice.topics.update'),
-            Route::post('/admin/topics/{id:\d+}/status')
-                ->action(Practice\Topics\StatusAction::class)
-                ->name('practice.topics.status'),
-            // Delete, which keeps the row and every assignment made under it. See TopicService::delete().
-            Route::post('/admin/topics/{id:\d+}/delete')
-                ->action(Practice\Topics\DeleteAction::class)
-                ->name('practice.topics.delete'),
-
             // The one global transcription setting, saved from this surface's own picker so that saving
             // returns the operator here. The setting itself is shared; only the redirect differs.
             Route::post('/order-testing/settings/default-provider')
@@ -734,6 +709,32 @@ return [
             Route::methods([Method::GET, Method::POST], '/practice-orders/store/{sourceId:\d+}')
                 ->action(PracticeOrdersSurface\StoreAction::class)
                 ->name('practice-orders.store'),
+
+            // ---------------------------------------------------------------------------------------
+            // Topic Management: the training topics a practice order can be assigned to.
+            //
+            // Administrators and operation users, and here is the whole of that rule: these routes sit
+            // in this group, whose gate admits exactly those two realms and sends a signed-in agent to
+            // their own area. Moved here from the administrators' group on 5 November 2026, when
+            // operation users were given topic curation as well as assignment. The paths keep their
+            // `/admin/` prefix and their names, so every link, form and bookmark still resolves.
+            // ---------------------------------------------------------------------------------------
+            Route::get('/admin/topics')
+                ->action(Practice\Topics\Action::class)
+                ->name('practice.topics'),
+            Route::post('/admin/topics')
+                ->action(Practice\Topics\StoreAction::class)
+                ->name('practice.topics.store'),
+            Route::post('/admin/topics/{id:\d+}')
+                ->action(Practice\Topics\UpdateAction::class)
+                ->name('practice.topics.update'),
+            Route::post('/admin/topics/{id:\d+}/status')
+                ->action(Practice\Topics\StatusAction::class)
+                ->name('practice.topics.status'),
+            // Delete, which keeps the row and every assignment made under it. See TopicService::delete().
+            Route::post('/admin/topics/{id:\d+}/delete')
+                ->action(Practice\Topics\DeleteAction::class)
+                ->name('practice.topics.delete'),
 
             // Assigning a topic. The store id is in the path because that is the only place it may
             // come from — a posted store id would let one store's page write onto another's orders.

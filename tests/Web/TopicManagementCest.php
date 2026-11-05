@@ -6,9 +6,12 @@ namespace App\Tests\Web;
 
 use App\Auth\Infrastructure\DbAdminUserRepository;
 use App\Auth\Infrastructure\NativePasswordHasher;
+use App\Environment;
+use App\Practice\Domain\ExcludedStoreIds;
 use App\Shared\Domain\Clock\SystemClock;
 use App\Tests\Support\IntegrationDb;
 use App\Tests\Support\WebTester;
+use Codeception\Scenario;
 use PHPUnit\Framework\Assert;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
@@ -24,7 +27,11 @@ use Yiisoft\Db\Query\Query;
  * A fixture administrator is created per run; topics use a distinctive prefix and are cleaned up by
  * name, never by truncation, so a shared development database survives.
  */
+use function array_map;
+use function count;
 use function substr_count;
+
+use const SORT_ASC;
 
 final class TopicManagementCest
 {
@@ -443,6 +450,51 @@ final class TopicManagementCest
         );
     }
 
+    /**
+     * The test and demo accounts named in `PRACTICE_TOPIC_EXCLUDED_STORE_IDS` are not in the dropdown,
+     * while every other store and Global still are. Read from the same setting the server reads, so the
+     * test follows the configured list rather than a copy of it.
+     */
+    public function theStoreFieldLeavesOutTheConfiguredTestAndDemoAccounts(WebTester $I, Scenario $scenario): void
+    {
+        $excluded = $this->configuredExclusions($scenario);
+
+        $I->amOnPage('/admin/topics?topic=new');
+        $offered = $I->grabMultiple('select[name="store_source_id"] option', 'value');
+
+        foreach ($excluded as $id) {
+            Assert::assertNotContains((string) $id, $offered, 'store #' . $id . ' is excluded');
+        }
+
+        Assert::assertContains('', $offered, 'Global (All Stores) is still offered');
+        Assert::assertSame(
+            $this->storeCount() - count($excluded) + 1,
+            count($offered),
+            'every other store is still offered, and Global',
+        );
+    }
+
+    /** A hand-made POST naming an excluded account is refused on the server, and nothing is saved. */
+    public function aStoreTheDropdownDoesNotOfferIsRefusedByTheServer(WebTester $I, Scenario $scenario): void
+    {
+        $id = $this->configuredExclusions($scenario)[0];
+
+        $I->amOnPage('/admin/topics?topic=new');
+        $token = (string) $I->grabValueFrom('input[name="_csrf"]');
+        $I->sendAjaxPostRequest('/admin/topics', [
+            '_csrf' => $token,
+            'name' => self::PREFIX . 'Excluded Store',
+            'status' => 'ACTIVE',
+            'store_source_id' => (string) $id,
+        ]);
+
+        $I->see('test or demo account');
+        Assert::assertSame(0, (int) (new Query($this->connection))
+            ->from('{{%practice_topics}}')
+            ->where(['name' => self::PREFIX . 'Excluded Store'])
+            ->count());
+    }
+
     public function searchAndStatusFiltersComposeAndSurviveInTheForm(WebTester $I): void
     {
         $this->seedTopic('Alpha');
@@ -468,6 +520,36 @@ final class TopicManagementCest
     }
 
     // ---------------------------------------------------------------- fixtures
+
+    /**
+     * The configured exclusions that name a store really in the mirror; skips when there are none.
+     *
+     * @return non-empty-list<int>
+     */
+    private function configuredExclusions(Scenario $scenario): array
+    {
+        $configured = ExcludedStoreIds::fromSetting(Environment::string('PRACTICE_TOPIC_EXCLUDED_STORE_IDS'));
+        $present = $configured->isEmpty() ? [] : array_map(
+            static fn(mixed $id): int => (int) $id,
+            (new Query($this->connection))
+                ->select('source_id')
+                ->from('{{%order58_stores}}')
+                ->where(['source_id' => $configured->ids])
+                ->orderBy(['source_id' => SORT_ASC])
+                ->column(),
+        );
+
+        if ($present === []) {
+            $scenario->skip('PRACTICE_TOPIC_EXCLUDED_STORE_IDS names no store in this mirror.');
+        }
+
+        return $present;
+    }
+
+    private function storeCount(): int
+    {
+        return (int) (new Query($this->connection))->from('{{%order58_stores}}')->count();
+    }
 
     private function seedTopic(string $suffix, string $status = 'ACTIVE'): int
     {

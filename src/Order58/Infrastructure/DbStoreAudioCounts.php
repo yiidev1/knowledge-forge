@@ -266,6 +266,28 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
         return array_map(static fn(mixed $id): int => (int) $id, $ids);
     }
 
+    public function storesWithCaseOrdersCreatedSince(int $sinceUnix): array
+    {
+        /*
+         * The newest order per store, compared with the cutoff.
+         *
+         * `ix_order58_orders_account_created (account_id, source_created_at)` answers MAX() per store
+         * with one index probe each ("Using index for group-by"), so the cost is the number of stores,
+         * not the number of orders. A row with no creation time is never newer than anything.
+         */
+
+        /** @var list<mixed> $ids */
+        $ids = (new Query($this->connection))
+            ->select('account_id')
+            ->from(self::ORDERS)
+            ->groupBy('account_id')
+            ->having(new Expression('MAX(source_created_at) >= :since', [':since' => $sinceUnix]))
+            ->orderBy(['account_id' => SORT_ASC])
+            ->column();
+
+        return array_map(static fn(mixed $id): int => (int) $id, $ids);
+    }
+
     public function caseRecordingCountsFor(array $sourceIds): array
     {
         if ($sourceIds === []) {
