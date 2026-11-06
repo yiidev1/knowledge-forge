@@ -32,6 +32,16 @@ use Yiisoft\Definitions\Reference;
 return [
     ClockInterface::class => SystemClock::class,
 
+    // The recording-duration rule, built once from RECORDING_DURATION_* and shared by every page that
+    // applies it. See App\Shared\Order58\RecordingDurationLimit.
+    App\Shared\Order58\RecordingDurationLimit::class => [
+        '__construct()' => [
+            'enabled' => (bool) $params['app/recording-duration']['enabled'],
+            'multiplier' => (float) $params['app/recording-duration']['multiplier'],
+            'divisor' => (float) $params['app/recording-duration']['divisor'],
+        ],
+    ],
+
     // One `/proc` reader for the whole application. Two background workers ask it the same two questions
     // with different ideas of what counts as enough room, and each passes its own ResourceBudget — the
     // threshold belongs to the work, the measurement belongs to the machine.

@@ -19,6 +19,8 @@ final readonly class RecordingLocation
         public string $callSessionId,
         public int $position,
         public string $url,
+        /** The stored length in seconds, or null until it has been measured. */
+        public ?float $durationSeconds = null,
     ) {}
 
     /**

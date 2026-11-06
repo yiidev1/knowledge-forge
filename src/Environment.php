@@ -145,6 +145,33 @@ final class Environment
             'default' => 'live',
             'values' => ['live', 'fixture'],
         ],
+        /*
+         * The recording-duration rule for Manage Orders and Practice Orders: a Case Order whose every
+         * call recording is longer than `total_amount × MULTIPLIER ÷ DIVISOR` minutes is hidden. See
+         * App\Shared\Order58\RecordingDurationLimit, the one place the formula lives.
+         *
+         * Off by default, so a missing setting keeps the original listings. MULTIPLIER and DIVISOR are
+         * bounded away from zero here, so a mistyped formula stops the application at startup rather
+         * than dividing by zero or hiding every order.
+         */
+        'RECORDING_DURATION_FILTER_ENABLED' => ['type' => 'bool', 'default' => false],
+        'RECORDING_DURATION_MULTIPLIER' => ['type' => 'float', 'default' => 2.0, 'min' => 0.0001, 'max' => 1000.0],
+        'RECORDING_DURATION_DIVISOR' => ['type' => 'float', 'default' => 10.0, 'min' => 0.0001, 'max' => 1000.0],
+        /*
+         * Measuring each Case Order recording's duration once, in the background
+         * (`kf:order58:call-recordings:measure-durations`). One HEAD request per recording, one at a
+         * time, through the same slot gate as playback (ORDER58_RECORDING_STREAM_MAX_CONCURRENT).
+         *   BATCH         recordings measured per run at most
+         *   PAUSE_MS      wait between two requests, so a run never bursts at the provider
+         *   RUN_SECONDS   a run stops starting new requests after this long
+         *   MAX_ATTEMPTS  failed measurements are retried this many times in all, then left unmeasured
+         *   RETRY_MINUTES first retry delay; each further retry doubles it, up to a day
+         */
+        'ORDER58_RECORDING_DURATION_BATCH' => ['type' => 'int', 'default' => 50, 'min' => 1, 'max' => 1000],
+        'ORDER58_RECORDING_DURATION_PAUSE_MS' => ['type' => 'int', 'default' => 250, 'min' => 0, 'max' => 60000],
+        'ORDER58_RECORDING_DURATION_RUN_SECONDS' => ['type' => 'int', 'default' => 50, 'min' => 5, 'max' => 3600],
+        'ORDER58_RECORDING_DURATION_MAX_ATTEMPTS' => ['type' => 'int', 'default' => 5, 'min' => 1, 'max' => 50],
+        'ORDER58_RECORDING_DURATION_RETRY_MINUTES' => ['type' => 'int', 'default' => 15, 'min' => 1, 'max' => 1440],
         // Machine headroom the importer wants before it claims a recording. Sized from the work, not from
         // the box: a tick was measured at 44 MB steady and about 92 MB while ffprobe runs, so 350 MB is
         // roughly 3.8x the peak. Deliberately far below the transcription worker's threshold — that one

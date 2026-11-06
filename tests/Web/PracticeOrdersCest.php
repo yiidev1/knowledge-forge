@@ -993,7 +993,7 @@ final class PracticeOrdersCest
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
             'source_order_id' => $orderId,
-            // Placed now: the picker lists only stores with a Case Order from the last 30 days.
+            // Placed now. Its age does not matter: the pickers have no date window.
             'source_created_at' => time(),
             'payload_json' => '{}',
             'content_hash' => str_repeat('0', 64),

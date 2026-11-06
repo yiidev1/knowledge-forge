@@ -77,6 +77,14 @@ final readonly class OrderGroupFilter
          * doing the asking.
          */
         public bool $requireLinkedOrder = false,
+        /**
+         * Apply the recording-duration rule: leave out an order whose every Case Order recording is
+         * longer than its amount allows (see App\Shared\Order58\RecordingDurationLimit).
+         *
+         * Like `requireLinkedOrder`, a property of the surface asking — Manage Orders and Practice
+         * Orders — never of the query string, and inert while the rule is switched off.
+         */
+        public bool $applyRecordingDurationLimit = false,
     ) {}
 
     /**
@@ -96,6 +104,24 @@ final readonly class OrderGroupFilter
     }
 
     /** Only practisable orders, with no topic narrowing at all. */
+    /** No narrowing at all, as a filter a surface can add its own properties to. */
+    public static function everything(): self
+    {
+        return new self([], false);
+    }
+
+    /** The same filter, also applying the recording-duration rule. */
+    public function withRecordingDurationLimit(): self
+    {
+        return new self($this->topicIds, $this->includeUnassigned, $this->requireLinkedOrder, true);
+    }
+
+    /** The same filter, without the recording-duration rule. */
+    public function withoutRecordingDurationLimit(): self
+    {
+        return new self($this->topicIds, $this->includeUnassigned, $this->requireLinkedOrder, false);
+    }
+
     public static function linkedOrdersOnly(): self
     {
         return new self([], false, true);
@@ -110,7 +136,7 @@ final readonly class OrderGroupFilter
      */
     public function withLinkedOrdersOnly(): self
     {
-        return new self($this->topicIds, $this->includeUnassigned, true);
+        return new self($this->topicIds, $this->includeUnassigned, true, $this->applyRecordingDurationLimit);
     }
 
     /**

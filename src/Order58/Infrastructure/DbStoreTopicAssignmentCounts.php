@@ -6,6 +6,7 @@ namespace App\Order58\Infrastructure;
 
 use App\Order58\Domain\StoreTopicAssignmentCountsInterface;
 use Yiisoft\Db\Expression\Expression;
+use App\Shared\Order58\RecordingDurationLimit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
@@ -40,13 +41,22 @@ final readonly class DbStoreTopicAssignmentCounts implements StoreTopicAssignmen
     private const ASSIGNMENTS = '{{%practice_order_topics}}';
     private const ORDERS = '{{%order58_orders}}';
 
-    public function __construct(private ConnectionInterface $connection) {}
+    public function __construct(
+        private ConnectionInterface $connection,
+        /**
+         * The recording-duration rule, for the Manage Orders and Practice Orders pickers only: an order
+         * the store page hides is not counted. Off by default; when off, the query is unchanged.
+         */
+        private RecordingDurationLimit $durationLimit = new RecordingDurationLimit(),
+    ) {}
 
     public function assignedOrdersFor(array $sourceIds): array
     {
         if ($sourceIds === []) {
             return [];
         }
+
+        $visible = $this->durationLimit->orderVisibleSql('o');
 
         $rows = (new Query($this->connection))
             ->select([
@@ -58,7 +68,9 @@ final readonly class DbStoreTopicAssignmentCounts implements StoreTopicAssignmen
             ->andWhere(new Expression(
                 'EXISTS (SELECT 1 FROM ' . self::ORDERS . ' o'
                 . ' WHERE o.account_id = a.store_source_id'
-                . ' AND o.source_order_id = a.source_order_id)',
+                . ' AND o.source_order_id = a.source_order_id'
+                . ($visible === null ? '' : ' AND ' . $visible->__toString())
+                . ')',
             ))
             ->groupBy('a.store_source_id')
             ->all();

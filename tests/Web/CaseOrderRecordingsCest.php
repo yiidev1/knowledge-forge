@@ -411,7 +411,7 @@ final class CaseOrderRecordingsCest
             'source_order_id' => $order,
             'payload_json' => '{}',
             'content_hash' => str_pad((string) $order, 64, '0', STR_PAD_LEFT),
-            // Relative to now: the picker lists only stores with a Case Order from the last 30 days.
+            // Relative to now. Its age does not matter to the pickers: they have no date window.
             'source_created_at' => time() - $age * 60,
             'synced_at' => $now,
             'created_at' => $now,

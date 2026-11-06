@@ -264,8 +264,7 @@ final class OrderTestingCest
         // Narrowed to the fixture by name throughout, so what is being tested is the audio filter and
         // not where this store happens to sort among the directory's several hundred.
         $search = '&q=' . urlencode(self::STORE_NAME);
-        // Manage Orders lists only stores with a Case Order from the last 30 days, so the store has one;
-        // what is being tested here is the audio filter on top of that.
+        // The store has a Case Order too; what is being tested here is the audio filter.
         $this->mirrorOrder(self::ORDER_ID);
 
         // Nothing uploaded yet, so this store is not one with audio.
@@ -948,7 +947,7 @@ final class OrderTestingCest
         $this->connection->createCommand()->insert('{{%order58_orders}}', [
             'account_id' => self::STORE_ID,
             'source_order_id' => $sourceOrderId,
-            // Placed now: the picker lists only stores with a Case Order from the last 30 days.
+            // Placed now. Its age does not matter: the pickers have no date window.
             'source_created_at' => time(),
             'payload_json' => '{}',
             'content_hash' => str_pad((string) $sourceOrderId, 64, '0', STR_PAD_LEFT),

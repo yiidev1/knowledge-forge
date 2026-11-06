@@ -18,5 +18,5 @@ interface CaseRecordingReaderInterface
      * @return array<string, list<CaseRecording>> current recordings per order id, in listing order;
      *                                            an order with none is absent
      */
-    public function forOrders(int $storeSourceId, array $orderIds): array;
+    public function forOrders(int $storeSourceId, array $orderIds, bool $withinDurationLimit = false): array;
 }

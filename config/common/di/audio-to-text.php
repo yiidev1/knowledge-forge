@@ -84,7 +84,11 @@ return [
     // module owns, like the topic and demo-order readers beside it.
     App\AudioToText\Domain\OrderVerificationReaderInterface::class => App\AudioToText\Infrastructure\DbOrderVerificationReader::class,
     // The Case Order call recordings each order row can play, read by table name like the two above.
-    App\AudioToText\Domain\CaseRecordingReaderInterface::class => App\AudioToText\Infrastructure\DbCaseRecordingReader::class,
+    App\AudioToText\Domain\CaseRecordingReaderInterface::class => [
+        'class' => App\AudioToText\Infrastructure\DbCaseRecordingReader::class,
+        // The recording-duration rule, used only when a surface asks (Manage Orders, Practice Orders).
+        '__construct()' => ['durationLimit' => Reference::to(App\Shared\Order58\RecordingDurationLimit::class)],
+    ],
 
     // The same seam, read-only and pointing the other way: the audio store page asks what recordings are
     // still on their way in, and the module that imports them answers. Bound here beside its counterpart
@@ -110,6 +114,8 @@ return [
             'mode' => App\AudioToText\Domain\OrderListingMode::fromCaseOrderPrimary(
                 (bool) $params['app/order58']['caseOrderPrimary'],
             ),
+            // Applied only to a filter that asks for it (Manage Orders, Practice Orders).
+            'durationLimit' => Reference::to(App\Shared\Order58\RecordingDurationLimit::class),
         ],
     ],
     AudioStoreLookupInterface::class => DbAudioStoreLookup::class,

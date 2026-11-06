@@ -248,6 +248,14 @@ return [
         'attemptTtlMinutes' => Environment::int('ORDER_TESTING_ATTEMPT_TTL_MINUTES'),
     ],
 
+    // The recording-duration rule. Transport only — the formula lives in
+    // App\Shared\Order58\RecordingDurationLimit, wired once in config/common/di/app-params.php.
+    'app/recording-duration' => [
+        'enabled' => Environment::bool('RECORDING_DURATION_FILTER_ENABLED'),
+        'multiplier' => Environment::float('RECORDING_DURATION_MULTIPLIER'),
+        'divisor' => Environment::float('RECORDING_DURATION_DIVISOR'),
+    ],
+
     // Topic Management: stores a topic may not be newly saved against. Transport only — parsed in
     // App\Practice\Domain\ExcludedStoreIds, wired in config/common/di/practice.php.
     'app/practice' => [
@@ -271,6 +279,12 @@ return [
         // Case Order recordings, streamed on demand. See RecordingStreamSettings.
         'recordingStreamMaxConcurrent' => Environment::int('ORDER58_RECORDING_STREAM_MAX_CONCURRENT'),
         'recordingStreamSource' => Environment::string('ORDER58_RECORDING_STREAM_SOURCE'),
+        // Measuring each recording's duration once. See MeasureRecordingDurationsCommand.
+        'recordingDurationBatch' => Environment::int('ORDER58_RECORDING_DURATION_BATCH'),
+        'recordingDurationPauseMs' => Environment::int('ORDER58_RECORDING_DURATION_PAUSE_MS'),
+        'recordingDurationRunSeconds' => Environment::int('ORDER58_RECORDING_DURATION_RUN_SECONDS'),
+        'recordingDurationMaxAttempts' => Environment::int('ORDER58_RECORDING_DURATION_MAX_ATTEMPTS'),
+        'recordingDurationRetryMinutes' => Environment::int('ORDER58_RECORDING_DURATION_RETRY_MINUTES'),
         'showStoreProfileDocuments' => Environment::bool('ORDER58_SHOW_STORE_PROFILE_DOCUMENTS'),
         // Which rows the store order listings draw. Display only; resolved into an OrderListingMode
         // in config/common/di/audio-to-text.php, because that is the module whose query it decides.

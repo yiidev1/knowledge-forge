@@ -42,6 +42,10 @@ return [
     // --write; makes no request to Order58 and touches no order or line. Not scheduled: the Case Order
     // synchronisation keeps the links current, and this is the one-off for what was stored before.
     'kf:order58:call-recordings:backfill' => App\Order58\Console\BackfillCallRecordingsCommand::class,
+    // Each Case Order recording's length, measured once (one HEAD request) and stored, for the
+    // recording-duration rule on Manage Orders and Practice Orders. Bounded per run; NOT scheduled —
+    // the operator installs a timer when ready (docs/server/systemd/knowledge-forge-order58-durations.*).
+    'kf:order58:call-recordings:measure-durations' => App\Order58\Console\MeasureRecordingDurationsCommand::class,
     // Order Testing's demo-order mirror, for a shell: the administrator's route to the same work is
     // the "Sync demo orders" button on /order-testing, and both call one service under one lock.
     //

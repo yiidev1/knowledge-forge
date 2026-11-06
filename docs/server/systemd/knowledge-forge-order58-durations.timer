@@ -1,0 +1,15 @@
+# Every 5 minutes: with the defaults (50 recordings per run, 250 ms apart) that is at most 600 HEAD
+# requests an hour, each through the same 4-slot gate as playback. See the .service beside this file.
+[Unit]
+Description=Measure Knowledge Forge Case Order recording durations every 5 minutes
+
+[Timer]
+Unit=knowledge-forge-order58-durations.service
+OnBootSec=8min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

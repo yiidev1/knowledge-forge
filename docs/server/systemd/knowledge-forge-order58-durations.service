@@ -1,0 +1,30 @@
+# Measures the length of Case Order call recordings that have none stored yet — one HEAD request each,
+# one at a time, no audio downloaded — for the recording-duration rule on Manage Orders and Practice
+# Orders (RECORDING_DURATION_FILTER_ENABLED). A bounded batch, then exit; see
+# src/Order58/Console/MeasureRecordingDurationsCommand.php for the limits and ORDER58_RECORDING_DURATION_*
+# in .env.example for their settings.
+#
+# NOT installed by any deployment step. Install it when ready to backfill:
+#   sudo cp docs/server/systemd/knowledge-forge-order58-durations.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo -u www-data php8.2 yii kf:order58:call-recordings:measure-durations --status   # backlog first
+#   sudo -u www-data php8.2 yii kf:order58:call-recordings:measure-durations --limit=5  # a small trial
+#   sudo systemctl enable --now knowledge-forge-order58-durations.timer
+# Stop it at any time with: sudo systemctl disable --now knowledge-forge-order58-durations.timer
+[Unit]
+Description=Knowledge Forge Case Order recording durations (one bounded batch, then exit)
+After=network-online.target mysql.service
+Wants=network-online.target mysql.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/html/knowledge-forge
+ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:order58:call-recordings:measure-durations
+# A run stops starting requests after ORDER58_RECORDING_DURATION_RUN_SECONDS (50 s by default); one HEAD
+# request can take up to 120 s, so this leaves room for the last one to finish.
+TimeoutStartSec=300
+Nice=10
+CPUQuota=10%
+MemoryMax=128M

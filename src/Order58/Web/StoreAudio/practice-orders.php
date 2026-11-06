@@ -39,7 +39,6 @@ use Yiisoft\Yii\View\Renderer\Csrf;
  * @var bool $showsPractisable
  * @var array<int, int> $topicCounts how many of each store's orders carry a topic
  * @var array<int, \App\Order58\Domain\StoreCaseRecordingCounts> $caseRecordingCounts
- * @var int|null $recentCaseOrderDays only stores with a Case Order this recent are listed
  */
 
 $this->setTitle('Practice Orders');
@@ -141,7 +140,5 @@ $dirUrl = static function (array $overrides) use ($base, $search, $sourceStatus,
     'base' => $base,
     'dirUrl' => $dirUrl,
     'storeRoute' => 'practice-orders.store',
-    // Only stores with a recent Case Order are listed here; the body says so. See RecentCaseOrderWindow.
-    'recentCaseOrderDays' => $recentCaseOrderDays,
     'cta' => 'View Practice Orders',
 ]) ?>

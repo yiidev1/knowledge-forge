@@ -71,6 +71,15 @@ final readonly class StoreAction extends PracticeStoreAction
         return ['AGENT', $this->currentActor->agentId()];
     }
 
+    /**
+     * The agents' practice page is left exactly as it was: the recording-duration rule was asked for on
+     * Manage Orders and Practice Orders only, and the agent store directory's counts are not narrowed.
+     */
+    protected function appliesRecordingDurationLimit(): bool
+    {
+        return false;
+    }
+
     protected function capabilities(): ConversationCapabilities
     {
         return ConversationCapabilities::agentPractice();

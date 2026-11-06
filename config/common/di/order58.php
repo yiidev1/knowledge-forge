@@ -70,6 +70,33 @@ return [
     App\Order58\Domain\CallRecordings\CallRecordingRepositoryInterface::class
         => App\Order58\Infrastructure\DbCallRecordingRepository::class,
 
+    // Each recording's length, measured once and kept; see RecordingDurations and the
+    // `kf:order58:call-recordings:measure-durations` command.
+    App\Order58\Domain\CallRecordings\RecordingDurationRepositoryInterface::class
+        => App\Order58\Infrastructure\DbRecordingDurationRepository::class,
+    App\Order58\Application\RecordingStream\RecordingDurationSettings::class => [
+        '__construct()' => [
+            'batch' => (int) $params['app/order58']['recordingDurationBatch'],
+            'pauseMs' => (int) $params['app/order58']['recordingDurationPauseMs'],
+            'runSeconds' => (int) $params['app/order58']['recordingDurationRunSeconds'],
+            'maxAttempts' => (int) $params['app/order58']['recordingDurationMaxAttempts'],
+            'retryMinutes' => (int) $params['app/order58']['recordingDurationRetryMinutes'],
+        ],
+    ],
+    App\Order58\Application\RecordingStream\RecordingDurations::class => [
+        '__construct()' => [
+            'settings' => Reference::to(App\Order58\Application\RecordingStream\RecordingDurationSettings::class),
+        ],
+    ],
+    // A lock file of its own — never another command's, and never one a cron `flock` wrapper also takes.
+    App\Order58\Console\MeasureRecordingDurationsCommand::class => [
+        '__construct()' => [
+            'lockFile' => DynamicReference::to(
+                static fn(Aliases $aliases): string => $aliases->get('@runtime/locks') . '/order58-recording-durations.lock',
+            ),
+        ],
+    ],
+
     // Streaming a recording when somebody presses Play or Download — the Order API viewer's approach,
     // shared with the order pages. Fixture mode is resolved HERE, against the environment, so it can be
     // true only in dev or test whatever the setting says; production always streams from the provider.
@@ -162,6 +189,9 @@ return [
     App\Order58\Web\StoreAudio\OrderTestingAction::class => [
         '__construct()' => [
             'defaultSource' => (string) $params['app/order58-case-orders']['manageOrdersDefaultSource'],
+            // Its cards count what its store page lists under the recording-duration rule.
+            'audioCounts' => Reference::to('order58.store-audio-counts.duration-limited'),
+            'topicCounts' => Reference::to('order58.store-topic-counts.duration-limited'),
         ],
     ],
 
@@ -177,6 +207,29 @@ return [
     // Orders carrying a topic, per store, for the second number on a store card.
     App\Order58\Domain\StoreTopicAssignmentCountsInterface::class
         => App\Order58\Infrastructure\DbStoreTopicAssignmentCounts::class,
+
+    // The same two readers with the recording-duration rule, for the Manage Orders and Practice Orders
+    // pickers only — so their cards count what their store pages list. The Audio-to-Text picker keeps
+    // the two above. See App\Shared\Order58\RecordingDurationLimit.
+    'order58.store-audio-counts.duration-limited' => [
+        'class' => DbStoreAudioCounts::class,
+        '__construct()' => [
+            'caseOrderPrimary' => (bool) $params['app/order58']['caseOrderPrimary'],
+            'durationLimit' => Reference::to(App\Shared\Order58\RecordingDurationLimit::class),
+        ],
+    ],
+    'order58.store-topic-counts.duration-limited' => [
+        'class' => App\Order58\Infrastructure\DbStoreTopicAssignmentCounts::class,
+        '__construct()' => [
+            'durationLimit' => Reference::to(App\Shared\Order58\RecordingDurationLimit::class),
+        ],
+    ],
+    App\Order58\Web\StoreAudio\PracticeOrdersAction::class => [
+        '__construct()' => [
+            'audioCounts' => Reference::to('order58.store-audio-counts.duration-limited'),
+            'topicCounts' => Reference::to('order58.store-topic-counts.duration-limited'),
+        ],
+    ],
     AudioProviderDefaultInterface::class => DbAudioProviderDefault::class,
 
     // The recording importer. The lock file is its own — sharing the transcription worker's would make

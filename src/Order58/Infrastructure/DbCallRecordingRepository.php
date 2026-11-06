@@ -182,6 +182,7 @@ final readonly class DbCallRecordingRepository implements CallRecordingRepositor
                 'call_session_id' => 's.call_session_id',
                 'position' => 'r.position',
                 'url' => 'r.url',
+                'duration_seconds' => 'r.duration_seconds',
             ])
             ->from(['r' => self::RECORDINGS])
             ->innerJoin(['s' => self::SESSIONS], 's.id = r.session_id')
@@ -204,6 +205,7 @@ final readonly class DbCallRecordingRepository implements CallRecordingRepositor
             (string) $row['call_session_id'],
             (int) $row['position'],
             (string) $row['url'],
+            $row['duration_seconds'] === null ? null : (float) $row['duration_seconds'],
         );
     }
 

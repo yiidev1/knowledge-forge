@@ -19,6 +19,7 @@ use App\AudioToText\Domain\Tts\TtsOutputType;
 use App\AudioToText\Domain\Tts\TtsRendition;
 use App\AudioToText\Domain\Tts\TtsRenditionRepositoryInterface;
 use App\Shared\Infrastructure\Db\DbDateTime;
+use App\Shared\Order58\RecordingDurationLimit;
 use App\Shared\Web\Actor\PracticeStoreScope;
 use DateTimeImmutable;
 use Yiisoft\Db\Connection\ConnectionInterface;
@@ -106,6 +107,12 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
          * setting needs no change to any query, action or template.
          */
         private OrderListingMode $mode = OrderListingMode::CaseOrderPrimary,
+        /**
+         * The recording-duration rule. Applied only to a filter that asks for it
+         * (`OrderGroupFilter::$applyRecordingDurationLimit`, set by Manage Orders and Practice Orders),
+         * and only while enabled; otherwise every query here is exactly what it was.
+         */
+        private RecordingDurationLimit $durationLimit = new RecordingDurationLimit(),
     ) {}
 
     /**
@@ -332,6 +339,15 @@ final readonly class DbStoreOrderGroupRepository implements StoreOrderGroupRepos
      */
     private function narrowOrders(Query $query, ?OrderGroupFilter $filter): Query
     {
+        // Applied to the page and to its count alike, so paging and "Showing 1–N of M" stay right.
+        if ($filter !== null && $filter->applyRecordingDurationLimit) {
+            $visible = $this->durationLimit->orderVisibleSql('o');
+
+            if ($visible !== null) {
+                $query = $query->andWhere($visible);
+            }
+        }
+
         if ($filter !== null && $filter->requireLinkedOrder) {
             $query = $query->andWhere(new Expression(PracticeStoreScope::orderSql('o')));
         }

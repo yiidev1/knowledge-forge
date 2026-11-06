@@ -217,7 +217,11 @@ readonly class StoreAction extends AudioStoreAction
             'practiceMode' => true,
             // One query for the page: which Case Order recordings each row can play. Every surface
             // that renders this template shows the Recording column, so every one of them asks.
-            'caseRecordings' => $this->caseRecordings->forOrders($sourceId, $orderIds),
+            'caseRecordings' => $this->caseRecordings->forOrders(
+                $sourceId,
+                $orderIds,
+                $this->appliesRecordingDurationLimit(),
+            ),
         ];
     }
 
@@ -230,7 +234,25 @@ readonly class StoreAction extends AudioStoreAction
      */
     protected function groupFilter(ServerRequestInterface $request): ?OrderGroupFilter
     {
-        return OrderGroupFilter::fromQuery($request->getQueryParams()[OrderGroupFilter::PARAM] ?? null);
+        $filter = OrderGroupFilter::fromQuery($request->getQueryParams()[OrderGroupFilter::PARAM] ?? null);
+
+        // The recording-duration rule rides on the filter, so the page and its count apply it together.
+        // Inert while RECORDING_DURATION_FILTER_ENABLED is off. See appliesRecordingDurationLimit().
+        return $this->appliesRecordingDurationLimit()
+            ? ($filter ?? OrderGroupFilter::everything())->withRecordingDurationLimit()
+            : $filter;
+    }
+
+    /**
+     * Whether this surface applies the recording-duration rule: Manage Orders and the Practice Orders
+     * surface that inherits this answer. An order whose every Case Order recording is longer than its
+     * amount allows is not listed, and a row offers only the recordings within the limit. See
+     * App\Shared\Order58\RecordingDurationLimit; the rule itself is switched by
+     * RECORDING_DURATION_FILTER_ENABLED, not here.
+     */
+    protected function appliesRecordingDurationLimit(): bool
+    {
+        return true;
     }
 
     /**

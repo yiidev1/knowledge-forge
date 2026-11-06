@@ -7,6 +7,7 @@ namespace App\Order58\Infrastructure;
 use App\Order58\Domain\StoreAudioBreakdown;
 use App\Order58\Domain\StoreAudioCountsInterface;
 use App\Order58\Domain\StoreCaseRecordingCounts;
+use App\Shared\Order58\RecordingDurationLimit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Expression\Expression;
 use Yiisoft\Db\Query\Query;
@@ -61,6 +62,16 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
          * does it under both settings.
          */
         private bool $caseOrderPrimary = true,
+        /**
+         * The recording-duration rule, for the Manage Orders and Practice Orders pickers only.
+         *
+         * Off by default — this instance also serves the Audio-to-Text picker, which is not narrowed.
+         * When given and enabled, every count and every store list that reads Case Orders or their
+         * recordings leaves out what the store page would hide: an order whose every recording is longer
+         * than its amount allows, and a recording that is. See RecordingDurationLimit; when off, every
+         * query below is exactly what it was.
+         */
+        private RecordingDurationLimit $durationLimit = new RecordingDurationLimit(),
     ) {}
 
     public function countsFor(array $sourceIds, ?bool $caseOrderPrimary = null): array
@@ -202,11 +213,13 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
     private function orderCounts(array $sourceIds): array
     {
         /** @var list<array<string, mixed>> $rows */
-        $rows = (new Query($this->connection))
-            ->select(['account_id', 'orders' => 'COUNT(*)'])
-            ->from(self::ORDERS)
-            ->where(['account_id' => $sourceIds])
-            ->groupBy('account_id')
+        $rows = $this->visibleOrders(
+            (new Query($this->connection))
+                ->select(['account_id' => 'o.account_id', 'orders' => 'COUNT(*)'])
+                ->from(['o' => self::ORDERS])
+                ->where(['o.account_id' => $sourceIds]),
+        )
+            ->groupBy('o.account_id')
             ->all();
 
         $counts = [];
@@ -216,6 +229,14 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
         }
 
         return $counts;
+    }
+
+    /** Narrows a query over `order58_orders o` to the orders the store page lists; unchanged when the rule is off. */
+    private function visibleOrders(Query $query): Query
+    {
+        $visible = $this->durationLimit->orderVisibleSql('o');
+
+        return $visible === null ? $query : $query->andWhere($visible);
     }
 
     /**
@@ -256,33 +277,11 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
          */
 
         /** @var list<mixed> $ids */
-        $ids = (new Query($this->connection))
-            ->select('account_id')
-            ->from(self::ORDERS)
-            ->groupBy('account_id')
-            ->orderBy(['account_id' => SORT_ASC])
-            ->column();
-
-        return array_map(static fn(mixed $id): int => (int) $id, $ids);
-    }
-
-    public function storesWithCaseOrdersCreatedSince(int $sinceUnix): array
-    {
-        /*
-         * The newest order per store, compared with the cutoff.
-         *
-         * `ix_order58_orders_account_created (account_id, source_created_at)` answers MAX() per store
-         * with one index probe each ("Using index for group-by"), so the cost is the number of stores,
-         * not the number of orders. A row with no creation time is never newer than anything.
-         */
-
-        /** @var list<mixed> $ids */
-        $ids = (new Query($this->connection))
-            ->select('account_id')
-            ->from(self::ORDERS)
-            ->groupBy('account_id')
-            ->having(new Expression('MAX(source_created_at) >= :since', [':since' => $sinceUnix]))
-            ->orderBy(['account_id' => SORT_ASC])
+        $ids = $this->visibleOrders(
+            (new Query($this->connection))->select(['account_id' => 'o.account_id'])->from(['o' => self::ORDERS]),
+        )
+            ->groupBy('o.account_id')
+            ->orderBy(['o.account_id' => SORT_ASC])
             ->column();
 
         return array_map(static fn(mixed $id): int => (int) $id, $ids);
@@ -294,15 +293,13 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
             return [];
         }
 
-        /**
+        /*
          * Orders, calls and files in one grouped scan over the page's stores.
          *
          * `COUNT(DISTINCT s.source_order_id)` is the headline: the join produces a row per link, and an
          * order with three links must still count once. The sessions are reached through the unique
          * key's `store_source_id` prefix, the links through theirs, and only current links count — a
          * link the provider replaced is kept, but it is not a recording anyone can play.
-         *
-         * @var list<array<string, mixed>> $rows
          */
         $rows = (new Query($this->connection))
             ->select([
@@ -313,9 +310,18 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
             ])
             ->from(['s' => self::SESSIONS])
             ->innerJoin(['r' => self::RECORDINGS], 'r.session_id = s.id AND r.delisted_at IS NULL')
-            ->where(['s.store_source_id' => $sourceIds])
-            ->groupBy('s.store_source_id')
-            ->all();
+            ->where(['s.store_source_id' => $sourceIds]);
+        $allowed = $this->durationLimit->recordingAllowedSql('r', 'o');
+
+        // Only the recordings the store page would offer: a recording longer than its order allows is
+        // not counted, and an order left with none is not counted either.
+        if ($allowed !== null) {
+            $rows->innerJoin(['o' => self::ORDERS], 'o.account_id = s.store_source_id AND o.source_order_id = s.source_order_id')
+                ->andWhere($allowed);
+        }
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $rows->groupBy('s.store_source_id')->all();
 
         $counts = [];
 
@@ -340,13 +346,20 @@ final readonly class DbStoreAudioCounts implements StoreAudioCountsInterface
          * to itself the optimiser turns the EXISTS into a semi-join that reads every recording row;
          * measured on 126,000 links across 300 stores that was 150 ms, against 14 ms like this.
          */
+        $allowed = $this->durationLimit->recordingAllowedSql('r', 'o');
+
         /** @var list<mixed> $ids */
         $ids = $this->connection->createCommand(
             'SELECT st.store_source_id'
             . ' FROM (SELECT DISTINCT store_source_id FROM `order58_call_sessions`) st'
             . ' WHERE EXISTS (SELECT /*+ NO_SEMIJOIN() */ 1 FROM `order58_call_sessions` s'
             . ' INNER JOIN `order58_call_recordings` r ON r.session_id = s.id AND r.delisted_at IS NULL'
-            . ' WHERE s.store_source_id = st.store_source_id)'
+            // The recording-duration rule, when on: only a recording the store page would offer counts.
+            . ($allowed === null ? '' : ' INNER JOIN `order58_orders` o'
+                . ' ON o.account_id = s.store_source_id AND o.source_order_id = s.source_order_id')
+            . ' WHERE s.store_source_id = st.store_source_id'
+            . ($allowed === null ? '' : ' AND ' . $allowed->__toString())
+            . ')'
             . ' ORDER BY st.store_source_id',
         )->queryColumn();
 

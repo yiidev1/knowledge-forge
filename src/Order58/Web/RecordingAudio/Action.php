@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Order58\Web\RecordingAudio;
 
+use App\Order58\Application\RecordingStream\RecordingDurations;
 use App\Order58\Application\RecordingStream\RecordingFetch;
 use App\Order58\Application\RecordingStream\RecordingFetchFailure;
 use App\Order58\Application\RecordingStream\RecordingStreamer;
@@ -45,6 +46,8 @@ final readonly class Action
         private RecordingResponder $responder,
         private LoggerInterface $logger,
         private SessionInterface $session,
+        /** The recording's length: stored once measured, so a page visit no longer asks the provider. */
+        private RecordingDurations $durations,
     ) {}
 
     public function __invoke(
@@ -84,14 +87,17 @@ final readonly class Action
         // A duration probe: the page's "--:--" labels. Answered from the recording's SIZE, so the
         // provider transfers nothing. Placed before the fetch below because it must never reach it —
         // the whole point is not to download audio in order to print a number.
+        //
+        // Once a recording has been measured its length is stored and answered from the database, so
+        // the provider is asked at most once per recording; see RecordingDurations::forLocation().
         if (($request->getQueryParams()['duration'] ?? null) === '1') {
-            $measured = $this->streamer->measure($location->url);
+            $seconds = $this->durations->forLocation($location);
 
             // 409, not 404 or 500: the recording exists and this server is well — only the shortcut
             // declined, and the page reads the real header instead, exactly as it did before. A
             // distinct status keeps that apart from a genuine failure in the access log.
-            return $measured->isUsable()
-                ? $this->responder->duration((float) $measured->seconds)
+            return $seconds !== null
+                ? $this->responder->duration($seconds)
                 : $this->responder->problem(409, 'Duration could not be determined from the recording size.');
         }
 

@@ -6,6 +6,7 @@ namespace App\AudioToText\Infrastructure;
 
 use App\AudioToText\Domain\CaseRecording;
 use App\AudioToText\Domain\CaseRecordingReaderInterface;
+use App\Shared\Order58\RecordingDurationLimit;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Query\Query;
 
@@ -31,9 +32,19 @@ final readonly class DbCaseRecordingReader implements CaseRecordingReaderInterfa
     private const SESSIONS = '{{%order58_call_sessions}}';
     private const RECORDINGS = '{{%order58_call_recordings}}';
 
-    public function __construct(private ConnectionInterface $connection) {}
+    private const ORDERS = '{{%order58_orders}}';
 
-    public function forOrders(int $storeSourceId, array $orderIds): array
+    public function __construct(
+        private ConnectionInterface $connection,
+        /** See App\Shared\Order58\RecordingDurationLimit. Off by default, and when off nothing below changes. */
+        private RecordingDurationLimit $durationLimit = new RecordingDurationLimit(),
+    ) {}
+
+    /**
+     * `$withinDurationLimit`: leave out a recording longer than its order allows, so a row whose order
+     * is listed offers only the recordings that are. Asked for by Manage Orders and Practice Orders.
+     */
+    public function forOrders(int $storeSourceId, array $orderIds, bool $withinDurationLimit = false): array
     {
         $wanted = [];
 
@@ -50,7 +61,7 @@ final readonly class DbCaseRecordingReader implements CaseRecordingReaderInterfa
         }
 
         /** @var list<array<string, mixed>> $rows */
-        $rows = (new Query($this->connection))
+        $query = (new Query($this->connection))
             ->select([
                 'source_order_id' => 's.source_order_id',
                 'call_session_id' => 's.call_session_id',
@@ -59,8 +70,16 @@ final readonly class DbCaseRecordingReader implements CaseRecordingReaderInterfa
             ->from(['s' => self::SESSIONS])
             ->innerJoin(['r' => self::RECORDINGS], 'r.session_id = s.id AND r.delisted_at IS NULL')
             ->where(['s.store_source_id' => $storeSourceId, 's.source_order_id' => array_keys($wanted)])
-            ->orderBy(['s.source_order_id' => SORT_ASC, 's.id' => SORT_ASC, 'r.position' => SORT_ASC])
-            ->all();
+            ->orderBy(['s.source_order_id' => SORT_ASC, 's.id' => SORT_ASC, 'r.position' => SORT_ASC]);
+        $allowed = $withinDurationLimit ? $this->durationLimit->recordingAllowedSql('r', 'o') : null;
+
+        if ($allowed !== null) {
+            $query->innerJoin(['o' => self::ORDERS], 'o.account_id = s.store_source_id AND o.source_order_id = s.source_order_id')
+                ->andWhere($allowed);
+        }
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $query->all();
 
         $recordings = [];
 
