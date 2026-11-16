@@ -1,12 +1,16 @@
-# Every 5 minutes: with the defaults (50 recordings per run, 250 ms apart) that is at most 600 HEAD
-# requests an hour, each through the same 4-slot gate as playback. See the .service beside this file.
+# Every 15 minutes. A run is bounded by ORDER58_RECORDING_DURATION_RUN_SECONDS (50 s) rather than by
+# the batch size: at the measured 1.6 s per recording that is about 31 per run, so roughly 124 HEAD
+# requests an hour, each through the same 4-slot gate as playback. Steady-state inflow is far lower —
+# about 9 new recordings a day — so most runs find nothing and exit in under a second.
+# See the .service beside this file.
 [Unit]
-Description=Measure Knowledge Forge Case Order recording durations every 5 minutes
+Description=Measure Knowledge Forge Case Order recording durations every 15 minutes
+Documentation=file:/opt/web/sites/joymeal.seawolf.io/knowledge-forge/docs/deploy/worker.md
 
 [Timer]
 Unit=knowledge-forge-order58-durations.service
 OnBootSec=8min
-OnUnitActiveSec=5min
+OnUnitActiveSec=15min
 AccuracySec=30s
 RandomizedDelaySec=30s
 Persistent=false

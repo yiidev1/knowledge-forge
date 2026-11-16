@@ -7,24 +7,47 @@
 # NOT installed by any deployment step. Install it when ready to backfill:
 #   sudo cp docs/server/systemd/knowledge-forge-order58-durations.{service,timer} /etc/systemd/system/
 #   sudo systemctl daemon-reload
-#   sudo -u www-data php8.2 yii kf:order58:call-recordings:measure-durations --status   # backlog first
-#   sudo -u www-data php8.2 yii kf:order58:call-recordings:measure-durations --limit=5  # a small trial
+#   sudo -u apache /usr/bin/php yii kf:order58:call-recordings:measure-durations --status   # backlog first
+#   sudo -u apache /usr/bin/php yii kf:order58:call-recordings:measure-durations --limit=5  # a small trial
 #   sudo systemctl enable --now knowledge-forge-order58-durations.timer
 # Stop it at any time with: sudo systemctl disable --now knowledge-forge-order58-durations.timer
+#
+# Paths, user and unit names match the Order58 import worker beside this file, which is the one already
+# running on this server — see knowledge-forge-order58-import.service.
 [Unit]
 Description=Knowledge Forge Case Order recording durations (one bounded batch, then exit)
-After=network-online.target mysql.service
-Wants=network-online.target mysql.service
+Documentation=file:/opt/web/sites/joymeal.seawolf.io/knowledge-forge/docs/deploy/worker.md
+After=network-online.target mysqld.service
+Wants=network-online.target mysqld.service
 
 [Service]
 Type=oneshot
-User=www-data
-Group=www-data
-WorkingDirectory=/var/www/html/knowledge-forge
-ExecStart=/usr/bin/php8.2 /var/www/html/knowledge-forge/yii kf:order58:call-recordings:measure-durations
+User=apache
+Group=apache
+WorkingDirectory=/opt/web/sites/joymeal.seawolf.io/knowledge-forge
+ExecStart=/usr/bin/php /opt/web/sites/joymeal.seawolf.io/knowledge-forge/yii kf:order58:call-recordings:measure-durations
+Environment=TMPDIR=/opt/web/sites/joymeal.seawolf.io/knowledge-forge/runtime/tmp
 # A run stops starting requests after ORDER58_RECORDING_DURATION_RUN_SECONDS (50 s by default); one HEAD
 # request can take up to 120 s, so this leaves room for the last one to finish.
 TimeoutStartSec=300
-Nice=10
+CPUAccounting=yes
 CPUQuota=10%
+MemoryAccounting=yes
+MemoryHigh=96M
 MemoryMax=128M
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+Restart=no
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kf-order58-durations
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=full makes /usr read-only, so the one directory the application writes to is named here.
+ReadWritePaths=/opt/web/sites/joymeal.seawolf.io/knowledge-forge/runtime
