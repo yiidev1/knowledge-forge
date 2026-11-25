@@ -106,6 +106,14 @@ $items = [
         'route' => 'order58.call-recordings',
         'match' => ['order58.call-recordings'],
     ],
+    // One configured store's latest calls, each recording played on demand. Administrators only, like
+    // the entry above. The prefix covers its list and audio routes, so the entry stays lit throughout.
+    [
+        'label' => 'Recent Calls',
+        'icon' => '📞',
+        'route' => 'order58.recent-calls',
+        'match' => ['order58.recent-calls'],
+    ],
 ];
 
 $navItems = [];

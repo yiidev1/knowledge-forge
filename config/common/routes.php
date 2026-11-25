@@ -39,6 +39,7 @@ use App\Order58\Web\StoreAudio as Order58StoreAudio;
 use App\Order58\Web\StoreChat as Order58StoreChat;
 use App\Order58\Web\Orders as Order58Orders;
 use App\Order58\Web\Receipt as Order58Receipt;
+use App\Order58\Web\RecentCalls as Order58RecentCalls;
 use App\Order58\Web\RecordingAudio as Order58RecordingAudio;
 use App\Order58\Web\OrderApiViewer as Order58OrderApiViewer;
 use App\Order58\Web\RecordingApiDiagnostics as Order58RecordingApiDiagnostics;
@@ -457,6 +458,20 @@ return [
             Route::get('/admin/order58/test-recording-channels/download')
                 ->action(Order58TestRecordingChannels\DownloadAction::class)
                 ->name('order58.test-recording-channels.download'),
+
+            // Recent Calls: one configured store's latest 25 calls, each with its three recordings to
+            // play or download and its receipt. The page itself contacts nobody; the list is fetched by
+            // its Load Calls button, and a recording only when Play or Download is pressed. Reads only —
+            // no row is written and no file kept. The store is checked against RecentCallsSettings.
+            Route::get('/admin/order58/recent-calls')
+                ->action(Order58RecentCalls\Action::class)
+                ->name('order58.recent-calls'),
+            Route::get('/admin/order58/recent-calls/list')
+                ->action(Order58RecentCalls\ListAction::class)
+                ->name('order58.recent-calls.list'),
+            Route::get('/admin/order58/recent-calls/audio')
+                ->action(Order58RecentCalls\AudioAction::class)
+                ->name('order58.recent-calls.audio'),
 
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')

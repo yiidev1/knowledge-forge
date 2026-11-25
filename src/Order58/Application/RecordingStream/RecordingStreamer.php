@@ -88,8 +88,10 @@ final readonly class RecordingStreamer
     public function fetch(string $url): RecordingFetch
     {
         // Checked again here even though every stored link was checked when it was stored: a row
-        // written by any other route must still not be able to point this server anywhere else.
-        if (!RecordingUrlPolicy::accepts($url)) {
+        // written by any other route must still not be able to point this server anywhere else. The
+        // fetch-time rule also admits one separated channel of a session (`/fetch/{id}-caller`), which
+        // the Recent Calls page plays; every other part of the address is held to the same rule.
+        if (!RecordingUrlPolicy::acceptsForFetch($url)) {
             return RecordingFetch::failed(RecordingFetchFailure::Refused);
         }
 

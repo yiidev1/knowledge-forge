@@ -51,49 +51,92 @@ final class RecordingUrlPolicy
 
     public static function accepts(string $url): bool
     {
-        if ($url === '' || strlen($url) > self::MAX_LENGTH) {
+        $rest = self::sessionPart($url);
+
+        // The rest of the path is the session id and nothing else: no further segments, no `..`.
+        return $rest !== null && preg_match('/\A\d{1,20}\z/', $rest) === 1;
+    }
+
+    /**
+     * {@see accepts()}, or the same address for one separated channel — `/fetch/{session}-caller`.
+     *
+     * Every other rule is identical: the scheme, the host, the port, no user info, no fragment, one
+     * path segment. The only difference is that the segment may carry a channel suffix, and only the
+     * exact suffix {@see RecordingChannel::requestSegmentFor()} produces — so the convention is still
+     * stated in one place, and nothing else can ride in on the path.
+     *
+     * Used where this server fetches a recording on demand, never where a link is accepted for storage:
+     * the provider's Case Order links are plain session ids, and {@see accepts()} still guards those.
+     */
+    public static function acceptsForFetch(string $url): bool
+    {
+        if (self::accepts($url)) {
+            return true;
+        }
+
+        $rest = self::sessionPart($url);
+
+        if ($rest === null || preg_match('/\A(\d{1,20})-[a-z]{1,10}\z/', $rest, $matches) !== 1) {
             return false;
+        }
+
+        foreach (RecordingChannel::all() as $channel) {
+            if ($channel !== RecordingChannel::Mixed && $channel->requestSegmentFor($matches[1]) === $rest) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Everything after `/fetch/` for an address that passes every rule except the session's own shape,
+     * or null when any other rule fails.
+     */
+    private static function sessionPart(string $url): ?string
+    {
+        if ($url === '' || strlen($url) > self::MAX_LENGTH) {
+            return null;
         }
 
         // Control characters and whitespace have no place in a URL the provider generated, and they are
         // exactly what makes one parser read a URL differently from another.
         if (preg_match('/[\x00-\x20\x7f]/', $url) === 1) {
-            return false;
+            return null;
         }
 
         $parts = parse_url($url);
 
         if (!is_array($parts)) {
-            return false;
+            return null;
         }
 
         if (strtolower($parts['scheme'] ?? '') !== 'https') {
-            return false;
+            return null;
         }
 
         if (isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])) {
-            return false;
+            return null;
         }
 
         if (isset($parts['port']) && $parts['port'] !== 443) {
-            return false;
+            return null;
         }
 
         $host = $parts['host'] ?? null;
 
         if (!is_string($host) || !in_array(strtolower($host), self::allowedHosts(), true)) {
-            return false;
+            return null;
         }
 
         $path = $parts['path'] ?? '';
         $prefix = self::pathPrefix();
 
         if (!str_starts_with($path, $prefix)) {
-            return false;
+            return null;
         }
 
-        // The rest of the path is the session id and nothing else: no further segments, no `..`.
-        return preg_match('/\A\d{1,20}\z/', substr($path, strlen($prefix))) === 1;
+        return substr($path, strlen($prefix));
     }
 
     /** @return list<string> */

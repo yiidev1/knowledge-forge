@@ -1,0 +1,1 @@
+dell@latitude:/var/www/html/knowledge-forge$ rsync -avh --progress   --no-perms --no-owner --no-group   --omit-dir-times   /var/www/html/knowledge-forge/src/   joymeal:/opt/web/sites/joymeal.seawolf.io/knowledge-forge/src/

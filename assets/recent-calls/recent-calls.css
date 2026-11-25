@@ -1,0 +1,128 @@
+/* Order58 Recent Calls. The Play and Download controls mirror the Manage Orders page's (a pill with a
+   CSS triangle, a round download icon) so the two read as the same control, without loading either of
+   that page's stylesheets. State is written by recent-calls.js as attributes, never inline styles. */
+
+/* This page only: about 95% of the area beside the sidebar instead of the 1240px reading column, with
+   24–32px gutters. The same page-scoped mechanism as `.content:has(.o58-wide)` in the shared sheet —
+   the column widens only while this page's card is on screen, and the breadcrumb bar follows it so the
+   two stay aligned. A browser without `:has()` keeps the normal column and scrolls inside the table. */
+.content:has([data-rc]) {
+    max-width: 95%;
+    padding-left: clamp(1.5rem, 2.2vw, 2rem);
+    padding-right: clamp(1.5rem, 2.2vw, 2rem);
+}
+.main:has([data-rc]) .topbar__inner { max-width: 95%; }
+
+.rc-toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: .75rem;
+}
+.rc-toolbar__field { flex: 0 1 380px; min-width: 0; }
+.rc-toolbar__field .field__label { margin-bottom: .45rem; }
+.rc-toolbar__select { width: 100%; }
+/* The button matches the select's height, so the two sit on one line. */
+.rc-toolbar .btn { min-height: 2.6rem; white-space: nowrap; }
+
+/* Reserved height, so the table does not jump when the line appears or goes. */
+.rc-status { min-height: 1.4em; margin: 0 0 .75rem; color: var(--text-muted); font-size: .88rem; }
+
+/* The table takes the full width of the card. Fixed layout, so the colgroup below is obeyed rather
+   than outvoted by whichever cell is widest; the floor keeps seven columns readable, and below it the
+   table scrolls inside its own frame rather than the page. */
+.rc-table { width: 100%; table-layout: fixed; min-width: 820px; }
+.rc-table th, .rc-table td { padding: .7rem .9rem; vertical-align: middle; text-align: left; }
+.rc-col-order { width: 12%; }
+.rc-col-session { width: 13%; }
+.rc-col-time { width: 17%; }
+.rc-col-audio { width: 15%; }
+.rc-col-receipt { width: 13%; }
+.rc-table th { white-space: normal; line-height: 1.25; }
+.rc-strong { font-weight: 600; }
+.rc-nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-error { color: var(--error-text); }
+.rc-placeholder td { padding: 1.25rem .9rem; }
+
+.rc-pair { display: inline-flex; align-items: center; gap: .55rem; }
+
+.rc-play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 1.85rem;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color .15s;
+}
+.rc-play:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.rc-play:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.rc-play__icon {
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 5px 0 5px 8px;
+    border-color: transparent transparent transparent var(--primary);
+}
+.rc-play[data-playing] { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.rc-play[data-playing] .rc-play__icon {
+    width: 8px;
+    height: 10px;
+    border: 0;
+    background: linear-gradient(to right, var(--primary) 0 3px, transparent 3px 5px, var(--primary) 5px 8px);
+}
+.rc-play[data-loading] .rc-play__icon {
+    width: 10px;
+    height: 10px;
+    border: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    background: none;
+    animation: rc-play-wait .8s linear infinite;
+}
+@keyframes rc-play-wait { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .rc-play[data-loading] .rc-play__icon { animation: none; }
+}
+.rc-play.is-broken { border-color: var(--error-border); }
+.rc-play.is-broken .rc-play__icon { border-left-color: var(--error-text); }
+
+.rc-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: border-color .15s, color .15s;
+}
+.rc-download:hover {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    text-decoration: none;
+}
+.rc-download:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.rc-download svg { width: 13px; height: 13px; }
+
+/* Smaller screens: the store control takes the row and the button stays beside it until there is no
+   room, then sits under it at full width. The table keeps its floor and scrolls inside its frame. */
+@media (max-width: 900px) {
+    .content:has([data-rc]) { max-width: 100%; }
+    .main:has([data-rc]) .topbar__inner { max-width: 100%; }
+    .rc-toolbar__field { flex: 1 1 260px; }
+}
+@media (max-width: 560px) {
+    .rc-toolbar { align-items: stretch; }
+    .rc-toolbar__field { flex-basis: 100%; }
+    .rc-toolbar .btn { width: 100%; }
+}
