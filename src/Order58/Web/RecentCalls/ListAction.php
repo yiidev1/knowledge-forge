@@ -31,8 +31,9 @@ use const JSON_UNESCAPED_UNICODE;
  *    provider that takes seconds to answer would otherwise freeze every other page the same person
  *    opens, because they all wait in `session_start()`. Authentication has already run by now.
  *  - **One outbound request**, with the shared client's connect and response timeouts, and no retry.
- *  - **No audio, no writes.** Every Play, Download and receipt address is built here, so the page
- *    composes no URL of its own; the audio itself is fetched only when a button is pressed.
+ *  - **No audio, and no database.** Every Play, Download and receipt address is built here, so the page
+ *    composes no URL of its own; the audio itself is fetched only when a button is pressed. The one
+ *    thing kept is which orders were listed, in the session, so their receipts can be opened.
  */
 final readonly class ListAction
 {
@@ -41,6 +42,7 @@ final readonly class ListAction
         private ResponseFactoryInterface $responseFactory,
         private UrlGeneratorInterface $urlGenerator,
         private SessionInterface $session,
+        private RecentCallsReceipts $receipts,
     ) {}
 
     public function __invoke(ServerRequestInterface $request): ResponseInterface
@@ -70,10 +72,21 @@ final readonly class ListAction
         }
 
         $rows = [];
+        $orderIds = [];
 
         foreach ($list->calls as $call) {
-            $rows[] = $this->row($accountId, $call, $list->hasReceipt($call), $useFixtures);
+            $orderId = RecentCallsReceipts::orderIdOf($call->orderId);
+
+            if ($orderId !== null) {
+                $orderIds[] = $orderId;
+            }
+
+            $rows[] = $this->row($accountId, $call, $orderId, $useFixtures);
         }
+
+        // These orders came from the provider's answer for this store, so their receipts may be opened
+        // from this page. The provider has answered already; reopening the session here is brief.
+        $this->receipts->remember($accountId, $orderIds);
 
         return $this->json(200, [
             'store' => $accountId,
@@ -83,7 +96,7 @@ final readonly class ListAction
     }
 
     /** @return array<string, mixed> */
-    private function row(int $accountId, CallSummary $call, bool $hasReceipt, bool $useFixtures): array
+    private function row(int $accountId, CallSummary $call, ?int $orderId, bool $useFixtures): array
     {
         // A recording can be asked for only with a session id the request object accepts and the call's
         // own date, which the provider needs (`time`). A row missing either still lists, without buttons.
@@ -124,14 +137,15 @@ final readonly class ListAction
             'sessionId' => $call->callSessionId,
             'callTime' => $call->callTime,
             'channels' => $channels,
-            // The existing receipt page, unchanged — it re-checks that the order is this store's. Offered
-            // only for an order this application has mirrored, because it refuses any other.
-            'receipt' => $hasReceipt
-                ? $this->urlGenerator->generate('order-testing.order-receipt', [
-                    'sourceId' => $accountId,
-                    'sourceOrderId' => (int) $call->orderId,
-                ])
-                : null,
+            // Every call with a numeric order id gets a receipt link — whether or not this application has
+            // synchronised the order. It opens through ReceiptAction, which accepts only orders listed
+            // here for this store.
+            'receipt' => $orderId === null
+                ? null
+                : $this->urlGenerator->generate('order58.recent-calls.receipt', [], [
+                    'store' => $accountId,
+                    'order' => $orderId,
+                ]),
         ];
     }
 

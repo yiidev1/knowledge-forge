@@ -472,6 +472,11 @@ return [
             Route::get('/admin/order58/recent-calls/audio')
                 ->action(Order58RecentCalls\AudioAction::class)
                 ->name('order58.recent-calls.audio'),
+            // The receipt of a listed call. Only an order the provider's latest-calls answer listed for that
+            // store in this session is served; it then goes through the existing receipt page unchanged.
+            Route::get('/admin/order58/recent-calls/receipt')
+                ->action(Order58RecentCalls\ReceiptAction::class)
+                ->name('order58.recent-calls.receipt'),
 
             // Dedicated Admin Rule Chat against the hidden global-rules knowledge base (not store chat).
             Route::get('/admin/rule-chat')

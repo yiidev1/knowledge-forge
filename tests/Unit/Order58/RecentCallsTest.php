@@ -9,20 +9,21 @@ use App\Integration\Order58Recording\ChannelApiProbe;
 use App\Integration\Order58Recording\ChannelDiagnosis;
 use App\Integration\Order58Recording\FixtureRecordingSource;
 use App\Integration\Order58Recording\RecordingUrlPolicy;
+use App\Order58\Client\Receipt\ReceiptClientInterface;
+use App\Order58\Client\Receipt\ReceiptDelivery;
+use App\Order58\Client\Receipt\ReceiptFailed;
 use App\Order58\Application\RecordingStream\RecordingStreamer;
 use App\Order58\Application\RecordingStream\RecordingStreamGate;
 use App\Order58\Application\RecordingStream\RecordingStreamSettings;
-use App\Order58\Domain\Orders\Order58Order;
-use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
-use App\Order58\Domain\Orders\OrderListQuery;
 use App\Order58\Web\RecentCalls\AudioAction;
 use App\Order58\Web\RecentCalls\ListAction;
+use App\Order58\Web\RecentCalls\ReceiptAction;
 use App\Order58\Web\RecentCalls\RecentCallsLoader;
+use App\Order58\Web\RecentCalls\RecentCallsReceipts;
 use App\Order58\Web\RecentCalls\RecentCallsSettings;
 use App\Order58\Web\RecordingAudio\RecordingResponder;
 use App\Tests\Support\Fake\Shared\RecordingSession;
 use Codeception\Test\Unit;
-use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
@@ -38,7 +39,6 @@ use Yiisoft\Router\UrlGeneratorInterface;
 
 use function array_column;
 use function http_build_query;
-use function in_array;
 use function json_decode;
 use function pack;
 use function str_repeat;
@@ -46,7 +46,7 @@ use function sys_get_temp_dir;
 
 /**
  * The Recent Calls page: two stores only, one metadata request per Load Calls, three recordings per call
- * fetched only on demand through the store page's own streamer, and the existing receipt link.
+ * fetched only on demand through the store page's own streamer, and a receipt for every listed order.
  *
  * The provider is a Guzzle mock, so every request this sends is in `$history` — "only the list was
  * requested" and "the caller channel's address carries the suffix" are assertions, not hopes.
@@ -56,14 +56,11 @@ final class RecentCallsTest extends Unit
     /** @var list<array{request: \Psr\Http\Message\RequestInterface, options: array<string, mixed>}> */
     private array $history = [];
 
-    private FakeOrders $orders;
-
     private RecordingSession $session;
 
     protected function _before(): void
     {
         $this->history = [];
-        $this->orders = new FakeOrders();
         $this->session = new RecordingSession();
     }
 
@@ -195,8 +192,6 @@ final class RecentCallsTest extends Unit
 
     public function testTheListCarriesEveryAddressTheRowNeeds(): void
     {
-        $this->orders->known = [17702731];
-
         $data = $this->list(['store' => '1731'], new Response(200, [], (string) json_encode([
             ['callSessionId' => '23905569', 'callTime' => '2026-11-25 01:58:59', 'orderId' => '17702731'],
             ['callSessionId' => '23905479', 'callTime' => '2026-11-25 01:57:24', 'orderId' => '17702641'],
@@ -221,10 +216,17 @@ final class RecentCallsTest extends Unit
         self::assertSame('23905569-callee.wav', $first['channels']['callee']['fileName']);
         self::assertSame('23905569.wav', $first['channels']['mixed']['fileName']);
 
-        // The existing receipt page, for the mirrored order only.
-        self::assertSame('order-testing.order-receipt/1731/17702731', $first['receipt']);
-        self::assertNull($data['calls'][1]['receipt'], 'not mirrored: the receipt page would refuse it');
+        // A receipt link for every call with an order id, synchronised here or not.
+        self::assertSame('order58.recent-calls.receipt?store=1731&order=17702731', $first['receipt']);
+        self::assertSame('order58.recent-calls.receipt?store=1731&order=17702641', $data['calls'][1]['receipt']);
         self::assertNull($data['calls'][2]['receipt'], 'no order at all');
+
+        // And those orders, only, may now be opened for this store.
+        $listed = new RecentCallsReceipts($this->session);
+        self::assertTrue($listed->allows(1731, 17702731));
+        self::assertTrue($listed->allows(1731, 17702641));
+        self::assertFalse($listed->allows(91, 17702731), 'listed for 1731, not for 91');
+        self::assertFalse($listed->allows(1731, 17702732), 'never listed');
 
         self::assertCount(1, $this->history, 'no recording was fetched');
         self::assertContains('session.close', $this->session->events, 'the session was released');
@@ -236,8 +238,9 @@ final class RecentCallsTest extends Unit
      */
     public function testTheSessionIsReleasedBeforeTheProviderIsContacted(): void
     {
+        // Reopened only after the provider has answered, to remember which receipts may be opened.
         $this->list(['store' => '1731'], new Response(200, [], '[]'));
-        self::assertSame(['session.close', 'provider.request'], $this->session->events, 'Load Calls');
+        self::assertSame(['session.close', 'provider.request', 'session.open'], $this->session->events, 'Load Calls');
 
         $this->session->events = [];
         $this->audio(['channel' => 'caller'], new Response(200, [], $this->wav()));
@@ -359,6 +362,72 @@ final class RecentCallsTest extends Unit
         self::assertSame([], $this->history, 'nothing was requested');
     }
 
+    // ---------------------------------------------------------------- the receipt
+
+    /** Invalid or missing order ids get no link, and the call still lists. */
+    public function testOnlyANumericOrderIdGetsAReceiptLink(): void
+    {
+        foreach (['17702731' => 17702731, '' => null, '58-100234' => null, '0' => null, '0123' => null, 'abc' => null, '1e5' => null] as $raw => $expected) {
+            self::assertSame($expected, RecentCallsReceipts::orderIdOf((string) $raw), 'order id ' . $raw);
+        }
+    }
+
+    /** A listed order's receipt is fetched with exactly the listed pair and shown on the existing page. */
+    public function testAListedOrdersReceiptOpens(): void
+    {
+        (new RecentCallsReceipts($this->session))->remember(1731, [17702731]);
+        $client = new RecordingReceipts();
+        $this->session->events = [];
+
+        $response = $this->receipt($client, ['store' => '1731', 'order' => '17702731']);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame([[1731, 17702731]], $client->asked);
+        self::assertStringContainsString('data:image/png;base64,', (string) $response->getBody());
+        self::assertSame('session.close', $this->session->events[0] ?? null, 'released before the provider is asked');
+    }
+
+    /** @return iterable<string, array{array<string, string>, int}> */
+    public static function refusedReceipts(): iterable
+    {
+        yield 'never listed' => [['store' => '1731', 'order' => '17702732'], 404];
+        yield 'listed for another store' => [['store' => '91', 'order' => '17702731'], 404];
+        yield 'a store this page does not offer' => [['store' => '871', 'order' => '17702731'], 400];
+        yield 'no order id' => [['store' => '1731', 'order' => ''], 400];
+        yield 'a non-numeric order id' => [['store' => '1731', 'order' => '58-100234'], 400];
+    }
+
+    /**
+     * Anything not listed for that store is refused before the provider is asked: the provider itself
+     * does not check that an order belongs to the account it is asked about.
+     *
+     * @dataProvider refusedReceipts
+     *
+     * @param array<string, string> $query
+     */
+    public function testAnythingNotListedIsRefusedWithoutAskingTheProvider(array $query, int $status): void
+    {
+        (new RecentCallsReceipts($this->session))->remember(1731, [17702731]);
+        $client = new RecordingReceipts();
+
+        $response = $this->receipt($client, $query);
+
+        self::assertSame($status, $response->getStatusCode());
+        self::assertSame([], $client->asked);
+    }
+
+    /** A provider failure is the existing page's readable failure, not a blank tab. */
+    public function testAProviderFailureIsShownInWords(): void
+    {
+        (new RecentCallsReceipts($this->session))->remember(1731, [17702731]);
+        $client = new RecordingReceipts(ReceiptFailed::notAvailable());
+
+        $response = $this->receipt($client, ['store' => '1731', 'order' => '17702731']);
+
+        self::assertSame(502, $response->getStatusCode());
+        self::assertStringContainsString('The receipt could not be loaded', (string) $response->getBody());
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private function client(Response|ConnectException ...$answers): Client
@@ -372,7 +441,7 @@ final class RecentCallsTest extends Unit
 
     private function loader(Response|ConnectException ...$answers): RecentCallsLoader
     {
-        return new RecentCallsLoader(new ChannelApiProbe($this->client(...$answers)), new FixtureRecordingSource(), $this->orders);
+        return new RecentCallsLoader(new ChannelApiProbe($this->client(...$answers)), new FixtureRecordingSource());
     }
 
     /** @param array<string, string> $query */
@@ -406,7 +475,7 @@ final class RecentCallsTest extends Unit
             public function setDefaultArgument(string $name, \Stringable|string|bool|int|float|null $value): void {}
         };
 
-        $action = new ListAction($this->loader(...$answers), new HttpFactory(), $urls, $this->session);
+        $action = new ListAction($this->loader(...$answers), new HttpFactory(), $urls, $this->session, new RecentCallsReceipts($this->session));
 
         return $action((new ServerRequest('GET', '/admin/order58/recent-calls/list'))->withQueryParams($query));
     }
@@ -455,6 +524,15 @@ final class RecentCallsTest extends Unit
         return $action($range === null ? $request : $request->withHeader('Range', $range));
     }
 
+    /** @param array<string, string> $query */
+    private function receipt(ReceiptClientInterface $client, array $query): ResponseInterface
+    {
+        $factory = new HttpFactory();
+        $action = new ReceiptAction(new RecentCallsReceipts($this->session), $this->session, $client, $factory, $factory);
+
+        return $action((new ServerRequest('GET', '/admin/order58/recent-calls/receipt'))->withQueryParams($query));
+    }
+
     private function wav(): string
     {
         return 'RIFF' . pack('V', 136) . 'WAVE'
@@ -463,32 +541,22 @@ final class RecentCallsTest extends Unit
     }
 }
 
-/** Which orders are "mirrored", without a database. */
-final class FakeOrders implements Order58OrderRepositoryInterface
+/** A receipt client that records what it was asked for, and answers with a tiny PNG or a failure. */
+final class RecordingReceipts implements ReceiptClientInterface
 {
-    /** @var list<int> */
-    public array $known = [];
+    /** @var list<array{int, int}> */
+    public array $asked = [];
 
-    public function hashesFor(int $accountId, array $sourceOrderIds): array
+    public function __construct(private ?ReceiptFailed $failure = null) {}
+
+    public function fetch(int $accountId, int $sourceOrderId): ReceiptDelivery
     {
-        $found = [];
+        $this->asked[] = [$accountId, $sourceOrderId];
 
-        foreach ($sourceOrderIds as $id) {
-            if ($accountId === 1731 && in_array($id, $this->known, true)) {
-                $found[$id] = 'hash';
-            }
+        if ($this->failure !== null) {
+            throw $this->failure;
         }
 
-        return $found;
-    }
-
-    public function upsert(Order58Order $order, DateTimeImmutable $now): bool
-    {
-        return false;
-    }
-
-    public function page(OrderListQuery $query): array
-    {
-        return [];
+        return new ReceiptDelivery("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR-pixels", 'image/png');
     }
 }

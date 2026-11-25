@@ -217,9 +217,9 @@
         var url = localUrl(call.receipt);
         if (url === null) {
             var none = dash();
-            none.title = call.orderNo
-                ? 'This order has not been synchronised to this application yet, so its receipt is not available here.'
-                : 'This call has no order.';
+            none.title = text(call.orderNo) !== ''
+                ? 'This call\u2019s order number is not one a receipt can be requested for.'
+                : 'This call has no order number.';
             return none;
         }
         var link = document.createElement('a');
@@ -227,7 +227,7 @@
         link.href = url;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = 'Receipt';
+        link.textContent = 'View Receipt';
         link.setAttribute('aria-label', 'View the receipt for order ' + text(call.orderNo) + ' (opens in a new tab)');
         return link;
     }

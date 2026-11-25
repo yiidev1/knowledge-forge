@@ -87,7 +87,7 @@ async function run() {
         check('a call with a date has Play and Download for all three channels', table.firstPairs === 3, table.firstPairs);
         check('a call without a readable date lists without audio', table.lastPairs === 0, table.lastPairs);
         check('the session id is shown', table.session === '22342359', table.session);
-        check('an order this application has not mirrored shows no receipt link', table.receipt === '—', table.receipt);
+        check('a non-numeric order number gets no receipt link', table.receipt === '—', table.receipt);
         check('the status line names the store', table.status.includes('Best Chinese Cuisine II'), table.status);
         check('the button is usable again', table.buttonEnabled);
         check('the page does not scroll sideways at 1500px', table.pageScroll <= 0, table.pageScroll + 'px');

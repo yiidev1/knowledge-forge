@@ -9,14 +9,11 @@ use App\Integration\Order58Recording\ChannelApiProbe;
 use App\Integration\Order58Recording\ChannelDiagnosis;
 use App\Integration\Order58Recording\FixtureRecordingSource;
 use App\Integration\Order58Recording\LatestCallsRequest;
-use App\Order58\Domain\Orders\Order58OrderRepositoryInterface;
 use DateTimeImmutable;
 use Throwable;
 
 use function array_keys;
 use function array_map;
-use function array_unique;
-use function array_values;
 use function preg_match;
 use function usort;
 
@@ -30,18 +27,16 @@ use function usort;
  * importer already use. No recording is requested here: audio is fetched only when somebody presses
  * Play or Download, one channel of one call at a time.
  *
- * ## One local read, and no writes
+ * ## No database
  *
- * Which of the listed orders this application has mirrored — a single indexed lookup for the whole
- * list — because the existing receipt link refuses an order it has not mirrored, and offering a link
- * that can only answer "not on this store" would be offering an error.
+ * Nothing is read from or written to the database. Which receipts may be opened is remembered from this
+ * very answer, by {@see ListAction} — see {@see RecentCallsReceipts}.
  */
 final readonly class RecentCallsLoader
 {
     public function __construct(
         private ChannelApiProbe $probe,
         private FixtureRecordingSource $fixtures,
-        private Order58OrderRepositoryInterface $orders,
     ) {}
 
     public function load(int $accountId, bool $useFixtures): RecentCallsList
@@ -66,9 +61,7 @@ final readonly class RecentCallsLoader
             return RecentCallsList::failed($diagnosis);
         }
 
-        $calls = self::newestFirst($result->calls);
-
-        return new RecentCallsList($calls, null, $this->mirroredOrders($accountId, $calls));
+        return new RecentCallsList(self::newestFirst($result->calls), null);
     }
 
     /**
@@ -100,34 +93,6 @@ final readonly class RecentCallsLoader
         usort($order, static fn(int $a, int $b): int => $times[$b] <=> $times[$a]);
 
         return array_map(static fn(int $index): CallSummary => $calls[$index], $order);
-    }
-
-    /**
-     * @param list<CallSummary> $calls
-     *
-     * @return array<int, true> the listed order ids this application has mirrored for the store
-     */
-    private function mirroredOrders(int $accountId, array $calls): array
-    {
-        $ids = [];
-
-        foreach ($calls as $call) {
-            if (preg_match('/\A\d{1,18}\z/', $call->orderId) === 1) {
-                $ids[] = (int) $call->orderId;
-            }
-        }
-
-        if ($ids === []) {
-            return [];
-        }
-
-        $mirrored = [];
-
-        foreach (array_keys($this->orders->hashesFor($accountId, array_values(array_unique($ids)))) as $orderId) {
-            $mirrored[$orderId] = true;
-        }
-
-        return $mirrored;
     }
 
     private static function readTime(string $value): ?int

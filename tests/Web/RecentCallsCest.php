@@ -93,7 +93,7 @@ final class RecentCallsCest
         Assert::assertStringStartsWith('/admin/order58/recent-calls/audio?', $first['channels']['caller']['play']);
         Assert::assertStringContainsString('session=' . self::SAMPLE, $first['channels']['caller']['play']);
         Assert::assertStringContainsString('date=2026-03-11', $first['channels']['caller']['play']);
-        Assert::assertNull($first['receipt'], 'the sample order is not mirrored, so no receipt is offered');
+        Assert::assertNull($first['receipt'], "the sample's order number (58-100234) is not numeric, so no receipt is offered");
 
         // The sample's third call has no date the page can read: it lists, without recordings.
         Assert::assertSame(['mixed' => null, 'caller' => null, 'callee' => null], $data['calls'][2]['channels']);
@@ -137,6 +137,27 @@ final class RecentCallsCest
         $I->seeResponseCodeIs(400);
 
         $I->amOnPage('/admin/order58/recent-calls/audio?store=1731&session=' . self::SAMPLE . '&date=2026-03-11&channel=agent&source=fixture');
+        $I->seeResponseCodeIs(400);
+    }
+
+    /**
+     * The receipt route serves only orders the latest-calls answer listed for that store in this
+     * session; anything else is refused before the provider is asked. (A listed order opening its
+     * receipt needs the live provider, and is covered in the unit test with a stand-in client.)
+     */
+    public function aReceiptForAnOrderThatWasNotListedIsRefused(WebTester $I): void
+    {
+        $this->signIn($I);
+        $this->json($I, '/admin/order58/recent-calls/list?store=1731&source=fixture');
+
+        $I->amOnPage('/admin/order58/recent-calls/receipt?store=1731&order=17702731');
+        $I->seeResponseCodeIs(404);
+        $I->see('This order is not in the loaded calls');
+
+        $I->amOnPage('/admin/order58/recent-calls/receipt?store=871&order=17702731');
+        $I->seeResponseCodeIs(400);
+
+        $I->amOnPage('/admin/order58/recent-calls/receipt?store=1731&order=58-100234');
         $I->seeResponseCodeIs(400);
     }
 
